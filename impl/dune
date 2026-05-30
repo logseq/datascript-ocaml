@@ -1,0 +1,4 @@
+(library
+ (name datascript)
+ (public_name datascript_ocaml)
+ (libraries datascript_types unix str))
