@@ -72,6 +72,10 @@ val q_return_map :
   query ->
   query_output
 val q_return_map_string : context -> ?inputs:query_arg list -> db -> string -> query_output
+val return_map_label_count : query_return_map -> int
+val return_map_name : query_return_map -> string
+val validate_query_return_map :
+  query_return -> query_return_map option -> query -> query_return_map option
 val has_aggregates : find_spec list -> bool
 val collect_find_vars : (string * query_result) list -> string list -> query_result list option
 val group_by_key :

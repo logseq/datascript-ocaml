@@ -136,6 +136,28 @@ let q_return_map_string context ?inputs db input =
   | Some return_map -> q_return_map context ?inputs db return return_map query
   | None -> q_return context ?inputs db return query
 
+let return_map_label_count = function
+  | Return_keys labels | Return_syms labels | Return_strs labels -> List.length labels
+
+let return_map_name = function
+  | Return_keys _ -> "keys"
+  | Return_syms _ -> "syms"
+  | Return_strs _ -> "strs"
+
+let validate_query_return_map return return_map query =
+  match return_map with
+  | None -> None
+  | Some return_map ->
+    (match return with
+     | Return_collection ->
+       invalid_arg (":" ^ return_map_name return_map ^ " does not work with collection :find")
+     | Return_scalar ->
+       invalid_arg (":" ^ return_map_name return_map ^ " does not work with single-scalar :find")
+     | Return_relation | Return_tuple ->
+       if return_map_label_count return_map <> List.length query.find then
+         invalid_arg ("Count of :" ^ return_map_name return_map ^ " must match count of :find");
+       Some return_map)
+
 let has_aggregates find =
   List.exists
     (function

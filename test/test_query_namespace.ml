@@ -725,6 +725,44 @@ let test_query_namespace__test_query_validation_helpers () =
             ; where = [ SourcePattern ("other", QVar "e", QAttr "name", QVar "name") ]
             }))
 
+let test_query_namespace__test_return_map_validation_helpers () =
+  assert_equal_string "return_map_name formats :keys" "keys" (Query.return_map_name (Return_keys [ "name" ]));
+  if Query.return_map_label_count (Return_syms [ "name"; "age" ]) <> 2 then
+    failwith "return_map_label_count should count labels";
+  let query =
+    { find = [ Find_var "name"; Find_var "age" ]
+    ; inputs = [ Input_source_decl "$" ]
+    ; with_vars = []
+    ; rules = []
+    ; where =
+        [ Pattern (QVar "e", QAttr "name", QVar "name")
+        ; Pattern (QVar "e", QAttr "age", QVar "age")
+        ]
+    }
+  in
+  if Query.validate_query_return_map Return_relation None query <> None then
+    failwith "validate_query_return_map should preserve absent return maps";
+  if
+    Query.validate_query_return_map Return_tuple (Some (Return_strs [ "name"; "age" ])) query
+    <> Some (Return_strs [ "name"; "age" ])
+  then
+    failwith "validate_query_return_map should return valid return maps";
+  assert_raises_invalid_arg_message
+    "validate_query_return_map rejects collection returns"
+    ":keys does not work with collection :find"
+    (fun () ->
+       ignore (Query.validate_query_return_map Return_collection (Some (Return_keys [ "name"; "age" ])) query));
+  assert_raises_invalid_arg_message
+    "validate_query_return_map rejects scalar returns"
+    ":syms does not work with single-scalar :find"
+    (fun () ->
+       ignore (Query.validate_query_return_map Return_scalar (Some (Return_syms [ "name"; "age" ])) query));
+  assert_raises_invalid_arg_message
+    "validate_query_return_map rejects label count mismatch"
+    "Count of :strs must match count of :find"
+    (fun () ->
+       ignore (Query.validate_query_return_map Return_relation (Some (Return_strs [ "name" ])) query))
+
 let test_query_namespace__test_query_string_helpers () =
   let value_to_string = function
     | String value -> "\"" ^ value ^ "\""
@@ -913,6 +951,7 @@ let () =
   test_query_namespace__test_source_discovery_helpers ();
   test_query_namespace__test_rule_source_analysis_helpers ();
   test_query_namespace__test_query_validation_helpers ();
+  test_query_namespace__test_return_map_validation_helpers ();
   test_query_namespace__test_query_string_helpers ();
   test_query_namespace__test_query_clause_string_helpers ();
   test_query_namespace__test_binding_validation_helpers ()

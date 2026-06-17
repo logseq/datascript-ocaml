@@ -5950,27 +5950,7 @@ let parse_return_map_section entries =
   | [ section ] -> Some section
   | _ -> invalid_arg "Only one of :keys/:syms/:strs must be present"
 
-let return_map_label_count = function
-  | Return_keys labels | Return_syms labels | Return_strs labels -> List.length labels
-
-let return_map_name = function
-  | Return_keys _ -> "keys"
-  | Return_syms _ -> "syms"
-  | Return_strs _ -> "strs"
-
-let validate_query_return_map return return_map query =
-  match return_map with
-  | None -> None
-  | Some return_map ->
-    (match return with
-     | Return_collection ->
-       invalid_arg (":" ^ return_map_name return_map ^ " does not work with collection :find")
-     | Return_scalar ->
-       invalid_arg (":" ^ return_map_name return_map ^ " does not work with single-scalar :find")
-     | Return_relation | Return_tuple ->
-       if return_map_label_count return_map <> List.length query.find then
-         invalid_arg ("Count of :" ^ return_map_name return_map ^ " must match count of :find");
-       Some return_map)
+let validate_query_return_map = Query.validate_query_return_map
 
 let parse_query_return_map_with_pull_context ?default_pull_db ?pull_db_for_source form =
   let entries = query_form_map form in
@@ -6103,6 +6083,9 @@ module Query = struct
   let q_return_string = Query_impl.q_return_string query_context
   let q_return_map = Query_impl.q_return_map query_context
   let q_return_map_string = Query_impl.q_return_map_string query_context
+  let return_map_label_count = Query_impl.return_map_label_count
+  let return_map_name = Query_impl.return_map_name
+  let validate_query_return_map = Query_impl.validate_query_return_map
   let has_aggregates = Query_impl.has_aggregates
   let collect_find_vars = Query_impl.collect_find_vars
   let group_by_key = Query_impl.group_by_key
