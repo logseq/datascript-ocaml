@@ -15919,6 +15919,38 @@ let test_pull_many_preserves_missing_entities () =
        ]
   then failwith "pull_many should preserve requested order and missing entities"
 
+let test_pull_reads_filtered_serialized_and_reinitialized_dbs () =
+  let schema = [ "name", unique_identity; "aka", many ] in
+  let db =
+    empty_db ~schema ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "aka", Many_values [ String "Devil"; String "Tupen" ]
+                 ]
+             }
+         ]
+  in
+  let assert_petr label expected_aka db =
+    match pull db [ Pull_attr "name"; Pull_attr "aka" ] (Entity_id 1) with
+    | None -> failf "%s should pull Petr" label
+    | Some entity ->
+      assert_equal_pulled_attrs
+        label
+        [ kw "aka", Pulled_many (List.map (fun value -> Pulled_scalar (String value)) expected_aka)
+        ; kw "name", Pulled_scalar (String "Petr")
+        ]
+        entity
+  in
+  let filtered = filter db (fun _ datom -> datom.v <> String "Tupen") in
+  assert_petr "pull reads filtered db views" [ "Devil" ] filtered;
+  let restored = db |> serializable |> from_serializable in
+  assert_petr "pull reads serialized and restored dbs" [ "Devil"; "Tupen" ] restored;
+  let reinitialized = init_db ~schema (datoms db Eavt ()) in
+  assert_petr "pull reads dbs reinitialized from datoms" [ "Devil"; "Tupen" ] reinitialized
+
 let test_filter_limits_read_apis () =
   let db =
     empty_db ()
@@ -17147,6 +17179,7 @@ let () =
   test_pull_deep_recursion_reaches_leaf ();
   test_pull_recursive_reverse_ref ();
   test_pull_many_preserves_missing_entities ();
+  test_pull_reads_filtered_serialized_and_reinitialized_dbs ();
   test_filter_limits_read_apis ();
   test_filter_composes_and_rejects_writes ();
   test_filter_predicates_read_unfiltered_db_like_upstream ();
