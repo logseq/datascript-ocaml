@@ -74,6 +74,21 @@
  (libraries datascript))
 
 (test
+ (name test_pull_api)
+ (modules test_pull_api)
+ (libraries datascript))
+
+(test
+ (name test_pull_parser)
+ (modules test_pull_parser)
+ (libraries datascript))
+
+(test
+ (name test_query_pull)
+ (modules test_query_pull)
+ (libraries datascript))
+
+(test
  (name test_serialize)
  (modules test_serialize)
  (libraries datascript))

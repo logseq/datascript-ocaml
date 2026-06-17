@@ -197,6 +197,18 @@ module Parser : sig
   val parse_query_return_map_string : string -> query_return * query_return_map option * query
 end
 
+module Pull_parser : sig
+  val parse_pattern : db -> query_form -> pull_selector list
+  val parse_pattern_string : db -> string -> pull_selector list
+end
+
+module Pull_api : sig
+  val pull : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref -> pulled_entity option
+  val pull_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
+  val pull_many : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref list -> pulled_entity option list
+  val pull_many_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref list -> pulled_entity option list
+end
+
 module Upsert : sig
   type resolution = attr * value * entity_id
 

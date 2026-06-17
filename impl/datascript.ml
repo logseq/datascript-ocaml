@@ -8991,6 +8991,11 @@ let parse_query_return_map_string input =
 let parse_query_return_map_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   parse_query_return_map_with_pull_context ?default_pull_db ?pull_db_for_source (read_edn input)
 
+module Pull_parser = struct
+  let parse_pattern = parse_pull_pattern
+  let parse_pattern_string = parse_pull_pattern_string
+end
+
 module Parser = struct
   let read_edn = read_edn
   let parse_binding = parse_binding
@@ -9012,6 +9017,13 @@ let pull_string ?visitor db input entity_ref =
 
 let pull_many_string ?visitor db input entity_refs =
   pull_many ?visitor db (parse_pull_pattern_string db input) entity_refs
+
+module Pull_api = struct
+  let pull = pull
+  let pull_string = pull_string
+  let pull_many = pull_many
+  let pull_many_string = pull_many_string
+end
 
 let query_rules_and_where query input_rules =
   let rules = validate_rule_arities (query.rules @ input_rules) in
