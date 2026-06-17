@@ -903,6 +903,132 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
         "datascript/root,datascript/tail"
         (String.concat "," (storage_addresses storage)))
 
+let test_sqlite_storage_backed_aggregates_and_upserts_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed aggregate/upsert test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn =
+        create_conn
+          ~schema:
+            [ "name", unique_identity
+            ; "email", unique_identity
+            ; "slug", unique_identity
+            ; "group", indexed
+            ; "score", indexed
+            ; "name+email", tuple_unique_identity [ "name"; "email" ]
+            ]
+          ~storage
+          ()
+      in
+      ignore
+        (transact_conn
+           conn
+           [ Entity
+               { db_id = None
+               ; attrs =
+                   [ "name", One_value (String "Ivan")
+                   ; "email", One_value (String "ivan@example.com")
+                   ; "slug", One_value (String "ivan")
+                   ; "group", One_value (String "red")
+                   ; "score", One_value (Int 10)
+                   ]
+               }
+           ; Entity
+               { db_id = None
+               ; attrs =
+                   [ "name", One_value (String "Petr")
+                   ; "email", One_value (String "petr@example.com")
+                   ; "slug", One_value (String "petr")
+                   ; "group", One_value (String "red")
+                   ; "score", One_value (Int 20)
+                   ]
+               }
+           ; Entity
+               { db_id = None
+               ; attrs =
+                   [ "name", One_value (String "Oleg")
+                   ; "email", One_value (String "oleg@example.com")
+                   ; "slug", One_value (String "oleg")
+                   ; "group", One_value (String "blue")
+                   ; "score", One_value (Int 5)
+                   ]
+               }
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for aggregate/upsert test"
+      in
+      assert_equal_query
+        "SQLite restored db supports grouped aggregate queries"
+        [ [ Result_value (String "blue"); Result_value (Int 1); Result_value (Int 5) ]
+        ; [ Result_value (String "red"); Result_value (Int 2); Result_value (Int 30) ]
+        ]
+        (q_string
+           (conn_db restored)
+           "[:find ?group (count ?e) (sum ?score)
+             :where [?e :group ?group]
+                    [?e :score ?score]]");
+      ignore
+        (transact_conn
+           restored
+           [ Entity
+               { db_id = None
+               ; attrs =
+                   [ "name", One_value (String "Ivan")
+                   ; "email", One_value (String "ivan+updated@example.com")
+                   ; "score", One_value (Int 15)
+                   ]
+               }
+           ; Add (Temp_id "petr", "name", String "Petr")
+           ; Add (Temp_id "petr", "score", Int 25)
+           ; Add (Temp_id "oleg", "name", String "Oleg")
+           ; Add (Temp_id "oleg", "email", String "oleg@example.com")
+           ; Add (Temp_id "oleg", "group", String "green")
+           ]);
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore aggregate/upsert db after transact"
+      in
+      assert_equal_query
+        "SQLite restored db persists unique identity and tempid upserts"
+        [ [ Result_entity 1
+          ; Result_value (String "Ivan")
+          ; Result_value (String "ivan+updated@example.com")
+          ; Result_value (String "red")
+          ; Result_value (Int 15)
+          ]
+        ; [ Result_entity 2
+          ; Result_value (String "Petr")
+          ; Result_value (String "petr@example.com")
+          ; Result_value (String "red")
+          ; Result_value (Int 25)
+          ]
+        ; [ Result_entity 3
+          ; Result_value (String "Oleg")
+          ; Result_value (String "oleg@example.com")
+          ; Result_value (String "green")
+          ; Result_value (Int 5)
+          ]
+        ]
+        (q_string
+           db
+           "[:find ?e ?name ?email ?group ?score
+             :where [?e :name ?name]
+                    [?e :email ?email]
+                    [?e :group ?group]
+                    [?e :score ?score]]");
+      assert_equal_triples
+        "SQLite restored db persists tuple identity datoms after upserts"
+        [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan+updated@example.com") ]
+        ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+        ; 3, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+        ]
+        (datoms db Eavt ~a:"name+email" ()))
+
 let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed parsed transact/query-pull test: sqlite3 is not available"
@@ -1305,6 +1431,7 @@ let () =
   test_sqlite_storage_backed_transact_history_and_current_tx_parity ();
   test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ();
   test_sqlite_storage_backed_reset_schema_and_compaction_parity ();
+  test_sqlite_storage_backed_aggregates_and_upserts_after_restore ();
   test_sqlite_storage_backed_parsed_transact_and_query_pull_parity ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();

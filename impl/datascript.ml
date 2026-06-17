@@ -504,6 +504,15 @@ let tx_meta_without_store_control tx_meta =
 
 let tx0 = 0x20000000
 
+let next_db_uid =
+  let counter = ref 0 in
+  fun () ->
+    incr counter;
+    !counter
+
+let refresh_db_identity db =
+  { db with db_uid = next_db_uid () }
+
 module Lru = Lru
 
 let max_entity_id = 0x7fffffff
@@ -770,7 +779,8 @@ let with_db_datoms db datoms =
 let empty_db ?(schema = []) ?storage () =
   let schema = validate_schema schema in
   refresh_db_indexes
-    { schema
+    { db_uid = next_db_uid ()
+    ; schema
     ; datoms = []
     ; eavt_index = []
     ; aevt_index = []
@@ -802,7 +812,8 @@ let init_db ?(schema = []) ?storage datoms =
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
   refresh_db_indexes
-    { schema
+    { db_uid = next_db_uid ()
+    ; schema
     ; datoms
     ; eavt_index = []
     ; aevt_index = []
@@ -817,7 +828,7 @@ let init_db ?(schema = []) ?storage datoms =
     ; tx_fns = []
     }
 
-let history db = with_db_datoms { db with historical = true } db.history_datoms
+let history db = with_db_datoms (refresh_db_identity { db with historical = true }) db.history_datoms
 
 let is_history db = db.historical
 
@@ -828,7 +839,7 @@ let visible_datoms db =
 
 let is_filtered db = Option.is_some db.filter_pred
 
-let unfiltered_db db = { db with filter_pred = None }
+let unfiltered_db db = refresh_db_identity { db with filter_pred = None }
 
 let filter db pred =
   let unfiltered = unfiltered_db db in
@@ -837,7 +848,7 @@ let filter db pred =
     | None -> fun datom -> pred unfiltered datom
     | Some existing -> fun datom -> existing datom && pred unfiltered datom
   in
-  { db with filter_pred = Some filter_pred }
+  refresh_db_identity { db with filter_pred = Some filter_pred }
 
 let serializable db =
   { serializable_schema = db.schema
@@ -853,7 +864,8 @@ let from_serializable snapshot =
   let datoms = List.map (normalize_datom_for_schema schema) snapshot.serializable_datoms in
   let history_datoms = List.map (normalize_datom_for_schema schema) snapshot.serializable_history_datoms in
   refresh_db_indexes
-    { schema
+    { db_uid = next_db_uid ()
+    ; schema
     ; datoms
     ; eavt_index = []
     ; aevt_index = []
@@ -1100,7 +1112,7 @@ let notify_listeners conn report =
 
 let schema db = db.schema
 
-let with_schema db schema = refresh_db_indexes { db with schema = validate_schema schema }
+let with_schema db schema = refresh_db_indexes (refresh_db_identity { db with schema = validate_schema schema })
 
 let reset_schema conn schema =
   let db = with_schema conn.db schema in
@@ -2776,14 +2788,15 @@ let apply_tx tx_ops db =
   in
   let history_tx_data = history_datoms_for_schema schema tx_data in
   ( refresh_db_indexes
-      { db with
-        schema
-      ; datoms
-      ; history_datoms = db.history_datoms @ history_tx_data
-      ; max_eid
-      ; max_tx = !max_tx_seen
-      ; tx_fns = !current_tx_fns
-      }
+      (refresh_db_identity
+         { db with
+           schema
+         ; datoms
+         ; history_datoms = db.history_datoms @ history_tx_data
+         ; max_eid
+         ; max_tx = !max_tx_seen
+         ; tx_fns = !current_tx_fns
+         })
   , tempids
   , tx_data
   )
@@ -3261,6 +3274,12 @@ let entity_attr (entity : entity) attr =
 let entity_db (entity : entity) = entity.db
 
 let is_entity (_ : entity) = true
+
+let entity_equal (left : entity) (right : entity) =
+  left.id = right.id && left.db.db_uid = right.db.db_uid
+
+let entity_hash (entity : entity) =
+  Hashtbl.hash (entity.db.db_uid, entity.id)
 
 let touch ent =
   let rec touch_entity visited (entity : entity) =

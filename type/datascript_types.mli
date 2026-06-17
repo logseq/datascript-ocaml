@@ -115,7 +115,8 @@ type tx_op =
   | Call of (db -> tx_op list)
 
 and db =
-  { schema : schema
+  { db_uid : int
+  ; schema : schema
   ; datoms : datom list
   ; eavt_index : datom list
   ; aevt_index : datom list

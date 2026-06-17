@@ -3023,6 +3023,44 @@ let test_entity_exposes_source_db_and_touch () =
       (datoms db Eavt ())
       (datoms (entity_db touched) Eavt ())
 
+let test_entity_equality_and_hash_match_upstream_identity_semantics () =
+  let db1 =
+    empty_db ()
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
+  in
+  let e1 =
+    match entity db1 (Entity_id 1) with
+    | Some entity -> entity
+    | None -> failwith "expected entity from db1"
+  in
+  let db2 = db_with [] db1 in
+  let db3 = db_with [ Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg") ] } ] db2 in
+  let e1_again =
+    match entity db1 (Entity_id 1) with
+    | Some entity -> entity
+    | None -> failwith "expected second entity from db1"
+  in
+  let e2 =
+    match entity db2 (Entity_id 1) with
+    | Some entity -> entity
+    | None -> failwith "expected entity from db2"
+  in
+  let e3 =
+    match entity db3 (Entity_id 1) with
+    | Some entity -> entity
+    | None -> failwith "expected entity from db3"
+  in
+  assert_bool "entity_equal should be reflexive" (entity_equal e1 e1);
+  assert_bool "entities from the same db and id should be equal" (entity_equal e1 e1_again);
+  assert_bool "entities from different db values should not be equal" (not (entity_equal e1 e2));
+  assert_bool "entities from later db values should not be equal" (not (entity_equal e1 e3));
+  assert_equal_int
+    "same db/id entities should have the same entity_hash"
+    (entity_hash e1)
+    (entity_hash e1_again);
+  assert_bool "different db values should produce different entity_hash values" (entity_hash e1 <> entity_hash e2);
+  assert_bool "later db values should produce different entity_hash values" (entity_hash e1 <> entity_hash e3)
+
 let test_entity_ref_attrs_navigate_to_entities () =
   let db =
     empty_db ~schema:[ "friend", ref_attr; "child", ref_many ] ()
@@ -17899,6 +17937,7 @@ let () =
   test_entity_reads_current_attributes ();
   test_entity_exposes_db_id_attr ();
   test_entity_exposes_source_db_and_touch ();
+  test_entity_equality_and_hash_match_upstream_identity_semantics ();
   test_entity_ref_attrs_navigate_to_entities ();
   test_touch_expands_component_refs ();
   test_entity_drops_missing_ref_targets ();

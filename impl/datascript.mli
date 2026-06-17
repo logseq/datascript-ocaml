@@ -561,6 +561,8 @@ val entity : db -> entity_ref -> entity option
 val entity_attr : entity -> attr -> tx_value option
 val entity_db : entity -> db
 val is_entity : entity -> bool
+val entity_equal : entity -> entity -> bool
+val entity_hash : entity -> int
 val touch : entity -> entity
 val entid : db -> attr -> value -> entity_id option
 val entid_ref : db -> entity_ref -> entity_id option
