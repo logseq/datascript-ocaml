@@ -4534,127 +4534,20 @@ and eval_clause
           rule.rule_body
         |> List.filter_map (fun rule_binding -> propagate_rule_binding rule_db bindings rule_binding rule terms))
 
-let section_forms = function
-  | QueryFormVector forms | QueryFormList forms -> forms
-  | form -> [ form ]
-
-let query_form_section key entries =
-  let values =
-    entries
-    |> List.filter_map (fun (entry_key, value) ->
-      if entry_key = QueryFormKeyword key then Some (section_forms value) else None)
-  in
-  match values with
-  | [] -> None
-  | [ forms ] -> Some (QueryFormVector forms)
-  | _ -> Some (QueryFormVector (List.concat values))
-
-let query_form_sections forms =
-  let finish key values sections =
-    match key with
-    | None -> sections
-    | Some key -> (QueryFormKeyword key, QueryFormVector (List.rev values)) :: sections
-  in
-  let rec collect key values sections = function
-    | [] -> List.rev (finish key values sections)
-    | QueryFormKeyword key' :: rest ->
-      collect (Some key') [] (finish key values sections) rest
-    | form :: rest ->
-      (match key with
-       | None -> invalid_arg "query vector must start with a keyword section"
-       | Some _ -> collect key (form :: values) sections rest)
-  in
-  collect None [] [] forms
-
-let query_form_map = function
-  | QueryFormMap entries -> entries
-  | QueryFormVector forms -> query_form_sections forms
-  | _ -> invalid_arg "query should be a vector or a map"
-
-let query_form_sequence = function
-  | QueryFormVector forms | QueryFormList forms -> Some forms
-  | _ -> None
-
-let query_symbol_name symbol =
-  if String.length symbol > 1 && symbol.[0] = '?' then
-    String.sub symbol 1 (String.length symbol - 1)
-  else
-    invalid_arg ("expected query variable symbol: " ^ symbol)
-
-let query_callable_name symbol =
-  if String.length symbol > 1 && symbol.[0] = '?' then query_symbol_name symbol else symbol
-
-let is_plain_input_symbol symbol =
-  String.length symbol > 0
-  && symbol <> "_"
-  && symbol <> "%"
-  && symbol.[0] <> '?'
-  && symbol.[0] <> '$'
-
-let is_query_input_symbol symbol =
-  (String.length symbol > 1 && symbol.[0] = '?') || is_plain_input_symbol symbol
-
-let query_input_name symbol =
-  if String.length symbol > 1 && symbol.[0] = '?' then
-    String.sub symbol 1 (String.length symbol - 1)
-  else if is_plain_input_symbol symbol then symbol
-  else
-    invalid_arg ("expected query input symbol: " ^ symbol)
-
-let query_source_name symbol =
-  if symbol = "$" then "$"
-  else if String.length symbol > 1 && symbol.[0] = '$' then
-    String.sub symbol 1 (String.length symbol - 1)
-  else
-    invalid_arg ("expected query source symbol: " ^ symbol)
-
-let is_query_source_symbol symbol =
-  String.length symbol > 0 && symbol.[0] = '$'
-
-let is_plain_rule_symbol symbol =
-  String.length symbol > 0
-  && symbol <> "_"
-  && symbol <> "%"
-  && symbol.[0] <> '?'
-  && symbol.[0] <> '$'
-
-let aggregate_of_symbol = function
-  | "count" -> Some Count
-  | "count-distinct" -> Some CountDistinct
-  | "distinct" -> Some Distinct
-  | "sum" -> Some Sum
-  | "avg" -> Some Avg
-  | "median" -> Some Median
-  | "variance" -> Some Variance
-  | "stddev" -> Some Stddev
-  | "min" -> Some Min
-  | "max" -> Some Max
-  | "rand" -> Some Rand
-  | _ -> None
-
-let amount_aggregate_of_symbol symbol amount =
-  if amount < 0 then invalid_arg (symbol ^ " aggregate amount must be non-negative");
-  match symbol with
-  | "min" -> Some (MinN amount)
-  | "max" -> Some (MaxN amount)
-  | "rand" -> Some (RandN amount)
-  | "sample" -> Some (Sample amount)
-  | _ -> None
-
-let dynamic_amount_aggregate_of_symbol symbol amount_var =
-  match symbol with
-  | "min" -> Some (MinNVar amount_var)
-  | "max" -> Some (MaxNVar amount_var)
-  | "rand" -> Some (RandNVar amount_var)
-  | "sample" -> Some (SampleVar amount_var)
-  | _ -> None
-
-let parse_find_arg = function
-  | QueryFormSymbol symbol when is_query_source_symbol symbol -> QSource (query_source_name symbol)
-  | QueryFormSymbol symbol -> QVar (query_symbol_name symbol)
-  | form -> QValue (query_value_of_form form)
-
-let parse_find_args forms = List.map parse_find_arg forms
+let query_form_section = Parser_impl.query_form_section
+let query_form_map = Parser_impl.query_form_map
+let query_form_sequence = Parser_impl.query_form_sequence
+let query_symbol_name = Parser_impl.query_symbol_name
+let query_callable_name = Parser_impl.query_callable_name
+let is_query_input_symbol = Parser_impl.is_query_input_symbol
+let query_input_name = Parser_impl.query_input_name
+let query_source_name = Parser_impl.query_source_name
+let is_query_source_symbol = Parser_impl.is_query_source_symbol
+let is_plain_rule_symbol = Parser_impl.is_plain_rule_symbol
+let aggregate_of_symbol = Parser_impl.aggregate_of_symbol
+let amount_aggregate_of_symbol = Parser_impl.amount_aggregate_of_symbol
+let dynamic_amount_aggregate_of_symbol = Parser_impl.dynamic_amount_aggregate_of_symbol
+let parse_find_args = Parser_impl.parse_find_args
 
 let parse_find_form ?(default_pull_db = empty_db ()) ?(pull_db_for_source = fun _ -> empty_db ()) = function
   | QueryFormSymbol symbol -> Find_var (query_symbol_name symbol)
@@ -5994,6 +5887,24 @@ end
 
 module Parser = struct
   let read_edn = read_edn
+  let section_forms = Parser_impl.section_forms
+  let query_form_section = Parser_impl.query_form_section
+  let query_form_sections = Parser_impl.query_form_sections
+  let query_form_map = Parser_impl.query_form_map
+  let query_form_sequence = Parser_impl.query_form_sequence
+  let query_symbol_name = Parser_impl.query_symbol_name
+  let query_callable_name = Parser_impl.query_callable_name
+  let is_plain_input_symbol = Parser_impl.is_plain_input_symbol
+  let is_query_input_symbol = Parser_impl.is_query_input_symbol
+  let query_input_name = Parser_impl.query_input_name
+  let query_source_name = Parser_impl.query_source_name
+  let is_query_source_symbol = Parser_impl.is_query_source_symbol
+  let is_plain_rule_symbol = Parser_impl.is_plain_rule_symbol
+  let aggregate_of_symbol = Parser_impl.aggregate_of_symbol
+  let amount_aggregate_of_symbol = Parser_impl.amount_aggregate_of_symbol
+  let dynamic_amount_aggregate_of_symbol = Parser_impl.dynamic_amount_aggregate_of_symbol
+  let parse_find_arg = Parser_impl.parse_find_arg
+  let parse_find_args = Parser_impl.parse_find_args
   let parse_binding = parse_binding
   let parse_in = parse_in
   let parse_with = parse_with

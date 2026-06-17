@@ -341,3 +341,125 @@ let rec query_form_of_value = function
   | TxRef
   | Ref_to _ ->
     invalid_arg "cannot convert value to query form"
+
+let section_forms = function
+  | QueryFormVector forms | QueryFormList forms -> forms
+  | form -> [ form ]
+
+let query_form_section key entries =
+  let values =
+    entries
+    |> List.filter_map (fun (entry_key, value) ->
+      if entry_key = QueryFormKeyword key then Some (section_forms value) else None)
+  in
+  match values with
+  | [] -> None
+  | [ forms ] -> Some (QueryFormVector forms)
+  | _ -> Some (QueryFormVector (List.concat values))
+
+let query_form_sections forms =
+  let finish key values sections =
+    match key with
+    | None -> sections
+    | Some key -> (QueryFormKeyword key, QueryFormVector (List.rev values)) :: sections
+  in
+  let rec collect key values sections = function
+    | [] -> List.rev (finish key values sections)
+    | QueryFormKeyword key' :: rest ->
+      collect (Some key') [] (finish key values sections) rest
+    | form :: rest ->
+      (match key with
+       | None -> invalid_arg "query vector must start with a keyword section"
+       | Some _ -> collect key (form :: values) sections rest)
+  in
+  collect None [] [] forms
+
+let query_form_map = function
+  | QueryFormMap entries -> entries
+  | QueryFormVector forms -> query_form_sections forms
+  | _ -> invalid_arg "query should be a vector or a map"
+
+let query_form_sequence = function
+  | QueryFormVector forms | QueryFormList forms -> Some forms
+  | _ -> None
+
+let query_symbol_name symbol =
+  if String.length symbol > 1 && symbol.[0] = '?' then
+    String.sub symbol 1 (String.length symbol - 1)
+  else
+    invalid_arg ("expected query variable symbol: " ^ symbol)
+
+let query_callable_name symbol =
+  if String.length symbol > 1 && symbol.[0] = '?' then query_symbol_name symbol else symbol
+
+let is_plain_input_symbol symbol =
+  String.length symbol > 0
+  && symbol <> "_"
+  && symbol <> "%"
+  && symbol.[0] <> '?'
+  && symbol.[0] <> '$'
+
+let is_query_input_symbol symbol =
+  (String.length symbol > 1 && symbol.[0] = '?') || is_plain_input_symbol symbol
+
+let query_input_name symbol =
+  if String.length symbol > 1 && symbol.[0] = '?' then
+    String.sub symbol 1 (String.length symbol - 1)
+  else if is_plain_input_symbol symbol then symbol
+  else
+    invalid_arg ("expected query input symbol: " ^ symbol)
+
+let query_source_name symbol =
+  if symbol = "$" then "$"
+  else if String.length symbol > 1 && symbol.[0] = '$' then
+    String.sub symbol 1 (String.length symbol - 1)
+  else
+    invalid_arg ("expected query source symbol: " ^ symbol)
+
+let is_query_source_symbol symbol =
+  String.length symbol > 0 && symbol.[0] = '$'
+
+let is_plain_rule_symbol symbol =
+  String.length symbol > 0
+  && symbol <> "_"
+  && symbol <> "%"
+  && symbol.[0] <> '?'
+  && symbol.[0] <> '$'
+
+let aggregate_of_symbol = function
+  | "count" -> Some Count
+  | "count-distinct" -> Some CountDistinct
+  | "distinct" -> Some Distinct
+  | "sum" -> Some Sum
+  | "avg" -> Some Avg
+  | "median" -> Some Median
+  | "variance" -> Some Variance
+  | "stddev" -> Some Stddev
+  | "min" -> Some Min
+  | "max" -> Some Max
+  | "rand" -> Some Rand
+  | _ -> None
+
+let amount_aggregate_of_symbol symbol amount =
+  if amount < 0 then invalid_arg (symbol ^ " aggregate amount must be non-negative");
+  match symbol with
+  | "min" -> Some (MinN amount)
+  | "max" -> Some (MaxN amount)
+  | "rand" -> Some (RandN amount)
+  | "sample" -> Some (Sample amount)
+  | _ -> None
+
+let dynamic_amount_aggregate_of_symbol symbol amount_var =
+  match symbol with
+  | "min" -> Some (MinNVar amount_var)
+  | "max" -> Some (MaxNVar amount_var)
+  | "rand" -> Some (RandNVar amount_var)
+  | "sample" -> Some (SampleVar amount_var)
+  | _ -> None
+
+let parse_find_arg = function
+  | QueryFormSymbol symbol when is_query_source_symbol symbol -> QSource (query_source_name symbol)
+  | QueryFormSymbol symbol -> QVar (query_symbol_name symbol)
+  | form -> QValue (query_value_of_form form)
+
+let parse_find_args forms = List.map parse_find_arg forms
