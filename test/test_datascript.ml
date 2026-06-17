@@ -14396,6 +14396,169 @@ let test_q_source_qualified_rules () =
     [ [ Result_value (String "Oleg") ] ]
     (q_sources (empty_db ()) [ "sexes", Db_source sexes; "ages", Db_source ages ] query)
 
+let test_query_fns__test_query_fns () =
+  test_q_predicates_without_free_variables_filter_all_rows ();
+  test_q_builtin_get_else_get_some_and_missing ();
+  test_q_builtin_get_map_values ();
+  test_q_builtin_count_values ();
+  test_q_builtin_comparison_predicates ();
+  test_q_builtin_variadic_comparison_predicates ();
+  test_q_builtin_vector_values ();
+  test_q_builtin_hash_map_values ();
+  test_q_with_dynamic_callable_inputs ();
+  test_q_functions_bind_derived_values ();
+  test_q_function_binding_conflicts_filter_rows ();
+  test_q_function_bindings_interact_with_rules ();
+  test_q_parsed_rule_inputs_interact_with_function_bindings ();
+  test_q_functions_filter_on_none ();
+  test_q_builtin_ground_bindings ()
+
+let test_query_fns__test_predicates () =
+  test_q_predicates_filter_bound_values ();
+  test_q_builtin_value_type_predicates ();
+  test_q_builtin_numeric_predicates ();
+  test_q_builtin_comparison_predicates ();
+  test_q_builtin_variadic_comparison_predicates ();
+  test_q_builtin_equality_predicates ();
+  test_q_builtin_boolean_predicates ();
+  test_q_builtin_differ_and_identical_predicates ()
+
+let test_query_fns__test_symbol_resolution () =
+  assert_equal_query
+    "query_fns.cljc test-symbol-resolution resolves a callable query function"
+    [ [ Result_value (Int 42) ] ]
+    (q_string
+       ~inputs:[ Arg_function (fun _ -> Some [ Result_value (Int 42) ]) ]
+       (empty_db ())
+       "[:find ?x
+         :in ?f
+         :where [(?f) ?x]]")
+
+let test_query_aggregates__test_aggregates () =
+  test_q_with_aggregates ();
+  test_q_aggregates_with_pull_expressions ();
+  test_q_with_interleaved_aggregates ();
+  test_q_aggregates_relation_inputs_with_with_vars ();
+  test_q_with_preserves_non_aggregate_duplicates ();
+  test_q_count_distinct_aggregate ();
+  test_q_distinct_aggregate ();
+  test_q_min_max_use_keyword_comparator ();
+  test_q_with_vars_preserve_aggregate_duplicates ();
+  test_q_avg_aggregate ();
+  test_q_sum_aggregate_accepts_float_values ();
+  test_q_statistical_aggregates ();
+  test_q_min_n_and_max_n_aggregates ();
+  test_q_rand_and_sample_aggregates ();
+  test_q_custom_aggregates ()
+
+let test_query_not__test_not () =
+  test_q_not_filters_matching_bindings ();
+  test_q_not_matches_upstream_edge_cases ()
+
+let test_query_not__test_not_join () =
+  test_q_not_join_projects_join_variables ();
+  test_q_not_join_rejects_unbound_join_vars ()
+
+let test_query_not__test_default_source () =
+  test_q_source_qualified_composite_clauses ();
+  test_q_not_or_upstream_source_and_relation_batch ()
+
+let test_query_not__test_impl_edge_cases () =
+  test_q_not_matches_upstream_edge_cases ()
+
+let test_query_not__test_insufficient_bindings () =
+  test_q_not_insufficient_bindings_match_upstream_messages ();
+  test_q_not_rejects_clauses_without_outer_bindings ()
+
+let test_query_or__test_or () =
+  test_q_or_unions_branch_results ();
+  test_q_or_allows_branch_vars_bound_by_outer_clauses ();
+  test_q_or_join_required_vars_use_outer_bindings ()
+
+let test_query_or__test_or_join () =
+  test_q_or_join_projects_join_variables ();
+  test_q_or_join_binds_listed_branch_variables ();
+  test_q_or_join_rejects_branches_missing_unbound_listed_vars ();
+  test_q_or_join_required_vars_use_outer_bindings ();
+  test_q_not_or_upstream_source_and_relation_batch ()
+
+let test_query_or__test_default_source () =
+  test_q_source_qualified_composite_clauses ();
+  test_q_not_or_upstream_source_and_relation_batch ()
+
+let test_query_or__test_const_substitution () =
+  test_q_or_join_constant_substitution ()
+
+let test_query_or__test_errors () =
+  test_q_or_matches_upstream_error_messages ();
+  test_q_or_rejects_branches_with_different_free_vars ()
+
+let test_query_rules__test_rules () =
+  test_q_with_rules ();
+  test_q_regular_clauses_join_with_rules ();
+  test_q_rule_context_is_isolated_from_outer_context ();
+  test_q_rule_branches_match_upstream ();
+  test_q_with_recursive_rules ();
+  test_q_with_symmetric_recursive_rules ();
+  test_q_with_mutually_recursive_rules ();
+  test_q_with_dynamic_callable_inputs_in_rules ();
+  test_q_can_call_same_dynamic_predicate_rule_twice ();
+  test_q_source_qualified_rules ();
+  test_q_rejects_unknown_rules ()
+
+let test_query_rules__test_false_arguments () =
+  test_q_rules_accept_false_arguments ()
+
+let test_query_rules__test_rule_performance_on_larger_datasets () =
+  let status_for i =
+    match i mod 3 with
+    | 0 -> "started"
+    | 1 -> "pending"
+    | _ -> "stopped"
+  in
+  let db =
+    db_with
+      (List.init 5000 (fun i ->
+         let eid = i + 1 in
+         Entity
+           { db_id = Some (Entity_id eid)
+           ; attrs =
+               [ "item/id", One_value (Int eid)
+               ; "item/status", One_value (String (status_for eid))
+               ]
+           }))
+      (empty_db ())
+  in
+  let inline_query =
+    { find = [ Find_var "e" ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where =
+        [ Pattern (QVar "e", QAttr "item/status", QVar "status")
+        ; Ground (String "pending", "status")
+        ]
+    }
+  in
+  let rule_query =
+    { inline_query with
+      rules =
+        [ { rule_name = "pending?"
+          ; rule_params = [ "status" ]
+          ; rule_body = [ Ground (String "pending", "status") ]
+          }
+        ]
+    ; where =
+        [ Pattern (QVar "e", QAttr "item/status", QVar "status")
+        ; Rule ("pending?", [ QVar "status" ])
+        ]
+    }
+  in
+  assert_equal_query
+    "query_rules.cljc performance case keeps rule and inline results equivalent on larger inputs"
+    (q db inline_query)
+    (q db rule_query)
+
 let test_unique_identity_lookup_and_upsert () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
@@ -18659,6 +18822,23 @@ let () =
   test_q_with_symmetric_recursive_rules ();
   test_q_with_mutually_recursive_rules ();
   test_q_source_qualified_rules ();
+  test_query_fns__test_query_fns ();
+  test_query_fns__test_predicates ();
+  test_query_fns__test_symbol_resolution ();
+  test_query_aggregates__test_aggregates ();
+  test_query_not__test_not ();
+  test_query_not__test_not_join ();
+  test_query_not__test_default_source ();
+  test_query_not__test_impl_edge_cases ();
+  test_query_not__test_insufficient_bindings ();
+  test_query_or__test_or ();
+  test_query_or__test_or_join ();
+  test_query_or__test_default_source ();
+  test_query_or__test_const_substitution ();
+  test_query_or__test_errors ();
+  test_query_rules__test_rules ();
+  test_query_rules__test_false_arguments ();
+  test_query_rules__test_rule_performance_on_larger_datasets ();
   test_unique_identity_lookup_and_upsert ();
   test_unique_identity_upserts_match_upstream_cases ();
   test_unique_identity_rejects_conflicting_explicit_entity_ids ();
