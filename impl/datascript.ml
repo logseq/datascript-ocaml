@@ -3255,146 +3255,34 @@ let propagate_rule_binding db outer_binding rule_binding rule terms =
 
 let rule_invocation_callables = Query.rule_invocation_callables
 
-let bind_relation_row db bindings vars row =
-  if List.length vars <> List.length row then
-    invalid_arg "relation input row arity mismatch";
-  List.fold_left2
-    (fun binding var value ->
-      match binding, var with
-      | None, _ -> None
-      | Some binding, "_" -> Some binding
-      | Some binding, _ -> bind_var db var value binding)
-    (Some bindings)
-    vars
-    row
-
 let resolve_query_input_result db = function
   | Result_value value ->
     Option.map (fun _ -> Result_value value) (resolve_query_value db value)
   | result -> Some result
 
-let resolve_query_input_row db row =
-  let rec resolve acc = function
-    | [] -> Some (List.rev acc)
-    | value :: rest ->
-      (match resolve_query_input_result db value with
-       | Some value -> resolve (value :: acc) rest
-       | None -> None)
-  in
-  resolve [] row
+let query_input_context db : Query.input_context =
+  { resolve_query_input_result = resolve_query_input_result db
+  ; bind_var = (fun var value bindings -> bind_var db var value bindings)
+  ; entity_id_of_ref = entity_id_of_ref db
+  }
+
+let bind_relation_row db bindings vars row =
+  Query.bind_relation_row (query_input_context db) bindings vars row
 
 let collection_values_of_input db value =
-  match resolve_query_input_result db value with
-  | Some (Result_value (List values | Vector values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
-  | Some (Result_value (Tuple values)) ->
-    Some (values |> List.filter_map (Option.map (fun value -> Result_value value)))
-  | Some _ | None -> None
+  Query.collection_values_of_input (query_input_context db) value
 
 let row_values_of_input db value =
-  match resolve_query_input_result db value with
-  | Some (Result_value (List values | Vector values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
-  | Some (Result_value (Tuple values)) ->
-    Some (values |> List.map (function Some value -> Result_value value | None -> Result_value Nil))
-  | Some _ | None -> None
+  Query.row_values_of_input (query_input_context db) value
 
 let eval_ground_term_tuple db bindings result output_vars =
-  match row_values_of_input db result with
-  | Some row ->
-    (match bind_relation_row db bindings output_vars row with
-     | Some bindings -> [ bindings ]
-     | None -> [])
-  | None -> []
+  Query.eval_ground_term_tuple (query_input_context db) bindings result output_vars
 
 let eval_ground_term_relation db bindings result output_vars =
-  match collection_values_of_input db result with
-  | Some rows ->
-    rows
-    |> List.filter_map (fun row ->
-      match row_values_of_input db row with
-      | Some row -> bind_relation_row db bindings output_vars row
-      | None -> None)
-  | None -> []
+  Query.eval_ground_term_relation (query_input_context db) bindings result output_vars
 
-let rec bind_input_binding db input_binding value bindings =
-  match input_binding with
-  | Bind_scalar var ->
-    (match resolve_query_input_result db value with
-     | Some value -> List.filter_map (fun binding -> bind_var db var value binding) bindings
-     | None -> [])
-  | Bind_ignore ->
-    (match resolve_query_input_result db value with
-     | Some _ -> bindings
-     | None -> [])
-  | Bind_collection binding ->
-    (match collection_values_of_input db value with
-     | Some values ->
-       List.concat_map (fun value -> bind_input_binding db binding value bindings) values
-     | None -> [])
-  | Bind_tuple bindings_ ->
-    (match row_values_of_input db value with
-     | Some row -> bind_nested_input_tuple db bindings_ row bindings
-     | None -> [])
-
-and bind_nested_input_tuple db input_bindings row bindings =
-  if List.length input_bindings <> List.length row then
-    invalid_arg "relation input row arity mismatch";
-  List.fold_left2
-    (fun bindings input_binding value -> bind_input_binding db input_binding value bindings)
-    bindings
-    input_bindings
-    row
-
-let apply_query_input db bindings = function
-  | Input_scalar (var, value) ->
-    (match resolve_query_input_result db value with
-     | Some value -> List.filter_map (fun binding -> bind_var db var value binding) bindings
-     | None -> [])
-  | Input_entity_ref (var, entity_ref) ->
-    (match entity_id_of_ref db entity_ref with
-     | Some entity_id ->
-       List.filter_map (fun binding -> bind_var db var (Result_entity entity_id) binding) bindings
-     | None -> [])
-  | Input_collection (var, values) ->
-    let values = List.filter_map (resolve_query_input_result db) values in
-    List.concat_map
-      (fun binding -> List.filter_map (fun value -> bind_var db var value binding) values)
-      bindings
-  | Input_collection_ignore values ->
-    let _ = List.filter_map (resolve_query_input_result db) values in
-    bindings
-  | Input_nested_collection (input_binding, values) ->
-    List.concat_map (fun value -> bind_input_binding db input_binding value bindings) values
-  | Input_tuple (vars, row) ->
-    (match resolve_query_input_row db row with
-     | Some row -> List.filter_map (fun binding -> bind_relation_row db binding vars row) bindings
-     | None -> [])
-  | Input_relation (vars, rows) ->
-    let rows = List.filter_map (resolve_query_input_row db) rows in
-    List.concat_map
-      (fun binding -> List.filter_map (bind_relation_row db binding vars) rows)
-      bindings
-  | Input_nested_tuple (input_bindings, row) -> bind_nested_input_tuple db input_bindings row bindings
-  | Input_nested_relation (input_bindings, rows) ->
-    List.concat_map (fun row -> bind_nested_input_tuple db input_bindings row bindings) rows
-  | Input_predicate _
-  | Input_function _ ->
-    bindings
-  | Input_aggregate _ -> bindings
-  | Input_rules _ -> bindings
-  | Input_ignore -> bindings
-  | Input_scalar_decl _
-  | Input_collection_decl _
-  | Input_collection_ignore_decl
-  | Input_ignore_decl
-  | Input_nested_collection_decl _
-  | Input_tuple_decl _
-  | Input_relation_decl _
-  | Input_nested_tuple_decl _
-  | Input_nested_relation_decl _ ->
-    invalid_arg "query input declarations require supplied input arguments"
-  | Input_source_decl _
-  | Input_rules_decl ->
-    bindings
+let apply_query_input db bindings input =
+  Query.apply_query_input (query_input_context db) bindings input
 
 let query_input_decl_binding_string = Query.query_input_decl_binding_string
 
@@ -5070,6 +4958,16 @@ module Query = struct
         (string * query_result) list option
     }
 
+  type input_context = Query_impl.input_context =
+    { resolve_query_input_result : query_result -> query_result option
+    ; bind_var :
+        string ->
+        query_result ->
+        (string * query_result) list ->
+        (string * query_result) list option
+    ; entity_id_of_ref : entity_ref -> entity_id option
+    }
+
   let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
   let q_string = Query_impl.q_string query_context
@@ -5200,6 +5098,15 @@ module Query = struct
   let row_of_collection_result = Query_impl.row_of_collection_result
   let row_of_scalar_sequence = Query_impl.row_of_scalar_sequence
   let rows_of_map_entries = Query_impl.rows_of_map_entries
+  let bind_relation_row = Query_impl.bind_relation_row
+  let resolve_query_input_row = Query_impl.resolve_query_input_row
+  let collection_values_of_input = Query_impl.collection_values_of_input
+  let row_values_of_input = Query_impl.row_values_of_input
+  let eval_ground_term_tuple = Query_impl.eval_ground_term_tuple
+  let eval_ground_term_relation = Query_impl.eval_ground_term_relation
+  let bind_input_binding = Query_impl.bind_input_binding
+  let bind_nested_input_tuple = Query_impl.bind_nested_input_tuple
+  let apply_query_input = Query_impl.apply_query_input
   let bind_query_inputs = Query_impl.bind_query_inputs
 end
 

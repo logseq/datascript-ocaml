@@ -86,6 +86,16 @@ type source_context =
       (string * query_result) list option
   }
 
+type input_context =
+  { resolve_query_input_result : query_result -> query_result option
+  ; bind_var :
+      string ->
+      query_result ->
+      (string * query_result) list ->
+      (string * query_result) list option
+  ; entity_id_of_ref : entity_ref -> entity_id option
+  }
+
 val empty_query_callables : query_callables
 
 val q : context -> ?inputs:query_arg list -> db -> query -> query_result list list
@@ -346,6 +356,44 @@ val values_of_collection_result : query_result -> query_result list option
 val row_of_collection_result : query_result -> query_result list
 val row_of_scalar_sequence : query_result -> query_result list
 val rows_of_map_entries : (value * value) list -> query_result list list
+val bind_relation_row :
+  input_context ->
+  (string * query_result) list ->
+  string list ->
+  query_result list ->
+  (string * query_result) list option
+val resolve_query_input_row : input_context -> query_result list -> query_result list option
+val collection_values_of_input : input_context -> query_result -> query_result list option
+val row_values_of_input : input_context -> query_result -> query_result list option
+val eval_ground_term_tuple :
+  input_context ->
+  (string * query_result) list ->
+  query_result ->
+  string list ->
+  (string * query_result) list list
+val eval_ground_term_relation :
+  input_context ->
+  (string * query_result) list ->
+  query_result ->
+  string list ->
+  (string * query_result) list list
+val bind_input_binding :
+  input_context ->
+  input_binding ->
+  query_result ->
+  (string * query_result) list list ->
+  (string * query_result) list list
+val bind_nested_input_tuple :
+  input_context ->
+  input_binding list ->
+  query_result list ->
+  (string * query_result) list list ->
+  (string * query_result) list list
+val apply_query_input :
+  input_context ->
+  (string * query_result) list list ->
+  query_input ->
+  (string * query_result) list list
 val bind_query_inputs :
   query_input_of_arg:(query_input -> query_arg -> query_input) ->
   consume_rules:bool ->

@@ -758,6 +758,60 @@ let test_query_namespace__test_input_shape_helpers () =
        [ Keyword "a", Int 1; Keyword "b", Vector [ Int 2; Int 3 ] ])
 
 let test_query_namespace__test_input_binding_helpers () =
+  let input_context =
+    { Query.resolve_query_input_result =
+        (function
+          | Result_value (Keyword "drop") -> None
+          | result -> Some result)
+    ; bind_var =
+        (fun var value bindings ->
+           Query.bind_var
+             { validate_entity_id = (fun entity_id -> entity_id)
+             ; resolve_query_value = (fun value -> Some value)
+             ; lookup_ref_entity_id = (fun _ _ -> None)
+             }
+             var
+             value
+             bindings)
+    ; entity_id_of_ref =
+        (function
+          | Ident "known" -> Some 42
+          | _ -> None)
+    }
+  in
+  assert_equal_query_option
+    "bind_relation_row binds relation columns"
+    (Some [ "age", Result_value (Int 30); "name", Result_value (String "Ivan") ])
+    (Query.bind_relation_row
+       input_context
+       []
+       [ "name"; "age" ]
+       [ Result_value (String "Ivan"); Result_value (Int 30) ]);
+  assert_raises_invalid_arg_message
+    "bind_relation_row rejects row arity mismatch"
+    "relation input row arity mismatch"
+    (fun () -> ignore (Query.bind_relation_row input_context [] [ "name" ] []));
+  assert_equal_query_rows
+    "apply_query_input binds scalar inputs"
+    [ [ "name", Result_value (String "Ivan") ] ]
+    (Query.apply_query_input input_context [ [] ] (Input_scalar ("name", Result_value (String "Ivan"))));
+  assert_equal_query_rows
+    "apply_query_input binds entity ref inputs"
+    [ [ "e", Result_entity 42 ] ]
+    (Query.apply_query_input input_context [ [] ] (Input_entity_ref ("e", Ident "known")));
+  assert_equal_query_rows
+    "apply_query_input expands relation inputs"
+    [ [ "age", Result_value (Int 30); "name", Result_value (String "Ivan") ]
+    ; [ "age", Result_value (Int 40); "name", Result_value (String "Oleg") ]
+    ]
+    (Query.apply_query_input
+       input_context
+       [ [] ]
+       (Input_relation
+          ( [ "name"; "age" ]
+          , [ [ Result_value (String "Ivan"); Result_value (Int 30) ]
+            ; [ Result_value (String "Oleg"); Result_value (Int 40) ]
+            ] )));
   let query_input_of_arg decl arg =
     match decl, arg with
     | Input_ignore_decl, _ -> Input_ignore
