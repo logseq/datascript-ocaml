@@ -20,6 +20,7 @@ module Entity = Entity
 module Lru = Lru
 module Schema = Schema
 module Serialize = Serialize
+module Storage = Storage
 
 let max_entity_id = 0x7fffffff
 
@@ -314,175 +315,23 @@ let serialize_context : Serialize.context =
 let from_serializable snapshot =
   Serialize.from_serializable serialize_context snapshot
 
-let storage_root_address = "datascript/root"
-let storage_tail_address = "datascript/tail"
-
-let memory_storage () =
-  let disk = ref [] in
-  let store entries delete_addresses =
-    disk :=
-      !disk
-      |> List.filter (fun (address, _) -> not (List.mem address delete_addresses))
-      |> fun disk ->
-        List.fold_left
-          (fun disk (address, payload) -> (address, payload) :: List.remove_assoc address disk)
-          disk
-          entries
-  in
-  let restore address = List.assoc_opt address !disk in
-  let list_addresses () =
-    !disk
-    |> List.map fst
-    |> List.sort_uniq compare
-  in
-  let delete addresses =
-    disk := List.filter (fun (address, _) -> not (List.mem address addresses)) !disk
-  in
-  { storage_store = store
-  ; storage_restore = restore
-  ; storage_list_addresses = list_addresses
-  ; storage_delete = delete
-  }
-
-let ensure_storage_dir dir =
-  if Sys.file_exists dir then begin
-    if not (Sys.is_directory dir) then
-      invalid_arg ("storage path is not a directory: " ^ dir)
-  end
-  else Unix.mkdir dir 0o755
-
-let hex_digit value =
-  Char.chr (if value < 10 then Char.code '0' + value else Char.code 'a' + value - 10)
-
-let hex_value = function
-  | '0' .. '9' as ch -> Char.code ch - Char.code '0'
-  | 'a' .. 'f' as ch -> Char.code ch - Char.code 'a' + 10
-  | 'A' .. 'F' as ch -> Char.code ch - Char.code 'A' + 10
-  | ch -> invalid_arg ("invalid storage address hex digit: " ^ String.make 1 ch)
-
-let encode_storage_address address =
-  String.init
-    (String.length address * 2)
-    (fun index ->
-      let code = Char.code address.[index / 2] in
-      if index mod 2 = 0 then hex_digit (code lsr 4) else hex_digit (code land 0x0f))
-
-let decode_storage_address encoded =
-  if String.length encoded mod 2 <> 0 then
-    invalid_arg ("invalid storage address filename: " ^ encoded);
-  String.init
-    (String.length encoded / 2)
-    (fun index ->
-      let high = hex_value encoded.[index * 2] in
-      let low = hex_value encoded.[index * 2 + 1] in
-      Char.chr ((high lsl 4) lor low))
-
-let storage_payload_path dir address =
-  Filename.concat dir (encode_storage_address address ^ ".bin")
-
-let file_storage dir =
-  ensure_storage_dir dir;
-  let write_payload address payload =
-    let channel = open_out_bin (storage_payload_path dir address) in
-    Fun.protect
-      ~finally:(fun () -> close_out_noerr channel)
-      (fun () -> Marshal.to_channel channel payload [])
-  in
-  let read_payload address =
-    let path = storage_payload_path dir address in
-    if not (Sys.file_exists path) then None
-    else
-      let channel = open_in_bin path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr channel)
-        (fun () -> Some (Marshal.from_channel channel : storage_payload))
-  in
-  let list_addresses () =
-    Sys.readdir dir
-    |> Array.to_list
-    |> List.filter_map (fun filename ->
-      if Filename.extension filename = ".bin" then
-        let base = Filename.remove_extension filename in
-        Some (decode_storage_address base)
-      else
-        None)
-    |> List.sort_uniq compare
-  in
-  let delete addresses =
-    List.iter
-      (fun address ->
-        let path = storage_payload_path dir address in
-        if Sys.file_exists path then Sys.remove path)
-      addresses
-  in
-  { storage_store =
-      (fun entries delete_addresses ->
-        delete delete_addresses;
-        List.iter (fun (address, payload) -> write_payload address payload) entries)
-  ; storage_restore = read_payload
-  ; storage_list_addresses = list_addresses
-  ; storage_delete = delete
-  }
-
-let store_to_storage db storage =
-  storage.storage_store
-    [ storage_root_address, Storage_db (serializable db)
-    ; storage_tail_address, Storage_tail []
-    ]
-    []
+let storage_store_context : Storage.store_context =
+  { serializable }
 
 let store ?storage db =
-  match storage, db.storage_ref with
-  | Some storage, _ -> store_to_storage db storage
-  | None, Some storage -> store_to_storage db storage
-  | None, None -> invalid_arg "db has no attached storage"
+  Storage.store storage_store_context ?storage db
 
-let store_tail storage tail =
-  storage.storage_store [ storage_tail_address, Storage_tail tail ] []
-
-let storage_tail_compaction_threshold = 32
-
-let storage_tail_datom_count tail =
-  tail |> List.concat |> List.length
-
-let restore_root_snapshot storage =
-  match storage.storage_restore storage_root_address with
-  | Some (Storage_db snapshot) -> Some snapshot
-  | Some (Storage_tail _) -> invalid_arg "storage root does not contain a db"
-  | None -> None
-
-let restore_tail_groups storage =
-  match storage.storage_restore storage_tail_address with
-  | Some (Storage_tail tail) -> tail
-  | Some (Storage_db _) -> invalid_arg "storage tail does not contain datom groups"
-  | None -> []
-
-let storage_addresses storage = storage.storage_list_addresses ()
-
-let storage (db : db) = db.storage_ref
-
-let addresses dbs =
-  dbs
-  |> List.concat_map (fun db ->
-    match db.storage_ref with
-    | None -> []
-    | Some storage -> storage.storage_list_addresses ())
-  |> List.sort_uniq compare
-
-let settings (db : db) =
-  [ "branching-factor", Int 512
-  ; "ref-type", Keyword "soft"
-  ; "storage", Bool (Option.is_some db.storage_ref)
-  ]
-
-let collect_garbage storage =
-  let live =
-    [ storage_root_address; storage_tail_address ]
-    |> List.filter (fun address -> Option.is_some (storage.storage_restore address))
-  in
-  storage.storage_list_addresses ()
-  |> List.filter (fun address -> not (List.mem address live))
-  |> storage.storage_delete
+let memory_storage = Storage.memory_storage
+let file_storage = Storage.file_storage
+let store_tail = Storage.store_tail
+let storage_tail_compaction_threshold = Storage.tail_compaction_threshold
+let storage_tail_datom_count = Storage.tail_datom_count
+let restore_tail_groups = Storage.restore_tail_groups
+let storage_addresses = Storage.storage_addresses
+let storage = Storage.storage
+let addresses = Storage.addresses
+let settings = Storage.settings
+let collect_garbage = Storage.collect_garbage
 
 let conn_creation_context : Conn.creation_context =
   { empty_db; init_db; store }
@@ -2144,29 +1993,18 @@ let db_with tx_ops db =
   let db_after, _, _ = apply_tx tx_ops db in
   db_after
 
+let storage_tail_context : Storage.tail_context =
+  { apply_group = (fun db group -> db_with (List.map (fun datom -> Raw_datom datom) group) db)
+  }
+
 let db_with_tail db tail =
-  List.fold_left
-    (fun db group ->
-      match group with
-      | [] -> db
-      | first :: _ ->
-        let group_tx = first.tx in
-        let db_before_group = { db with max_tx = group_tx - 1 } in
-        let db_after_group =
-          match db_with (List.map (fun datom -> Raw_datom datom) group) db_before_group with
-          | db -> db
-          | exception Invalid_argument _ -> db_before_group
-        in
-        { db_after_group with max_tx = group_tx })
-    db
-    tail
+  Storage.db_with_tail storage_tail_context db tail
+
+let storage_restore_context : Storage.restore_context =
+  { from_serializable; db_with_tail }
 
 let restore storage =
-  match restore_root_snapshot storage with
-  | None -> None
-  | Some snapshot ->
-    let db = db_with_tail (from_serializable snapshot) (restore_tail_groups storage) in
-    Some { db with storage_ref = Some storage }
+  Storage.restore storage_restore_context storage
 
 let restore_conn storage =
   let context : Conn.restore_context = { restore; restore_tail_groups } in

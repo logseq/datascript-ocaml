@@ -38,6 +38,11 @@
  (modules test_sqlite_storage)
  (libraries datascript logseq_sqlite_storage unix))
 
+(test
+ (name test_storage)
+ (modules test_storage)
+ (libraries datascript unix))
+
 (executable
  (name js_smoke)
  (modes js)
