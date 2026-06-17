@@ -2277,6 +2277,14 @@ let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term da
   let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
   match_query_term db op_term (result_of_datom_op datom) bindings
 
+let query_source_context db : Query.source_context =
+  { match_context = query_match_context db
+  ; pattern_datoms
+  ; match_data_pattern
+  ; match_data_pattern_tx
+  ; match_data_pattern_tx_op
+  }
+
 let eval_query_term db bindings term =
   Query.eval_query_term (query_match_context db) bindings term
 
@@ -3016,76 +3024,24 @@ let eval_untuple_function db bindings tuple_term output_vars =
   | Some _ | None -> []
 
 let source default_db sources name =
-  match List.assoc_opt name sources with
-  | Some source -> source
-  | None ->
-    if name = "$" then Db_source default_db else invalid_arg ("unknown query source: " ^ name)
+  Query.source default_db sources name
 
 let sources_with_root_default db sources =
-  if List.mem_assoc "$" sources then sources else ("$", Db_source db) :: sources
+  Query.sources_with_root_default db sources
 
 let source_db default_db sources name =
-  match source default_db sources name with
-  | Db_source db -> db
-  | Relation_source _ -> invalid_arg ("query source is not a database: " ^ name)
+  Query.source_db default_db sources name
 
-let query_source_db = function
-  | Db_source db -> db
-  | Relation_source _ -> invalid_arg "query source is not a database"
-
-let match_relation_row db bindings terms row =
-  let rec match_terms binding terms row =
-    match binding, terms, row with
-    | None, _, _ -> None
-    | Some binding, [], _ -> Some binding
-    | Some _, _ :: _, [] -> invalid_arg "source relation row arity mismatch"
-    | Some binding, term :: terms, value :: row ->
-      match_terms (match_query_term db term value binding) terms row
-  in
-  match_terms (Some bindings) terms row
+let query_source_db = Query.query_source_db
 
 let match_query_source_pattern default_db source bindings terms =
-  match source with
-  | Db_source source_db ->
-    (match terms with
-     | [ e_term; a_term; v_term ] ->
-       pattern_datoms source_db a_term
-       |> List.filter_map (fun datom -> match_data_pattern source_db bindings e_term a_term v_term datom)
-     | [ e_term; a_term; v_term; tx_term ] ->
-       pattern_datoms source_db a_term
-       |> List.filter_map (fun datom -> match_data_pattern_tx source_db bindings e_term a_term v_term tx_term datom)
-     | [ e_term; a_term; v_term; tx_term; op_term ] ->
-       pattern_datoms source_db a_term
-       |> List.filter_map (fun datom -> match_data_pattern_tx_op source_db bindings e_term a_term v_term tx_term op_term datom)
-     | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms")
-  | Relation_source rows ->
-    rows
-    |> List.filter_map (fun row -> match_relation_row default_db bindings terms row)
+  Query.match_query_source_pattern (query_source_context default_db) default_db source bindings terms
 
 let match_source_pattern default_db sources source_name bindings terms =
-  match_query_source_pattern default_db (source default_db sources source_name) bindings terms
+  Query.match_source_pattern (query_source_context default_db) default_db sources source_name bindings terms
 
 let match_relation_source_pattern default_db sources source_name bindings terms =
-  let attr_term_of_short_pattern = function
-    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
-    | term -> term
-  in
-  match source default_db sources source_name with
-  | Relation_source rows ->
-    rows
-    |> List.filter_map (fun row -> match_relation_row default_db bindings terms row)
-  | Db_source _ ->
-    (match terms with
-     | [ e_term ] ->
-       match_source_pattern default_db sources source_name bindings [ e_term; QWildcard; QWildcard ]
-     | [ e_term; a_term ] ->
-       match_source_pattern
-         default_db
-         sources
-         source_name
-         bindings
-         [ e_term; attr_term_of_short_pattern a_term; QWildcard ]
-     | _ -> invalid_arg ("query source is not a relation: " ^ source_name))
+  Query.match_relation_source_pattern (query_source_context default_db) default_db sources source_name bindings terms
 
 let pull_pattern_of_result = function
   | Result_value value -> parse_pull_pattern (empty_db ()) (query_form_of_value value)
@@ -5115,6 +5071,38 @@ module Query = struct
     ; coerce_tuple_lookup_value : attr -> value -> value
     }
 
+  type source_context = Query_impl.source_context =
+    { match_context : match_context
+    ; pattern_datoms : db -> query_term -> datom list
+    ; match_data_pattern :
+        db ->
+        (string * query_result) list ->
+        query_term ->
+        query_term ->
+        query_term ->
+        datom ->
+        (string * query_result) list option
+    ; match_data_pattern_tx :
+        db ->
+        (string * query_result) list ->
+        query_term ->
+        query_term ->
+        query_term ->
+        query_term ->
+        datom ->
+        (string * query_result) list option
+    ; match_data_pattern_tx_op :
+        db ->
+        (string * query_result) list ->
+        query_term ->
+        query_term ->
+        query_term ->
+        query_term ->
+        query_term ->
+        datom ->
+        (string * query_result) list option
+    }
+
   let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
   let q_string = Query_impl.q_string query_context
@@ -5168,6 +5156,14 @@ module Query = struct
   let collect_query_terms = Query_impl.collect_query_terms
   let collect_query_terms_exn = Query_impl.collect_query_terms_exn
   let query_term_entity_id = Query_impl.query_term_entity_id
+  let source = Query_impl.source
+  let sources_with_root_default = Query_impl.sources_with_root_default
+  let source_db = Query_impl.source_db
+  let query_source_db = Query_impl.query_source_db
+  let match_relation_row = Query_impl.match_relation_row
+  let match_query_source_pattern = Query_impl.match_query_source_pattern
+  let match_source_pattern = Query_impl.match_source_pattern
+  let match_relation_source_pattern = Query_impl.match_relation_source_pattern
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules

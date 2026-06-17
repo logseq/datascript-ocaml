@@ -54,6 +54,38 @@ type match_context =
   ; coerce_tuple_lookup_value : attr -> value -> value
   }
 
+type source_context =
+  { match_context : match_context
+  ; pattern_datoms : db -> query_term -> datom list
+  ; match_data_pattern :
+      db ->
+      (string * query_result) list ->
+      query_term ->
+      query_term ->
+      query_term ->
+      datom ->
+      (string * query_result) list option
+  ; match_data_pattern_tx :
+      db ->
+      (string * query_result) list ->
+      query_term ->
+      query_term ->
+      query_term ->
+      query_term ->
+      datom ->
+      (string * query_result) list option
+  ; match_data_pattern_tx_op :
+      db ->
+      (string * query_result) list ->
+      query_term ->
+      query_term ->
+      query_term ->
+      query_term ->
+      query_term ->
+      datom ->
+      (string * query_result) list option
+  }
+
 val empty_query_callables : query_callables
 
 val q : context -> ?inputs:query_arg list -> db -> query -> query_result list list
@@ -173,6 +205,39 @@ val collect_query_terms_exn :
   match_context -> (string * query_result) list -> query_term list -> query_result list
 val query_term_entity_id :
   match_context -> (string * query_result) list -> query_term -> entity_id option
+val source : db -> (string * query_source) list -> string -> query_source
+val sources_with_root_default : db -> (string * query_source) list -> (string * query_source) list
+val source_db : db -> (string * query_source) list -> string -> db
+val query_source_db : query_source -> db
+val match_relation_row :
+  source_context ->
+  (string * query_result) list ->
+  query_term list ->
+  query_result list ->
+  (string * query_result) list option
+val match_query_source_pattern :
+  source_context ->
+  db ->
+  query_source ->
+  (string * query_result) list ->
+  query_term list ->
+  (string * query_result) list list
+val match_source_pattern :
+  source_context ->
+  db ->
+  (string * query_source) list ->
+  string ->
+  (string * query_result) list ->
+  query_term list ->
+  (string * query_result) list list
+val match_relation_source_pattern :
+  source_context ->
+  db ->
+  (string * query_source) list ->
+  string ->
+  (string * query_result) list ->
+  query_term list ->
+  (string * query_result) list list
 val query_callables_of_inputs : query_input list -> query_callables
 val query_rules_of_inputs : query_input list -> query_rule list
 val matching_rules : query_rule list -> string -> int -> query_rule list

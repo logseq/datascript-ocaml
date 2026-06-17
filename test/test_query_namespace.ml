@@ -391,6 +391,129 @@ let test_query_namespace__test_query_matching_helpers () =
     (Some 42)
     (Query.query_term_entity_id match_context [] (QValue (Keyword "known-ident")))
 
+let test_query_namespace__test_source_matching_helpers () =
+  let result_resolution_context =
+    { Query.validate_entity_id = (fun entity_id -> entity_id)
+    ; resolve_query_value = (fun value -> Some value)
+    ; lookup_ref_entity_id = (fun _ _ -> None)
+    }
+  in
+  let match_context =
+    { Query.result_resolution_context
+    ; source_db = empty_db ()
+    ; ident_entity_id = (fun _ -> None)
+    ; unresolved_lookup_ref_message = (fun attr _ -> "missing lookup ref: " ^ attr)
+    ; value_equal = Util.value_equal
+    ; coerce_tuple_lookup_value = (fun _ value -> value)
+    }
+  in
+  let name_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:7 ~added:true () in
+  let source_context =
+    { Query.match_context
+    ; pattern_datoms = (fun _ _ -> [ name_datom ])
+    ; match_data_pattern =
+        (fun _ bindings e_term a_term v_term datom ->
+           Query.match_pattern_clause match_context bindings e_term a_term v_term datom)
+    ; match_data_pattern_tx =
+        (fun _ bindings e_term a_term v_term tx_term datom ->
+           Query.match_pattern_tx_clause match_context bindings e_term a_term v_term tx_term datom)
+    ; match_data_pattern_tx_op =
+        (fun _ bindings e_term a_term v_term tx_term op_term datom ->
+           let ( let* ) = Option.bind in
+           let* bindings =
+             Query.match_pattern_tx_clause match_context bindings e_term a_term v_term tx_term datom
+           in
+           Query.match_query_term match_context op_term (Query.result_of_datom_op datom) bindings)
+    }
+  in
+  let root_db = empty_db () in
+  let other_db = empty_db () in
+  (match Query.source root_db [ "other", Db_source other_db ] "$" with
+   | Db_source db when db == root_db -> ()
+   | _ -> failwith "source should default $ to the root db");
+  (match Query.source_db root_db [ "other", Db_source other_db ] "other" with
+   | db when db == other_db -> ()
+   | _ -> failwith "source_db should return named database sources");
+  assert_raises_invalid_arg_message
+    "source rejects unknown names"
+    "unknown query source: missing"
+    (fun () -> ignore (Query.source root_db [] "missing"));
+  assert_raises_invalid_arg_message
+    "source_db rejects relation sources"
+    "query source is not a database: rows"
+    (fun () -> ignore (Query.source_db root_db [ "rows", Relation_source [] ] "rows"));
+  assert_equal_query_option
+    "match_relation_row binds each relation column"
+    (Some [ "age", Result_value (Int 42); "name", Result_value (String "Ivan") ])
+    (Query.match_relation_row
+       source_context
+       []
+       [ QVar "name"; QVar "age" ]
+       [ Result_value (String "Ivan"); Result_value (Int 42) ]);
+  assert_raises_invalid_arg_message
+    "match_relation_row rejects short rows"
+    "source relation row arity mismatch"
+    (fun () ->
+       ignore
+         (Query.match_relation_row
+            source_context
+            []
+            [ QVar "name"; QVar "age" ]
+            [ Result_value (String "Ivan") ]));
+  assert_equal_query_rows
+    "match_query_source_pattern matches database source triples"
+    [ [ "name", Result_value (String "Ivan"); "e", Result_entity 1 ] ]
+    (Query.match_query_source_pattern
+       source_context
+       root_db
+       (Db_source root_db)
+       []
+       [ QVar "e"; QAttr "name"; QVar "name" ]);
+  assert_equal_query_rows
+    "match_query_source_pattern matches relation source rows"
+    [ [ "name", Result_value (String "Ivan") ] ]
+    (Query.match_query_source_pattern
+       source_context
+       root_db
+       (Relation_source [ [ Result_value (String "Ivan") ] ])
+       []
+       [ QVar "name" ]);
+  assert_raises_invalid_arg_message
+    "match_query_source_pattern rejects database arity mismatch"
+    "database source patterns expect 3, 4, or 5 terms"
+    (fun () ->
+       ignore
+         (Query.match_query_source_pattern
+            source_context
+            root_db
+            (Db_source root_db)
+            []
+            [ QVar "e"; QAttr "name" ]));
+  assert_equal_query_rows
+    "match_relation_source_pattern expands short database entity patterns"
+    [ [ "e", Result_entity 1 ] ]
+    (Query.match_relation_source_pattern source_context root_db [] "$" [] [ QVar "e" ]);
+  assert_equal_query_rows
+    "match_relation_source_pattern coerces short database attr values"
+    [ [ "e", Result_entity 1 ] ]
+    (Query.match_relation_source_pattern
+       source_context
+       root_db
+       []
+       "$"
+       []
+       [ QVar "e"; QValue (Keyword "name") ]);
+  assert_equal_query_rows
+    "match_source_pattern uses named relation sources"
+    [ [ "name", Result_value (String "Ivan") ] ]
+    (Query.match_source_pattern
+       source_context
+       root_db
+       [ "rows", Relation_source [ [ Result_value (String "Ivan") ] ] ]
+       "rows"
+       []
+       [ QVar "name" ])
+
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then
     failwith "Query.has_aggregates should detect aggregate find specs";
@@ -1263,6 +1386,7 @@ let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_query_result_helpers ();
   test_query_namespace__test_query_matching_helpers ();
+  test_query_namespace__test_source_matching_helpers ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
   test_query_namespace__test_input_label_helpers ();
