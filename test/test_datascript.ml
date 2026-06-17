@@ -12819,6 +12819,111 @@ let test_unique_identity_lookup_and_upsert () =
     [ 1, "age", Int 32; 1, "name", String "Ivan" ]
     (datoms db Eavt ())
 
+let test_unique_identity_upserts_match_upstream_cases () =
+  let ref_unique_identity = { unique_identity with value_type = Some RefType } in
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "email", unique_identity; "ref", ref_unique_identity ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "email", One_value (String "@1")
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "email", One_value (String "@2")
+                 ; "ref", One_value (Ref 3)
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 3)
+             ; attrs =
+                 [ "name", One_value (String "Dima")
+                 ; "email", One_value (String "@3")
+                 ; "ref", One_value (Ref 4)
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 4)
+             ; attrs =
+                 [ "name", One_value (String "Olga")
+                 ; "email", One_value (String "@4")
+                 ; "ref", One_value (Ref 1)
+                 ]
+             }
+         ]
+  in
+  let updated_email =
+    db_with
+      [ Entity
+          { db_id = None
+          ; attrs =
+              [ "name", One_value (String "Ivan")
+              ; "email", One_value (String "@5")
+              ; "age", One_value (Int 35)
+              ]
+          }
+      ]
+      db
+  in
+  assert_equal_triples
+    "unique identity upsert updates the existing entity when another identity value is new"
+    [ 1, "age", Int 35
+    ; 1, "email", String "@5"
+    ; 1, "name", String "Ivan"
+    ; 2, "email", String "@2"
+    ; 2, "name", String "Petr"
+    ; 2, "ref", Ref 3
+    ; 3, "email", String "@3"
+    ; 3, "name", String "Dima"
+    ; 3, "ref", Ref 4
+    ; 4, "email", String "@4"
+    ; 4, "name", String "Olga"
+    ; 4, "ref", Ref 1
+    ]
+    (datoms updated_email Eavt ());
+  assert_raises_invalid_arg_message
+    "conflicting unique identity attrs without db/id report both lookup refs"
+    "Conflicting upserts: [:name \"Ivan\"] resolves to 1, but [:email \"@2\"] resolves to 2"
+    (fun () ->
+       ignore
+         (db_with
+            [ Entity
+                { db_id = None
+                ; attrs =
+                    [ "name", One_value (String "Ivan")
+                    ; "email", One_value (String "@2")
+                    ; "age", One_value (Int 35)
+                    ]
+                }
+            ]
+            db));
+  let updated_ref =
+    db_with
+      [ Entity { db_id = None; attrs = [ "ref", One_value (Ref 3); "age", One_value (Int 36) ] } ]
+      db
+  in
+  assert_equal_triples
+    "unique identity upsert can resolve through ref values"
+    [ 1, "email", String "@1"
+    ; 1, "name", String "Ivan"
+    ; 2, "age", Int 36
+    ; 2, "email", String "@2"
+    ; 2, "name", String "Petr"
+    ; 2, "ref", Ref 3
+    ; 3, "email", String "@3"
+    ; 3, "name", String "Dima"
+    ; 3, "ref", Ref 4
+    ; 4, "email", String "@4"
+    ; 4, "name", String "Olga"
+    ; 4, "ref", Ref 1
+    ]
+    (datoms updated_ref Eavt ())
+
 let test_unique_identity_rejects_conflicting_explicit_entity_ids () =
   let db =
     empty_db ~schema:[ "name", unique_identity; "email", unique_identity ] ()
@@ -16691,6 +16796,7 @@ let () =
   test_q_with_mutually_recursive_rules ();
   test_q_source_qualified_rules ();
   test_unique_identity_lookup_and_upsert ();
+  test_unique_identity_upserts_match_upstream_cases ();
   test_unique_identity_rejects_conflicting_explicit_entity_ids ();
   test_unique_tuple_identity_upserts_entity_maps ();
   test_unique_tuple_identity_updates_multiple_sources_atomically ();
