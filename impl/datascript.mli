@@ -2,6 +2,12 @@ include module type of Datascript_types
 
 type conn
 
+module Db : sig
+  val tx0 : tx
+  val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
+  val is_datom : datom -> bool
+end
+
 module Lru : sig
   type ('key, 'value) t
   type ('key, 'value) cache

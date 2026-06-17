@@ -21,7 +21,7 @@ let tx_meta_without_store_control tx_meta =
       | _ -> true)
     tx_meta
 
-let tx0 = 0x20000000
+let tx0 = Db.tx0
 
 let next_db_uid =
   let counter = ref 0 in
@@ -32,6 +32,7 @@ let next_db_uid =
 let refresh_db_identity db =
   { db with db_uid = next_db_uid () }
 
+module Db = Db
 module Lru = Lru
 
 let max_entity_id = 0x7fffffff
@@ -43,9 +44,9 @@ let validate_entity_id entity_id =
     invalid_arg ("highest supported entity id exceeded: " ^ string_of_int entity_id);
   entity_id
 
-let datom ?(tx = tx0) ?(added = true) ~e ~a ~v () = { e; a; v; tx; added }
+let datom = Db.datom
 
-let is_datom (_ : datom) = true
+let is_datom = Db.is_datom
 
 let validate_schema schema =
   let is_tuple_attr attr =

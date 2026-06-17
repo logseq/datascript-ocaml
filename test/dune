@@ -4,6 +4,11 @@
  (libraries datascript unix))
 
 (test
+ (name test_lru)
+ (modules test_lru)
+ (libraries datascript))
+
+(test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
  (libraries datascript logseq_sqlite_storage unix))
