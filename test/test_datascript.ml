@@ -10873,6 +10873,15 @@ let test_q_with_dynamic_callable_inputs () =
          :where [?e :person/name ?name]
                 [(?my-fn) ?result]
                 [(< ?result 3)]]");
+  assert_equal_query
+    "q_string skips dynamic predicates when their binding relation is empty like upstream issue-180"
+    []
+    (q_string
+       (empty_db () |> db_with [ Add (Entity_id 1, "age", Int 20) ])
+       "[:find ?e ?age
+         :where [_ :pred ?pred]
+                [?e :age ?age]
+                [(?pred ?age)]]");
   let age_matches = function
     | [ Result_db source_db; Result_entity entity_id; Result_value (Int expected_age) ] ->
       (match entity source_db (Entity_id entity_id) with
