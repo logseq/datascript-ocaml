@@ -5005,33 +5005,10 @@ let parse_flat_value_function symbol args output_vars =
   | "identity", [ term ] -> GroundTermTuple (parse_pattern_term term, output_vars)
   | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
 
-let parse_output_var = function
-  | QueryFormSymbol "_" -> "_"
-  | QueryFormSymbol symbol -> query_symbol_name symbol
-  | _ -> invalid_arg "expected output variable"
-
-let parse_output_vars = function
-  | QueryFormVector forms | QueryFormList forms -> List.map parse_output_var forms
-  | QueryFormSymbol symbol -> [ query_symbol_name symbol ]
-  | _ -> invalid_arg "expected output variables"
-
-let parse_flat_output_vars = function
-  | QueryFormVector forms | QueryFormList forms -> Some (List.map parse_output_var forms)
-  | _ -> None
-
-let parse_collection_output_var = function
-  | QueryFormVector [ QueryFormSymbol output; QueryFormSymbol "..." ]
-  | QueryFormList [ QueryFormSymbol output; QueryFormSymbol "..." ] ->
-    Some (query_symbol_name output)
-  | _ -> None
-
-let parse_relation_output_vars = function
-  | QueryFormVector [ relation_form; QueryFormSymbol "..." ]
-  | QueryFormList [ relation_form; QueryFormSymbol "..." ] ->
-    (match relation_form with
-     | QueryFormSymbol _ -> None
-     | form -> parse_flat_output_vars form)
-  | _ -> None
+let parse_output_var = Parser_impl.parse_output_var
+let parse_output_vars = Parser_impl.parse_output_vars
+let parse_collection_output_var = Parser_impl.parse_collection_output_var
+let parse_relation_output_vars = Parser_impl.parse_relation_output_vars
 
 let ground_values_of_form = function
   | QueryFormVector values | QueryFormList values -> List.map query_value_of_form values
@@ -5636,140 +5613,13 @@ let parse_rules = function
   | Some _ -> invalid_arg "query :rules must be a vector or list"
   | None -> []
 
-let nonempty_input_vars binding_name vars =
-  match vars with
-  | [] -> invalid_arg (binding_name ^ " :in binding requires at least one variable")
-  | vars -> vars
-
-let input_relation_vars = function
-  | QueryFormVector vars | QueryFormList vars -> Some vars
-  | _ -> None
-
-let input_var_of_form = function
-  | QueryFormSymbol "_" -> Some "_"
-  | QueryFormSymbol symbol when String.length symbol > 1 && symbol.[0] = '?' ->
-    Some (query_symbol_name symbol)
-  | _ -> None
-
-let flat_input_vars forms =
-  let rec collect acc = function
-    | [] -> Some (List.rev acc)
-    | form :: rest ->
-      (match input_var_of_form form with
-       | Some var -> collect (var :: acc) rest
-       | None -> None)
-  in
-  collect [] forms
-
-let rec parse_nested_input_binding form =
-  match form with
-  | QueryFormSymbol "_" -> Bind_ignore
-  | QueryFormSymbol symbol -> Bind_scalar (query_symbol_name symbol)
-  | _ ->
-    (match query_form_sequence form with
-     | Some [ binding_form; QueryFormSymbol "..." ] ->
-       Bind_collection (parse_nested_input_binding binding_form)
-     | Some [ (QueryFormVector _ | QueryFormList _ as relation_form) ] ->
-       Bind_collection (parse_nested_input_binding relation_form)
-     | Some forms ->
-       (match List.map parse_nested_tuple_binding forms with
-        | [] -> invalid_arg "tuple :in binding requires at least one variable"
-        | bindings -> Bind_tuple bindings)
-     | None -> invalid_arg "cannot parse :in binding")
-
-and parse_nested_tuple_binding = function
-  | QueryFormSymbol "_" -> Bind_ignore
-  | form -> parse_nested_input_binding form
-
-let parse_binding = parse_nested_input_binding
-
-let nested_relation_binding = function
-  | QueryFormVector forms | QueryFormList forms ->
-    (match flat_input_vars forms with
-     | Some _ -> None
-     | None ->
-       (match parse_nested_input_binding (QueryFormVector forms) with
-        | Bind_tuple bindings -> Some bindings
-        | _ -> None))
-  | _ -> None
-
-let parse_input_binding = function
-  | QueryFormSymbol "%" -> Some Input_rules_decl
-  | QueryFormSymbol "_" -> Some Input_ignore_decl
-  | QueryFormSymbol symbol when is_query_source_symbol symbol ->
-    Some (Input_source_decl (query_source_name symbol))
-  | QueryFormSymbol symbol -> Some (Input_scalar_decl (query_input_name symbol))
-  | form ->
-    (match query_form_sequence form with
-     | Some [ QueryFormSymbol "_"; QueryFormSymbol "..." ] ->
-       Some Input_collection_ignore_decl
-     | Some [ QueryFormSymbol symbol; QueryFormSymbol "..." ] ->
-       Some (Input_collection_decl (query_symbol_name symbol))
-     | Some [ relation_form; QueryFormSymbol "..." ] ->
-       (match input_relation_vars relation_form with
-        | Some vars ->
-          (match flat_input_vars vars with
-           | Some vars -> Some (Input_relation_decl (vars |> nonempty_input_vars "relation"))
-           | None ->
-             (match nested_relation_binding relation_form with
-              | Some bindings -> Some (Input_nested_relation_decl bindings)
-              | None -> Some (Input_nested_collection_decl (parse_nested_input_binding relation_form))))
-        | None -> Some (Input_nested_collection_decl (parse_nested_input_binding relation_form)))
-     | Some [ relation_form ] ->
-       (match input_relation_vars relation_form with
-        | Some vars ->
-          (match flat_input_vars vars with
-           | Some vars -> Some (Input_relation_decl (vars |> nonempty_input_vars "relation"))
-           | None ->
-             (match nested_relation_binding relation_form with
-              | Some bindings -> Some (Input_nested_relation_decl bindings)
-              | None -> invalid_arg "cannot parse :in binding"))
-        | None -> Some (Input_tuple_decl ([ relation_form ] |> List.map parse_output_var |> nonempty_input_vars "tuple")))
-     | Some vars ->
-       (match flat_input_vars vars with
-        | Some vars -> Some (Input_tuple_decl (vars |> nonempty_input_vars "tuple"))
-        | None ->
-          (match parse_nested_input_binding form with
-           | Bind_tuple bindings -> Some (Input_nested_tuple_decl bindings)
-           | _ -> invalid_arg "cannot parse :in binding"))
-     | None -> invalid_arg "cannot parse :in binding")
-
-let parse_inputs = function
-  | Some (QueryFormVector inputs | QueryFormList inputs) -> List.filter_map parse_input_binding inputs
-  | Some _ -> invalid_arg "query :in must be a vector or list"
-  | None -> []
-
-let parse_in form = parse_inputs (Some form)
-
-let input_declares_rules_var = function
-  | Some (QueryFormVector inputs) | Some (QueryFormList inputs) ->
-    List.exists (function QueryFormSymbol "%" -> true | _ -> false) inputs
-  | Some _ | None -> false
-
-let ensure_distinct_input_rules_var = function
-  | Some (QueryFormVector inputs) | Some (QueryFormList inputs) ->
-    let count =
-      List.fold_left
-        (fun count -> function
-          | QueryFormSymbol "%" -> count + 1
-          | _ -> count)
-        0
-        inputs
-    in
-    if count > 1 then invalid_arg "Vars used in :in should be distinct"
-  | Some _ | None -> ()
-
-let parse_with_var = function
-  | QueryFormSymbol "_" -> invalid_arg "Cannot parse :with clause"
-  | QueryFormSymbol symbol -> query_symbol_name symbol
-  | _ -> invalid_arg "Cannot parse :with clause"
-
-let parse_with_section = function
-  | Some (QueryFormVector vars | QueryFormList vars) -> List.map parse_with_var vars
-  | Some _ -> invalid_arg "query :with must be a vector or list"
-  | None -> []
-
-let parse_with form = parse_with_section (Some form)
+let parse_binding = Parser_impl.parse_binding
+let parse_inputs = Parser_impl.parse_inputs
+let parse_in = Parser_impl.parse_in
+let input_declares_rules_var = Parser_impl.input_declares_rules_var
+let ensure_distinct_input_rules_var = Parser_impl.ensure_distinct_input_rules_var
+let parse_with_section = Parser_impl.parse_with_section
+let parse_with = Parser_impl.parse_with
 
 let has_rule_clause = Query.has_rule_clause
 let rule_names = Query.rule_names
@@ -5905,6 +5755,23 @@ module Parser = struct
   let dynamic_amount_aggregate_of_symbol = Parser_impl.dynamic_amount_aggregate_of_symbol
   let parse_find_arg = Parser_impl.parse_find_arg
   let parse_find_args = Parser_impl.parse_find_args
+  let parse_output_var = Parser_impl.parse_output_var
+  let parse_output_vars = Parser_impl.parse_output_vars
+  let parse_flat_output_vars = Parser_impl.parse_flat_output_vars
+  let parse_collection_output_var = Parser_impl.parse_collection_output_var
+  let parse_relation_output_vars = Parser_impl.parse_relation_output_vars
+  let nonempty_input_vars = Parser_impl.nonempty_input_vars
+  let input_relation_vars = Parser_impl.input_relation_vars
+  let input_var_of_form = Parser_impl.input_var_of_form
+  let flat_input_vars = Parser_impl.flat_input_vars
+  let parse_nested_input_binding = Parser_impl.parse_nested_input_binding
+  let nested_relation_binding = Parser_impl.nested_relation_binding
+  let parse_input_binding = Parser_impl.parse_input_binding
+  let parse_inputs = Parser_impl.parse_inputs
+  let input_declares_rules_var = Parser_impl.input_declares_rules_var
+  let ensure_distinct_input_rules_var = Parser_impl.ensure_distinct_input_rules_var
+  let parse_with_var = Parser_impl.parse_with_var
+  let parse_with_section = Parser_impl.parse_with_section
   let parse_binding = parse_binding
   let parse_in = parse_in
   let parse_with = parse_with

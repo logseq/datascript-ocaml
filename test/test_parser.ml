@@ -170,10 +170,88 @@ let test_parser__aggregate_and_find_arg_helpers () =
     [ QVar "name"; QSource "other"; QValue (Int 1) ]
     (Parser.parse_find_args [ sym "?name"; sym "$other"; QueryFormInt 1 ])
 
+let test_parser__output_var_helpers () =
+  assert_equal_string "parse_output_var preserves placeholders" "_" (Parser.parse_output_var (sym "_"));
+  assert_equal_string "parse_output_var strips query var prefix" "name" (Parser.parse_output_var (sym "?name"));
+  assert_invalid "parse_output_var rejects constants" (fun () ->
+    ignore (Parser.parse_output_var (QueryFormKeyword "name")));
+  assert_equal
+    "parse_output_vars parses vector outputs"
+    [ "name"; "_" ]
+    (Parser.parse_output_vars (vec [ sym "?name"; sym "_" ]));
+  assert_equal
+    "parse_output_vars parses scalar outputs"
+    [ "name" ]
+    (Parser.parse_output_vars (sym "?name"));
+  assert_equal
+    "parse_flat_output_vars only accepts flat vectors"
+    (Some [ "name"; "age" ])
+    (Parser.parse_flat_output_vars (vec [ sym "?name"; sym "?age" ]));
+  assert_equal
+    "parse_collection_output_var parses collection output markers"
+    (Some "name")
+    (Parser.parse_collection_output_var (vec [ sym "?name"; sym "..." ]));
+  assert_equal
+    "parse_relation_output_vars parses relation output markers"
+    (Some [ "name"; "age" ])
+    (Parser.parse_relation_output_vars (vec [ vec [ sym "?name"; sym "?age" ]; sym "..." ]))
+
+let test_parser__input_binding_helpers () =
+  assert_equal
+    "nonempty_input_vars returns vars"
+    [ "name" ]
+    (Parser.nonempty_input_vars "tuple" [ "name" ]);
+  assert_invalid "nonempty_input_vars rejects empty vars" (fun () ->
+    ignore (Parser.nonempty_input_vars "tuple" []));
+  assert_equal
+    "input_relation_vars returns sequence forms"
+    (Some [ sym "?name"; sym "?age" ])
+    (Parser.input_relation_vars (vec [ sym "?name"; sym "?age" ]));
+  assert_equal "input_var_of_form parses placeholders" (Some "_") (Parser.input_var_of_form (sym "_"));
+  assert_equal "input_var_of_form parses vars" (Some "name") (Parser.input_var_of_form (sym "?name"));
+  assert_equal "input_var_of_form rejects non-vars" None (Parser.input_var_of_form (QueryFormKeyword "name"));
+  assert_equal
+    "flat_input_vars preserves parsed order"
+    (Some [ "name"; "_"; "age" ])
+    (Parser.flat_input_vars [ sym "?name"; sym "_"; sym "?age" ]);
+  assert_equal
+    "parse_nested_input_binding parses nested tuple collections"
+    (Bind_tuple [ Bind_scalar "name"; Bind_collection (Bind_scalar "tag") ])
+    (Parser.parse_nested_input_binding (vec [ sym "?name"; vec [ sym "?tag"; sym "..." ] ]));
+  assert_equal
+    "nested_relation_binding detects non-flat relation bindings"
+    (Some [ Bind_scalar "name"; Bind_collection (Bind_scalar "tag") ])
+    (Parser.nested_relation_binding (vec [ sym "?name"; vec [ sym "?tag"; sym "..." ] ]));
+  assert_equal
+    "parse_input_binding parses source declarations"
+    (Some (Input_source_decl "other"))
+    (Parser.parse_input_binding (sym "$other"));
+  assert_equal
+    "parse_input_binding parses relation declarations"
+    (Some (Input_relation_decl [ "name"; "age" ]))
+    (Parser.parse_input_binding (vec [ vec [ sym "?name"; sym "?age" ]; sym "..." ]));
+  assert_equal
+    "parse_inputs accepts missing :in"
+    []
+    (Parser.parse_inputs None);
+  if not (Parser.input_declares_rules_var (Some (vec [ sym "$"; sym "%" ]))) then
+    failwith "input_declares_rules_var should detect %";
+  Parser.ensure_distinct_input_rules_var (Some (vec [ sym "$"; sym "%" ]));
+  assert_invalid "ensure_distinct_input_rules_var rejects duplicate rules vars" (fun () ->
+    Parser.ensure_distinct_input_rules_var (Some (vec [ sym "%"; sym "%" ])));
+  assert_equal_string "parse_with_var parses query vars" "name" (Parser.parse_with_var (sym "?name"));
+  assert_invalid "parse_with_var rejects placeholders" (fun () -> ignore (Parser.parse_with_var (sym "_")));
+  assert_equal
+    "parse_with_section accepts absent :with"
+    []
+    (Parser.parse_with_section None)
+
 let () =
   test_parser__bindings ();
   test_parser__in ();
   test_parser__with ();
   test_parser__query_form_helpers ();
   test_parser__query_symbol_helpers ();
-  test_parser__aggregate_and_find_arg_helpers ()
+  test_parser__aggregate_and_find_arg_helpers ();
+  test_parser__output_var_helpers ();
+  test_parser__input_binding_helpers ()
