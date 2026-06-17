@@ -36,6 +36,9 @@ let run_sql db_path sql =
   | Unix.WSIGNALED signal -> failf "sqlite3 killed by signal %d: %s" signal error
   | Unix.WSTOPPED signal -> failf "sqlite3 stopped by signal %d: %s" signal error
 
+let sql_quote text =
+  "'" ^ String.concat "''" (String.split_on_char '\'' text) ^ "'"
+
 let with_temp_db f =
   let dir =
     Filename.concat
@@ -449,7 +452,7 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
       assert_equal_query
         "SQLite restored db query sees indexed list values exactly"
         [ [ Result_entity 1 ] ]
-        (q_string restored_db "[:find ?e :where [?e :path [1 2]]]");
+        (q_string restored_db "[:find ?e :where [?e :path (1 2)]]");
       ignore
         (transact_conn
            restored
@@ -1544,6 +1547,46 @@ let test_sqlite_storage_backed_query_input_maps_after_restore () =
            db
            "[:find ?a ?b :in ?a ?b]"))
 
+let test_logseq_sqlite_import_preserves_clojure_collection_values () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping Logseq SQLite collection value import test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let content =
+        {|["^ ","~:keys",[[101,"~:item/vector",[1,2],536870913],[102,"~:item/list",["~#list",[1,2]],536870913],[103,"~:item/profile",["^ ","~:tags",["alpha","beta"],"~:prefs",["^ ","~:pins",[1,2]]],536870913]]]|}
+      in
+      ignore
+        (run_sql
+           db_path
+           ("create table kvs (addr INTEGER primary key, content TEXT, addresses JSON);\n"
+            ^ "insert into kvs (addr, content, addresses) values (2, "
+            ^ sql_quote content
+            ^ ", '[]');"));
+      let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path in
+      assert_equal_triples
+        "Logseq SQLite import preserves vector/list/map value shapes"
+        [ 101, "item/vector", Vector [ Int 1; Int 2 ]
+        ; 102, "item/list", List [ Int 1; Int 2 ]
+        ; ( 103
+          , "item/profile"
+          , Map
+              [ Keyword "tags", Vector [ String "alpha"; String "beta" ]
+              ; Keyword "prefs", Map [ Keyword "pins", Vector [ Int 1; Int 2 ] ]
+              ] )
+        ]
+        datoms;
+      let db = init_db ~schema:[ "item/vector", indexed; "item/profile", indexed ] datoms in
+      assert_equal_query
+        "Logseq SQLite imported vectors query as Clojure vectors"
+        [ [ Result_entity 101 ] ]
+        (q_string db "[:find ?e :where [?e :item/vector [1 2]]]");
+      assert_equal_query
+        "Logseq SQLite imported nested map vectors query structurally"
+        [ [ Result_value (Vector [ Int 1; Int 2 ]) ] ]
+        (q_string
+           db
+           "[:find ?pins :where [?e :item/profile ?profile] [(get ?profile :prefs) ?prefs] [(get ?prefs :pins) ?pins]]"))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -1738,6 +1781,7 @@ let () =
   test_sqlite_storage_backed_aggregates_and_upserts_after_restore ();
   test_sqlite_storage_backed_parsed_transact_and_query_pull_parity ();
   test_sqlite_storage_backed_query_input_maps_after_restore ();
+  test_logseq_sqlite_import_preserves_clojure_collection_values ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

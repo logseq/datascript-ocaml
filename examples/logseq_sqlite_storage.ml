@@ -549,7 +549,22 @@ let rec logseq_value_of_shallow_json reader = function
       (shallow_pairs entries
        |> List.map (fun (key, value) ->
          logseq_value_of_shallow_json reader key, logseq_value_of_shallow_json reader value))
-  | `List values -> List (List.map (logseq_value_of_shallow_json reader) values)
+  | `List [ `String tag; `List values ] ->
+    let tag = shallow_decode_string reader tag in
+    if starts_with "~#" tag then
+      match String.sub tag 2 (String.length tag - 2) with
+      | "list" -> List (List.map (logseq_value_of_shallow_json reader) values)
+      | "set" -> Set (List.map (logseq_value_of_shallow_json reader) values)
+      | "cmap" ->
+        Map
+          (shallow_pairs values
+           |> List.map (fun (key, value) ->
+             logseq_value_of_shallow_json reader key, logseq_value_of_shallow_json reader value))
+      | _ ->
+        Vector [ String tag; Vector (List.map (logseq_value_of_shallow_json reader) values) ]
+    else
+      Vector [ String tag; Vector (List.map (logseq_value_of_shallow_json reader) values) ]
+  | `List values -> Vector (List.map (logseq_value_of_shallow_json reader) values)
   | `Assoc entries ->
     Map
       (entries

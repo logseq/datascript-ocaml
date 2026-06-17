@@ -2228,7 +2228,7 @@ let result_of_ref = function
   | Result_value (Ref eid) -> Result_entity eid
   | result -> result
 
-let resolve_query_value = resolve_ref_value
+let resolve_query_value db value = resolve_ref_value ~preserve_vector:true db value
 
 let resolved_query_result db = function
   | Result_value value -> Option.map (fun value -> result_of_ref (Result_value value)) (resolve_query_value db value)
