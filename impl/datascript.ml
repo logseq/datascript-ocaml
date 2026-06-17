@@ -2793,42 +2793,11 @@ let eval_keyword_from_namespace_name_clause db bindings namespace_term name_term
      | None -> [])
   | Some _ | None -> []
 
-let string_starts_with value prefix =
-  let prefix_length = String.length prefix in
-  String.length value >= prefix_length && String.sub value 0 prefix_length = prefix
-
-let string_ends_with value suffix =
-  let value_length = String.length value in
-  let suffix_length = String.length suffix in
-  value_length >= suffix_length && String.sub value (value_length - suffix_length) suffix_length = suffix
-
-let string_index_of value needle =
-  let value_length = String.length value in
-  let needle_length = String.length needle in
-  let rec scan index =
-    if index + needle_length > value_length then
-      None
-    else if String.sub value index needle_length = needle then
-      Some index
-    else
-      scan (index + 1)
-  in
-  scan 0
-
-let string_includes value needle =
-  Option.is_some (string_index_of value needle)
-
-let string_last_index_of value needle =
-  let needle_length = String.length needle in
-  let rec scan index =
-    if index < 0 then
-      None
-    else if String.sub value index needle_length = needle then
-      Some index
-    else
-      scan (index - 1)
-  in
-  scan (String.length value - needle_length)
+let string_starts_with = Built_ins.string_starts_with
+let string_ends_with = Built_ins.string_ends_with
+let string_index_of = Built_ins.string_index_of
+let string_includes = Built_ins.string_includes
+let string_last_index_of = Built_ins.string_last_index_of
 
 let eval_string_predicate_clause db bindings left_term right_term predicate =
   match collect_query_terms db bindings [ left_term; right_term ] with
@@ -3135,55 +3104,15 @@ let eval_re_seq_value_clause db bindings pattern_term value_term output_var =
            | None -> [])))
   | Some _ | None -> []
 
-let is_ascii_whitespace = function
-  | ' ' | '\n' | '\r' | '\t' | '\012' -> true
-  | _ -> false
-
-let string_is_blank value =
-  String.for_all is_ascii_whitespace value
+let string_is_blank = Built_ins.string_is_blank
 
 let eval_string_blank_clause db bindings term =
   match eval_query_term db bindings term with
   | Some (Result_value (String value)) when string_is_blank value -> [ bindings ]
   | Some _ | None -> []
 
-let split_string value separator =
-  if separator = "" then
-    invalid_arg "split separator cannot be empty";
-  let separator_length = String.length separator in
-  let rec collect start acc =
-    match string_index_of (String.sub value start (String.length value - start)) separator with
-    | None -> List.rev (String.sub value start (String.length value - start) :: acc)
-    | Some relative_index ->
-      let index = start + relative_index in
-      collect (index + separator_length) (String.sub value start (index - start) :: acc)
-  in
-  collect 0 []
-
-let split_string_limited value separator limit =
-  if limit <= 0 then
-    split_string value separator
-  else if limit = 1 then
-    [ value ]
-  else begin
-    if separator = "" then
-      invalid_arg "split separator cannot be empty";
-    let separator_length = String.length separator in
-    let rec collect start remaining acc =
-      if remaining = 1 then
-        List.rev (String.sub value start (String.length value - start) :: acc)
-      else
-        match string_index_of (String.sub value start (String.length value - start)) separator with
-        | None -> List.rev (String.sub value start (String.length value - start) :: acc)
-        | Some relative_index ->
-          let index = start + relative_index in
-          collect
-            (index + separator_length)
-            (remaining - 1)
-            (String.sub value start (index - start) :: acc)
-    in
-    collect 0 limit []
-  end
+let split_string = Built_ins.split_string
+let split_string_limited = Built_ins.split_string_limited
 
 let split_regex value pattern =
   Str.split (compile_regex pattern) value
@@ -3211,21 +3140,8 @@ let split_regex_limited value pattern limit =
     collect 0 limit []
   end
 
-let split_lines value =
-  let length = String.length value in
-  let rec collect start index acc =
-    if index >= length then
-      List.rev (String.sub value start (length - start) :: acc)
-    else
-      match value.[index] with
-      | '\n' ->
-        collect (index + 1) (index + 1) (String.sub value start (index - start) :: acc)
-      | '\r' ->
-        let next_index = if index + 1 < length && value.[index + 1] = '\n' then index + 2 else index + 1 in
-        collect next_index next_index (String.sub value start (index - start) :: acc)
-      | _ -> collect start (index + 1) acc
-  in
-  collect 0 0 []
+let is_ascii_whitespace = Built_ins.is_ascii_whitespace
+let split_lines = Built_ins.split_lines
 
 let bind_string_list db output_var values bindings =
   bind_var db output_var (Result_value (List (List.map (fun value -> String value) values))) bindings

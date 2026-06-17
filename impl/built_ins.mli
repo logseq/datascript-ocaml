@@ -13,6 +13,16 @@ val all_values_equal : value list -> bool
 val eval_arithmetic : arithmetic_op -> value list -> value option
 val normalized_comparison : int -> int
 val extremum_value : extremum_op -> value -> value list -> value
+val string_starts_with : string -> string -> bool
+val string_ends_with : string -> string -> bool
+val string_index_of : string -> string -> int option
+val string_includes : string -> string -> bool
+val string_last_index_of : string -> string -> int option
+val is_ascii_whitespace : char -> bool
+val string_is_blank : string -> bool
+val split_string : string -> string -> string list
+val split_string_limited : string -> string -> int -> string list
+val split_lines : string -> string list
 val aggregate_result : aggregate -> query_result list -> query_result
 val value_is_truthy : value -> bool
 val boolean_and_value : value list -> value

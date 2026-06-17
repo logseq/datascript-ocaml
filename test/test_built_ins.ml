@@ -9,6 +9,15 @@ let assert_equal_value label expected actual =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d but got %d" label expected actual
 
+let assert_equal_bool label expected actual =
+  if expected <> actual then failf "%s: expected %b but got %b" label expected actual
+
+let assert_equal_int_option label expected actual =
+  if expected <> actual then failf "%s: integer options did not match" label
+
+let assert_equal_string_list label expected actual =
+  if expected <> actual then failf "%s: string lists did not match" label
+
 let assert_equal_result label expected actual =
   if expected <> actual then failf "%s: query results did not match" label
 
@@ -59,6 +68,52 @@ let test_extremum_value () =
     (Int 9)
     (Built_ins.extremum_value MaximumValue (Int 3) [ Int 9; Int 4 ])
 
+let test_string_helpers () =
+  assert_equal_bool
+    "string_starts_with accepts matching prefixes"
+    true
+    (Built_ins.string_starts_with "alphabet" "alpha");
+  assert_equal_bool
+    "string_starts_with rejects non-prefixes"
+    false
+    (Built_ins.string_starts_with "alphabet" "beta");
+  assert_equal_bool
+    "string_ends_with accepts matching suffixes"
+    true
+    (Built_ins.string_ends_with "alphabet" "bet");
+  assert_equal_int_option
+    "string_index_of returns the first match"
+    (Some 2)
+    (Built_ins.string_index_of "banana" "na");
+  assert_equal_int_option
+    "string_last_index_of returns the last match"
+    (Some 4)
+    (Built_ins.string_last_index_of "banana" "na");
+  assert_equal_bool
+    "string_includes returns false for missing needles"
+    false
+    (Built_ins.string_includes "banana" "zz");
+  assert_equal_bool
+    "string_is_blank accepts ascii whitespace"
+    true
+    (Built_ins.string_is_blank " \n\r\t\012");
+  assert_equal_bool
+    "string_is_blank rejects non-whitespace"
+    false
+    (Built_ins.string_is_blank " \tx");
+  assert_equal_string_list
+    "split_string keeps empty fields"
+    [ "a"; ""; "b" ]
+    (Built_ins.split_string "a,,b" ",");
+  assert_equal_string_list
+    "split_string_limited stops at the requested part count"
+    [ "a"; "b,c" ]
+    (Built_ins.split_string_limited "a,b,c" "," 2);
+  assert_equal_string_list
+    "split_lines handles lf crlf and cr separators"
+    [ "a"; "b"; "c"; "d" ]
+    (Built_ins.split_lines "a\nb\r\nc\rd")
+
 let test_aggregate_result () =
   let values =
     [ Result_value (Int 1); Result_value (Int 2); Result_value (Int 2); Result_value (Float 3.5) ]
@@ -107,5 +162,6 @@ let () =
   test_eval_arithmetic ();
   test_normalized_comparison ();
   test_extremum_value ();
+  test_string_helpers ();
   test_aggregate_result ();
   print_endline "test_built_ins ok"
