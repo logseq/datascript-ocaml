@@ -14,6 +14,11 @@
  (libraries datascript))
 
 (test
+ (name test_core)
+ (modules test_core)
+ (libraries datascript))
+
+(test
  (name test_db)
  (modules test_db)
  (libraries datascript))

@@ -54,6 +54,8 @@ module Db : sig
   val is_datom : datom -> bool
   val value_equal : value -> value -> bool
   val same_fact : datom -> datom -> bool
+  val hash : db -> int
+  val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
   val squuid : ?msec:int -> unit -> value
   val squuid_time_millis : value -> int
@@ -208,6 +210,8 @@ val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list
 val storage_addresses : storage -> storage_address list
 val collect_garbage : storage -> unit
+val db_hash : db -> int
+val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
 val squuid : ?msec:int -> unit -> value
 val squuid_time_millis : value -> int

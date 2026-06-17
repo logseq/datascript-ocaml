@@ -49,6 +49,27 @@ and value_equal left right =
 
 let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
 
+let hash_cache : (int, int) Hashtbl.t = Hashtbl.create 128
+
+let hash db =
+  match Hashtbl.find_opt hash_cache db.db_uid with
+  | Some hash -> hash
+  | None ->
+    let hash =
+      Hashtbl.hash
+        ( db.schema
+        , db.datoms
+        , db.history_datoms
+        , db.historical
+        , db.max_eid
+        , db.max_tx
+        )
+    in
+    Hashtbl.replace hash_cache db.db_uid hash;
+    hash
+
+let hash_cache_size () = Hashtbl.length hash_cache
+
 let visible_datoms db index =
   let datoms =
     match index with

@@ -10,6 +10,13 @@ let assert_equal_string label expected actual =
   if expected <> actual then
     failf "%s: expected %s, got %s" label expected actual
 
+type hash_beef =
+  { x : value
+  ; tag : string
+  }
+
+let hash_hash_beef (_ : hash_beef) = 0xBEEF
+
 let rec debug_value = function
   | Nil -> "nil"
   | Int value -> string_of_int value
@@ -48,6 +55,24 @@ let assert_equal_triples label expected actual =
       |> String.concat "; "
     in
     failf "%s: expected [%s], got [%s]" label (format expected) (format triples)
+
+let test_db__test_defrecord_updatable () =
+  let value = { x = Keyword "ignored"; tag = "kept" } in
+  let updated = { value with x = String "updated" } in
+  assert_equal_int "custom hash analogue returns 0xBEEF" 0xBEEF (hash_hash_beef value);
+  if updated.x <> String "updated" || updated.tag <> "kept" then
+    failwith "record update should preserve generated field accessors"
+
+let test_db__test_db_hash_cache () =
+  let db = empty_db () in
+  let before = db_hash_cache_size () in
+  let first_hash = db_hash db in
+  assert_equal_int "first db_hash call stores one cache entry" (before + 1) (db_hash_cache_size ());
+  assert_equal_int "second db_hash call returns same value" first_hash (db_hash db);
+  assert_equal_int "second db_hash call reuses cache entry" (before + 1) (db_hash_cache_size ());
+  let changed = db_with [ Add (Entity_id 1, "name", String "Ivan") ] db in
+  ignore (db_hash changed);
+  assert_equal_int "different db identity gets a separate hash cache entry" (before + 2) (db_hash_cache_size ())
 
 let test_db__test_uuid () =
   let first = squuid ~msec:1_710_000_123_456 () in
@@ -117,5 +142,7 @@ let test_db__test_diff () =
     both
 
 let () =
+  test_db__test_defrecord_updatable ();
+  test_db__test_db_hash_cache ();
   test_db__test_uuid ();
   test_db__test_diff ()

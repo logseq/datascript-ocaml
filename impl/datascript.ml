@@ -2074,6 +2074,10 @@ let datoms_ref db index ?e ?a ?v ?tx () =
 
 let diff = Db.diff
 
+let db_hash = Db.hash
+
+let db_hash_cache_size = Db.hash_cache_size
+
 let squuid = Db.squuid
 
 let squuid_time_millis = Db.squuid_time_millis
