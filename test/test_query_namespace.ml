@@ -383,7 +383,32 @@ let test_query_namespace__test_rule_helpers () =
       [ QVar "large?" ]
   in
   if Query.has_callable unchanged "p" then
-    failwith "rule_invocation_callables should not alias already-bound vars"
+    failwith "rule_invocation_callables should not alias already-bound vars";
+  if not (Query.clause_calls_rule "parent" (Rule ("parent", [ QVar "e" ]))) then
+    failwith "clause_calls_rule should detect direct rule calls";
+  if not (Query.clause_calls_rule "parent" (SourceRule ("other", "parent", [ QVar "e" ]))) then
+    failwith "clause_calls_rule should detect sourced rule calls";
+  if
+    not
+      (Query.clause_calls_rule
+         "parent"
+         (Not [ SourceClause ("other", Rule ("parent", [ QVar "e" ])) ]))
+  then
+    failwith "clause_calls_rule should recurse through not/source clauses";
+  if
+    not
+      (Query.clause_calls_rule
+         "parent"
+         (OrJoinRequired
+            ( [ "e" ]
+            , [ "name" ]
+            , [ [ Pattern (QVar "e", QAttr "name", QVar "name") ]
+              ; [ Rule ("parent", [ QVar "e" ]) ]
+              ] )))
+  then
+    failwith "clause_calls_rule should recurse through or-join branches";
+  if Query.clause_calls_rule "parent" (DynamicPredicate ("parent", [ QVar "e" ])) then
+    failwith "clause_calls_rule should ignore predicate names"
 
 let test_query_namespace__test_variable_discovery_helpers () =
   assert_equal_string_list

@@ -685,6 +685,44 @@ let ensure_or_join_branches_cover_listed_vars bindings vars branches =
     if List.exists (fun var -> not (List.mem var branch_vars)) required_vars then
       invalid_arg "or branches must use same free vars")
 
+let rec clause_calls_rule name = function
+  | Rule (rule_name, _) | SourceRule (_, rule_name, _) -> rule_name = name
+  | SourceClause (_, clause) -> clause_calls_rule name clause
+  | Not clauses | SourceNot (_, clauses) | NotJoin (_, clauses) | SourceNotJoin (_, _, clauses) ->
+    List.exists (clause_calls_rule name) clauses
+  | Or branches
+  | SourceOr (_, branches)
+  | OrJoin (_, branches)
+  | SourceOrJoin (_, _, branches)
+  | OrJoinRequired (_, _, branches)
+  | SourceOrJoinRequired (_, _, _, branches) ->
+    List.exists (List.exists (clause_calls_rule name)) branches
+  | Pattern _ | PatternTx _ | PatternTxOp _ | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _
+  | SourceRelationPattern _ | Missing _ | SourceMissing _ | GetElse _ | SourceGetElse _ | GetSome _
+  | SourceGetSome _ | GetValue _ | GetDefaultValue _ | CountValue _ | EmptyValue _ | NotEmptyValue _ | ContainsValue _
+  | ValuePredicate _ | NumericPredicate _ | ComparisonPredicate _ | ComparisonPredicateN _ | EqualityPredicate _
+  | ArithmeticValue _ | CompareValue _ | ExtremumValue _ | BooleanPredicate _ | BooleanNotPredicate _ | BooleanNotValue _
+  | IdentityValue _ | BooleanAndPredicate _ | BooleanAndValue _ | BooleanOrPredicate _ | BooleanOrValue _
+  | RandomValue _ | RandomIntValue _ | DifferPredicate _
+  | IdenticalPredicate _ | TypeValue _ | MetaValue _ | NameValue _ | NamespaceValue _ | KeywordFromName _
+  | KeywordFromNamespaceName _ | Ground _
+  | GroundCollection _ | StringIncludesValue _ | StringStartsWithValue _ | StringEndsWithValue _
+  | GroundTuple _ | GroundRelation _ | GroundTerm _ | GroundTermCollection _ | GroundTermTuple _
+  | GroundTermRelation _ | StringLowerCaseValue _ | StringUpperCaseValue _
+  | StringCapitalizeValue _ | StringReverseValue _ | StringTrimValue _ | StringTrimLeftValue _
+  | StringTrimRightValue _ | StringTrimNewlineValue _ | StringIndexOfValue _ | StringLastIndexOfValue _
+  | VectorValue _ | ListValue _ | SetValue _ | StringSubstringValue _ | StringBuildValue _
+  | PrintStringValue _ | PrintLineStringValue _ | PrStringValue _ | PrnStringValue _ | StringJoinPlainValue _
+  | StringJoinValue _
+  | HashMapValue _ | ArrayMapValue _ | TupleFunction _ | StringReplaceValue _ | StringReplaceFirstValue _
+  | StringEscapeValue _ | StringBlankValue _ | StringSplitValue _ | StringSplitLimitValue _
+  | StringSplitLinesValue _
+  | RePatternValue _ | ReFindValue _ | ReMatchesValue _ | ReSeqValue _ | ReFindPredicate _
+  | ReMatchesPredicate _ | RangeEndValue _ | RangeValue _
+  | RangeStepValue _ | UntupleFunction _ | Predicate _ | Function _ | DynamicPredicate _ | DynamicFunction _
+  | DynamicFunctionCollection _ | DynamicFunctionRelation _ ->
+    false
+
 let rec query_input_binding_string = function
   | Bind_scalar var -> query_input_var_label var
   | Bind_ignore -> "_"

@@ -4046,43 +4046,8 @@ and ensure_join_vars_bound_in_clause bindings vars clause_string =
 and ensure_or_join_branches_cover_listed_vars bindings vars branches =
   Query.ensure_or_join_branches_cover_listed_vars bindings vars branches
 
-and clause_calls_rule name = function
-  | Rule (rule_name, _) | SourceRule (_, rule_name, _) -> rule_name = name
-  | SourceClause (_, clause) -> clause_calls_rule name clause
-  | Not clauses | SourceNot (_, clauses) | NotJoin (_, clauses) | SourceNotJoin (_, _, clauses) ->
-    List.exists (clause_calls_rule name) clauses
-  | Or branches
-  | SourceOr (_, branches)
-  | OrJoin (_, branches)
-  | SourceOrJoin (_, _, branches)
-  | OrJoinRequired (_, _, branches)
-  | SourceOrJoinRequired (_, _, _, branches) ->
-    List.exists (List.exists (clause_calls_rule name)) branches
-  | Pattern _ | PatternTx _ | PatternTxOp _ | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _
-  | SourceRelationPattern _ | Missing _ | SourceMissing _ | GetElse _ | SourceGetElse _ | GetSome _
-  | SourceGetSome _ | GetValue _ | GetDefaultValue _ | CountValue _ | EmptyValue _ | NotEmptyValue _ | ContainsValue _
-  | ValuePredicate _ | NumericPredicate _ | ComparisonPredicate _ | ComparisonPredicateN _ | EqualityPredicate _
-  | ArithmeticValue _ | CompareValue _ | ExtremumValue _ | BooleanPredicate _ | BooleanNotPredicate _ | BooleanNotValue _
-  | IdentityValue _ | BooleanAndPredicate _ | BooleanAndValue _ | BooleanOrPredicate _ | BooleanOrValue _
-  | RandomValue _ | RandomIntValue _ | DifferPredicate _
-  | IdenticalPredicate _ | TypeValue _ | MetaValue _ | NameValue _ | NamespaceValue _ | KeywordFromName _
-  | KeywordFromNamespaceName _ | Ground _
-  | GroundCollection _ | StringIncludesValue _ | StringStartsWithValue _ | StringEndsWithValue _
-  | GroundTuple _ | GroundRelation _ | GroundTerm _ | GroundTermCollection _ | GroundTermTuple _
-  | GroundTermRelation _ | StringLowerCaseValue _ | StringUpperCaseValue _
-  | StringCapitalizeValue _ | StringReverseValue _ | StringTrimValue _ | StringTrimLeftValue _
-  | StringTrimRightValue _ | StringTrimNewlineValue _ | StringIndexOfValue _ | StringLastIndexOfValue _
-  | VectorValue _ | ListValue _ | SetValue _ | StringSubstringValue _ | StringBuildValue _
-  | PrintStringValue _ | PrintLineStringValue _ | PrStringValue _ | PrnStringValue _ | StringJoinPlainValue _
-  | StringJoinValue _
-  | HashMapValue _ | ArrayMapValue _ | TupleFunction _ | StringReplaceValue _ | StringReplaceFirstValue _
-  | StringEscapeValue _ | StringBlankValue _ | StringSplitValue _ | StringSplitLimitValue _
-  | StringSplitLinesValue _
-  | RePatternValue _ | ReFindValue _ | ReMatchesValue _ | ReSeqValue _ | ReFindPredicate _
-  | ReMatchesPredicate _ | RangeEndValue _ | RangeValue _
-  | RangeStepValue _ | UntupleFunction _ | Predicate _ | Function _ | DynamicPredicate _ | DynamicFunction _
-  | DynamicFunctionCollection _ | DynamicFunctionRelation _ ->
-    false
+and clause_calls_rule name clause =
+  Query.clause_calls_rule name clause
 
 and rule_call_key db source name bindings terms =
   source, name, List.map (eval_query_term db bindings) terms
@@ -6751,6 +6716,7 @@ module Query = struct
   let ensure_join_vars_bound = Query_impl.ensure_join_vars_bound
   let ensure_join_vars_bound_in_clause = Query_impl.ensure_join_vars_bound_in_clause
   let ensure_or_join_branches_cover_listed_vars = Query_impl.ensure_or_join_branches_cover_listed_vars
+  let clause_calls_rule = Query_impl.clause_calls_rule
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
   let query_input_binding_label = Query_impl.query_input_binding_label
