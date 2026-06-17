@@ -29,6 +29,11 @@
  (libraries datascript))
 
 (test
+ (name test_lookup_refs)
+ (modules test_lookup_refs)
+ (libraries datascript))
+
+(test
  (name test_serialize)
  (modules test_serialize)
  (libraries datascript))

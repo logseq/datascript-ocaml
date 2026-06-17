@@ -18,6 +18,7 @@ let refresh_db_identity db =
 module Db = Db
 module Entity = Entity
 module Lru = Lru
+module Lookup_refs = Lookup_refs
 module Schema = Schema
 module Serialize = Serialize
 module Storage = Storage
@@ -751,16 +752,6 @@ and edn_string_of_entity_ref = function
   | Ident ident -> ":" ^ ident
   | Lookup_ref (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
 
-let unresolved_lookup_ref_message attr value =
-  "Nothing found for entity id [:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
-
-let non_unique_lookup_ref_message attr value =
-  "Lookup ref attribute should be marked as :db/unique: [:"
-  ^ attr
-  ^ " "
-  ^ edn_string_of_value value
-  ^ "]"
-
 let cas_current_value_string db datoms e a =
   match cardinality db a with
   | Many ->
@@ -790,19 +781,25 @@ let compare_and_set_failure_message db datoms e a expected =
   ^ "], expected "
   ^ cas_expected_value_string expected
 
-let lookup_ref_entity_id_in_datoms ?(strict_missing = false) db datoms attr value =
-  if not (is_unique db attr) then
-    invalid_arg (non_unique_lookup_ref_message attr value);
-  match entid_in_datoms db datoms attr value with
-  | Some entity_id -> Some entity_id
-  | None ->
-    if strict_missing then
-      invalid_arg (unresolved_lookup_ref_message attr value)
-    else
-      None
+let lookup_refs_context : Lookup_refs.context =
+  { is_unique
+  ; entid_in_datoms
+  ; visible_datoms
+  ; value_to_string = edn_string_of_value
+  }
 
-let lookup_ref_entity_id ?(strict_missing = false) db attr value =
-  lookup_ref_entity_id_in_datoms ~strict_missing db (visible_datoms db) attr value
+let lookup_ref_entity_id_in_datoms ?strict_missing db datoms attr value =
+  Lookup_refs.entity_id_in_datoms ?strict_missing lookup_refs_context db datoms attr value
+
+let lookup_ref_entity_id ?strict_missing db attr value =
+  Lookup_refs.entity_id ?strict_missing lookup_refs_context db attr value
+
+let unresolved_lookup_ref_message attr value =
+  Lookup_refs.unresolved_message lookup_refs_context attr value
+
+let unresolved_entity_ref_message = function
+  | Lookup_ref (attr, value) -> unresolved_lookup_ref_message attr value
+  | _ -> "lookup ref did not resolve"
 
 let upsert_context : Upsert.context =
   { is_unique_identity
@@ -858,7 +855,7 @@ let rec resolve_entity_ref db datoms tx max_eid tempids = function
     let value, max_eid, tempids = resolve_value db datoms tx max_eid tempids value in
     (match lookup_ref_entity_id_in_datoms ~strict_missing:true db datoms attr value with
      | Some e -> e, max max_eid e, tempids
-     | None -> invalid_arg "lookup ref did not resolve")
+     | None -> invalid_arg (unresolved_lookup_ref_message attr value))
 
 and resolve_value db datoms tx max_eid tempids = function
   | TxRef -> Ref tx, max_eid, remember_current_tx tempids tx
@@ -2015,7 +2012,7 @@ and resolve_index_value db = function
   | Ref_to entity_ref ->
     (match resolve_index_entity_ref db entity_ref with
      | Some entity_id -> Ref entity_id
-     | None -> invalid_arg "lookup ref did not resolve")
+     | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
   | List values ->
     normalize_value (List (List.map (resolve_index_value db) values))
   | Map entries ->
@@ -2050,7 +2047,7 @@ let resolve_index_value_for_attr db attr value =
   | Some _, Some entity_ref ->
     (match resolve_index_entity_ref db entity_ref with
      | Some entity_id -> Ref entity_id
-     | None -> invalid_arg "lookup ref did not resolve")
+     | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
   | _ -> resolve_index_value db value
 
 let resolve_index_value_option_for_attr db attr = Option.map (resolve_index_value_for_attr db attr)
@@ -2063,7 +2060,7 @@ let resolve_index_value_option_for_optional_attr db attr value =
 let resolve_index_entity_ref_option db = Option.map (fun entity_ref ->
   match resolve_index_entity_ref db entity_ref with
   | Some entity_id -> entity_id
-  | None -> invalid_arg "lookup ref did not resolve")
+  | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
 
 let datoms db index ?e ?a ?v ?tx () =
   validate_index_access db index a;
@@ -3822,7 +3819,7 @@ let match_query_term db term value bindings =
     (match entity_id_of_ref db (Lookup_ref (attr, lookup_value)) with
      | Some entity_id when result_matches_entity db entity_id value -> Some bindings
      | Some _ -> None
-     | None -> invalid_arg "lookup ref did not resolve")
+     | None -> invalid_arg (unresolved_lookup_ref_message attr lookup_value))
   | QAttr attr when value = Result_attr attr -> Some bindings
   | QValue expected ->
     (match resolve_query_value db expected, value with
@@ -3888,7 +3885,7 @@ let eval_query_term db bindings = function
   | QLookupRef (attr, value) ->
     (match entity_id_of_ref db (Lookup_ref (attr, value)) with
      | Some entity_id -> Some (Result_entity entity_id)
-     | None -> invalid_arg "lookup ref did not resolve")
+     | None -> invalid_arg (unresolved_lookup_ref_message attr value))
   | QAttr attr -> Some (Result_attr attr)
   | QValue value -> Option.map (fun value -> Result_value value) (resolve_query_value db value)
   | QSource "$" -> Some (Result_db db)

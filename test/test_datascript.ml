@@ -2492,163 +2492,6 @@ let test_init_db_preserves_uuid_and_instant_values () =
     [ 1, "created-at", instant; 1, "uuid", uuid ]
     (datoms (history db) Eavt ())
 
-let test_entity_and_pull_accept_lookup_refs () =
-  let db =
-    empty_db ~schema:[ "name", unique_identity ] ()
-    |> db_with
-         [ Entity
-             { db_id = Some (Entity_id 1)
-             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ]
-             }
-         ]
-  in
-  (match entity db (Lookup_ref ("name", String "Ivan")) with
-   | Some entity -> assert_equal_int "lookup entity id" 1 entity.id
-   | None -> failwith "expected lookup ref entity to resolve");
-  (match pull db [ Pull_attr "age" ] (Lookup_ref ("name", String "Ivan")) with
-   | Some entity ->
-     assert_equal_pulled_attrs
-       "pull accepts lookup ref"
-       [ kw "age", Pulled_scalar (Int 31) ]
-       entity
-   | None -> failwith "expected lookup ref pull to resolve")
-
-let test_lookup_refs_reject_non_unique_attrs () =
-  let db =
-    empty_db ()
-    |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
-  in
-  assert_raises_invalid_arg_message
-    "entity lookup refs require unique attrs like upstream"
-    "Lookup ref attribute should be marked as :db/unique: [:name \"Ivan\"]"
-    (fun () -> ignore (entity db (Lookup_ref ("name", String "Ivan"))));
-  assert_raises_invalid_arg
-    "query lookup refs require unique attrs"
-    (fun () ->
-      ignore
-        (q
-           db
-           { find = [ Find_var "name" ]
-           ; inputs = []
-           ; with_vars = []
-           ; rules = []
-           ; where = [ Pattern (QLookupRef ("name", String "Ivan"), QAttr "name", QVar "name") ]
-           }))
-
-let test_q_rejects_unresolved_lookup_refs () =
-  let db =
-    empty_db ~schema:[ "name", unique_identity ] ()
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
-  in
-  assert_raises_invalid_arg
-    "query lookup refs reject missing entities"
-    (fun () ->
-      ignore
-        (q
-           db
-           { find = [ Find_var "name" ]
-           ; inputs = []
-           ; with_vars = []
-           ; rules = []
-           ; where = [ Pattern (QLookupRef ("name", String "Valery"), QAttr "name", QVar "name") ]
-           }))
-
-let test_lookup_refs_accept_unique_value_attrs () =
-  let db =
-    empty_db ~schema:[ "email", unique_value ] ()
-    |> db_with
-         [ Entity
-             { db_id = Some (Entity_id 1)
-             ; attrs = [ "email", One_value (String "ivan@example.com"); "age", One_value (Int 31) ]
-             }
-         ]
-  in
-  assert_equal_int
-    "entid resolves unique value attributes"
-    1
-    (match entid db "email" (String "ivan@example.com") with
-     | Some eid -> eid
-     | None -> failwith "expected entid to resolve unique value attr");
-  (match entity db (Lookup_ref ("email", String "ivan@example.com")) with
-   | Some entity -> assert_equal_int "unique value lookup entity id" 1 entity.id
-   | None -> failwith "expected unique value lookup ref entity to resolve");
-  (match pull db [ Pull_attr "age" ] (Lookup_ref ("email", String "ivan@example.com")) with
-   | Some entity ->
-     assert_equal_pulled_attrs
-       "pull accepts unique value lookup ref"
-       [ kw "age", Pulled_scalar (Int 31) ]
-       entity
-   | None -> failwith "expected unique value lookup ref pull to resolve")
-
-let test_lookup_ref_transaction_upstream_parity_batch () =
-  let base =
-    empty_db ~schema:[ "name", unique_identity; "email", unique_value; "friend", ref_attr; "friends", ref_many; "age", indexed ] ()
-    |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "email", One_value (String "@1") ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "email", One_value (String "@2") ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "email", One_value (String "@3") ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Sergey"); "email", One_value (String "@4") ] }
-         ]
-  in
-  let ivan = Lookup_ref ("name", String "Ivan") in
-  let petr = Lookup_ref ("name", String "Petr") in
-  let oleg = Lookup_ref ("name", String "Oleg") in
-  let db =
-    base
-    |> db_with [ Add (ivan, "age", Int 35) ]
-    |> db_with [ Entity { db_id = Some ivan; attrs = [ "age", One_value (Int 36) ] } ]
-    |> db_with [ Add (Entity_id 1, "friend", Ref_to petr) ]
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "friend", One_value (Ref_to oleg) ] } ]
-    |> db_with [ Entity { db_id = Some (Entity_id 2); attrs = [ "_friend", One_value (Ref_to ivan) ] } ]
-    |> db_with [ Add (Entity_id 1, "friends", Ref_to petr); Add (Entity_id 1, "friends", Ref_to oleg) ]
-  in
-  assert_equal_triples
-    "lookup refs transact through entity ids and ref values"
-    [ 1, "age", Int 36
-    ; 1, "email", String "@1"
-    ; 1, "friend", Ref 2
-    ; 1, "friends", Ref 2
-    ; 1, "friends", Ref 3
-    ; 1, "name", String "Ivan"
-    ; 2, "email", String "@2"
-    ; 2, "name", String "Petr"
-    ; 3, "email", String "@3"
-    ; 3, "name", String "Oleg"
-    ; 4, "email", String "@4"
-    ; 4, "name", String "Sergey"
-    ]
-    (datoms db Eavt ());
-  let db =
-    db
-    |> db_with [ CompareAndSet (ivan, "name", Some (String "Ivan"), String "Vanya") ]
-    |> db_with [ CompareAndSet (Entity_id 1, "friend", Some (Ref_to (Lookup_ref ("name", String "Petr"))), Ref_to (Lookup_ref ("name", String "Sergey"))) ]
-    |> db_with [ Retract (Lookup_ref ("name", String "Vanya"), "age", Some (Int 36)) ]
-    |> db_with [ Retract (Entity_id 1, "friends", Some (Ref_to (Lookup_ref ("name", String "Oleg")))) ]
-  in
-  assert_equal_triples
-    "lookup refs transact through CAS and retract operations"
-    [ 1, "email", String "@1"
-    ; 1, "friend", Ref 4
-    ; 1, "friends", Ref 2
-    ; 1, "name", String "Vanya"
-    ; 2, "email", String "@2"
-    ; 2, "name", String "Petr"
-    ; 3, "email", String "@3"
-    ; 3, "name", String "Oleg"
-    ; 4, "email", String "@4"
-    ; 4, "name", String "Sergey"
-    ]
-    (datoms db Eavt ());
-  assert_raises_invalid_arg_message
-    "lookup refs in add entity position must resolve like upstream"
-    "Nothing found for entity id [:name \"Missing\"]"
-    (fun () -> ignore (db_with [ Add (Lookup_ref ("name", String "Missing"), "age", Int 10) ] base));
-  assert_raises_invalid_arg_message
-    "lookup refs in entity-map db/id must resolve like upstream"
-    "Nothing found for entity id [:name \"Missing\"]"
-    (fun () -> ignore (db_with [ Entity { db_id = Some (Lookup_ref ("name", String "Missing")); attrs = [ "age", One_value (Int 10) ] } ] base))
-
 let test_q_finds_values () =
   let db =
     empty_db ~schema:[ "likes", many ] ()
@@ -12445,82 +12288,6 @@ let test_q_sources_lookup_ref_uses_named_source () =
     [ [ Result_value (Int 7) ] ]
     (q_sources db [ "scores", Db_source source ] query)
 
-let test_lookup_refs_in_index_access_values () =
-  let db =
-    empty_db ~schema:[ "name", unique_identity; "friends", ref_many ] ()
-    |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "friends", Many_values [ Ref 2; Ref 3 ] ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "friends", One_value (Ref 3) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg") ] }
-         ]
-  in
-  assert_equal_triples
-    "datoms resolves lookup refs in AVET value position"
-    [ 1, "friends", Ref 3; 2, "friends", Ref 3 ]
-    (datoms db Avet ~a:"friends" ~v:(Ref_to (Lookup_ref ("name", String "Oleg"))) ());
-  assert_equal_triples
-    "datoms resolves direct lookup-ref values for ref attrs"
-    [ 1, "friends", Ref 3; 2, "friends", Ref 3 ]
-    (datoms db Avet ~a:"friends" ~v:(List [ Keyword "name"; String "Oleg" ]) ());
-  assert_equal_triples
-    "Aevt datoms resolves direct lookup-ref entity and value positions"
-    [ 1, "friends", Ref 2 ]
-    (datoms_ref
-       db
-       Aevt
-       ~a:"friends"
-       ~e:(Lookup_ref ("name", String "Ivan"))
-       ~v:(List [ Keyword "name"; String "Petr" ])
-       ());
-  assert_equal_triples
-    "datoms resolves lookup refs in EAVT entity position"
-    [ 1, "friends", Ref 2; 1, "friends", Ref 3; 1, "name", String "Ivan" ]
-    (datoms_ref db Eavt ~e:(Lookup_ref ("name", String "Ivan")) ());
-  (match find_datom_ref db Eavt ~e:(Lookup_ref ("name", String "Ivan")) ~a:"name" () with
-   | Some datom when datom.e = 1 && datom.a = "name" && datom.v = String "Ivan" -> ()
-   | _ -> failwith "find_datom resolves lookup refs in EAVT entity position");
-  assert_equal_triples
-    "seek_datoms resolves lookup refs in EAVT entity position"
-    [ 2, "friends", Ref 3; 2, "name", String "Petr"; 3, "name", String "Oleg" ]
-    (seek_datoms_ref db Eavt ~e:(Lookup_ref ("name", String "Petr")) ());
-  assert_equal_triples
-    "rseek_datoms resolves lookup refs in EAVT entity position"
-    [ 2, "name", String "Petr"; 2, "friends", Ref 3; 1, "name", String "Ivan"; 1, "friends", Ref 3; 1, "friends", Ref 2 ]
-    (rseek_datoms_ref db Eavt ~e:(Lookup_ref ("name", String "Petr")) ());
-  assert_equal_triples
-    "index_range resolves lookup refs in AVET bounds"
-    [ 1, "friends", Ref 2
-    ; 1, "friends", Ref 3
-    ; 2, "friends", Ref 3
-    ]
-    (index_range
-       db
-       "friends"
-       ~start:(Ref_to (Lookup_ref ("name", String "Petr")))
-       ~stop:(Ref_to (Lookup_ref ("name", String "Oleg")))
-       ());
-  assert_equal_triples
-    "index_range resolves direct lookup-ref bounds for ref attrs"
-    [ 1, "friends", Ref 2
-    ; 1, "friends", Ref 3
-    ; 2, "friends", Ref 3
-    ]
-    (index_range
-       db
-       "friends"
-       ~start:(List [ Keyword "name"; String "Petr" ])
-       ~stop:(List [ Keyword "name"; String "Oleg" ])
-       ());
-  assert_equal_triples
-    "seek_datoms resolves direct lookup-ref bounds for ref attrs"
-    [ 1, "friends", Ref 3
-    ; 2, "friends", Ref 3
-    ; 1, "name", String "Ivan"
-    ; 3, "name", String "Oleg"
-    ; 2, "name", String "Petr"
-    ]
-    (seek_datoms db Avet ~a:"friends" ~v:(List [ Keyword "name"; String "Oleg" ]) ())
-
 let test_q_resolves_idents_in_patterns () =
   let db =
     empty_db ()
@@ -17148,11 +16915,6 @@ let () =
   test_entity_maps_expand_many_reverse_nested_entity_values ();
   test_upstream_components_and_explode_parity_batch ();
   test_init_db_preserves_uuid_and_instant_values ();
-  test_entity_and_pull_accept_lookup_refs ();
-  test_lookup_refs_reject_non_unique_attrs ();
-  test_q_rejects_unresolved_lookup_refs ();
-  test_lookup_refs_accept_unique_value_attrs ();
-  test_lookup_ref_transaction_upstream_parity_batch ();
   test_q_finds_values ();
   test_parse_query_finds_values ();
   test_edn_reader_parses_query_and_pull_strings ();
@@ -17310,7 +17072,6 @@ let () =
   test_parse_query_infers_default_source_input ();
   test_q_sources_unknown_source_rejected ();
   test_q_sources_lookup_ref_uses_named_source ();
-  test_lookup_refs_in_index_access_values ();
   test_q_resolves_idents_in_patterns ();
   test_parse_query_resolves_idents_in_patterns ();
   test_q_find_pull_expressions ();
