@@ -545,6 +545,14 @@ module Query : sig
   val resolved_query_result : result_resolution_context -> query_result -> query_result option
   val lookup_ref_entity_id_of_value : result_resolution_context -> value -> entity_id option
   val query_result_entity_id : result_resolution_context -> query_result -> entity_id option
+  val query_results_equivalent : result_resolution_context -> query_result -> query_result -> bool
+  val bind_var :
+    result_resolution_context ->
+    string ->
+    query_result ->
+    (string * query_result) list ->
+    (string * query_result) list option
+  val result_matches_entity : result_resolution_context -> entity_id -> query_result -> bool
   val query_callables_of_inputs : query_input list -> query_callables
   val query_rules_of_inputs : query_input list -> query_rule list
   val matching_rules : query_rule list -> string -> int -> query_rule list

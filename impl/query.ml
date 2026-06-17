@@ -369,6 +369,31 @@ let query_result_entity_id context result =
       ~validate_entity_id:context.validate_entity_id
       (resolved_query_result context result)
 
+let query_results_equivalent context left right =
+  match left, right with
+  | Result_db left_db, Result_db right_db -> left_db == right_db
+  | Result_db _, _ | _, Result_db _ -> false
+  | _ ->
+    left = right
+    ||
+    match query_result_entity_id context left, query_result_entity_id context right with
+    | Some left_id, Some right_id -> left_id = right_id
+    | _ ->
+      (match resolved_query_result context left, resolved_query_result context right with
+       | Some left, Some right -> left = right
+       | _ -> false)
+
+let bind_var context name value bindings =
+  match List.assoc_opt name bindings with
+  | Some bound when query_results_equivalent context bound value -> Some bindings
+  | Some _ -> None
+  | None -> Some ((name, value) :: bindings)
+
+let result_matches_entity context entity_id result =
+  match query_result_entity_id context result with
+  | Some actual -> actual = entity_id
+  | None -> false
+
 let query_callables_of_inputs inputs =
   inputs
   |> List.fold_left

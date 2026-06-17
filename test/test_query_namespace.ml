@@ -20,6 +20,9 @@ let assert_equal_query_option label expected actual =
 let assert_equal_int_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional integer result" label
 
+let assert_equal_bool label expected actual =
+  if expected <> actual then failf "%s: expected %b but got %b" label expected actual
+
 let assert_equal_grouped_bindings label expected actual =
   if expected <> actual then failf "%s: unexpected grouped bindings" label
 
@@ -179,7 +182,51 @@ let test_query_namespace__test_query_result_helpers () =
   assert_equal_int_option
     "query_result_entity_id falls back to resolved values"
     (Some 42)
-    (Query.query_result_entity_id result_resolution_context (Result_value (Keyword "known-ident")))
+    (Query.query_result_entity_id result_resolution_context (Result_value (Keyword "known-ident")));
+  assert_equal_bool
+    "query_results_equivalent compares identical db results by physical identity"
+    true
+    (let db = empty_db () in
+     Query.query_results_equivalent result_resolution_context (Result_db db) (Result_db db));
+  assert_equal_bool
+    "query_results_equivalent rejects different db results"
+    false
+    (Query.query_results_equivalent result_resolution_context (Result_db (empty_db ())) (Result_db (empty_db ())));
+  assert_equal_bool
+    "query_results_equivalent compares lookup refs through entity ids"
+    true
+    (Query.query_results_equivalent
+       result_resolution_context
+       (Result_value (Vector [ Keyword "name"; String "Ivan" ]))
+       (Result_entity 101));
+  assert_equal_bool
+    "query_results_equivalent compares resolved values"
+    true
+    (Query.query_results_equivalent result_resolution_context (Result_value (Keyword "known-ident")) (Result_entity 42));
+  assert_equal_query_option
+    "bind_var adds unbound vars"
+    (Some [ "e", Result_entity 42 ])
+    (Query.bind_var result_resolution_context "e" (Result_entity 42) []);
+  assert_equal_query_option
+    "bind_var accepts equivalent bound values"
+    (Some [ "e", Result_value (Keyword "known-ident") ])
+    (Query.bind_var
+       result_resolution_context
+       "e"
+       (Result_entity 42)
+       [ "e", Result_value (Keyword "known-ident") ]);
+  assert_equal_query_option
+    "bind_var rejects conflicting bound values"
+    None
+    (Query.bind_var result_resolution_context "e" (Result_entity 99) [ "e", Result_entity 42 ]);
+  assert_equal_bool
+    "result_matches_entity accepts equivalent entity ids"
+    true
+    (Query.result_matches_entity result_resolution_context 42 (Result_value (Keyword "known-ident")));
+  assert_equal_bool
+    "result_matches_entity rejects mismatches"
+    false
+    (Query.result_matches_entity result_resolution_context 99 (Result_value (Keyword "known-ident")))
 
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then

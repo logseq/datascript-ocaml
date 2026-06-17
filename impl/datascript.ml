@@ -2228,36 +2228,14 @@ let query_result_context db : Query.result_resolution_context =
   ; lookup_ref_entity_id = (fun attr value -> entity_id_of_ref db (Lookup_ref (attr, value)))
   }
 
-let resolved_query_result db result =
-  Query.resolved_query_result (query_result_context db) result
-
 let query_result_entity_id db result =
   Query.query_result_entity_id (query_result_context db) result
 
-let query_results_equivalent db left right =
-  match left, right with
-  | Result_db left_db, Result_db right_db -> left_db == right_db
-  | Result_db _, _ | _, Result_db _ -> false
-  | _ ->
-    left = right
-    ||
-    match query_result_entity_id db left, query_result_entity_id db right with
-    | Some left_id, Some right_id -> left_id = right_id
-    | _ ->
-      (match resolved_query_result db left, resolved_query_result db right with
-       | Some left, Some right -> left = right
-       | _ -> false)
-
 let bind_var db name value bindings =
-  match List.assoc_opt name bindings with
-  | Some bound when query_results_equivalent db bound value -> Some bindings
-  | Some _ -> None
-  | None -> Some ((name, value) :: bindings)
+  Query.bind_var (query_result_context db) name value bindings
 
 let result_matches_entity db entity_id result =
-  match query_result_entity_id db result with
-  | Some actual -> actual = entity_id
-  | None -> false
+  Query.result_matches_entity (query_result_context db) entity_id result
 
 let match_query_term db term value bindings =
   match term with
@@ -5227,6 +5205,9 @@ module Query = struct
   let resolved_query_result = Query_impl.resolved_query_result
   let lookup_ref_entity_id_of_value = Query_impl.lookup_ref_entity_id_of_value
   let query_result_entity_id = Query_impl.query_result_entity_id
+  let query_results_equivalent = Query_impl.query_results_equivalent
+  let bind_var = Query_impl.bind_var
+  let result_matches_entity = Query_impl.result_matches_entity
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules
