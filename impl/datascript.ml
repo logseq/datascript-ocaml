@@ -8193,7 +8193,7 @@ let parse_find_arg = function
 
 let parse_find_args forms = List.map parse_find_arg forms
 
-let parse_find_form = function
+let parse_find_form ?(default_pull_db = empty_db ()) ?(pull_db_for_source = fun _ -> empty_db ()) = function
   | QueryFormSymbol symbol -> Find_var (query_symbol_name symbol)
   | form ->
     (match query_form_sequence form with
@@ -8201,14 +8201,15 @@ let parse_find_form = function
        when is_query_input_symbol pattern_var && pattern_var <> "*" ->
        Find_pull_var (query_symbol_name var, query_input_name pattern_var)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol var; pattern ] ->
-       Find_pull (query_symbol_name var, parse_pull_pattern (empty_db ()) pattern)
+       Find_pull (query_symbol_name var, parse_pull_pattern default_pull_db pattern)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; QueryFormSymbol pattern_var ]
        when is_query_source_symbol source && is_query_input_symbol pattern_var && pattern_var <> "*" ->
        Find_pull_source_var (query_source_name source, query_symbol_name var, query_input_name pattern_var)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; pattern ]
        when is_query_source_symbol source ->
+       let source_name = query_source_name source in
        Find_pull_source
-         (query_source_name source, query_symbol_name var, parse_pull_pattern (empty_db ()) pattern)
+         (source_name, query_symbol_name var, parse_pull_pattern (pull_db_for_source source_name) pattern)
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol var ] ->
        (match aggregate_of_symbol aggregate with
         | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
@@ -8240,33 +8241,35 @@ let parse_find_form = function
         | None -> invalid_arg "find elements must be variable symbols")
      | Some _ | None -> invalid_arg "find elements must be variable symbols")
 
-let parse_find_relation = function
-  | Some (QueryFormVector forms | QueryFormList forms) -> List.map parse_find_form forms
+let parse_find_relation ?default_pull_db ?pull_db_for_source = function
+  | Some (QueryFormVector forms | QueryFormList forms) ->
+    List.map (parse_find_form ?default_pull_db ?pull_db_for_source) forms
   | Some _ -> invalid_arg "query :find must be a vector"
   | None -> invalid_arg "query requires :find"
 
-let is_find_form form =
-  match parse_find_form form with
+let is_find_form ?default_pull_db ?pull_db_for_source form =
+  match parse_find_form ?default_pull_db ?pull_db_for_source form with
   | _ -> true
   | exception Invalid_argument _ -> false
 
-let parse_find_return = function
+let parse_find_return ?default_pull_db ?pull_db_for_source = function
   | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                            | QueryFormList [ form; QueryFormSymbol "..." ]) ])
   | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                          | QueryFormList [ form; QueryFormSymbol "..." ]) ]) ->
-    Return_collection, [ parse_find_form form ]
+    Return_collection, [ parse_find_form ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ form; QueryFormSymbol "." ])
   | Some (QueryFormList [ form; QueryFormSymbol "." ]) ->
-    Return_scalar, [ parse_find_form form ]
+    Return_scalar, [ parse_find_form ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ ((QueryFormVector _ | QueryFormList _) as form) ])
   | Some (QueryFormList [ ((QueryFormVector _ | QueryFormList _) as form) ])
-    when not (is_find_form form) ->
+    when not (is_find_form ?default_pull_db ?pull_db_for_source form) ->
     (match form with
      | QueryFormVector forms
-     | QueryFormList forms -> Return_tuple, List.map parse_find_form forms
+     | QueryFormList forms ->
+       Return_tuple, List.map (parse_find_form ?default_pull_db ?pull_db_for_source) forms
      | _ -> assert false)
-  | form -> Return_relation, parse_find_relation form
+  | form -> Return_relation, parse_find_relation ?default_pull_db ?pull_db_for_source form
 
 let parse_find form = parse_find_return (Some form)
 
@@ -9942,9 +9945,11 @@ let parse_where = function
   | Some _ -> invalid_arg "query :where must be a vector or list"
   | None -> []
 
-let parse_query_return form =
+let parse_query_return_with_pull_context ?default_pull_db ?pull_db_for_source form =
   let entries = query_form_map form in
-  let return, find = parse_find_return (query_form_section "find" entries) in
+  let return, find =
+    parse_find_return ?default_pull_db ?pull_db_for_source (query_form_section "find" entries)
+  in
   let in_form = query_form_section "in" entries in
   ensure_distinct_input_rules_var in_form;
   let rules = parse_rules (query_form_section "rules" entries) in
@@ -9969,6 +9974,9 @@ let parse_query_return form =
      && not (input_declares_rules_var in_form)
   then invalid_arg "Missing rules var '%' in :in";
   return, query
+
+let parse_query_return form =
+  parse_query_return_with_pull_context form
 
 let parse_return_map_labels section_name = function
   | QueryFormVector labels | QueryFormList labels ->
@@ -10019,23 +10027,40 @@ let validate_query_return_map return return_map query =
          invalid_arg ("Count of :" ^ return_map_name return_map ^ " must match count of :find");
        Some return_map)
 
-let parse_query_return_map form =
+let parse_query_return_map_with_pull_context ?default_pull_db ?pull_db_for_source form =
   let entries = query_form_map form in
-  let return, query = parse_query_return form in
+  let return, query =
+    parse_query_return_with_pull_context ?default_pull_db ?pull_db_for_source form
+  in
   let return_map = parse_return_map_section entries in
   return, validate_query_return_map return return_map query, query
+
+let parse_query_return_map form =
+  parse_query_return_map_with_pull_context form
 
 let parse_query form =
   snd (parse_query_return form)
 
+let parse_query_with_pull_context ?default_pull_db ?pull_db_for_source form =
+  snd (parse_query_return_with_pull_context ?default_pull_db ?pull_db_for_source form)
+
 let parse_query_string input =
   parse_query (read_edn input)
+
+let parse_query_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
+  parse_query_with_pull_context ?default_pull_db ?pull_db_for_source (read_edn input)
 
 let parse_query_return_string input =
   parse_query_return (read_edn input)
 
+let parse_query_return_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
+  parse_query_return_with_pull_context ?default_pull_db ?pull_db_for_source (read_edn input)
+
 let parse_query_return_map_string input =
   parse_query_return_map (read_edn input)
+
+let parse_query_return_map_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
+  parse_query_return_map_with_pull_context ?default_pull_db ?pull_db_for_source (read_edn input)
 
 let pull_string ?visitor db input entity_ref =
   pull ?visitor db (parse_pull_pattern_string db input) entity_ref
@@ -10061,7 +10086,7 @@ let q_sources ?(inputs = []) db sources query =
 let q ?inputs db query = q_sources ?inputs db [] query
 
 let q_string ?inputs db input =
-  q ?inputs db (parse_query_string input)
+  q ?inputs db (parse_query_string_with_pull_context ~default_pull_db:db input)
 
 let q_with ?(inputs = []) db with_vars query =
   let callables, input_bindings = initial_query_context db query inputs in
@@ -10073,10 +10098,22 @@ let q_with ?(inputs = []) db with_vars query =
     non_aggregate_rows_with db [] bindings query.find with_vars
 
 let q_with_string ?inputs db with_vars input =
-  q_with ?inputs db with_vars (parse_query_string input)
+  q_with ?inputs db with_vars (parse_query_string_with_pull_context ~default_pull_db:db input)
 
 let q_sources_string ?inputs db sources input =
-  q_sources ?inputs db sources (parse_query_string input)
+  let pull_db_for_source source =
+    match List.assoc_opt source sources with
+    | Some (Db_source source_db) -> source_db
+    | Some (Relation_source _) -> empty_db ()
+    | None when source = "$" -> db
+    | None -> empty_db ()
+  in
+  let default_pull_db = pull_db_for_source "$" in
+  q_sources
+    ?inputs
+    db
+    sources
+    (parse_query_string_with_pull_context ~default_pull_db ~pull_db_for_source input)
 
 let q_return ?inputs db return query =
   let rows = q ?inputs db query in
@@ -10101,7 +10138,7 @@ let q_return ?inputs db return query =
     Query_scalar value
 
 let q_return_string ?inputs db input =
-  let return, query = parse_query_return_string input in
+  let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in
   q_return ?inputs db return query
 
 let labels_of_return_map = function
@@ -10130,7 +10167,9 @@ let q_return_map ?inputs db return return_map query =
     invalid_arg "return maps require relation or tuple query returns"
 
 let q_return_map_string ?inputs db input =
-  let return, return_map, query = parse_query_return_map_string input in
+  let return, return_map, query =
+    parse_query_return_map_string_with_pull_context ~default_pull_db:db input
+  in
   match return_map with
   | Some return_map -> q_return_map ?inputs db return return_map query
   | None -> q_return ?inputs db return query

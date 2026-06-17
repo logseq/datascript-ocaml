@@ -97,6 +97,13 @@ let ref_attr =
 let ref_many =
   { ref_attr with cardinality = Many }
 
+let no_history =
+  { indexed with no_history = true }
+
+let assert_equal_tx_flags label expected actual =
+  let values = List.map (fun datom -> datom.e, datom.a, datom.v, datom.added) actual in
+  if expected <> values then failf "%s: unexpected tx flags" label
+
 let test_sqlite_storage_round_trips_ocaml_payloads () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage round trip: sqlite3 is not available"
@@ -599,6 +606,234 @@ let test_sqlite_storage_backed_not_or_queries_after_restore () =
                       [?e :name \"Oleg\"])]"
            ~inputs:[ Arg_scalar (Result_value (Int 10)) ]))
 
+let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed transact/history/current-tx test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn =
+        create_conn
+          ~schema:
+            [ "name", unique_identity
+            ; "created-at", ref_attr
+            ; "source", indexed
+            ; "secret", no_history
+            ]
+          ~storage
+          ()
+      in
+      let report =
+        transact_conn
+          ~tx_meta:[ "source", String "sqlite-parity" ]
+          conn
+          [ Entity
+              { db_id = Some (Temp_id "ivan")
+              ; attrs =
+                  [ "name", One_value (String "Ivan")
+                  ; "created-at", One_value TxRef
+                  ; "secret", One_value (String "alpha")
+                  ]
+              }
+          ; Add (CurrentTx, "source", String "initial")
+          ]
+      in
+      if report.tx_meta <> [ "source", String "sqlite-parity" ] then
+        failwith "SQLite storage-backed transact should preserve tx metadata in reports";
+      if resolve_tempid report.tempids "ivan" <> Some 1 then
+        failwith "SQLite storage-backed transact should expose resolved entity tempids";
+      if resolve_tempid report.tempids "db/current-tx" <> Some (tx0 + 1) then
+        failwith "SQLite storage-backed transact should expose current tx tempid";
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for transact/history/current-tx test"
+      in
+      assert_equal_query
+        "SQLite restored db queries current-tx ref facts"
+        [ [ Result_value (String "initial") ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?source
+             :where [?e :name \"Ivan\"]
+                    [?e :created-at ?tx]
+                    [?tx :source ?source]]");
+      ignore
+        (transact_conn
+           restored
+           [ Add (Lookup_ref ("name", String "Ivan"), "name", String "Petr")
+           ; Add (Lookup_ref ("name", String "Petr"), "secret", String "beta")
+           ]);
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db after history transact"
+      in
+      assert_equal_query
+        "SQLite storage persists cardinality-one replacement after restore"
+        [ [ Result_value (String "Petr") ] ]
+        (q_string db "[:find ?name :where [?e :name ?name]]");
+      assert_equal_tx_flags
+        "SQLite restored history keeps name additions and retractions"
+        [ 1, "name", String "Ivan", true
+        ; 1, "name", String "Ivan", false
+        ; 1, "name", String "Petr", true
+        ]
+        (datoms (history db) Eavt ~a:"name" ());
+      assert_equal_triples
+        "SQLite restored history excludes no-history attrs"
+        []
+        (datoms (history db) Eavt ~a:"secret" ());
+      assert_equal_query
+        "SQLite restored active db keeps latest no-history value"
+        [ [ Result_value (String "beta") ] ]
+        (q_string db "[:find ?secret :where [?e :name \"Petr\"] [?e :secret ?secret]]"))
+
+let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed pull/source/relation query test: sqlite3 is not available"
+  else
+    with_temp_db (fun people_path ->
+      with_temp_db (fun score_path ->
+        let people_storage = Sqlite_storage.storage people_path in
+        let score_storage = Sqlite_storage.storage score_path in
+        let people_conn =
+          create_conn
+            ~schema:[ "email", unique_identity; "name", indexed; "friend", ref_attr ]
+            ~storage:people_storage
+            ()
+        in
+        let score_conn =
+          create_conn
+            ~schema:[ "email", unique_identity; "score", indexed ]
+            ~storage:score_storage
+            ()
+        in
+        ignore
+          (transact_conn
+             people_conn
+             [ Add (Entity_id 1, "email", String "ivan@example.com")
+             ; Add (Entity_id 1, "name", String "Ivan")
+             ; Add (Entity_id 1, "friend", Ref 2)
+             ; Add (Entity_id 2, "email", String "petr@example.com")
+             ; Add (Entity_id 2, "name", String "Petr")
+             ]);
+        ignore
+          (transact_conn
+             score_conn
+             [ Add (Entity_id 10, "email", String "ivan@example.com")
+             ; Add (Entity_id 10, "score", Int 20)
+             ; Add (Entity_id 11, "email", String "petr@example.com")
+             ; Add (Entity_id 11, "score", Int 40)
+             ]);
+        let people =
+          match restore people_storage with
+          | Some db -> db
+          | None -> failwith "SQLite storage should restore people db"
+        in
+        let scores =
+          match restore score_storage with
+          | Some db -> db
+          | None -> failwith "SQLite storage should restore score db"
+        in
+        assert_equal_query
+          "SQLite restored named sources join across persisted dbs"
+          [ [ Result_value (String "Ivan"); Result_value (Int 20) ]
+          ; [ Result_value (String "Petr"); Result_value (Int 40) ]
+          ]
+          (q_sources_string
+             people
+             [ "scores", Db_source scores ]
+             "[:find ?name ?score
+               :in $ $scores
+               :where [?person :email ?email]
+                      [?person :name ?name]
+                      [$scores ?row :email ?email]
+                      [$scores ?row :score ?score]]");
+        assert_equal_query
+          "SQLite restored db joins relation inputs after persistence"
+          [ [ Result_value (String "Petr"); Result_value (String "friend") ] ]
+          (q_sources_string
+             people
+             [ "labels", Relation_source [ [ Result_value (String "petr@example.com"); Result_value (String "friend") ] ] ]
+             "[:find ?name ?label
+               :in $ $labels
+               :where [?e :email ?email]
+                      [?e :name ?name]
+                      [$labels ?email ?label]]");
+        (match pull_string people "[:name {:friend [:name]}]" (Lookup_ref ("email", String "ivan@example.com")) with
+         | Some pulled ->
+           if
+             pulled.pulled_attrs
+             <> [ Keyword "friend",
+                  Pulled_entity
+                    { pulled_id = 2
+                    ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ]
+                    }
+                ; Keyword "name", Pulled_scalar (String "Ivan")
+                ]
+           then failwith "SQLite restored db should support pull with refs"
+         | None -> failwith "SQLite restored db should pull lookup-ref entities");
+        if
+          q_return_string
+            people
+            "[:find (pull ?e [:name {:friend [:name]}]) .
+              :where [?e :email \"ivan@example.com\"]]"
+          <> Query_scalar
+               (Some
+                  (Result_pull
+                     { pulled_id = 1
+                     ; pulled_attrs =
+                         [ Keyword "friend",
+                           Pulled_entity
+                             { pulled_id = 2
+                             ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ]
+                             }
+                         ; Keyword "name", Pulled_scalar (String "Ivan")
+                         ]
+                     }))
+        then failwith "SQLite restored db should support pull find specs"))
+
+let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed reset-schema/compaction test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
+      ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for reset-schema test"
+      in
+      ignore (reset_schema restored [ "name", indexed; "email", unique_identity ]);
+      ignore
+        (transact_conn
+           restored
+           [ Add (Entity_id 1, "email", String "ivan@example.com")
+           ; Add (Temp_id "same-email", "email", String "ivan@example.com")
+           ; Add (Temp_id "same-email", "name", String "Ivan Upserted")
+           ]);
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db after reset-schema"
+      in
+      (match List.assoc_opt "age" (schema db) with
+       | None -> ()
+       | Some _ -> failwith "SQLite reset_schema should persist removed schema attrs");
+      if List.assoc_opt "email" (schema db) <> Some unique_identity then
+        failwith "SQLite reset_schema should persist added unique attrs";
+      assert_equal_query
+        "SQLite reset schema persists unique identity tempid upsert semantics"
+        [ [ Result_entity 1; Result_value (String "ivan@example.com"); Result_value (String "Ivan Upserted") ] ]
+        (q_string db "[:find ?e ?email ?name :where [?e :email ?email] [?e :name ?name]]");
+      assert_equal
+        "SQLite reset schema compacts stale tail"
+        "datascript/root,datascript/tail"
+        (String.concat "," (storage_addresses storage)))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -785,6 +1020,9 @@ let () =
   test_sqlite_storage_backed_query_result_shapes_after_restore ();
   test_sqlite_storage_backed_lookup_ref_transacts_after_restore ();
   test_sqlite_storage_backed_not_or_queries_after_restore ();
+  test_sqlite_storage_backed_transact_history_and_current_tx_parity ();
+  test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ();
+  test_sqlite_storage_backed_reset_schema_and_compaction_parity ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();
