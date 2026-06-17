@@ -489,6 +489,50 @@ let test_query_namespace__test_variable_discovery_helpers () =
     [ "e"; "v" ]
     (Query.vars_of_clause (SourceClause ("$", Pattern (QVar "e", QAttr "name", QVar "v"))))
 
+let test_query_namespace__test_source_discovery_helpers () =
+  assert_equal_string_list
+    "named_source returns a singleton source list"
+    [ "other" ]
+    (Query.named_source "other");
+  assert_equal_string_list
+    "sources_of_query_term returns only source terms"
+    [ "other" ]
+    (Query.sources_of_query_term (QSource "other"));
+  assert_equal_string_list
+    "sources_of_query_terms preserves repeated source references"
+    [ "a"; "b"; "a" ]
+    (Query.sources_of_query_terms [ QSource "a"; QVar "ignored"; QSource "b"; QSource "a" ]);
+  assert_equal_string_list
+    "sources_of_optional_query_term handles optional terms"
+    [ "other" ]
+    (Query.sources_of_optional_query_term (Some (QSource "other")));
+  assert_equal_string_list
+    "sources_of_optional_query_term returns empty sources for None"
+    []
+    (Query.sources_of_optional_query_term None);
+  assert_equal_string_list
+    "sources_of_clause includes explicit sources and nested term sources"
+    [ "people"; "needle" ]
+    (Query.sources_of_clause
+       (SourcePattern ("people", QVar "e", QAttr "name", QSource "needle")));
+  assert_equal_string_list
+    "sources_of_clause recurses through branch clauses"
+    [ "outer"; "inner"; "dynamic" ]
+    (Query.sources_of_clause
+       (SourceOr
+          ( "outer"
+          , [ [ Pattern (QSource "inner", QAttr "name", QVar "name") ]
+            ; [ DynamicPredicate ("pred", [ QSource "dynamic" ]) ]
+            ] )));
+  assert_equal_string_list
+    "sources_of_find_spec includes pull sources"
+    [ "pull-db" ]
+    (Query.sources_of_find_spec (Find_pull_source ("pull-db", "e", [ Pull_id ])));
+  assert_equal_string_list
+    "sources_of_find_spec includes aggregate term sources"
+    [ "amounts" ]
+    (Query.sources_of_find_spec (Find_aggregate (Sum, [ QSource "amounts"; QVar "amount" ])))
+
 let test_query_namespace__test_query_string_helpers () =
   let value_to_string = function
     | String value -> "\"" ^ value ^ "\""
@@ -674,6 +718,7 @@ let () =
   test_query_namespace__test_callable_helpers ();
   test_query_namespace__test_rule_helpers ();
   test_query_namespace__test_variable_discovery_helpers ();
+  test_query_namespace__test_source_discovery_helpers ();
   test_query_namespace__test_query_string_helpers ();
   test_query_namespace__test_query_clause_string_helpers ();
   test_query_namespace__test_binding_validation_helpers ()

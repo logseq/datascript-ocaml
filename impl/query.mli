@@ -101,6 +101,12 @@ val rule_invocation_callables :
 val vars_of_query_term : query_term -> string list
 val vars_of_query_terms : query_term list -> string list
 val vars_of_clause : query_clause -> string list
+val named_source : string -> string list
+val sources_of_query_term : query_term -> string list
+val sources_of_query_terms : query_term list -> string list
+val sources_of_optional_query_term : query_term option -> string list
+val sources_of_clause : query_clause -> string list
+val sources_of_find_spec : find_spec -> string list
 val query_input_var_label : string -> string
 val query_term_string : value_to_string:(value -> string) -> query_term -> string
 val query_output_var_string : string -> string

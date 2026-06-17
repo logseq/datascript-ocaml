@@ -463,6 +463,149 @@ and vars_of_clause = function
     |> List.sort_uniq compare
   | Rule (_, terms) | SourceRule (_, _, terms) -> vars_of_query_terms terms
 
+let named_source source = [ source ]
+
+let sources_of_query_term = function
+  | QSource source -> [ source ]
+  | QEntity _ | QIdent _ | QLookupRef _ | QVar _ | QAttr _ | QValue _ | QWildcard -> []
+
+let sources_of_query_terms terms =
+  List.concat_map sources_of_query_term terms
+
+let sources_of_optional_query_term = function
+  | Some term -> sources_of_query_term term
+  | None -> []
+
+let rec sources_of_clause = function
+  | Pattern (e, a, v) -> sources_of_query_terms [ e; a; v ]
+  | PatternTx (e, a, v, tx) -> sources_of_query_terms [ e; a; v; tx ]
+  | PatternTxOp (e, a, v, tx, op) -> sources_of_query_terms [ e; a; v; tx; op ]
+  | SourcePattern (source, e, a, v) -> named_source source @ sources_of_query_terms [ e; a; v ]
+  | SourcePatternTx (source, e, a, v, tx) ->
+    named_source source @ sources_of_query_terms [ e; a; v; tx ]
+  | SourcePatternTxOp (source, e, a, v, tx, op) ->
+    named_source source @ sources_of_query_terms [ e; a; v; tx; op ]
+  | SourceRelationPattern (source, terms) -> named_source source @ sources_of_query_terms terms
+  | Missing (entity, _) -> sources_of_query_term entity
+  | SourceMissing (source, entity, _) -> named_source source @ sources_of_query_term entity
+  | GetElse (entity, _, _, _) -> sources_of_query_term entity
+  | SourceGetElse (source, entity, _, _, _) -> named_source source @ sources_of_query_term entity
+  | GetSome (entity, _, _, _) -> sources_of_query_term entity
+  | SourceGetSome (source, entity, _, _, _) -> named_source source @ sources_of_query_term entity
+  | GetValue (map, key, _) -> sources_of_query_terms [ map; key ]
+  | GetDefaultValue (map, key, default, _) -> sources_of_query_terms [ map; key; default ]
+  | CountValue (term, _)
+  | EmptyValue term
+  | NotEmptyValue term
+  | ValuePredicate (_, term)
+  | NumericPredicate (_, term)
+  | BooleanPredicate (_, term)
+  | BooleanNotPredicate term
+  | BooleanNotValue (term, _)
+  | IdentityValue (term, _)
+  | RandomIntValue (term, _)
+  | TypeValue (term, _)
+  | MetaValue (term, _)
+  | NameValue (term, _)
+  | NamespaceValue (term, _)
+  | KeywordFromName (term, _)
+  | StringLowerCaseValue (term, _)
+  | StringUpperCaseValue (term, _)
+  | StringCapitalizeValue (term, _)
+  | StringReverseValue (term, _)
+  | StringTrimValue (term, _)
+  | StringTrimLeftValue (term, _)
+  | StringTrimRightValue (term, _)
+  | StringTrimNewlineValue (term, _)
+  | StringJoinPlainValue (term, _)
+  | RePatternValue (term, _)
+  | StringBlankValue term
+  | StringSplitLinesValue (term, _)
+  | GroundTerm (term, _)
+  | GroundTermCollection (term, _)
+  | GroundTermTuple (term, _)
+  | GroundTermRelation (term, _)
+  | RangeEndValue (term, _)
+  | UntupleFunction (term, _) ->
+    sources_of_query_term term
+  | ContainsValue (collection, key)
+  | ComparisonPredicate (_, collection, key)
+  | CompareValue (collection, key, _)
+  | IdenticalPredicate (collection, key)
+  | KeywordFromNamespaceName (collection, key, _)
+  | StringIncludesValue (collection, key)
+  | StringStartsWithValue (collection, key)
+  | StringEndsWithValue (collection, key)
+  | StringIndexOfValue (collection, key, _)
+  | StringLastIndexOfValue (collection, key, _)
+  | StringJoinValue (collection, key, _)
+  | StringEscapeValue (collection, key, _)
+  | ReFindValue (collection, key, _)
+  | ReMatchesValue (collection, key, _)
+  | ReFindPredicate (collection, key)
+  | ReMatchesPredicate (collection, key)
+  | ReSeqValue (collection, key, _)
+  | StringSplitValue (collection, key, _)
+  | RangeValue (collection, key, _) ->
+    sources_of_query_terms [ collection; key ]
+  | StringSubstringValue (value, start, end_, _) ->
+    sources_of_query_terms [ value; start ] @ sources_of_optional_query_term end_
+  | StringReplaceValue (value, pattern, replacement, _)
+  | StringReplaceFirstValue (value, pattern, replacement, _)
+  | StringSplitLimitValue (value, pattern, replacement, _)
+  | RangeStepValue (value, pattern, replacement, _) ->
+    sources_of_query_terms [ value; pattern; replacement ]
+  | ComparisonPredicateN (_, terms)
+  | EqualityPredicate (_, terms)
+  | ArithmeticValue (_, terms, _)
+  | ExtremumValue (_, terms, _)
+  | BooleanAndPredicate terms
+  | BooleanAndValue (terms, _)
+  | BooleanOrPredicate terms
+  | BooleanOrValue (terms, _)
+  | DifferPredicate terms
+  | StringBuildValue (terms, _)
+  | PrintStringValue (terms, _)
+  | PrintLineStringValue (terms, _)
+  | PrStringValue (terms, _)
+  | PrnStringValue (terms, _)
+  | VectorValue (terms, _)
+  | ListValue (terms, _)
+  | SetValue (terms, _)
+  | HashMapValue (terms, _)
+  | ArrayMapValue (terms, _)
+  | TupleFunction (terms, _)
+  | Predicate (_, terms, _)
+  | Function (_, terms, _, _)
+  | DynamicPredicate (_, terms)
+  | DynamicFunction (_, terms, _)
+  | DynamicFunctionCollection (_, terms, _)
+  | DynamicFunctionRelation (_, terms, _)
+  | Rule (_, terms)
+  | SourceRule (_, _, terms) ->
+    sources_of_query_terms terms
+  | SourceClause (source, clause) -> named_source source @ sources_of_clause clause
+  | SourceNot (source, clauses) | SourceNotJoin (source, _, clauses) ->
+    named_source source @ List.concat_map sources_of_clause clauses
+  | SourceOr (source, branches)
+  | SourceOrJoin (source, _, branches)
+  | SourceOrJoinRequired (source, _, _, branches) ->
+    named_source source @ List.concat_map (List.concat_map sources_of_clause) branches
+  | Not clauses | NotJoin (_, clauses) -> List.concat_map sources_of_clause clauses
+  | Or branches | OrJoin (_, branches) | OrJoinRequired (_, _, branches) ->
+    List.concat_map (List.concat_map sources_of_clause) branches
+  | RandomValue _
+  | Ground _
+  | GroundCollection _
+  | GroundTuple _
+  | GroundRelation _ ->
+    []
+
+let sources_of_find_spec = function
+  | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> named_source source
+  | Find_aggregate (_, terms) -> sources_of_query_terms terms
+  | Find_var _ | Find_pull _ | Find_pull_var _ -> []
+
 let query_input_var_label var =
   if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
 
