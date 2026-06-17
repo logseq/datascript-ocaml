@@ -11,6 +11,10 @@ let assert_invalid label f =
   | exception exn -> failf "%s: unexpected exception %s" label (Printexc.to_string exn)
   | _ -> failf "%s: expected Invalid_argument" label
 
+let assert_none label = function
+  | None -> ()
+  | Some _ -> failf "%s: expected None" label
+
 let sym name = QueryFormSymbol name
 let kw name = QueryFormKeyword name
 let int value = QueryFormInt value
@@ -221,6 +225,40 @@ let test_parser_where__string_transform_helper_batch () =
   assert_invalid "parse_string_transform_function validates split arity" (fun () ->
     ignore (Parser.parse_string_transform_function "clojure.string/split" [ sym "?s" ] "?out"))
 
+let test_parser_where__string_predicate_symbol_helper_batch () =
+  let unary symbol term =
+    match Parser.unary_string_predicate_clause_of_symbol symbol with
+    | Some make_clause -> make_clause term
+    | None -> failf "expected unary predicate helper for %s" symbol
+  in
+  let binary symbol left right =
+    match Parser.binary_string_predicate_clause_of_symbol symbol with
+    | Some make_clause -> make_clause left right
+    | None -> failf "expected binary predicate helper for %s" symbol
+  in
+  assert_equal
+    "unary_string_predicate_clause_of_symbol maps blank?"
+    (StringBlankValue (QVar "text"))
+    (unary "clojure.string/blank?" (QVar "text"));
+  assert_none
+    "unary_string_predicate_clause_of_symbol ignores unknown symbols"
+    (Parser.unary_string_predicate_clause_of_symbol "clojure.string/includes?");
+  assert_equal
+    "binary_string_predicate_clause_of_symbol maps includes?"
+    (StringIncludesValue (QVar "text", QValue (String "needle")))
+    (binary "clojure.string/includes?" (QVar "text") (QValue (String "needle")));
+  assert_equal
+    "binary_string_predicate_clause_of_symbol maps starts-with?"
+    (StringStartsWithValue (QVar "text", QValue (String "pre")))
+    (binary "clojure.string/starts-with?" (QVar "text") (QValue (String "pre")));
+  assert_equal
+    "binary_string_predicate_clause_of_symbol maps ends-with?"
+    (StringEndsWithValue (QVar "text", QValue (String "post")))
+    (binary "clojure.string/ends-with?" (QVar "text") (QValue (String "post")));
+  assert_none
+    "binary_string_predicate_clause_of_symbol ignores unknown symbols"
+    (Parser.binary_string_predicate_clause_of_symbol "clojure.string/blank?")
+
 let test_parser_where__not_clause () =
   assert_equal
     "not clause"
@@ -269,5 +307,6 @@ let () =
   test_parser_where__clause_helper_batch ();
   test_parser_where__value_function_helper_batch ();
   test_parser_where__string_transform_helper_batch ();
+  test_parser_where__string_predicate_symbol_helper_batch ();
   test_parser_where__not_clause ();
   test_parser_where__or_clause ()

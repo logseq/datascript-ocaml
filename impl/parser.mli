@@ -55,6 +55,8 @@ val comparison_predicate_of_symbol : string -> comparison_predicate option
 val value_predicate_of_symbol : string -> value_predicate option
 val numeric_predicate_of_symbol : string -> numeric_predicate option
 val boolean_predicate_of_symbol : string -> boolean_predicate option
+val unary_string_predicate_clause_of_symbol : string -> (query_term -> query_clause) option
+val binary_string_predicate_clause_of_symbol : string -> (query_term -> query_term -> query_clause) option
 val equality_predicate_of_symbol : string -> equality_predicate option
 val arithmetic_op_of_symbol : string -> arithmetic_op option
 val query_attr_name : query_form -> attr

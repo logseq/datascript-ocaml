@@ -4635,19 +4635,13 @@ let value_predicate_of_symbol = Parser_impl.value_predicate_of_symbol
 let numeric_predicate_of_symbol = Parser_impl.numeric_predicate_of_symbol
 let boolean_predicate_of_symbol = Parser_impl.boolean_predicate_of_symbol
 
-let unary_string_predicate_clause_of_symbol = function
-  | "clojure.string/blank?" -> Some (fun term -> StringBlankValue term)
-  | _ -> None
+let unary_string_predicate_clause_of_symbol = Parser_impl.unary_string_predicate_clause_of_symbol
 
 let unary_string_predicate_of_symbol = function
   | "clojure.string/blank?" -> Some string_is_blank
   | _ -> None
 
-let binary_string_predicate_clause_of_symbol = function
-  | "clojure.string/includes?" -> Some (fun left right -> StringIncludesValue (left, right))
-  | "clojure.string/starts-with?" -> Some (fun left right -> StringStartsWithValue (left, right))
-  | "clojure.string/ends-with?" -> Some (fun left right -> StringEndsWithValue (left, right))
-  | _ -> None
+let binary_string_predicate_clause_of_symbol = Parser_impl.binary_string_predicate_clause_of_symbol
 
 let binary_string_predicate_of_symbol = function
   | "clojure.string/includes?" -> Some string_includes
@@ -5388,6 +5382,8 @@ module Parser = struct
   let value_predicate_of_symbol = Parser_impl.value_predicate_of_symbol
   let numeric_predicate_of_symbol = Parser_impl.numeric_predicate_of_symbol
   let boolean_predicate_of_symbol = Parser_impl.boolean_predicate_of_symbol
+  let unary_string_predicate_clause_of_symbol = Parser_impl.unary_string_predicate_clause_of_symbol
+  let binary_string_predicate_clause_of_symbol = Parser_impl.binary_string_predicate_clause_of_symbol
   let equality_predicate_of_symbol = Parser_impl.equality_predicate_of_symbol
   let arithmetic_op_of_symbol = Parser_impl.arithmetic_op_of_symbol
   let query_attr_name = Parser_impl.query_attr_name

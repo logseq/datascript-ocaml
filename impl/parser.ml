@@ -717,6 +717,16 @@ let boolean_predicate_of_symbol = function
   | "some?" -> Some SomeValue
   | _ -> None
 
+let unary_string_predicate_clause_of_symbol = function
+  | "clojure.string/blank?" -> Some (fun term -> StringBlankValue term)
+  | _ -> None
+
+let binary_string_predicate_clause_of_symbol = function
+  | "clojure.string/includes?" -> Some (fun left right -> StringIncludesValue (left, right))
+  | "clojure.string/starts-with?" -> Some (fun left right -> StringStartsWithValue (left, right))
+  | "clojure.string/ends-with?" -> Some (fun left right -> StringEndsWithValue (left, right))
+  | _ -> None
+
 let equality_predicate_of_symbol = function
   | "=" | "==" -> Some EqualValues
   | "!=" | "not=" -> Some NotEqualValues
