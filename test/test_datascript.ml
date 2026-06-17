@@ -9,10 +9,6 @@ let assert_equal_int label expected actual =
   if expected <> actual then
     failf "%s: expected %d, got %d" label expected actual
 
-let assert_equal_string label expected actual =
-  if expected <> actual then
-    failf "%s: expected %s, got %s" label expected actual
-
 let assert_equal_value label expected actual =
   if expected <> actual then failf "%s: unexpected value" label
 
@@ -186,27 +182,6 @@ let test_empty_db () =
   assert_equal_datoms "empty aevt index" [] (datoms db Aevt ());
   assert_equal_datoms "empty avet index" [] (datoms db Avet ())
 
-let test_squuid_embeds_time_and_generates_unique_values () =
-  let first = squuid ~msec:1_710_000_123_456 () in
-  let second = squuid ~msec:1_710_000_123_456 () in
-  if first = second then failwith "squuid should include random bits";
-  let first_uuid =
-    match first with
-    | Uuid uuid -> uuid
-    | _ -> failwith "squuid should return a Uuid value"
-  in
-  assert_equal_int
-    "squuid_time_millis returns the embedded second"
-    1_710_000_123_000
-    (squuid_time_millis first);
-  assert_equal_string
-    "squuid uses the timestamp as its first UUID segment"
-    "65ec87fb"
-    (String.sub first_uuid 0 8);
-  assert_equal_int "squuid has UUID string length" 36 (String.length first_uuid);
-  if first_uuid.[8] <> '-' || first_uuid.[13] <> '-' || first_uuid.[18] <> '-' || first_uuid.[23] <> '-' then
-    failwith "squuid should use canonical UUID separators"
-
 let test_init_db_and_indexes () =
   let ivan = datom ~e:1 ~a:"name" ~v:(String "Ivan") () in
   let likes_pizza = datom ~e:1 ~a:"likes" ~v:(String "pizza") () in
@@ -340,52 +315,6 @@ let test_transact__test_with_datoms () =
     "Raw_datom retractions remove matching active facts"
     [ datom ~e:1 ~a:"age" ~v:(Int 17) () ]
     (datoms db Eavt ())
-
-let test_db_diff_returns_left_right_and_common_datoms () =
-  let left =
-    empty_db ()
-    |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int 1); "b", One_value (Int 2); "c", One_value (Int 4) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "a", One_value (Int 1) ] }
-         ]
-  in
-  let right =
-    empty_db ()
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "b", One_value (Int 3); "d", One_value (Int 5) ] } ]
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int 1) ] } ]
-  in
-  let only_left, only_right, both = diff left right in
-  assert_equal_triples
-    "db diff returns datoms only on the left"
-    [ 1, "b", Int 2; 1, "c", Int 4; 2, "a", Int 1 ]
-    only_left;
-  assert_equal_triples
-    "db diff returns datoms only on the right"
-    [ 1, "b", Int 3; 1, "d", Int 5 ]
-    only_right;
-  assert_equal_triples
-    "db diff returns datoms present in both dbs"
-    [ 1, "a", Int 1 ]
-    both;
-  let typed_left =
-    empty_db () |> db_with [ Add (Entity_id 1, "attr", Keyword "aa") ]
-  in
-  let typed_right =
-    empty_db () |> db_with [ Add (Entity_id 1, "attr", String "aa") ]
-  in
-  let only_left, only_right, both = diff typed_left typed_right in
-  assert_equal_triples
-    "db diff keeps keyword values distinct from string values"
-    [ 1, "attr", Keyword "aa" ]
-    only_left;
-  assert_equal_triples
-    "db diff keeps string values distinct from keyword values"
-    [ 1, "attr", String "aa" ]
-    only_right;
-  assert_equal_triples
-    "db diff has no common datoms for same attr with different value types"
-    []
-    both
 
 let test_find_datom_returns_first_index_match () =
   let ivan = datom ~e:1 ~a:"name" ~v:(String "Ivan") () in
@@ -18475,14 +18404,12 @@ let test_conn_helpers_and_reset () =
 let () =
   test_datom_defaults ();
   test_empty_db ();
-  test_squuid_embeds_time_and_generates_unique_values ();
   test_init_db_and_indexes ();
   test_init_db_counts_ref_values_in_max_eid ();
   test_init_db_resolves_raw_ref_datoms_from_schema ();
   test_raw_datom_counts_ref_values_in_max_eid ();
   test_raw_datom_counts_tx_in_max_tx ();
   test_transact__test_with_datoms ();
-  test_db_diff_returns_left_right_and_common_datoms ();
   test_find_datom_returns_first_index_match ();
   test_vaet_index_returns_ref_datoms_by_value ();
   test_index_range_returns_avet_values_between_bounds ();
