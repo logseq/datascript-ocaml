@@ -9577,6 +9577,32 @@ let test_q_builtin_vector_values () =
     [ [ Result_value (List [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ]) ] ]
     (q (empty_db ()) query)
 
+let test_q_builtin_vector_captures_bound_row_values () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (String "A") ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (String "B") ] }
+         ]
+  in
+  let query =
+    { find = [ Find_var "a"; Find_var "b" ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where =
+        [ Pattern (QWildcard, QAttr "attr", QVar "a")
+        ; VectorValue ([ QVar "a" ], "b")
+        ]
+    }
+  in
+  assert_equal_query_set
+    "q vector captures each row's current binding"
+    [ [ Result_value (String "A"); Result_value (List [ String "A" ]) ]
+    ; [ Result_value (String "B"); Result_value (List [ String "B" ]) ]
+    ]
+    (q db query)
+
 let test_q_builtin_hash_map_values () =
   let query =
     { find = [ Find_var "m" ]
@@ -16777,6 +16803,7 @@ let () =
   test_q_builtin_regex_values ();
   test_q_builtin_string_blank_and_split_values ();
   test_q_builtin_vector_values ();
+  test_q_builtin_vector_captures_bound_row_values ();
   test_q_builtin_hash_map_values ();
   test_q_builtin_list_and_set_values ();
   test_q_builtin_range_values ();
