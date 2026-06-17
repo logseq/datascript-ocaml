@@ -2222,27 +2222,17 @@ let result_of_ref = Query.result_of_ref
 
 let resolve_query_value db value = resolve_ref_value ~preserve_vector:true db value
 
-let resolved_query_result db = function
-  | Result_value value -> Option.map (fun value -> result_of_ref (Result_value value)) (resolve_query_value db value)
-  | Result_db _ -> None
-  | result -> Some result
+let query_result_context db : Query.result_resolution_context =
+  { validate_entity_id
+  ; resolve_query_value = resolve_query_value db
+  ; lookup_ref_entity_id = (fun attr value -> entity_id_of_ref db (Lookup_ref (attr, value)))
+  }
 
-let lookup_ref_entity_id_of_value db = function
-  | List [ Keyword attr; value ] | List [ String attr; value ]
-  | Vector [ Keyword attr; value ] | Vector [ String attr; value ] ->
-    entity_id_of_ref db (Lookup_ref (attr, value))
-  | _ -> None
-
-let entity_id_of_resolved_query_result =
-  Query.entity_id_of_resolved_query_result ~validate_entity_id
+let resolved_query_result db result =
+  Query.resolved_query_result (query_result_context db) result
 
 let query_result_entity_id db result =
-  match result with
-  | Result_value value ->
-    (match lookup_ref_entity_id_of_value db value with
-     | Some entity_id -> Some entity_id
-     | None -> entity_id_of_resolved_query_result (resolved_query_result db result))
-  | _ -> entity_id_of_resolved_query_result (resolved_query_result db result)
+  Query.query_result_entity_id (query_result_context db) result
 
 let query_results_equivalent db left right =
   match left, right with
@@ -5190,6 +5180,12 @@ module Query = struct
     ; callable_aliases : (string * string) list
     }
 
+  type result_resolution_context = Query_impl.result_resolution_context =
+    { validate_entity_id : int -> entity_id
+    ; resolve_query_value : value -> value option
+    ; lookup_ref_entity_id : attr -> value -> entity_id option
+    }
+
   let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
   let q_string = Query_impl.q_string query_context
@@ -5228,6 +5224,9 @@ module Query = struct
   let result_of_datom_op = Query_impl.result_of_datom_op
   let result_of_ref = Query_impl.result_of_ref
   let entity_id_of_resolved_query_result = Query_impl.entity_id_of_resolved_query_result
+  let resolved_query_result = Query_impl.resolved_query_result
+  let lookup_ref_entity_id_of_value = Query_impl.lookup_ref_entity_id_of_value
+  let query_result_entity_id = Query_impl.query_result_entity_id
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules

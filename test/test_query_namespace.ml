@@ -112,6 +112,20 @@ let test_query_namespace__test_query_result_helpers () =
     if entity_id <= 0 then invalid_arg "invalid entity id";
     entity_id
   in
+  let result_resolution_context =
+    { Query.validate_entity_id
+    ; resolve_query_value =
+        (function
+          | Keyword "known-ident" -> Some (Ref 42)
+          | Symbol "missing" -> None
+          | value -> Some value)
+    ; lookup_ref_entity_id =
+        (fun attr value ->
+           match attr, value with
+           | "name", String "Ivan" -> Some 101
+           | _ -> None)
+    }
+  in
   assert_equal_int_option
     "entity_id_of_resolved_query_result accepts entity results"
     (Some 42)
@@ -133,7 +147,39 @@ let test_query_namespace__test_query_result_helpers () =
     None
     (Query.entity_id_of_resolved_query_result ~validate_entity_id None);
   assert_raises_invalid_arg "entity_id_of_resolved_query_result validates integer ids" (fun () ->
-    ignore (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 0)))))
+    ignore (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 0)))));
+  assert_equal_query_option
+    "resolved_query_result resolves value results through the context"
+    (Some (Result_entity 42))
+    (Query.resolved_query_result result_resolution_context (Result_value (Keyword "known-ident")));
+  assert_equal_query_option
+    "resolved_query_result drops values that cannot resolve"
+    None
+    (Query.resolved_query_result result_resolution_context (Result_value (Symbol "missing")));
+  assert_equal_query_option
+    "resolved_query_result drops db results"
+    None
+    (Query.resolved_query_result result_resolution_context (Result_db (empty_db ())));
+  assert_equal_int_option
+    "lookup_ref_entity_id_of_value resolves vector lookup refs"
+    (Some 101)
+    (Query.lookup_ref_entity_id_of_value
+       result_resolution_context
+       (Vector [ Keyword "name"; String "Ivan" ]));
+  assert_equal_int_option
+    "lookup_ref_entity_id_of_value rejects non lookup-ref values"
+    None
+    (Query.lookup_ref_entity_id_of_value result_resolution_context (String "Ivan"));
+  assert_equal_int_option
+    "query_result_entity_id prefers lookup-ref values"
+    (Some 101)
+    (Query.query_result_entity_id
+       result_resolution_context
+       (Result_value (Vector [ Keyword "name"; String "Ivan" ])));
+  assert_equal_int_option
+    "query_result_entity_id falls back to resolved values"
+    (Some 42)
+    (Query.query_result_entity_id result_resolution_context (Result_value (Keyword "known-ident")))
 
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then

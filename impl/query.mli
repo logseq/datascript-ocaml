@@ -39,6 +39,12 @@ type query_callables =
   ; callable_aliases : (string * string) list
   }
 
+type result_resolution_context =
+  { validate_entity_id : int -> entity_id
+  ; resolve_query_value : value -> value option
+  ; lookup_ref_entity_id : attr -> value -> entity_id option
+  }
+
 val empty_query_callables : query_callables
 
 val q : context -> ?inputs:query_arg list -> db -> query -> query_result list list
@@ -103,6 +109,9 @@ val result_of_datom_op : datom -> query_result
 val result_of_ref : query_result -> query_result
 val entity_id_of_resolved_query_result :
   validate_entity_id:(int -> entity_id) -> query_result option -> entity_id option
+val resolved_query_result : result_resolution_context -> query_result -> query_result option
+val lookup_ref_entity_id_of_value : result_resolution_context -> value -> entity_id option
+val query_result_entity_id : result_resolution_context -> query_result -> entity_id option
 val query_callables_of_inputs : query_input list -> query_callables
 val query_rules_of_inputs : query_input list -> query_rule list
 val matching_rules : query_rule list -> string -> int -> query_rule list

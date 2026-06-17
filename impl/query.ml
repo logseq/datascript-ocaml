@@ -39,6 +39,12 @@ type query_callables =
   ; callable_aliases : (string * string) list
   }
 
+type result_resolution_context =
+  { validate_entity_id : int -> entity_id
+  ; resolve_query_value : value -> value option
+  ; lookup_ref_entity_id : attr -> value -> entity_id option
+  }
+
 let empty_query_callables =
   { callable_predicates = []
   ; callable_functions = []
@@ -337,6 +343,31 @@ let entity_id_of_resolved_query_result ~validate_entity_id = function
   | Some (Result_value (Int entity_id)) -> Some (validate_entity_id entity_id)
   | Some (Result_value (Ref entity_id)) -> Some entity_id
   | _ -> None
+
+let resolved_query_result context = function
+  | Result_value value -> Option.map (fun value -> result_of_ref (Result_value value)) (context.resolve_query_value value)
+  | Result_db _ -> None
+  | result -> Some result
+
+let lookup_ref_entity_id_of_value context = function
+  | List [ Keyword attr; value ] | List [ String attr; value ]
+  | Vector [ Keyword attr; value ] | Vector [ String attr; value ] ->
+    context.lookup_ref_entity_id attr value
+  | _ -> None
+
+let query_result_entity_id context result =
+  match result with
+  | Result_value value ->
+    (match lookup_ref_entity_id_of_value context value with
+     | Some entity_id -> Some entity_id
+     | None ->
+       entity_id_of_resolved_query_result
+         ~validate_entity_id:context.validate_entity_id
+         (resolved_query_result context result))
+  | _ ->
+    entity_id_of_resolved_query_result
+      ~validate_entity_id:context.validate_entity_id
+      (resolved_query_result context result)
 
 let query_callables_of_inputs inputs =
   inputs
