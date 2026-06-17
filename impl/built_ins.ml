@@ -270,6 +270,193 @@ let split_lines value =
   in
   collect 0 0 []
 
+let string_of_query_value = function
+  | String value -> value
+  | Symbol value -> value
+  | Nil -> ""
+  | Int value -> string_of_int value
+  | Float value -> string_of_float value
+  | Bool true -> "true"
+  | Bool false -> "false"
+  | Keyword value -> ":" ^ value
+  | Uuid value -> value
+  | Instant value -> string_of_int value
+  | Regex value -> value
+  | Ref entity_id -> string_of_int entity_id
+  | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite query value"
+
+let escaped_string_literal value =
+  let buffer = Buffer.create (String.length value + 2) in
+  Buffer.add_char buffer '"';
+  String.iter
+    (function
+      | '"' -> Buffer.add_string buffer "\\\""
+      | '\\' -> Buffer.add_string buffer "\\\\"
+      | '\n' -> Buffer.add_string buffer "\\n"
+      | '\r' -> Buffer.add_string buffer "\\r"
+      | '\t' -> Buffer.add_string buffer "\\t"
+      | ch -> Buffer.add_char buffer ch)
+    value;
+  Buffer.add_char buffer '"';
+  Buffer.contents buffer
+
+let rec print_query_value ~readably = function
+  | String value -> if readably then escaped_string_literal value else value
+  | Symbol value -> value
+  | Nil -> "nil"
+  | Int value -> string_of_int value
+  | Float value -> string_of_float value
+  | Bool true -> "true"
+  | Bool false -> "false"
+  | Keyword value -> ":" ^ value
+  | Uuid value -> value
+  | Instant value -> string_of_int value
+  | Regex value -> "#\"" ^ value ^ "\""
+  | Ref entity_id -> string_of_int entity_id
+  | List values -> "(" ^ print_query_values ~readably values ^ ")"
+  | Vector values -> "[" ^ print_query_values ~readably values ^ "]"
+  | Set values -> "#{" ^ print_query_values ~readably values ^ "}"
+  | Map entries ->
+    entries
+    |> List.map (fun (key, value) -> print_query_value ~readably key ^ " " ^ print_query_value ~readably value)
+    |> String.concat ", "
+    |> fun body -> "{" ^ body ^ "}"
+  | Tuple values ->
+    values
+    |> List.map (function
+      | None -> "nil"
+      | Some value -> print_query_value ~readably value)
+    |> String.concat " "
+    |> fun body -> "[" ^ body ^ "]"
+  | TxRef -> "#datascript/tx"
+  | Ref_to _ -> "#datascript/ref"
+
+and print_query_values ~readably values =
+  values |> List.map (print_query_value ~readably) |> String.concat " "
+
+let collection_string_values = function
+  | List values | Vector values | Set values -> Some (List.map string_of_query_value values)
+  | Tuple values ->
+    values
+    |> List.map (function
+      | Some value -> string_of_query_value value
+      | None -> "")
+    |> fun values -> Some values
+  | _ -> None
+
+let replace_string ?(first_only = false) value pattern replacement =
+  if pattern = "" then
+    value
+  else
+    let pattern_length = String.length pattern in
+    let buffer = Buffer.create (String.length value) in
+    let rec loop index =
+      match string_index_of (String.sub value index (String.length value - index)) pattern with
+      | None -> Buffer.add_substring buffer value index (String.length value - index)
+      | Some relative_index ->
+        let match_index = index + relative_index in
+        Buffer.add_substring buffer value index (match_index - index);
+        Buffer.add_string buffer replacement;
+        let next_index = match_index + pattern_length in
+        if first_only then
+          Buffer.add_substring buffer value next_index (String.length value - next_index)
+        else
+          loop next_index
+    in
+    loop 0;
+    Buffer.contents buffer
+
+let compile_regex pattern =
+  try Str.regexp pattern with
+  | Failure message -> invalid_arg ("invalid regex pattern: " ^ message)
+
+let replace_regex ?(first_only = false) value pattern replacement =
+  let regex = compile_regex pattern in
+  if first_only then
+    Str.replace_first regex replacement value
+  else
+    Str.global_replace regex replacement value
+
+let string_escape_replacement replacements ch =
+  let key = String (String.make 1 ch) in
+  List.find_map
+    (fun (replacement_key, replacement_value) ->
+      if compare_value replacement_key key = 0 then Some (string_of_query_value replacement_value) else None)
+    replacements
+
+let escape_string value replacements =
+  let buffer = Buffer.create (String.length value) in
+  String.iter
+    (fun ch ->
+      match string_escape_replacement replacements ch with
+      | Some replacement -> Buffer.add_string buffer replacement
+      | None -> Buffer.add_char buffer ch)
+    value;
+  Buffer.contents buffer
+
+let regex_pattern_of_result = function
+  | Result_value (Regex pattern) | Result_value (String pattern) -> Some pattern
+  | _ -> None
+
+let regex_find pattern value =
+  let regex = compile_regex pattern in
+  try
+    ignore (Str.search_forward regex value 0);
+    Some (Str.matched_string value)
+  with
+  | Not_found -> None
+
+let regex_matches pattern value =
+  let regex = compile_regex pattern in
+  if Str.string_match regex value 0 && Str.match_end () = String.length value then
+    Some (Str.matched_string value)
+  else
+    None
+
+let regex_seq pattern value =
+  let regex = compile_regex pattern in
+  let length = String.length value in
+  let rec collect index matches =
+    if index > length then
+      List.rev matches
+    else
+      try
+        let match_start = Str.search_forward regex value index in
+        let match_end = Str.match_end () in
+        let matched = Str.matched_string value in
+        let next_index = if match_end <= match_start then match_start + 1 else match_end in
+        collect next_index (matched :: matches)
+      with
+      | Not_found -> List.rev matches
+  in
+  collect 0 []
+
+let split_regex value pattern =
+  Str.split (compile_regex pattern) value
+
+let split_regex_limited value pattern limit =
+  if limit <= 0 then
+    split_regex value pattern
+  else if limit = 1 then
+    [ value ]
+  else begin
+    let regex = compile_regex pattern in
+    let length = String.length value in
+    let rec collect start remaining acc =
+      if remaining = 1 || start > length then
+        List.rev (String.sub value start (length - start) :: acc)
+      else
+        try
+          let match_start = Str.search_forward regex value start in
+          let match_end = Str.match_end () in
+          let next_start = if match_end <= match_start then match_start + 1 else match_end in
+          collect next_start (remaining - 1) (String.sub value start (match_start - start) :: acc)
+        with
+        | Not_found -> List.rev (String.sub value start (length - start) :: acc)
+    in
+    collect 0 limit []
+  end
+
 let query_result_value = function
   | Result_value value -> Some value
   | Result_entity entity_id -> Some (Ref entity_id)

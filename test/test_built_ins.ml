@@ -18,6 +18,15 @@ let assert_equal_int_option label expected actual =
 let assert_equal_string_list label expected actual =
   if expected <> actual then failf "%s: string lists did not match" label
 
+let assert_equal_string label expected actual =
+  if expected <> actual then failf "%s: expected %S but got %S" label expected actual
+
+let assert_equal_string_option label expected actual =
+  if expected <> actual then failf "%s: string options did not match" label
+
+let assert_equal_string_list_option label expected actual =
+  if expected <> actual then failf "%s: string list options did not match" label
+
 let assert_equal_result label expected actual =
   if expected <> actual then failf "%s: query results did not match" label
 
@@ -112,7 +121,57 @@ let test_string_helpers () =
   assert_equal_string_list
     "split_lines handles lf crlf and cr separators"
     [ "a"; "b"; "c"; "d" ]
-    (Built_ins.split_lines "a\nb\r\nc\rd")
+    (Built_ins.split_lines "a\nb\r\nc\rd");
+  assert_equal_string
+    "string_of_query_value prints scalar values for str"
+    ":page/title"
+    (Built_ins.string_of_query_value (Keyword "page/title"));
+  assert_equal_string
+    "print_query_value readably escapes strings"
+    "\"a\\n\\\"b\""
+    (Built_ins.print_query_value ~readably:true (String "a\n\"b"));
+  assert_equal_string
+    "print_query_value prints nested collections"
+    "[one nil :two]"
+    (Built_ins.print_query_value
+       ~readably:false
+       (Tuple [ Some (String "one"); None; Some (Keyword "two") ]));
+  assert_equal_string_list_option
+    "collection_string_values stringifies tuple nils as empty strings"
+    (Some [ "a"; ""; ":b" ])
+    (Built_ins.collection_string_values (Tuple [ Some (String "a"); None; Some (Keyword "b") ]));
+  assert_equal_string
+    "replace_string replaces all plain string matches"
+    "bo no no"
+    (Built_ins.replace_string "ba na na" "a" "o");
+  assert_equal_string
+    "replace_string first_only replaces only the first plain string match"
+    "bo na na"
+    (Built_ins.replace_string ~first_only:true "ba na na" "a" "o");
+  assert_equal_string
+    "replace_regex replaces regex matches"
+    "a-#-b-#"
+    (Built_ins.replace_regex "a-12-b-34" "[0-9]+" "#");
+  assert_equal_string
+    "escape_string replaces mapped characters"
+    "a&lt;b&gt;"
+    (Built_ins.escape_string "a<b>" [ String "<", String "&lt;"; String ">", String "&gt;" ]);
+  assert_equal_string_option
+    "regex_find returns the first regex match"
+    (Some "123")
+    (Built_ins.regex_find "[0-9]+" "a123b456");
+  assert_equal_string_option
+    "regex_matches requires a full string match"
+    None
+    (Built_ins.regex_matches "[0-9]+" "a123");
+  assert_equal_string_list
+    "regex_seq returns all matches"
+    [ "123"; "456" ]
+    (Built_ins.regex_seq "[0-9]+" "a123b456");
+  assert_equal_string_list
+    "split_regex_limited stops at the requested part count"
+    [ "a"; "b-c" ]
+    (Built_ins.split_regex_limited "a1b-c" "[0-9]+" 2)
 
 let test_aggregate_result () =
   let values =

@@ -23,6 +23,22 @@ val string_is_blank : string -> bool
 val split_string : string -> string -> string list
 val split_string_limited : string -> string -> int -> string list
 val split_lines : string -> string list
+val string_of_query_value : value -> string
+val escaped_string_literal : string -> string
+val print_query_value : readably:bool -> value -> string
+val print_query_values : readably:bool -> value list -> string
+val collection_string_values : value -> string list option
+val replace_string : ?first_only:bool -> string -> string -> string -> string
+val compile_regex : string -> Str.regexp
+val replace_regex : ?first_only:bool -> string -> string -> string -> string
+val string_escape_replacement : (value * value) list -> char -> string option
+val escape_string : string -> (value * value) list -> string
+val regex_pattern_of_result : query_result -> string option
+val regex_find : string -> string -> string option
+val regex_matches : string -> string -> string option
+val regex_seq : string -> string -> string list
+val split_regex : string -> string -> string list
+val split_regex_limited : string -> string -> int -> string list
 val aggregate_result : aggregate -> query_result list -> query_result
 val value_is_truthy : value -> bool
 val boolean_and_value : value list -> value
