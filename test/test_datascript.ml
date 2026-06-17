@@ -11215,6 +11215,52 @@ let test_parse_query_return_shapes () =
     <> Query_scalar (Some (Result_value (Int 2)))
   then failwith "q_return_string aggregate scalar find spec should produce scalar output"
 
+let test_q_return_find_specs_match_upstream_cases () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int 11) ] }
+         ]
+  in
+  if
+    q_return_string db "[:find [?name ...] :where [_ :name ?name]]"
+    <> Query_collection
+         [ Result_value (String "Ivan")
+         ; Result_value (String "Petr")
+         ; Result_value (String "Sergey")
+         ]
+  then failwith "q_return_string collection find spec should return all names";
+  let expected_rows =
+    [ [ Result_value (String "Petr"); Result_value (Int 44) ]
+    ; [ Result_value (String "Ivan"); Result_value (Int 25) ]
+    ; [ Result_value (String "Sergey"); Result_value (Int 11) ]
+    ]
+  in
+  (match q_return_string db "[:find [?name ?age] :where [?e :name ?name] [?e :age ?age]]" with
+   | Query_tuple (Some row) ->
+     assert_bool "tuple find spec should cut multiple results to one row" (List.mem row expected_rows)
+   | _ -> failwith "tuple find spec should return one tuple");
+  (match q_return_string db "[:find ?name . :where [_ :name ?name]]" with
+   | Query_scalar (Some name) ->
+     assert_bool
+       "scalar find spec should cut multiple results to one value"
+       (List.mem name [ Result_value (String "Ivan"); Result_value (String "Petr"); Result_value (String "Sergey") ])
+   | _ -> failwith "scalar find spec should return one value");
+  if
+    q_return_string db "[:find [(count ?name) ...] :where [_ :name ?name]]"
+    <> Query_collection [ Result_value (Int 3) ]
+  then failwith "aggregate collection find spec should return aggregate value";
+  if
+    q_return_string db "[:find [(count ?name)] :where [_ :name ?name]]"
+    <> Query_tuple (Some [ Result_value (Int 3) ])
+  then failwith "aggregate tuple find spec should return aggregate value";
+  if
+    q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
+    <> Query_scalar (Some (Result_value (Int 3)))
+  then failwith "aggregate scalar find spec should return aggregate value"
+
 let test_q_return_map_shapes () =
   let db =
     empty_db ()
@@ -17080,6 +17126,7 @@ let () =
   test_q_input_placeholders_ignore_values ();
   test_q_return_shapes ();
   test_parse_query_return_shapes ();
+  test_q_return_find_specs_match_upstream_cases ();
   test_q_return_map_shapes ();
   test_parse_query_return_map_shapes ();
   test_q_resolves_lookup_refs_in_patterns ();
