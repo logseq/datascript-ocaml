@@ -10858,6 +10858,21 @@ let test_q_with_dynamic_callable_inputs () =
          :in ?label-fn
          :where [?e :name ?name]
                 [(?label-fn ?name) ?label]]");
+  let five = function
+    | [] -> Some [ Result_value (Int 5) ]
+    | _ -> None
+  in
+  assert_equal_query
+    "q_string filters unrelated joins after zero-argument dynamic functions like upstream issue-385"
+    []
+    (q_string
+       ~inputs:[ Arg_function five ]
+       (empty_db () |> db_with [ Entity { db_id = None; attrs = [ "person/name", One_value (String "Joe") ] } ])
+       "[:find ?name
+         :in ?my-fn
+         :where [?e :person/name ?name]
+                [(?my-fn) ?result]
+                [(< ?result 3)]]");
   let age_matches = function
     | [ Result_db source_db; Result_entity entity_id; Result_value (Int expected_age) ] ->
       (match entity source_db (Entity_id entity_id) with
