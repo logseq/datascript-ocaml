@@ -488,6 +488,14 @@ module Query : sig
     ; lookup_ref_entity_id : attr -> value -> entity_id option
     }
 
+  type match_context =
+    { result_resolution_context : result_resolution_context
+    ; ident_entity_id : string -> entity_id option
+    ; unresolved_lookup_ref_message : attr -> value -> string
+    ; value_equal : value -> value -> bool
+    ; coerce_tuple_lookup_value : attr -> value -> value
+    }
+
   val empty_query_callables : query_callables
   val q : ?inputs:query_arg list -> db -> query -> query_result list list
   val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
@@ -553,6 +561,43 @@ module Query : sig
     (string * query_result) list ->
     (string * query_result) list option
   val result_matches_entity : result_resolution_context -> entity_id -> query_result -> bool
+  val match_query_term :
+    match_context ->
+    query_term ->
+    query_result ->
+    (string * query_result) list ->
+    (string * query_result) list option
+  val match_value_term_for_datom_attr :
+    match_context ->
+    (string * query_result) list ->
+    query_term ->
+    datom ->
+    (string * query_result) list option
+  val match_pattern_clause :
+    match_context ->
+    (string * query_result) list ->
+    query_term ->
+    query_term ->
+    query_term ->
+    datom ->
+    (string * query_result) list option
+  val match_pattern_tx_clause :
+    match_context ->
+    (string * query_result) list ->
+    query_term ->
+    query_term ->
+    query_term ->
+    query_term ->
+    datom ->
+    (string * query_result) list option
+  val match_reverse_pattern_clause :
+    match_context ->
+    (string * query_result) list ->
+    query_term ->
+    attr ->
+    query_term ->
+    datom ->
+    (string * query_result) list option
   val query_callables_of_inputs : query_input list -> query_callables
   val query_rules_of_inputs : query_input list -> query_rule list
   val matching_rules : query_rule list -> string -> int -> query_rule list

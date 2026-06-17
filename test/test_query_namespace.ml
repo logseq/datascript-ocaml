@@ -228,6 +228,112 @@ let test_query_namespace__test_query_result_helpers () =
     false
     (Query.result_matches_entity result_resolution_context 99 (Result_value (Keyword "known-ident")))
 
+let test_query_namespace__test_query_matching_helpers () =
+  let result_resolution_context =
+    { Query.validate_entity_id = (fun entity_id -> entity_id)
+    ; resolve_query_value =
+        (function
+          | Keyword "known-ident" -> Some (Ref 42)
+          | value -> Some value)
+    ; lookup_ref_entity_id =
+        (fun attr value ->
+           match attr, value with
+           | "name", String "Ivan" -> Some 101
+           | _ -> None)
+    }
+  in
+  let match_context =
+    { Query.result_resolution_context
+    ; ident_entity_id = (function "known-ident" -> Some 42 | _ -> None)
+    ; unresolved_lookup_ref_message = (fun attr _ -> "missing lookup ref: " ^ attr)
+    ; value_equal = Util.value_equal
+    ; coerce_tuple_lookup_value =
+        (fun attr value ->
+           match attr, value with
+           | "tuple", Vector [ left; right ] -> Tuple [ Some left; Some right ]
+           | _ -> value)
+    }
+  in
+  let base_binding = [ "existing", Result_value (String "kept") ] in
+  assert_equal_query_option
+    "match_query_term keeps bindings for wildcards"
+    (Some base_binding)
+    (Query.match_query_term match_context QWildcard (Result_entity 1) base_binding);
+  assert_equal_query_option
+    "match_query_term matches entity terms through result equivalence"
+    (Some [])
+    (Query.match_query_term match_context (QEntity 42) (Result_value (Keyword "known-ident")) []);
+  assert_equal_query_option
+    "match_query_term resolves ident terms through the context"
+    (Some [])
+    (Query.match_query_term match_context (QIdent "known-ident") (Result_entity 42) []);
+  assert_equal_query_option
+    "match_query_term resolves lookup ref terms through the context"
+    (Some [])
+    (Query.match_query_term match_context (QLookupRef ("name", String "Ivan")) (Result_entity 101) []);
+  assert_raises_invalid_arg_message
+    "match_query_term reports missing lookup refs"
+    "missing lookup ref: name"
+    (fun () ->
+       ignore
+         (Query.match_query_term
+            match_context
+            (QLookupRef ("name", String "Missing"))
+            (Result_entity 101)
+            []));
+  assert_equal_query_option
+    "match_query_term matches attrs"
+    (Some [])
+    (Query.match_query_term match_context (QAttr "name") (Result_attr "name") []);
+  assert_equal_query_option
+    "match_query_term matches literal values"
+    (Some [])
+    (Query.match_query_term match_context (QValue (String "Ivan")) (Result_value (String "Ivan")) []);
+  assert_equal_query_option
+    "match_query_term matches ref values against entity results"
+    (Some [])
+    (Query.match_query_term match_context (QValue (Ref 42)) (Result_entity 42) []);
+  assert_equal_query_option
+    "match_query_term matches keyword idents against entity results"
+    (Some [])
+    (Query.match_query_term match_context (QValue (Keyword "known-ident")) (Result_entity 42) []);
+  assert_equal_query_option
+    "match_query_term binds vars after normalizing refs"
+    (Some [ "e", Result_entity 42 ])
+    (Query.match_query_term match_context (QVar "e") (Result_value (Ref 42)) []);
+  let name_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:7 ~added:true () in
+  assert_equal_query_option
+    "match_pattern_clause matches datoms"
+    (Some [ "v", Result_value (String "Ivan"); "e", Result_entity 1 ])
+    (Query.match_pattern_clause match_context [] (QVar "e") (QAttr "name") (QVar "v") name_datom);
+  assert_equal_query_option
+    "match_pattern_tx_clause matches tx terms"
+    (Some [ "tx", Result_entity 7; "v", Result_value (String "Ivan"); "e", Result_entity 1 ])
+    (Query.match_pattern_tx_clause
+       match_context
+       []
+       (QVar "e")
+       (QAttr "name")
+       (QVar "v")
+       (QVar "tx")
+       name_datom);
+  let tuple_datom =
+    datom ~e:2 ~a:"tuple" ~v:(Tuple [ Some (String "a"); Some (String "b") ]) ~tx:8 ~added:true ()
+  in
+  assert_equal_query_option
+    "match_value_term_for_datom_attr coerces tuple lookup values"
+    (Some [])
+    (Query.match_value_term_for_datom_attr
+       match_context
+       []
+       (QValue (Vector [ String "a"; String "b" ]))
+       tuple_datom);
+  let reverse_datom = datom ~e:1 ~a:"parent" ~v:(Ref 2) ~tx:9 ~added:true () in
+  assert_equal_query_option
+    "match_reverse_pattern_clause matches reverse refs"
+    (Some [ "parent", Result_entity 1 ])
+    (Query.match_reverse_pattern_clause match_context [] (QEntity 2) "_parent" (QVar "parent") reverse_datom)
+
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then
     failwith "Query.has_aggregates should detect aggregate find specs";
@@ -1099,6 +1205,7 @@ let test_query_namespace__test_binding_validation_helpers () =
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_query_result_helpers ();
+  test_query_namespace__test_query_matching_helpers ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
   test_query_namespace__test_input_label_helpers ();

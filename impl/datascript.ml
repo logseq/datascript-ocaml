@@ -2213,9 +2213,6 @@ let parse_pull_pattern db form =
 let parse_pull_pattern_string db input =
   Pull_parser_impl.parse_pattern_string pull_parser_context db input
 
-let result_of_datom_e = Query.result_of_datom_e
-let result_of_datom_a = Query.result_of_datom_a
-let result_of_datom_v = Query.result_of_datom_v
 let result_of_datom_tx = Query.result_of_datom_tx
 let result_of_datom_op = Query.result_of_datom_op
 let result_of_ref = Query.result_of_ref
@@ -2228,67 +2225,31 @@ let query_result_context db : Query.result_resolution_context =
   ; lookup_ref_entity_id = (fun attr value -> entity_id_of_ref db (Lookup_ref (attr, value)))
   }
 
+let query_match_context db : Query.match_context =
+  { result_resolution_context = query_result_context db
+  ; ident_entity_id = (fun ident -> entid db ident_attr (Keyword ident))
+  ; unresolved_lookup_ref_message
+  ; value_equal
+  ; coerce_tuple_lookup_value = (fun attr value -> coerce_tuple_lookup_value db (visible_datoms db) attr value)
+  }
+
 let query_result_entity_id db result =
   Query.query_result_entity_id (query_result_context db) result
 
 let bind_var db name value bindings =
   Query.bind_var (query_result_context db) name value bindings
 
-let result_matches_entity db entity_id result =
-  Query.result_matches_entity (query_result_context db) entity_id result
-
 let match_query_term db term value bindings =
-  match term with
-  | QWildcard -> Some bindings
-  | QEntity eid when result_matches_entity db eid value -> Some bindings
-  | QIdent ident ->
-    (match entid db ident_attr (Keyword ident) with
-     | Some entity_id when result_matches_entity db entity_id value -> Some bindings
-     | _ -> None)
-  | QLookupRef (attr, lookup_value) ->
-    (match entity_id_of_ref db (Lookup_ref (attr, lookup_value)) with
-     | Some entity_id when result_matches_entity db entity_id value -> Some bindings
-     | Some _ -> None
-     | None -> invalid_arg (unresolved_lookup_ref_message attr lookup_value))
-  | QAttr attr when value = Result_attr attr -> Some bindings
-  | QValue expected ->
-    (match resolve_query_value db expected, value with
-     | Some expected, Result_value actual when value_equal actual expected -> Some bindings
-     | Some (Ref expected), Result_entity actual when actual = expected -> Some bindings
-     | Some (Keyword ident), _ ->
-       (match entid db ident_attr (Keyword ident) with
-        | Some entity_id when result_matches_entity db entity_id value -> Some bindings
-        | _ -> None)
-     | _ -> None)
-  | QVar name -> bind_var db name (result_of_ref value) bindings
-  | _ -> None
-
-let match_value_term_for_datom_attr db bindings v_term datom =
-  match v_term with
-  | QValue value ->
-    let value = coerce_tuple_lookup_value db (visible_datoms db) datom.a value in
-    match_query_term db (QValue value) (result_of_datom_v datom) bindings
-  | _ -> match_query_term db v_term (result_of_datom_v datom) bindings
+  Query.match_query_term (query_match_context db) term value bindings
 
 let match_pattern_clause db bindings e_term a_term v_term datom =
-  let ( let* ) = Option.bind in
-  let* bindings = match_query_term db e_term (result_of_datom_e datom) bindings in
-  let* bindings = match_query_term db a_term (result_of_datom_a datom) bindings in
-  match_value_term_for_datom_attr db bindings v_term datom
+  Query.match_pattern_clause (query_match_context db) bindings e_term a_term v_term datom
 
 let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
-  let ( let* ) = Option.bind in
-  let* bindings = match_pattern_clause db bindings e_term a_term v_term datom in
-  match_query_term db tx_term (result_of_datom_tx datom) bindings
+  Query.match_pattern_tx_clause (query_match_context db) bindings e_term a_term v_term tx_term datom
 
 let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
-  match datom.v with
-  | Ref target ->
-    let ( let* ) = Option.bind in
-    let* bindings = match_query_term db e_term (Result_entity target) bindings in
-    let* bindings = match_query_term db (QAttr reverse_attr) (Result_attr reverse_attr) bindings in
-    match_query_term db v_term (Result_entity datom.e) bindings
-  | _ -> None
+  Query.match_reverse_pattern_clause (query_match_context db) bindings e_term reverse_attr v_term datom
 
 let pattern_datoms db a_term =
   match a_term with
@@ -5164,6 +5125,14 @@ module Query = struct
     ; lookup_ref_entity_id : attr -> value -> entity_id option
     }
 
+  type match_context = Query_impl.match_context =
+    { result_resolution_context : result_resolution_context
+    ; ident_entity_id : string -> entity_id option
+    ; unresolved_lookup_ref_message : attr -> value -> string
+    ; value_equal : value -> value -> bool
+    ; coerce_tuple_lookup_value : attr -> value -> value
+    }
+
   let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
   let q_string = Query_impl.q_string query_context
@@ -5208,6 +5177,11 @@ module Query = struct
   let query_results_equivalent = Query_impl.query_results_equivalent
   let bind_var = Query_impl.bind_var
   let result_matches_entity = Query_impl.result_matches_entity
+  let match_query_term = Query_impl.match_query_term
+  let match_value_term_for_datom_attr = Query_impl.match_value_term_for_datom_attr
+  let match_pattern_clause = Query_impl.match_pattern_clause
+  let match_pattern_tx_clause = Query_impl.match_pattern_tx_clause
+  let match_reverse_pattern_clause = Query_impl.match_reverse_pattern_clause
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules

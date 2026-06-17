@@ -45,6 +45,14 @@ type result_resolution_context =
   ; lookup_ref_entity_id : attr -> value -> entity_id option
   }
 
+type match_context =
+  { result_resolution_context : result_resolution_context
+  ; ident_entity_id : string -> entity_id option
+  ; unresolved_lookup_ref_message : attr -> value -> string
+  ; value_equal : value -> value -> bool
+  ; coerce_tuple_lookup_value : attr -> value -> value
+  }
+
 let empty_query_callables =
   { callable_predicates = []
   ; callable_functions = []
@@ -393,6 +401,60 @@ let result_matches_entity context entity_id result =
   match query_result_entity_id context result with
   | Some actual -> actual = entity_id
   | None -> false
+
+let match_query_term context term value bindings =
+  let result_context = context.result_resolution_context in
+  match term with
+  | QWildcard -> Some bindings
+  | QEntity eid when result_matches_entity result_context eid value -> Some bindings
+  | QIdent ident ->
+    (match context.ident_entity_id ident with
+     | Some entity_id when result_matches_entity result_context entity_id value -> Some bindings
+     | _ -> None)
+  | QLookupRef (attr, lookup_value) ->
+    (match result_context.lookup_ref_entity_id attr lookup_value with
+     | Some entity_id when result_matches_entity result_context entity_id value -> Some bindings
+     | Some _ -> None
+     | None -> invalid_arg (context.unresolved_lookup_ref_message attr lookup_value))
+  | QAttr attr when value = Result_attr attr -> Some bindings
+  | QValue expected ->
+    (match result_context.resolve_query_value expected, value with
+     | Some expected, Result_value actual when context.value_equal actual expected -> Some bindings
+     | Some (Ref expected), Result_entity actual when actual = expected -> Some bindings
+     | Some (Keyword ident), _ ->
+       (match context.ident_entity_id ident with
+        | Some entity_id when result_matches_entity result_context entity_id value -> Some bindings
+        | _ -> None)
+     | _ -> None)
+  | QVar name -> bind_var result_context name (result_of_ref value) bindings
+  | _ -> None
+
+let match_value_term_for_datom_attr context bindings v_term datom =
+  match v_term with
+  | QValue value ->
+    let value = context.coerce_tuple_lookup_value datom.a value in
+    match_query_term context (QValue value) (result_of_datom_v datom) bindings
+  | _ -> match_query_term context v_term (result_of_datom_v datom) bindings
+
+let match_pattern_clause context bindings e_term a_term v_term datom =
+  let ( let* ) = Option.bind in
+  let* bindings = match_query_term context e_term (result_of_datom_e datom) bindings in
+  let* bindings = match_query_term context a_term (result_of_datom_a datom) bindings in
+  match_value_term_for_datom_attr context bindings v_term datom
+
+let match_pattern_tx_clause context bindings e_term a_term v_term tx_term datom =
+  let ( let* ) = Option.bind in
+  let* bindings = match_pattern_clause context bindings e_term a_term v_term datom in
+  match_query_term context tx_term (result_of_datom_tx datom) bindings
+
+let match_reverse_pattern_clause context bindings e_term reverse_attr v_term datom =
+  match datom.v with
+  | Ref target ->
+    let ( let* ) = Option.bind in
+    let* bindings = match_query_term context e_term (Result_entity target) bindings in
+    let* bindings = match_query_term context (QAttr reverse_attr) (Result_attr reverse_attr) bindings in
+    match_query_term context v_term (Result_entity datom.e) bindings
+  | _ -> None
 
 let query_callables_of_inputs inputs =
   inputs
