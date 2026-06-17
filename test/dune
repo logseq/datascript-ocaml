@@ -44,6 +44,36 @@
  (libraries datascript))
 
 (test
+ (name test_parser)
+ (modules test_parser)
+ (libraries datascript))
+
+(test
+ (name test_parser_find)
+ (modules test_parser_find)
+ (libraries datascript))
+
+(test
+ (name test_parser_query)
+ (modules test_parser_query)
+ (libraries datascript))
+
+(test
+ (name test_parser_return_map)
+ (modules test_parser_return_map)
+ (libraries datascript))
+
+(test
+ (name test_parser_rules)
+ (modules test_parser_rules)
+ (libraries datascript))
+
+(test
+ (name test_parser_where)
+ (modules test_parser_where)
+ (libraries datascript))
+
+(test
  (name test_serialize)
  (modules test_serialize)
  (libraries datascript))

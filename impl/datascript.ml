@@ -8211,6 +8211,8 @@ let rec parse_nested_input_binding form =
     (match query_form_sequence form with
      | Some [ binding_form; QueryFormSymbol "..." ] ->
        Bind_collection (parse_nested_input_binding binding_form)
+     | Some [ (QueryFormVector _ | QueryFormList _ as relation_form) ] ->
+       Bind_collection (parse_nested_input_binding relation_form)
      | Some forms ->
        (match List.map parse_nested_tuple_binding forms with
         | [] -> invalid_arg "tuple :in binding requires at least one variable"
@@ -8988,6 +8990,22 @@ let parse_query_return_map_string input =
 
 let parse_query_return_map_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   parse_query_return_map_with_pull_context ?default_pull_db ?pull_db_for_source (read_edn input)
+
+module Parser = struct
+  let read_edn = read_edn
+  let parse_binding = parse_binding
+  let parse_in = parse_in
+  let parse_with = parse_with
+  let parse_find = parse_find
+  let parse_clause = parse_pattern_clause
+  let parse_rules form = parse_rules (Some form)
+  let parse_query = parse_query
+  let parse_query_string = parse_query_string
+  let parse_query_return = parse_query_return
+  let parse_query_return_string = parse_query_return_string
+  let parse_query_return_map = parse_query_return_map
+  let parse_query_return_map_string = parse_query_return_map_string
+end
 
 let pull_string ?visitor db input entity_ref =
   pull ?visitor db (parse_pull_pattern_string db input) entity_ref

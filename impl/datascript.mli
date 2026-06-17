@@ -181,6 +181,22 @@ module Util : sig
   val normalize_datom_value : datom -> datom
 end
 
+module Parser : sig
+  val read_edn : string -> query_form
+  val parse_binding : query_form -> input_binding
+  val parse_in : query_form -> query_input list
+  val parse_with : query_form -> string list
+  val parse_find : query_form -> query_return * find_spec list
+  val parse_clause : query_form -> query_clause
+  val parse_rules : query_form -> query_rule list
+  val parse_query : query_form -> query
+  val parse_query_string : string -> query
+  val parse_query_return : query_form -> query_return * query
+  val parse_query_return_string : string -> query_return * query
+  val parse_query_return_map : query_form -> query_return * query_return_map option * query
+  val parse_query_return_map_string : string -> query_return * query_return_map option * query
+end
+
 module Upsert : sig
   type resolution = attr * value * entity_id
 

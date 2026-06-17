@@ -6688,7 +6688,7 @@ let test_parse_query_input_helper_parsers () =
           ]));
   assert_equal_value
     "parse_binding parses relation-style tuple bindings"
-    (Bind_tuple [ Bind_tuple [ Bind_scalar "a"; Bind_scalar "b"; Bind_scalar "c" ] ])
+    (Bind_collection (Bind_tuple [ Bind_scalar "a"; Bind_scalar "b"; Bind_scalar "c" ]))
     (parse_binding
        (QueryFormVector
           [ QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "?b"; QueryFormSymbol "?c" ] ]));
