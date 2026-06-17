@@ -1,5 +1,6 @@
 include Datascript_types
 
+module Built_ins = Built_ins
 module Conn = Conn
 
 type conn = Conn.t
@@ -2109,13 +2110,24 @@ let rec entity_id_of_ref db = function
   | CurrentTx -> None
   | Temp_id _ -> None
 
-and resolve_ref_value db = function
+and resolve_ref_value ?(preserve_vector = false) db = function
   | Ref_to entity_ref -> Option.map (fun entity_id -> Ref entity_id) (entity_id_of_ref db entity_ref)
-  | List values | Vector values ->
+  | List values ->
     let rec resolve_values acc = function
       | [] -> Some (normalize_value (List (List.rev acc)))
       | value :: rest ->
-        (match resolve_ref_value db value with
+        (match resolve_ref_value ~preserve_vector:true db value with
+         | Some value -> resolve_values (value :: acc) rest
+         | None -> None)
+    in
+    resolve_values [] values
+  | Vector values ->
+    let rec resolve_values acc = function
+      | [] ->
+        let values = List.rev acc in
+        Some (normalize_value (if preserve_vector then Vector values else List values))
+      | value :: rest ->
+        (match resolve_ref_value ~preserve_vector:true db value with
          | Some value -> resolve_values (value :: acc) rest
          | None -> None)
     in
@@ -2124,7 +2136,10 @@ and resolve_ref_value db = function
     let rec resolve_entries acc = function
       | [] -> Some (normalize_value (Map (List.rev acc)))
       | (key, value) :: rest ->
-        (match resolve_ref_value db key, resolve_ref_value db value with
+        (match
+           resolve_ref_value ~preserve_vector:true db key,
+           resolve_ref_value ~preserve_vector:true db value
+         with
          | Some key, Some value -> resolve_entries ((key, value) :: acc) rest
          | _ -> None)
     in
@@ -2133,7 +2148,7 @@ and resolve_ref_value db = function
     let rec resolve_values acc = function
       | [] -> Some (normalize_value (Set (List.rev acc)))
       | value :: rest ->
-        (match resolve_ref_value db value with
+        (match resolve_ref_value ~preserve_vector:true db value with
          | Some value -> resolve_values (value :: acc) rest
          | None -> None)
     in
@@ -2143,7 +2158,7 @@ and resolve_ref_value db = function
       | [] -> Some (normalize_value (Tuple (List.rev acc)))
       | None :: rest -> resolve_values (None :: acc) rest
       | Some value :: rest ->
-        (match resolve_ref_value db value with
+        (match resolve_ref_value ~preserve_vector:true db value with
          | Some value -> resolve_values (Some value :: acc) rest
          | None -> None)
     in
@@ -2204,7 +2219,7 @@ module Parser_impl = Parser
 
 let read_edn = Parser_impl.read_edn
 
-let query_value_of_form = Parser_impl.query_value_of_form
+let query_value_of_form form = normalize_value (Parser_impl.query_value_of_form form)
 
 let query_form_of_value = Parser_impl.query_form_of_value
 
@@ -2875,26 +2890,7 @@ let collect_query_values db bindings terms =
   in
   collect [] results
 
-let map_get_value entries key =
-  entries
-  |> List.find_map (fun (entry_key, entry_value) ->
-    if compare_value entry_key key = 0 then Some entry_value else None)
-
-let value_get collection key =
-  match collection, key with
-  | Map entries, key -> map_get_value entries key
-  | Set values, key ->
-    if List.exists (fun value -> compare_value value key = 0) values then Some key else None
-  | (List values | Vector values), Int index ->
-    if index >= 0 && index < List.length values then Some (List.nth values index) else None
-  | Tuple values, Int index ->
-    if index >= 0 && index < List.length values then
-      match List.nth values index with
-      | Some value -> Some value
-      | None -> Some Nil
-    else
-      None
-  | _ -> None
+let value_get = Built_ins.value_get
 
 let bind_get_value db bindings output_var value =
   match bind_var db output_var (result_of_ref (Result_value value)) bindings with
@@ -2920,12 +2916,7 @@ let eval_get_default_value_clause db bindings map_term key_term default_term out
     bind_get_value db bindings output_var value
   | Some _ | None -> []
 
-let value_count = function
-  | String value -> Some (String.length value)
-  | List values | Vector values | Set values -> Some (List.length values)
-  | Map entries -> Some (List.length entries)
-  | Tuple values -> Some (List.length values)
-  | Nil | Int _ | Float _ | Bool _ | Keyword _ | Symbol _ | Uuid _ | Instant _ | Regex _ | Ref _ | TxRef | Ref_to _ -> None
+let value_count = Built_ins.value_count
 
 let eval_count_value_clause db bindings term output_var =
   match eval_query_term db bindings term with
@@ -2938,80 +2929,40 @@ let eval_count_value_clause db bindings term output_var =
         | None -> []))
   | Some (Result_entity _) | Some (Result_attr _) | Some (Result_db _) | Some (Result_pull _) | None -> []
 
-let value_has_count expected value =
-  match value_count value with
-  | Some count -> count = expected
-  | None -> false
+let value_has_count = Built_ins.value_has_count
 
-let value_is_not_empty value =
-  match value_count value with
-  | Some count -> count > 0
-  | None -> false
+let value_is_not_empty = Built_ins.value_is_not_empty
 
 let eval_value_predicate_clause db bindings term predicate =
   match eval_query_term db bindings term with
   | Some (Result_value value) when predicate value -> [ bindings ]
   | Some _ | None -> []
 
-let matches_value_predicate predicate value =
-  match predicate, value with
-  | NumberValue, (Int _ | Float _) -> true
-  | IntegerValue, Int _ -> true
-  | StringValue, String _ -> true
-  | BooleanValue, Bool _ -> true
-  | KeywordValue, Keyword _ -> true
-  | _ -> false
+let matches_value_predicate = Built_ins.matches_value_predicate
 
 let eval_type_predicate_clause db bindings predicate term =
   eval_value_predicate_clause db bindings term (matches_value_predicate predicate)
 
-let matches_numeric_predicate predicate value =
-  match predicate, value with
-  | ZeroNumber, Int value -> value = 0
-  | ZeroNumber, Float value -> value = 0.0
-  | PositiveNumber, Int value -> value > 0
-  | PositiveNumber, Float value -> value > 0.0
-  | NegativeNumber, Int value -> value < 0
-  | NegativeNumber, Float value -> value < 0.0
-  | EvenInteger, Int value -> value mod 2 = 0
-  | OddInteger, Int value -> value mod 2 <> 0
-  | (EvenInteger | OddInteger), Float _ -> false
-  | _, _ -> false
+let matches_numeric_predicate = Built_ins.matches_numeric_predicate
 
 let eval_numeric_predicate_clause db bindings predicate term =
   eval_value_predicate_clause db bindings term (matches_numeric_predicate predicate)
 
-let matches_comparison_predicate predicate comparison =
-  match predicate with
-  | LessThan -> comparison < 0
-  | GreaterThan -> comparison > 0
-  | LessOrEqual -> comparison <= 0
-  | GreaterOrEqual -> comparison >= 0
+let matches_comparison_predicate = Built_ins.matches_comparison_predicate
 
 let eval_comparison_predicate_clause db bindings predicate left_term right_term =
   match collect_query_values db bindings [ left_term; right_term ] with
   | Some [ left; right ] when matches_comparison_predicate predicate (compare_value left right) -> [ bindings ]
   | Some _ | None -> []
 
-let comparison_chain_matches predicate = function
-  | [] -> invalid_arg "comparison predicate requires at least one argument"
-  | [ _ ] -> true
-  | first :: rest ->
-    let rec matches left = function
-      | [] -> true
-      | right :: rest ->
-        matches_comparison_predicate predicate (compare_value left right) && matches right rest
-    in
-    matches first rest
+let comparison_chain_matches = Built_ins.comparison_chain_matches
 
 let eval_comparison_predicate_n_clause db bindings predicate terms =
   match collect_query_values db bindings terms with
   | Some values when comparison_chain_matches predicate values -> [ bindings ]
   | Some _ | None -> []
 
-let all_values_equal = function
-  | [] | [ _ ] -> true
-  | first :: rest -> List.for_all (fun value -> compare_value first value = 0) rest
+let all_values_equal = Built_ins.all_values_equal
 
 let eval_equality_predicate_clause db bindings predicate terms =
   match collect_query_values db bindings terms with
@@ -3153,9 +3104,7 @@ let eval_boolean_predicate_clause db bindings predicate term =
   | Some result when matches_boolean_predicate predicate result -> [ bindings ]
   | Some _ | None -> []
 
-let value_is_truthy = function
-  | Nil | Bool false -> false
-  | _ -> true
+let value_is_truthy = Built_ins.value_is_truthy
 
 let query_result_is_truthy = function
   | Result_value value -> value_is_truthy value
@@ -3187,21 +3136,7 @@ let eval_boolean_and_predicate_clause db bindings terms =
   | Some results when List.for_all query_result_is_truthy results -> [ bindings ]
   | Some _ | None -> []
 
-let boolean_and_value = function
-  | [] -> Bool true
-  | first :: rest ->
-    let rec last_truthy current = function
-      | [] -> current
-      | value :: rest ->
-        if value_is_truthy value then
-          last_truthy value rest
-        else
-          value
-    in
-    if value_is_truthy first then
-      last_truthy first rest
-    else
-      first
+let boolean_and_value = Built_ins.boolean_and_value
 
 let eval_boolean_and_clause db bindings terms output_var =
   match collect_query_values db bindings terms with
@@ -3216,18 +3151,7 @@ let eval_boolean_or_predicate_clause db bindings terms =
   | Some results when List.exists query_result_is_truthy results -> [ bindings ]
   | Some _ | None -> []
 
-let boolean_or_value = function
-  | [] -> Nil
-  | first :: rest ->
-    let rec first_truthy current = function
-      | [] -> current
-      | value :: rest ->
-        if value_is_truthy current then
-          current
-        else
-          first_truthy value rest
-    in
-    first_truthy first rest
+let boolean_or_value = Built_ins.boolean_or_value
 
 let eval_boolean_or_clause db bindings terms output_var =
   match collect_query_values db bindings terms with
@@ -3251,19 +3175,9 @@ let eval_random_int_value_clause db bindings bound_term output_var =
   | Some (Result_value (Int _)) -> invalid_arg "rand-int bound must be positive"
   | Some _ | None -> []
 
-let split_at count values =
-  let rec split index left right =
-    if index = 0 then
-      List.rev left, right
-    else
-      match right with
-      | [] -> List.rev left, []
-      | value :: rest -> split (index - 1) (value :: left) rest
-  in
-  split count [] values
+let split_at = Built_ins.split_at
 
-let values_equal left right =
-  compare_value left right = 0
+let values_equal = Built_ins.values_equal
 
 let eval_differ_predicate_clause db bindings terms =
   match collect_query_values db bindings terms with
@@ -3280,25 +3194,7 @@ let eval_identical_predicate_clause db bindings left_term right_term =
   | Some [ left; right ] when values_equal left right -> [ bindings ]
   | Some _ | None -> []
 
-let type_keyword_of_value = function
-  | Int _ -> "type/int"
-  | Float _ -> "type/float"
-  | String _ -> "type/string"
-  | Symbol _ -> "type/symbol"
-  | Bool _ -> "type/bool"
-  | Nil -> "type/nil"
-  | Keyword _ -> "type/keyword"
-  | Uuid _ -> "type/uuid"
-  | Instant _ -> "type/instant"
-  | Regex _ -> "type/regex"
-  | Ref _ -> "type/ref"
-  | List _ -> "type/list"
-  | Map _ -> "type/map"
-  | Set _ -> "type/set"
-  | Vector _ -> "type/vector"
-  | Tuple _ -> "type/tuple"
-  | TxRef -> "type/tx-ref"
-  | Ref_to _ -> "type/ref-to"
+let type_keyword_of_value = Built_ins.type_keyword_of_value
 
 let eval_type_value_clause db bindings term output_var =
   match eval_query_term db bindings term with
@@ -3900,17 +3796,7 @@ let eval_string_transform_clause db bindings term output_var transform =
      | None -> [])
   | Some _ | None -> []
 
-let value_contains collection key =
-  match collection, key with
-  | Map entries, key ->
-    List.exists (fun (entry_key, _) -> compare_value entry_key key = 0) entries
-  | Set values, key ->
-    List.exists (fun value -> compare_value value key = 0) values
-  | (List values | Vector values), Int index ->
-    index >= 0 && index < List.length values
-  | Tuple values, Int index ->
-    index >= 0 && index < List.length values
-  | _ -> false
+let value_contains = Built_ins.value_contains
 
 let eval_contains_value_clause db bindings collection_term key_term =
   match collect_query_terms db bindings [ collection_term; key_term ] with
@@ -3953,15 +3839,7 @@ let eval_hash_map_value_clause db bindings terms output_var =
      | Some bindings -> [ bindings ]
      | None -> [])
 
-let range_values start_value end_value step =
-  if step = 0 then invalid_arg "range step cannot be zero";
-  let rec collect value acc =
-    if (step > 0 && value >= end_value) || (step < 0 && value <= end_value) then
-      List.rev acc
-    else
-      collect (value + step) (value :: acc)
-  in
-  collect start_value []
+let range_values = Built_ins.range_values
 
 let eval_range_values db bindings output_var start_value end_value step =
   range_values start_value end_value step

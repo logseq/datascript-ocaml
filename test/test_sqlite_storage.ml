@@ -471,6 +471,45 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
         [ 4, "age", Int 42; 1, "age", Int 44 ]
         (index_range restored_again "age" ~start:(Int 42) ~stop:(Int 44) ()))
 
+let test_sqlite_storage_backed_composite_values_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed composite value test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let profile =
+        Map
+          [ Keyword "tags", Vector [ String "alpha"; String "beta" ]
+          ; Keyword "prefs", Map [ Keyword "theme", String "dark"; Keyword "pins", Vector [ Int 1; Int 2 ] ]
+          ]
+      in
+      let conn = create_conn ~schema:[ "profile", indexed ] ~storage () in
+      ignore (transact_conn conn [ Add (Entity_id 1, "profile", profile) ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for composite value test"
+      in
+      let restored_db = conn_db restored in
+      assert_equal_query
+        "SQLite restored db queries map-of-vector datom values by structural equality"
+        [ [ Result_entity 1 ] ]
+        (q_string
+           restored_db
+           "[:find ?e :where [?e :profile {:tags [\"alpha\" \"beta\"] :prefs {:pins [1 2] :theme \"dark\"}}]]");
+      assert_equal_query
+        "SQLite restored db reads nested vector values out of map datom values"
+        [ [ Result_value (Vector [ Int 1; Int 2 ]) ] ]
+        (q_string
+           restored_db
+           "[:find ?pins :where [?e :profile ?profile] [(get ?profile :prefs) ?prefs] [(get ?prefs :pins) ?pins]]");
+      assert_equal_query
+        "SQLite restored db uses map datom values in AVET lookups"
+        [ [ Result_entity 1 ] ]
+        (q_string
+           restored_db
+           "[:find ?e :where [?e :profile {:prefs {:theme \"dark\" :pins [1 2]} :tags [\"alpha\" \"beta\"]}]]"))
+
 let test_sqlite_storage_backed_query_result_shapes_after_restore () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed query result-shape test: sqlite3 is not available"
@@ -1688,6 +1727,7 @@ let () =
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
+  test_sqlite_storage_backed_composite_values_after_restore ();
   test_sqlite_storage_backed_query_result_shapes_after_restore ();
   test_sqlite_storage_backed_lookup_ref_transacts_after_restore ();
   test_sqlite_storage_backed_not_or_queries_after_restore ();
