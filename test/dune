@@ -43,6 +43,11 @@
  (modules test_storage)
  (libraries datascript unix))
 
+(test
+ (name test_upsert)
+ (modules test_upsert)
+ (libraries datascript))
+
 (executable
  (name js_smoke)
  (modes js)

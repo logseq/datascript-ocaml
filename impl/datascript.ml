@@ -21,6 +21,7 @@ module Lru = Lru
 module Schema = Schema
 module Serialize = Serialize
 module Storage = Storage
+module Upsert = Upsert
 
 let max_entity_id = 0x7fffffff
 
@@ -803,90 +804,17 @@ let lookup_ref_entity_id_in_datoms ?(strict_missing = false) db datoms attr valu
 let lookup_ref_entity_id ?(strict_missing = false) db attr value =
   lookup_ref_entity_id_in_datoms ~strict_missing db (visible_datoms db) attr value
 
-let upsert_lookup_ref_string attr value =
-  "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+let upsert_context : Upsert.context =
+  { is_unique_identity
+  ; entid_in_datoms
+  ; value_to_string = edn_string_of_value
+  }
 
-let conflicting_upserts_message (left_attr, left_value, left_e) (right_attr, right_value, right_e) =
-  "Conflicting upserts: "
-  ^ upsert_lookup_ref_string left_attr left_value
-  ^ " resolves to "
-  ^ string_of_int left_e
-  ^ ", but "
-  ^ upsert_lookup_ref_string right_attr right_value
-  ^ " resolves to "
-  ^ string_of_int right_e
+let validate_explicit_upsert_target =
+  Upsert.validate_explicit_target upsert_context
 
-let explicit_upsert_conflict_message attr value target_e entity_id =
-  "Conflicting upsert: "
-  ^ upsert_lookup_ref_string attr value
-  ^ " resolves to "
-  ^ string_of_int target_e
-  ^ ", but entity already has :db/id "
-  ^ string_of_int entity_id
-
-let unique_identity_resolutions db datoms attrs =
-  attrs
-  |> List.concat_map (function
-    | attr, One_value value when is_unique_identity db attr ->
-      (match entid_in_datoms db datoms attr value with
-       | Some entity_id -> [ attr, value, entity_id ]
-       | None -> [])
-    | attr, Many_values values when is_unique_identity db attr ->
-      values
-      |> List.filter_map (fun value ->
-        match entid_in_datoms db datoms attr value with
-        | Some entity_id -> Some (attr, value, entity_id)
-        | None -> None)
-    | _ -> [])
-
-let conflicting_unique_identity_resolution = function
-  | [] | [ _ ] -> None
-  | first :: rest ->
-    rest
-    |> List.find_opt (fun (_, _, entity_id) ->
-      let _, _, first_entity_id = first in
-      entity_id <> first_entity_id)
-    |> Option.map (fun conflict -> first, conflict)
-
-let validate_explicit_upsert_target db datoms entity_id attrs =
-  let resolutions = unique_identity_resolutions db datoms attrs in
-  match conflicting_unique_identity_resolution resolutions with
-  | Some (left, right) -> invalid_arg (conflicting_upserts_message left right)
-  | None ->
-    resolutions
-    |> List.iter (fun (attr, value, target_e) ->
-      if target_e <> entity_id then
-        invalid_arg (explicit_upsert_conflict_message attr value target_e entity_id))
-
-let entity_unique_identity db datoms attrs =
-  let attr_value attr =
-    match List.assoc_opt attr attrs with
-    | Some (One_value value) -> Some value
-    | Some (Many_values (value :: _)) -> Some value
-    | _ -> None
-  in
-  let direct_resolutions = unique_identity_resolutions db datoms attrs in
-  let direct_identity =
-    match conflicting_unique_identity_resolution direct_resolutions with
-    | Some (left, right) -> invalid_arg (conflicting_upserts_message left right)
-    | None ->
-      (match direct_resolutions with
-       | [] -> None
-       | (_, _, target_e) :: _ -> Some target_e)
-  in
-  match direct_identity with
-  | Some _ as identity -> identity
-  | None ->
-    db.schema
-    |> List.find_map (fun (attr, schema_attr) ->
-      match schema_attr.unique, schema_attr.tuple_attrs with
-      | Some Identity, Some source_attrs ->
-        let values = List.map attr_value source_attrs in
-        if List.for_all Option.is_some values then
-          entid_in_datoms db datoms attr (Tuple values)
-        else
-          None
-      | _ -> None)
+let entity_unique_identity =
+  Upsert.entity_unique_identity upsert_context
 
 let remember_tempid tempids tempid eid =
   match List.assoc_opt tempid tempids with
