@@ -11239,6 +11239,20 @@ let test_q_return_map_shapes () =
          ]
   then failwith "q_return_map relation should map rows by labels";
   if
+    q_return_map db Return_relation (Return_syms [ "n"; "a" ]) query
+    <> Query_relation_maps
+         [ [ Symbol "a", Result_value (Int 31); Symbol "n", Result_value (String "Ivan") ]
+         ; [ Symbol "a", Result_value (Int 37); Symbol "n", Result_value (String "Petr") ]
+         ]
+  then failwith "q_return_map relation should support :syms labels";
+  if
+    q_return_map db Return_relation (Return_strs [ "n"; "a" ]) query
+    <> Query_relation_maps
+         [ [ String "a", Result_value (Int 31); String "n", Result_value (String "Ivan") ]
+         ; [ String "a", Result_value (Int 37); String "n", Result_value (String "Petr") ]
+         ]
+  then failwith "q_return_map relation should support :strs labels";
+  if
     q_return_map db Return_tuple (Return_strs [ "name"; "age" ]) query
     <> Query_tuple_map (Some [ String "age", Result_value (Int 31); String "name", Result_value (String "Ivan") ])
   then failwith "q_return_map tuple should map the first row by labels";
