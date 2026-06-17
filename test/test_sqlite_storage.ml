@@ -60,9 +60,48 @@ let assert_equal_query label expected actual =
   if expected <> actual then
     failf "%s: unexpected query result" label
 
+let rec string_of_value = function
+  | Nil -> "nil"
+  | Int value -> string_of_int value
+  | Float value -> string_of_float value
+  | String value -> Printf.sprintf "%S" value
+  | Symbol value -> value
+  | Bool value -> string_of_bool value
+  | Keyword value -> ":" ^ value
+  | Uuid value -> "#uuid " ^ Printf.sprintf "%S" value
+  | Instant value -> string_of_int value
+  | Regex value -> "#\"" ^ String.escaped value ^ "\""
+  | Ref entity_id -> string_of_int entity_id
+  | List values -> "[" ^ String.concat " " (List.map string_of_value values) ^ "]"
+  | Map entries ->
+    "{"
+    ^ (entries
+       |> List.map (fun (key, value) -> string_of_value key ^ " " ^ string_of_value value)
+       |> String.concat " ")
+    ^ "}"
+  | Set values -> "#{" ^ String.concat " " (List.map string_of_value values) ^ "}"
+  | Tuple values ->
+    "["
+    ^ (values
+       |> List.map (function None -> "nil" | Some value -> string_of_value value)
+       |> String.concat " ")
+    ^ "]"
+  | TxRef -> ":db/current-tx"
+  | Ref_to _ -> "#ref"
+
+let string_of_triples triples =
+  triples
+  |> List.map (fun (e, a, v) -> Printf.sprintf "(%d :%s %s)" e a (string_of_value v))
+  |> String.concat "; "
+
 let assert_equal_triples label expected actual =
   let triples = List.map (fun datom -> datom.e, datom.a, datom.v) actual in
-  if expected <> triples then failf "%s: unexpected datoms" label
+  if expected <> triples then
+    failf
+      "%s: expected [%s], got [%s]"
+      label
+      (string_of_triples expected)
+      (string_of_triples triples)
 
 let many =
   { cardinality = Many
@@ -97,8 +136,18 @@ let ref_attr =
 let ref_many =
   { ref_attr with cardinality = Many }
 
+let component =
+  { ref_attr with is_component = true }
+
 let no_history =
   { indexed with no_history = true }
+
+let tuple_unique_identity attrs =
+  { indexed with
+    unique = Some Identity
+  ; value_type = Some TupleType
+  ; tuple_attrs = Some attrs
+  }
 
 let assert_equal_tx_flags label expected actual =
   let values = List.map (fun datom -> datom.e, datom.a, datom.v, datom.added) actual in
@@ -854,6 +903,219 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
         "datascript/root,datascript/tail"
         (String.concat "," (storage_addresses storage)))
 
+let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed parsed transact/query-pull test: sqlite3 is not available"
+  else
+    with_temp_db (fun people_path ->
+      with_temp_db (fun score_path ->
+        let people_storage = Sqlite_storage.storage people_path in
+        let score_storage = Sqlite_storage.storage score_path in
+        let people_conn =
+          create_conn
+            ~schema:
+              [ "name", unique_identity
+              ; "email", unique_identity
+              ; "age", indexed
+              ; "aka", many
+              ; "friend", ref_attr
+              ; "friends", ref_many
+              ; "profile", component
+              ; "bio", indexed
+              ; "name+email", tuple_unique_identity [ "name"; "email" ]
+              ]
+            ~storage:people_storage
+            ()
+        in
+        let score_conn =
+          create_conn ~schema:[ "email", unique_identity; "score", indexed ] ~storage:score_storage ()
+        in
+        ignore
+          (transact_conn_string
+             people_conn
+             "[{:db/id -1
+                :name \"Ivan\"
+                :email \"ivan@example.com\"
+                :age 25
+                :aka [\"Vanya\" \"IV\"]
+                :friend -2
+                :profile {:bio \"engineer\"}}
+               {:db/id -2
+                :name \"Petr\"
+                :email \"petr@example.com\"
+                :age 44}
+               {:db/id -3
+                :name \"Oleg\"
+                :email \"oleg@example.com\"
+                :age 11
+                :friends [-1 -2]}
+               [:db/add datomic.tx :source \"parsed\"]
+               {:db/id datascript.tx :kind \"datascript\"}]");
+        ignore
+          (transact_conn_string
+             score_conn
+             "[{:db/id 10 :email \"ivan@example.com\" :score 20}
+               {:db/id 11 :email \"petr@example.com\" :score 40}
+               {:db/id 12 :email \"oleg@example.com\" :score 5}]");
+        assert_equal_triples
+          "SQLite live parsed transacts derive tuple attrs before persistence"
+          [ 1, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+          ; 2, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+          ]
+          (datoms (conn_db people_conn) Eavt ~a:"name+email" ());
+        let people =
+          match restore people_storage with
+          | Some db -> db
+          | None -> failwith "SQLite storage should restore parsed people transactions"
+        in
+        let scores =
+          match restore score_storage with
+          | Some db -> db
+          | None -> failwith "SQLite storage should restore parsed score transactions"
+        in
+        assert_equal_triples
+          "SQLite parsed transacts persist derived tuple attrs"
+          [ 1, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+          ; 2, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+          ]
+          (datoms people Eavt ~a:"name+email" ());
+        assert_equal_query
+          "SQLite restored db queries derived tuple attrs with tuple function output"
+          [ [ Result_value (String "Ivan") ] ]
+          (q_string
+             people
+             "[:find ?name
+               :where [(tuple \"Ivan\" \"ivan@example.com\") ?lookup]
+                      [?e :name+email ?lookup]
+                      [?e :name ?name]]");
+        assert_equal_query
+          "SQLite parsed transacts persist nested component maps"
+          [ [ Result_value (String "engineer") ] ]
+          (q_string
+             people
+             "[:find ?bio
+               :where [?e :name \"Ivan\"]
+                      [?e :profile ?profile]
+                      [?profile :bio ?bio]]");
+        assert_equal_query
+          "SQLite parsed transacts resolve current-tx aliases"
+          [ [ Result_value (String "parsed"); Result_value (String "datascript") ] ]
+          (q_string
+             people
+             "[:find ?source ?kind
+               :where [?tx :source ?source]
+                      [?tx :kind ?kind]]");
+        assert_equal_query
+          "SQLite restored db supports relation input bindings after parsed transact"
+          [ [ Result_value (String "Ivan"); Result_value (Int 25) ]
+          ; [ Result_value (String "Petr"); Result_value (Int 44) ]
+          ]
+          (q_string
+             ~inputs:
+               [ Arg_relation
+                   [ [ Result_value (String "Ivan"); Result_value (Int 18) ]
+                   ; [ Result_value (String "Petr"); Result_value (Int 18) ]
+                   ; [ Result_value (String "Oleg"); Result_value (Int 18) ]
+                   ]
+               ]
+             people
+             "[:find ?name ?age
+               :in $ [[?name ?min-age]]
+               :where [?e :name ?name]
+                      [?e :age ?age]
+                      [(>= ?age ?min-age)]]");
+        if
+          q_return_string
+            ~inputs:[ Arg_scalar (Result_value (List [ Keyword "name" ])) ]
+            people
+            "[:find (pull ?e ?pattern) .
+              :in $ ?pattern
+              :where [?e :email \"ivan@example.com\"]]"
+          <> Query_scalar
+               (Some
+                  (Result_pull
+                     { pulled_id = 2
+                     ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
+                     }))
+        then failwith "SQLite restored db should support pull find specs with pattern inputs";
+        if
+          q_return_string
+            ~inputs:[ Arg_scalar (Result_value (List [ Keyword "name" ])) ]
+            people
+            "[:find (pull ?e pattern) .
+              :in $ pattern
+              :where [(ground 2) ?e]]"
+          <> Query_scalar
+               (Some
+                  (Result_pull
+                     { pulled_id = 2
+                     ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
+                     }))
+        then failwith "SQLite restored db should support symbolic pull pattern inputs";
+        assert_equal_query
+          "SQLite restored db supports pull with lookup-ref collection inputs"
+          [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))
+            ; Result_value (Int 25)
+            ; Result_pull
+                { pulled_id = 2
+                ; pulled_attrs =
+                    [ Keyword "db/id", Pulled_scalar (Int 2)
+                    ; Keyword "name", Pulled_scalar (String "Ivan")
+                    ]
+                }
+            ]
+          ; [ Result_value (Ref_to (Lookup_ref ("name", String "Petr")))
+            ; Result_value (Int 44)
+            ; Result_pull
+                { pulled_id = 1
+                ; pulled_attrs =
+                    [ Keyword "db/id", Pulled_scalar (Int 1)
+                    ; Keyword "name", Pulled_scalar (String "Petr")
+                    ]
+                }
+            ]
+          ]
+          (q_string
+             ~inputs:
+               [ Arg_collection
+                   [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))
+                   ; Result_value (Ref_to (Lookup_ref ("name", String "Oleg")))
+                   ; Result_value (Ref_to (Lookup_ref ("name", String "Petr")))
+                   ]
+               ]
+             people
+             "[:find ?ref ?age (pull ?ref [:db/id :name])
+               :in $ [?ref ...]
+               :where [?ref :age ?age]
+                      [(>= ?age 18)]]");
+        assert_equal_query
+          "SQLite restored named sources use source-specific pull contexts"
+          [ [ Result_value (String "Ivan")
+            ; Result_pull
+                { pulled_id = 10
+                ; pulled_attrs = [ Keyword "score", Pulled_scalar (Int 20) ]
+                }
+            ]
+          ; [ Result_value (String "Petr")
+            ; Result_pull
+                { pulled_id = 11
+                ; pulled_attrs = [ Keyword "score", Pulled_scalar (Int 40) ]
+                }
+            ]
+          ]
+          (q_sources_string
+             people
+             [ "scores", Db_source scores ]
+             "[:find ?name (pull $scores ?row [:score])
+               :in $ $scores
+               :where [?person :email ?email]
+                      [?person :name ?name]
+                      [$scores ?row :email ?email]
+                      [$scores ?row :score ?score]
+                      [(>= ?score 20)]]")))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -1043,6 +1305,7 @@ let () =
   test_sqlite_storage_backed_transact_history_and_current_tx_parity ();
   test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ();
   test_sqlite_storage_backed_reset_schema_and_compaction_parity ();
+  test_sqlite_storage_backed_parsed_transact_and_query_pull_parity ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

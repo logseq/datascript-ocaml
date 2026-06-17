@@ -2509,7 +2509,7 @@ let apply_tx tx_ops db =
       let d = normalize_datom_for_schema db.schema d in
       max_tx_seen := max !max_tx_seen d.tx;
       if d.added then
-        let datoms, datom_tx_data = add_active_datom_with_report db d.tx datoms d in
+        let datoms, datom_tx_data = add_active_datom_with_report ~allow_tuple:true db d.tx datoms d in
         datoms, max_eid_in_value (max max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
       else
         begin
@@ -4813,6 +4813,7 @@ let lookup_ref_entity_id_of_value db = function
 
 let entity_id_of_resolved_query_result = function
   | Some (Result_entity entity_id) -> Some entity_id
+  | Some (Result_value (Int entity_id)) -> Some (validate_entity_id entity_id)
   | Some (Result_value (Ref entity_id)) -> Some entity_id
   | _ -> None
 
