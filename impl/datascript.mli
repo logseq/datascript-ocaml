@@ -428,6 +428,9 @@ module Query : sig
   val project_binding : string list -> (string * query_result) list -> (string * query_result) list
   val rule_invocation_callables :
     query_callables -> (string * query_result) list -> query_rule -> query_term list -> query_callables
+  val vars_of_query_term : query_term -> string list
+  val vars_of_query_terms : query_term list -> string list
+  val vars_of_clause : query_clause -> string list
   val query_input_var_label : string -> string
   val query_input_binding_string : input_binding -> string
   val query_input_decl_binding_string : query_input -> string

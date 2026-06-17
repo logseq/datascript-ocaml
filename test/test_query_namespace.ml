@@ -377,6 +377,51 @@ let test_query_namespace__test_rule_helpers () =
   if Query.has_callable unchanged "p" then
     failwith "rule_invocation_callables should not alias already-bound vars"
 
+let test_query_namespace__test_variable_discovery_helpers () =
+  assert_equal_string_list
+    "vars_of_query_term returns vars only"
+    [ "e" ]
+    (Query.vars_of_query_term (QVar "e"));
+  assert_equal_string_list
+    "vars_of_query_term ignores literals"
+    []
+    (Query.vars_of_query_term (QValue (String "Ivan")));
+  assert_equal_string_list
+    "vars_of_query_terms sorts and deduplicates vars"
+    [ "a"; "e"; "v" ]
+    (Query.vars_of_query_terms [ QVar "v"; QVar "e"; QVar "v"; QVar "a"; QWildcard ]);
+  assert_equal_string_list
+    "vars_of_clause includes data pattern vars"
+    [ "a"; "e"; "v" ]
+    (Query.vars_of_clause (Pattern (QVar "e", QVar "a", QVar "v")));
+  assert_equal_string_list
+    "vars_of_clause includes function outputs and inputs"
+    [ "out"; "x"; "y" ]
+    (Query.vars_of_clause (Function ("f", [ QVar "x"; QVar "y" ], [ "out" ], fun _ -> None)));
+  assert_equal_string_list
+    "vars_of_clause drops ignored ground outputs"
+    [ "value"; "source" ]
+    (Query.vars_of_clause (GroundTermTuple (QVar "source", [ "_"; "value" ])));
+  assert_equal_string_list
+    "vars_of_clause includes not-join vars and body vars"
+    [ "e"; "name" ]
+    (Query.vars_of_clause
+       (NotJoin ([ "e" ], [ Pattern (QVar "e", QAttr "name", QVar "name") ])));
+  assert_equal_string_list
+    "vars_of_clause includes required or-join vars and branch vars"
+    [ "e"; "name"; "other" ]
+    (Query.vars_of_clause
+       (OrJoinRequired
+          ( [ "e" ]
+          , [ "other" ]
+          , [ [ Pattern (QVar "e", QAttr "name", QVar "name") ]
+            ; [ Pattern (QVar "other", QAttr "name", QVar "name") ]
+            ] )));
+  assert_equal_string_list
+    "vars_of_clause delegates through source clauses"
+    [ "e"; "v" ]
+    (Query.vars_of_clause (SourceClause ("$", Pattern (QVar "e", QAttr "name", QVar "v"))))
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
@@ -385,4 +430,5 @@ let () =
   test_query_namespace__test_input_shape_helpers ();
   test_query_namespace__test_input_binding_helpers ();
   test_query_namespace__test_callable_helpers ();
-  test_query_namespace__test_rule_helpers ()
+  test_query_namespace__test_rule_helpers ();
+  test_query_namespace__test_variable_discovery_helpers ()

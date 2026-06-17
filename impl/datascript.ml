@@ -4019,132 +4019,9 @@ let rec eval_clauses
     bindings
     clauses
 
-and vars_of_query_term = function
-  | QVar name -> [ name ]
-  | QEntity _ | QIdent _ | QLookupRef _ | QAttr _ | QValue _ | QSource _ | QWildcard -> []
+and vars_of_query_terms terms = Query.vars_of_query_terms terms
 
-and vars_of_query_terms terms =
-  terms |> List.concat_map vars_of_query_term |> List.sort_uniq compare
-
-and vars_of_clause = function
-  | Pattern (e, a, v) -> vars_of_query_terms [ e; a; v ]
-  | PatternTx (e, a, v, tx) -> vars_of_query_terms [ e; a; v; tx ]
-  | PatternTxOp (e, a, v, tx, op) -> vars_of_query_terms [ e; a; v; tx; op ]
-  | SourcePattern (_, e, a, v) -> vars_of_query_terms [ e; a; v ]
-  | SourcePatternTx (_, e, a, v, tx) -> vars_of_query_terms [ e; a; v; tx ]
-  | SourcePatternTxOp (_, e, a, v, tx, op) -> vars_of_query_terms [ e; a; v; tx; op ]
-  | SourceRelationPattern (_, terms) -> vars_of_query_terms terms
-  | Missing (e, _) | SourceMissing (_, e, _) -> vars_of_query_term e
-  | GetElse (e, _, _, output) | SourceGetElse (_, e, _, _, output) -> output :: vars_of_query_term e
-  | GetSome (e, _, attr, value) | SourceGetSome (_, e, _, attr, value) -> attr :: value :: vars_of_query_term e
-  | GetValue (m, key, output) -> output :: vars_of_query_terms [ m; key ]
-  | GetDefaultValue (m, key, default, output) -> output :: vars_of_query_terms [ m; key; default ]
-  | CountValue (term, output) -> output :: vars_of_query_term term
-  | EmptyValue term | NotEmptyValue term -> vars_of_query_term term
-  | ContainsValue (collection, key) -> vars_of_query_terms [ collection; key ]
-  | ValuePredicate (_, term) -> vars_of_query_term term
-  | NumericPredicate (_, term) -> vars_of_query_term term
-  | ComparisonPredicate (_, left, right) -> vars_of_query_terms [ left; right ]
-  | ComparisonPredicateN (_, terms) -> vars_of_query_terms terms
-  | EqualityPredicate (_, terms) -> vars_of_query_terms terms
-  | ArithmeticValue (_, terms, output) -> output :: vars_of_query_terms terms
-  | CompareValue (left, right, output) -> output :: vars_of_query_terms [ left; right ]
-  | ExtremumValue (_, terms, output) -> output :: vars_of_query_terms terms
-  | BooleanPredicate (_, term) -> vars_of_query_term term
-  | BooleanNotPredicate term -> vars_of_query_term term
-  | BooleanNotValue (term, output) -> output :: vars_of_query_term term
-  | IdentityValue (term, output) -> output :: vars_of_query_term term
-  | BooleanAndPredicate terms | BooleanOrPredicate terms -> vars_of_query_terms terms
-  | BooleanAndValue (terms, output) | BooleanOrValue (terms, output) -> output :: vars_of_query_terms terms
-  | RandomValue output -> [ output ]
-  | RandomIntValue (bound, output) -> output :: vars_of_query_term bound
-  | DifferPredicate terms -> vars_of_query_terms terms
-  | IdenticalPredicate (left, right) -> vars_of_query_terms [ left; right ]
-  | TypeValue (term, output) -> output :: vars_of_query_term term
-  | MetaValue (term, output) -> output :: vars_of_query_term term
-  | NameValue (term, output) | NamespaceValue (term, output) | KeywordFromName (term, output) ->
-    output :: vars_of_query_term term
-  | KeywordFromNamespaceName (namespace_term, name_term, output) ->
-    output :: vars_of_query_terms [ namespace_term; name_term ]
-  | StringIncludesValue (left, right)
-  | StringStartsWithValue (left, right)
-  | StringEndsWithValue (left, right) ->
-    vars_of_query_terms [ left; right ]
-  | StringLowerCaseValue (term, output)
-  | StringUpperCaseValue (term, output)
-  | StringCapitalizeValue (term, output)
-  | StringReverseValue (term, output) ->
-    output :: vars_of_query_term term
-  | StringTrimValue (term, output)
-  | StringTrimLeftValue (term, output)
-  | StringTrimRightValue (term, output)
-  | StringTrimNewlineValue (term, output) ->
-    output :: vars_of_query_term term
-  | StringIndexOfValue (value, needle, output) | StringLastIndexOfValue (value, needle, output) ->
-    output :: vars_of_query_terms [ value; needle ]
-  | StringSubstringValue (value, start, end_, output) ->
-    output :: vars_of_query_terms (value :: start :: Option.to_list end_)
-  | StringBuildValue (terms, output) -> output :: vars_of_query_terms terms
-  | PrintStringValue (terms, output)
-  | PrintLineStringValue (terms, output)
-  | PrStringValue (terms, output)
-  | PrnStringValue (terms, output) ->
-    output :: vars_of_query_terms terms
-  | StringJoinPlainValue (collection, output) -> output :: vars_of_query_term collection
-  | StringJoinValue (separator, collection, output) -> output :: vars_of_query_terms [ separator; collection ]
-  | StringReplaceValue (value, pattern, replacement, output)
-  | StringReplaceFirstValue (value, pattern, replacement, output) ->
-    output :: vars_of_query_terms [ value; pattern; replacement ]
-  | StringEscapeValue (value, replacements, output) -> output :: vars_of_query_terms [ value; replacements ]
-  | RePatternValue (pattern, output) -> output :: vars_of_query_term pattern
-  | ReFindValue (pattern, value, output)
-  | ReMatchesValue (pattern, value, output)
-  | ReSeqValue (pattern, value, output) ->
-    output :: vars_of_query_terms [ pattern; value ]
-  | ReFindPredicate (pattern, value)
-  | ReMatchesPredicate (pattern, value) ->
-    vars_of_query_terms [ pattern; value ]
-  | StringBlankValue term -> vars_of_query_term term
-  | StringSplitValue (value, separator, output) -> output :: vars_of_query_terms [ value; separator ]
-  | StringSplitLimitValue (value, separator, limit, output) ->
-    output :: vars_of_query_terms [ value; separator; limit ]
-  | StringSplitLinesValue (value, output) -> output :: vars_of_query_term value
-  | Ground (_, output) | GroundCollection (_, output) -> List.filter (( <> ) "_") [ output ]
-  | GroundTuple (_, outputs) | GroundRelation (_, outputs) -> List.filter (( <> ) "_") outputs
-  | GroundTerm (term, output) | GroundTermCollection (term, output) ->
-    List.filter (( <> ) "_") [ output ] @ vars_of_query_term term
-  | GroundTermTuple (term, outputs) | GroundTermRelation (term, outputs) ->
-    List.filter (( <> ) "_") outputs @ vars_of_query_term term
-  | VectorValue (terms, output) -> output :: vars_of_query_terms terms
-  | ListValue (terms, output) -> output :: vars_of_query_terms terms
-  | SetValue (terms, output) -> output :: vars_of_query_terms terms
-  | HashMapValue (terms, output) | ArrayMapValue (terms, output) -> output :: vars_of_query_terms terms
-  | RangeEndValue (end_term, output) -> output :: vars_of_query_term end_term
-  | RangeValue (start_term, end_term, output) -> output :: vars_of_query_terms [ start_term; end_term ]
-  | RangeStepValue (start_term, end_term, step_term, output) ->
-    output :: vars_of_query_terms [ start_term; end_term; step_term ]
-  | TupleFunction (terms, output) -> output :: vars_of_query_terms terms
-  | UntupleFunction (term, outputs) -> vars_of_query_term term @ List.filter (( <> ) "_") outputs
-  | Predicate (_, terms, _) -> vars_of_query_terms terms
-  | Function (_, terms, outputs, _) -> outputs @ vars_of_query_terms terms
-  | DynamicPredicate (_, terms) -> vars_of_query_terms terms
-  | DynamicFunction (_, terms, outputs) -> outputs @ vars_of_query_terms terms
-  | DynamicFunctionCollection (_, terms, output) -> output :: vars_of_query_terms terms
-  | DynamicFunctionRelation (_, terms, outputs) -> List.filter (( <> ) "_") outputs @ vars_of_query_terms terms
-  | SourceClause (_, clause) -> vars_of_clause clause
-  | Not clauses | SourceNot (_, clauses) ->
-    clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare
-  | NotJoin (vars, clauses) | SourceNotJoin (_, vars, clauses) ->
-    vars @ (clauses |> List.concat_map vars_of_clause) |> List.sort_uniq compare
-  | Or branches
-  | SourceOr (_, branches)
-  | OrJoin (_, branches)
-  | SourceOrJoin (_, _, branches) ->
-    branches |> List.concat_map (List.concat_map vars_of_clause) |> List.sort_uniq compare
-  | OrJoinRequired (required_vars, vars, branches) | SourceOrJoinRequired (_, required_vars, vars, branches) ->
-    required_vars @ vars @ (branches |> List.concat_map (List.concat_map vars_of_clause))
-    |> List.sort_uniq compare
-  | Rule (_, terms) | SourceRule (_, _, terms) -> vars_of_query_terms terms
+and vars_of_clause clause = Query.vars_of_clause clause
 
 and query_term_string = function
   | QVar var -> query_input_var_label var
@@ -7012,6 +6889,9 @@ module Query = struct
   let matching_rules_exn = Query_impl.matching_rules_exn
   let project_binding = Query_impl.project_binding
   let rule_invocation_callables = Query_impl.rule_invocation_callables
+  let vars_of_query_term = Query_impl.vars_of_query_term
+  let vars_of_query_terms = Query_impl.vars_of_query_terms
+  let vars_of_clause = Query_impl.vars_of_clause
   let query_input_var_label = Query_impl.query_input_var_label
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
