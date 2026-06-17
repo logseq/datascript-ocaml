@@ -22,6 +22,7 @@ and value =
   | Regex of string
   | Ref of entity_id
   | List of value list
+  | Vector of value list
   | Map of (value * value) list
   | Set of value list
   | Tuple of value option list

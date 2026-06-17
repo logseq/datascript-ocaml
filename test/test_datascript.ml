@@ -33,6 +33,7 @@ let rec debug_value = function
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
+  | Vector values -> "#vector[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
   | Map entries ->
     "{"
     ^ (entries
@@ -3099,7 +3100,7 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
   in
   assert_equal_triples
     "db_with_string stores collection values on cardinality-one attrs"
-    [ 1, "path", List [ Int 1; Int 2 ]; 1, "tags", Set [ Keyword "blue"; Keyword "red" ] ]
+    [ 1, "path", Vector [ Int 1; Int 2 ]; 1, "tags", Set [ Keyword "blue"; Keyword "red" ] ]
     (datoms collection_value_db Eavt ~e:1 ~a:"path" ()
      @ datoms collection_value_db Eavt ~e:1 ~a:"tags" ());
   assert_equal_triples
@@ -5009,7 +5010,7 @@ let test_parse_query_collection_constructors () =
   in
   assert_equal_query
     "parse_query parses collection constructor functions"
-    [ [ Result_value (List [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ])
+    [ [ Result_value (Vector [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ])
       ; Result_value (List [ Int 2; Int 1; Int 1 ])
       ; Result_value (Set [ Int 1; Int 2 ])
       ; Result_value (Map [ Keyword "left", Int 1; Keyword "right", Int 2 ])
@@ -9643,8 +9644,8 @@ let test_q_builtin_vector_values () =
     }
   in
   assert_equal_query
-    "q vector builds a list value from bound terms"
-    [ [ Result_value (List [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ]) ] ]
+    "q vector builds a vector value from bound terms"
+    [ [ Result_value (Vector [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ]) ] ]
     (q (empty_db ()) query)
 
 let test_q_builtin_vector_captures_bound_row_values () =
@@ -9668,8 +9669,8 @@ let test_q_builtin_vector_captures_bound_row_values () =
   in
   assert_equal_query_set
     "q vector captures each row's current binding"
-    [ [ Result_value (String "A"); Result_value (List [ String "A" ]) ]
-    ; [ Result_value (String "B"); Result_value (List [ String "B" ]) ]
+    [ [ Result_value (String "A"); Result_value (Vector [ String "A" ]) ]
+    ; [ Result_value (String "B"); Result_value (Vector [ String "B" ]) ]
     ]
     (q db query)
 

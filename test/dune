@@ -24,6 +24,11 @@
  (libraries datascript))
 
 (test
+ (name test_issues)
+ (modules test_issues)
+ (libraries datascript))
+
+(test
  (name test_entity)
  (modules test_entity)
  (libraries datascript))
@@ -56,6 +61,11 @@
 (test
  (name test_upsert)
  (modules test_upsert)
+ (libraries datascript))
+
+(test
+ (name test_util)
+ (modules test_util)
  (libraries datascript))
 
 (executable

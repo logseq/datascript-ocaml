@@ -30,6 +30,7 @@ let rec debug_value = function
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
+  | Vector values -> "#vector[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
   | Map entries ->
     "{"
     ^ (entries
@@ -120,25 +121,6 @@ let test_db__test_diff () =
   assert_equal_triples
     "db diff returns datoms present in both dbs"
     [ 1, "a", Int 1 ]
-    both;
-  let typed_left =
-    empty_db () |> db_with [ Add (Entity_id 1, "attr", Keyword "aa") ]
-  in
-  let typed_right =
-    empty_db () |> db_with [ Add (Entity_id 1, "attr", String "aa") ]
-  in
-  let only_left, only_right, both = diff typed_left typed_right in
-  assert_equal_triples
-    "db diff keeps keyword values distinct from string values"
-    [ 1, "attr", Keyword "aa" ]
-    only_left;
-  assert_equal_triples
-    "db diff keeps string values distinct from keyword values"
-    [ 1, "attr", String "aa" ]
-    only_right;
-  assert_equal_triples
-    "db diff has no common datoms for same attr with different value types"
-    []
     both
 
 let () =

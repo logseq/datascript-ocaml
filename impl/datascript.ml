@@ -22,6 +22,7 @@ module Lookup_refs = Lookup_refs
 module Schema = Schema
 module Serialize = Serialize
 module Storage = Storage
+module Util = Util
 module Upsert = Upsert
 
 let max_entity_id = 0x7fffffff
@@ -43,7 +44,7 @@ let is_db (_ : db) = true
 
 let rec max_eid_in_value max_eid = function
   | Ref entity_id -> max max_eid (validate_entity_id entity_id)
-  | List values ->
+  | List values | Vector values ->
     List.fold_left max_eid_in_value max_eid values
   | Map entries ->
     List.fold_left
@@ -62,136 +63,12 @@ let rec max_eid_in_value max_eid = function
       values
   | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
 
-let split_keyword keyword =
-  match String.index_opt keyword '/' with
-  | None -> "", keyword
-  | Some index ->
-    let namespace = String.sub keyword 0 index in
-    let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
-    namespace, name
-
-let rec compare_list_items_with compare_item left right =
-  match left, right with
-  | [], [] -> 0
-  | left :: left_rest, right :: right_rest ->
-    let comparison = compare_item left right in
-    if comparison <> 0 then comparison else compare_list_items_with compare_item left_rest right_rest
-  | [], _ | _, [] -> 0
-
-let compare_list_with compare_item left right =
-  let length_comparison = compare (List.length left) (List.length right) in
-  if length_comparison <> 0 then length_comparison
-  else compare_list_items_with compare_item left right
-
-let compare_option_with compare_item left right =
-  match left, right with
-  | None, None -> 0
-  | None, Some _ -> -1
-  | Some _, None -> 1
-  | Some left, Some right -> compare_item left right
-
-let value_type_rank = function
-  | Nil -> 0
-  | Keyword _ -> 1
-  | Symbol _ -> 2
-  | Map _ -> 3
-  | Set _ -> 4
-  | List _ | Tuple _ -> 5
-  | Bool _ -> 6
-  | Int _ | Float _ | Ref _ -> 7
-  | String _ -> 8
-  | Regex _ -> 9
-  | Instant _ -> 10
-  | Uuid _ -> 11
-  | TxRef -> 12
-  | Ref_to _ -> 13
-
-let rec compare_value left right =
-  match left, right with
-  | Int left, Int right -> compare left right
-  | Float left, Float right -> compare left right
-  | Int left, Float right -> compare (float_of_int left) right
-  | Float left, Int right -> compare left (float_of_int right)
-  | Ref left, Ref right -> compare left right
-  | Int left, Ref right -> compare left right
-  | Ref left, Int right -> compare left right
-  | Float left, Ref right -> compare left (float_of_int right)
-  | Ref left, Float right -> compare (float_of_int left) right
-  | String left, String right -> compare left right
-  | Symbol left, Symbol right -> compare (split_keyword left) (split_keyword right)
-  | Bool left, Bool right -> compare left right
-  | Uuid left, Uuid right -> compare left right
-  | Instant left, Instant right -> compare left right
-  | Regex left, Regex right -> compare left right
-  | Nil, Nil -> 0
-  | Keyword left, Keyword right -> compare (split_keyword left) (split_keyword right)
-  | List left, List right -> compare_list_with compare_value left right
-  | List left, Tuple right -> compare_list_with (compare_option_with compare_value) (List.map (fun value -> Some value) left) right
-  | Set left, Set right -> compare_list_with compare_value left right
-  | Map left, Map right -> compare_list_with compare_map_entry left right
-  | Tuple left, Tuple right -> compare_list_with (compare_option_with compare_value) left right
-  | Tuple left, List right -> compare_list_with (compare_option_with compare_value) left (List.map (fun value -> Some value) right)
-  | _ ->
-    let rank_comparison = compare (value_type_rank left) (value_type_rank right) in
-    if rank_comparison <> 0 then rank_comparison else compare left right
-
-and compare_map_entry (left_key, left_value) (right_key, right_value) =
-  let comparison = compare_value left_key right_key in
-  if comparison <> 0 then comparison else compare_value left_value right_value
-
-let first_nonzero comparisons =
-  List.find_opt (( <> ) 0) comparisons
-  |> Option.value ~default:0
-
-let compare_datom index left right =
-  match index with
-  | Eavt ->
-    first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; compare_value left.v right.v
-      ; compare left.tx right.tx
-      ]
-  | Aevt ->
-    first_nonzero
-      [ compare left.a right.a
-      ; compare left.e right.e
-      ; compare_value left.v right.v
-      ; compare left.tx right.tx
-      ]
-  | Avet ->
-    first_nonzero
-      [ compare left.a right.a
-      ; compare_value left.v right.v
-      ; compare left.e right.e
-      ; compare left.tx right.tx
-      ]
-  | Vaet ->
-    first_nonzero
-      [ compare_value left.v right.v
-      ; compare left.a right.a
-      ; compare left.e right.e
-      ; compare left.tx right.tx
-      ]
-
-let rec normalize_value = function
-  | List values -> List (List.map normalize_value values)
-  | Map entries ->
-    entries
-    |> List.map (fun (key, value) -> normalize_value key, normalize_value value)
-    |> List.sort_uniq compare_map_entry
-    |> fun entries -> Map entries
-  | Set values ->
-    values
-    |> List.map normalize_value
-    |> List.sort_uniq compare_value
-    |> fun values -> Set values
-  | Tuple values ->
-    Tuple (List.map (Option.map normalize_value) values)
-  | value -> value
-
-let normalize_datom_value d =
-  { d with v = normalize_value d.v }
+let split_keyword = Util.split_keyword
+let compare_value = Util.compare_value
+let first_nonzero = Util.first_nonzero
+let compare_datom = Util.compare_datom
+let normalize_value = Util.normalize_value
+let normalize_datom_value = Util.normalize_datom_value
 
 let schema_attr_is_ref = Schema.schema_attr_is_ref
 
@@ -252,6 +129,8 @@ let empty_db ?(schema = []) ?storage () =
     ; storage_ref = storage
     ; tx_fns = []
     }
+
+let empty db = empty_db ~schema:db.schema ?storage:db.storage_ref ()
 
 let schema_has_no_history = Schema.schema_has_no_history
 
@@ -688,7 +567,7 @@ let allocate_entity_id max_eid = validate_entity_id (max_eid + 1)
 
 let rec coerce_tuple_lookup_value db datoms attr value =
   match schema_attr db attr, value with
-  | Some { tuple_attrs = Some source_attrs; _ }, List values
+  | Some { tuple_attrs = Some source_attrs; _ }, (List values | Vector values)
     when List.length source_attrs = List.length values ->
     let lookup_attr_name = function
       | Keyword attr | String attr | Symbol attr -> Some attr
@@ -698,7 +577,7 @@ let rec coerce_tuple_lookup_value db datoms attr value =
       match value with
       | Nil -> None
       | Int entity_id when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
-      | List [ lookup_attr; lookup_value ] when is_ref_attr db source_attr ->
+      | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
         (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
          | Some entity_id -> Some (Ref entity_id)
          | None -> Some (normalize_value value))
@@ -732,7 +611,8 @@ let rec edn_string_of_value = function
   | Ref entity_id -> string_of_int entity_id
   | TxRef -> ":db/current-tx"
   | Ref_to entity_ref -> edn_string_of_entity_ref entity_ref
-  | List values -> "[" ^ String.concat " " (List.map edn_string_of_value values) ^ "]"
+  | List values -> "(" ^ String.concat " " (List.map edn_string_of_value values) ^ ")"
+  | Vector values -> "[" ^ String.concat " " (List.map edn_string_of_value values) ^ "]"
   | Set values -> "#{" ^ String.concat " " (List.map edn_string_of_value values) ^ "}"
   | Tuple values ->
     "[" ^ String.concat " " (List.map (function None -> "nil" | Some value -> edn_string_of_value value) values) ^ "]"
@@ -875,6 +755,16 @@ and resolve_value db datoms tx max_eid tempids = function
         values
     in
     normalize_value (List (List.rev values)), max_eid, tempids
+  | Vector values ->
+    let values, max_eid, tempids =
+      List.fold_left
+        (fun (values, max_eid, tempids) value ->
+          let value, max_eid, tempids = resolve_value db datoms tx max_eid tempids value in
+          value :: values, max_eid, tempids)
+        ([], max_eid, tempids)
+        values
+    in
+    normalize_value (Vector (List.rev values)), max_eid, tempids
   | Map entries ->
     let entries, max_eid, tempids =
       List.fold_left
@@ -926,7 +816,7 @@ let entity_ref_of_ref_attr_value = function
   | Keyword ident -> Some (Ident ident)
   | Symbol "db/current-tx" -> Some CurrentTx
   | Symbol ("datomic.tx" | "datascript.tx" as tempid) -> Some (Temp_id tempid)
-  | List [ attr; value ] ->
+  | List [ attr; value ] | Vector [ attr; value ] ->
     attr_name_of_value attr |> Option.map (fun attr -> Lookup_ref (attr, value))
   | _ -> None
 
@@ -951,7 +841,7 @@ let attr_expands_collection db attr =
   cardinality db attr = Many || is_reverse_ref attr
 
 let ref_lookup_collection_value = function
-  | List _ as value ->
+  | (List _ | Vector _) as value ->
     (match entity_ref_of_ref_attr_value value with
      | Some _ -> true
      | None -> false)
@@ -973,7 +863,7 @@ let resolve_optional_existing_entity_ref db datoms tx max_eid tempids = function
     Some e, max_eid, tempids
 
 let resolve_tx_value_for_attr db attr datoms tx max_eid tempids = function
-  | One_value (List values as value) when attr_expands_collection db attr && not (ref_lookup_collection_value value) ->
+  | One_value ((List values | Vector values) as value) when attr_expands_collection db attr && not (ref_lookup_collection_value value) ->
     let values, max_eid, tempids =
       List.fold_left
         (fun (values, max_eid, tempids) value ->
@@ -1030,6 +920,8 @@ let rec remap_value_ref old_e new_e = function
   | Ref entity_id when entity_id = old_e -> Ref new_e
   | List values ->
     List (List.map (remap_value_ref old_e new_e) values)
+  | Vector values ->
+    Vector (List.map (remap_value_ref old_e new_e) values)
   | Map entries ->
     Map
       (List.map
@@ -1335,7 +1227,7 @@ let apply_tx tx_ops db =
   and max_explicit_value max_eid = function
     | Ref entity_id -> max max_eid (validate_entity_id entity_id)
     | Ref_to entity_ref -> max_explicit_entity_ref max_eid entity_ref
-    | List values ->
+    | List values | Vector values ->
       List.fold_left max_explicit_value max_eid values
     | Map entries ->
       List.fold_left
@@ -1416,7 +1308,7 @@ let apply_tx tx_ops db =
          ^ ")")
   in
   let rec tx_value_has_assertions attr = function
-    | One_value (List []) | One_value (Set []) when attr_expands_collection db attr -> false
+    | One_value (List []) | One_value (Vector []) | One_value (Set []) when attr_expands_collection db attr -> false
     | Many_values [] | Many_entities [] -> false
     | One_entity _ | Many_entities _ -> true
     | One_value _ | Many_values _ -> true
@@ -1781,7 +1673,7 @@ let apply_tx tx_ops db =
       in
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes) (attr, tx_value) =
         match tx_value with
-        | One_value (List values) when attr_expands_collection db attr ->
+        | One_value (List values | Vector values) when attr_expands_collection db attr ->
           List.fold_left
             (fun state value -> add_entity_map_attr_value e attr value state)
             (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes)
@@ -2015,6 +1907,8 @@ and resolve_index_value db = function
      | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
   | List values ->
     normalize_value (List (List.map (resolve_index_value db) values))
+  | Vector values ->
+    normalize_value (Vector (List.map (resolve_index_value db) values))
   | Map entries ->
     normalize_value
       (Map
@@ -2182,7 +2076,7 @@ let rec entity_id_of_ref db = function
 
 and resolve_ref_value db = function
   | Ref_to entity_ref -> Option.map (fun entity_id -> Ref entity_id) (entity_id_of_ref db entity_ref)
-  | List values ->
+  | List values | Vector values ->
     let rec resolve_values acc = function
       | [] -> Some (normalize_value (List (List.rev acc)))
       | value :: rest ->
@@ -3078,7 +2972,8 @@ let rec query_value_of_form = function
          && symbol <> "%"
          && symbol <> "_" ->
     Symbol symbol
-  | QueryFormVector values | QueryFormList values -> List (List.map query_value_of_form values)
+  | QueryFormVector values -> Vector (List.map query_value_of_form values)
+  | QueryFormList values -> List (List.map query_value_of_form values)
   | QueryFormMap entries -> Map (List.map (fun (key, value) -> query_value_of_form key, query_value_of_form value) entries)
   | QueryFormSymbol symbol -> invalid_arg ("cannot parse symbol as query constant: " ^ symbol)
 
@@ -3090,7 +2985,8 @@ let rec query_form_of_value = function
   | String value -> QueryFormString value
   | Keyword value -> QueryFormKeyword value
   | Symbol value -> QueryFormSymbol value
-  | List values -> QueryFormVector (List.map query_form_of_value values)
+  | List values -> QueryFormList (List.map query_form_of_value values)
+  | Vector values -> QueryFormVector (List.map query_form_of_value values)
   | Set values -> QueryFormSet (List.map query_form_of_value values)
   | Tuple values ->
     QueryFormVector (List.map (function Some value -> query_form_of_value value | None -> QueryFormNil) values)
@@ -3200,6 +3096,7 @@ and tx_attr_values_of_edn_form attr = function
     let scalar_collection values =
       match form with
       | QueryFormSet _ -> Set values
+      | QueryFormVector _ -> Vector values
       | _ -> List values
     in
     (match List.rev nested, List.rev scalars with
@@ -3571,7 +3468,7 @@ let pull_string_of_value = function
   | Instant value -> string_of_int value
   | Regex value -> value
   | Ref entity_id -> string_of_int entity_id
-  | List _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite pull value"
+  | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite pull value"
 
 let pull_name_value = function
   | Keyword value | Symbol value ->
@@ -3768,7 +3665,8 @@ let resolved_query_result db = function
   | result -> Some result
 
 let lookup_ref_entity_id_of_value db = function
-  | List [ Keyword attr; value ] | List [ String attr; value ] ->
+  | List [ Keyword attr; value ] | List [ String attr; value ]
+  | Vector [ Keyword attr; value ] | Vector [ String attr; value ] ->
     entity_id_of_ref db (Lookup_ref (attr, value))
   | _ -> None
 
@@ -4021,7 +3919,7 @@ let value_get collection key =
   | Map entries, key -> map_get_value entries key
   | Set values, key ->
     if List.exists (fun value -> compare_value value key = 0) values then Some key else None
-  | List values, Int index ->
+  | (List values | Vector values), Int index ->
     if index >= 0 && index < List.length values then Some (List.nth values index) else None
   | Tuple values, Int index ->
     if index >= 0 && index < List.length values then
@@ -4058,7 +3956,7 @@ let eval_get_default_value_clause db bindings map_term key_term default_term out
 
 let value_count = function
   | String value -> Some (String.length value)
-  | List values | Set values -> Some (List.length values)
+  | List values | Vector values | Set values -> Some (List.length values)
   | Map entries -> Some (List.length entries)
   | Tuple values -> Some (List.length values)
   | Nil | Int _ | Float _ | Bool _ | Keyword _ | Symbol _ | Uuid _ | Instant _ | Regex _ | Ref _ | TxRef | Ref_to _ -> None
@@ -4431,6 +4329,7 @@ let type_keyword_of_value = function
   | List _ -> "type/list"
   | Map _ -> "type/map"
   | Set _ -> "type/set"
+  | Vector _ -> "type/vector"
   | Tuple _ -> "type/tuple"
   | TxRef -> "type/tx-ref"
   | Ref_to _ -> "type/ref-to"
@@ -4616,7 +4515,7 @@ let string_of_query_value = function
   | Instant value -> string_of_int value
   | Regex value -> value
   | Ref entity_id -> string_of_int entity_id
-  | List _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite query value"
+  | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite query value"
 
 let escaped_string_literal value =
   let buffer = Buffer.create (String.length value + 2) in
@@ -4647,6 +4546,7 @@ let rec print_query_value ~readably = function
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | List values -> "(" ^ print_query_values ~readably values ^ ")"
+  | Vector values -> "[" ^ print_query_values ~readably values ^ "]"
   | Set values -> "#{" ^ print_query_values ~readably values ^ "}"
   | Map entries ->
     entries
@@ -4684,7 +4584,7 @@ let eval_string_build_clause db bindings terms output_var =
      | None -> [])
 
 let collection_string_values = function
-  | List values | Set values -> Some (List.map string_of_query_value values)
+  | List values | Vector values | Set values -> Some (List.map string_of_query_value values)
   | Tuple values ->
     values
     |> List.map (function
@@ -5040,7 +4940,7 @@ let value_contains collection key =
     List.exists (fun (entry_key, _) -> compare_value entry_key key = 0) entries
   | Set values, key ->
     List.exists (fun value -> compare_value value key = 0) values
-  | List values, Int index ->
+  | (List values | Vector values), Int index ->
     index >= 0 && index < List.length values
   | Tuple values, Int index ->
     index >= 0 && index < List.length values
@@ -5140,7 +5040,7 @@ let eval_untuple_values db bindings output_vars values =
 let eval_untuple_function db bindings tuple_term output_vars =
   match eval_query_term db bindings tuple_term with
   | Some (Result_value (Tuple values)) -> eval_untuple_values db bindings output_vars values
-  | Some (Result_value (List values)) ->
+  | Some (Result_value (List values | Vector values)) ->
     eval_untuple_values db bindings output_vars (List.map (fun value -> Some value) values)
   | Some _ | None -> []
 
@@ -5784,14 +5684,14 @@ let resolve_query_input_row db row =
 
 let collection_values_of_input db value =
   match resolve_query_input_result db value with
-  | Some (Result_value (List values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
+  | Some (Result_value (List values | Vector values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
   | Some (Result_value (Tuple values)) ->
     Some (values |> List.filter_map (Option.map (fun value -> Result_value value)))
   | Some _ | None -> None
 
 let row_values_of_input db value =
   match resolve_query_input_result db value with
-  | Some (Result_value (List values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
+  | Some (Result_value (List values | Vector values | Set values)) -> Some (List.map (fun value -> Result_value value) values)
   | Some (Result_value (Tuple values)) ->
     Some (values |> List.map (function Some value -> Result_value value | None -> Result_value Nil))
   | Some _ | None -> None
@@ -5931,13 +5831,13 @@ let query_result_collection_string values =
 
 let query_input_of_arg decl arg =
   let values_of_collection_result = function
-    | Result_value (List values | Set values) -> Some (List.map (fun value -> Result_value value) values)
+    | Result_value (List values | Vector values | Set values) -> Some (List.map (fun value -> Result_value value) values)
     | Result_value (Tuple values) ->
       Some (values |> List.filter_map (Option.map (fun value -> Result_value value)))
     | _ -> None
   in
   let row_of_collection_value = function
-    | Result_value (List values | Set values) -> List.map (fun value -> Result_value value) values
+    | Result_value (List values | Vector values | Set values) -> List.map (fun value -> Result_value value) values
     | Result_value (Tuple values) ->
       values |> List.map (function Some value -> Result_value value | None -> Result_value Nil)
     | value -> [ value ]
@@ -6857,7 +6757,7 @@ and eval_clause
      | Some result -> eval_ground_term_relation db bindings result output_vars
      | None -> [])
   | VectorValue (terms, output_var) ->
-    eval_collection_value_clause db bindings terms output_var (fun values -> List values)
+    eval_collection_value_clause db bindings terms output_var (fun values -> Vector values)
   | ListValue (terms, output_var) ->
     eval_collection_value_clause db bindings terms output_var (fun values -> List values)
   | SetValue (terms, output_var) ->

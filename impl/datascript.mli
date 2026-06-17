@@ -167,6 +167,20 @@ module Storage : sig
   val collect_garbage : storage -> unit
 end
 
+module Util : sig
+  val list_equal_by : ('a -> 'a -> bool) -> 'a list -> 'a list -> bool
+  val entity_ref_equal : entity_ref -> entity_ref -> bool
+  val value_equal : value -> value -> bool
+  val split_keyword : string -> string * string
+  val compare_list_with : ('a -> 'a -> int) -> 'a list -> 'a list -> int
+  val compare_option_with : ('a -> 'a -> int) -> 'a option -> 'a option -> int
+  val compare_value : value -> value -> int
+  val first_nonzero : int list -> int
+  val compare_datom : index -> datom -> datom -> int
+  val normalize_value : value -> value
+  val normalize_datom_value : datom -> datom
+end
+
 module Upsert : sig
   type resolution = attr * value * entity_id
 
@@ -189,6 +203,7 @@ val tx0 : tx
 val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
 val is_datom : datom -> bool
 val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
+val empty : db -> db
 val is_db : db -> bool
 val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
 val history : db -> db

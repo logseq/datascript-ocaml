@@ -73,6 +73,7 @@ let rec string_of_value = function
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | List values -> "[" ^ String.concat " " (List.map string_of_value values) ^ "]"
+  | Vector values -> "#vector[" ^ String.concat " " (List.map string_of_value values) ^ "]"
   | Map entries ->
     "{"
     ^ (entries

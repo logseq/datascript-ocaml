@@ -6,46 +6,7 @@ let datom ?(tx = tx0) ?(added = true) ~e ~a ~v () = { e; a; v; tx; added }
 
 let is_datom (_ : datom) = true
 
-let rec list_equal_by equal left right =
-  match left, right with
-  | [], [] -> true
-  | left :: left_rest, right :: right_rest ->
-    equal left right && list_equal_by equal left_rest right_rest
-  | [], _ :: _ | _ :: _, [] -> false
-
-let rec entity_ref_equal left right =
-  match left, right with
-  | Entity_id left, Entity_id right -> left = right
-  | Temp_id left, Temp_id right -> left = right
-  | CurrentTx, CurrentTx -> true
-  | Ident left, Ident right -> left = right
-  | Lookup_ref (left_attr, left_value), Lookup_ref (right_attr, right_value) ->
-    left_attr = right_attr && value_equal left_value right_value
-  | _ -> false
-
-and value_equal left right =
-  match left, right with
-  | Float left, Float right ->
-    (classify_float left = FP_nan && classify_float right = FP_nan) || left = right
-  | List left, List right -> list_equal_by value_equal left right
-  | Set left, Set right -> list_equal_by value_equal left right
-  | Map left, Map right ->
-    list_equal_by
-      (fun (left_key, left_value) (right_key, right_value) ->
-         value_equal left_key right_key && value_equal left_value right_value)
-      left
-      right
-  | Tuple left, Tuple right ->
-    list_equal_by
-      (fun left right ->
-         match left, right with
-         | None, None -> true
-         | Some left, Some right -> value_equal left right
-         | None, Some _ | Some _, None -> false)
-      left
-      right
-  | Ref_to left, Ref_to right -> entity_ref_equal left right
-  | _ -> left = right
+let value_equal = Util.value_equal
 
 let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
 
