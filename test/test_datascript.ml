@@ -8876,6 +8876,74 @@ let test_q_function_bindings_interact_with_rules () =
            ]
        })
 
+let test_q_parsed_rule_inputs_interact_with_function_bindings () =
+  let rules =
+    [ { rule_name = "my-vals"
+      ; rule_params = [ "x" ]
+      ; rule_body = [ IdentityValue (QValue (Int 1), "x") ]
+      }
+    ; { rule_name = "my-vals"
+      ; rule_params = [ "x" ]
+      ; rule_body = [ IdentityValue (QValue (Int 2), "x") ]
+      }
+    ; { rule_name = "my-vals"
+      ; rule_params = [ "x" ]
+      ; rule_body = [ IdentityValue (QValue (Int 3), "x") ]
+      }
+    ]
+  in
+  assert_equal_query
+    "q_string applies rules supplied through % after prior function bindings"
+    [ [ Result_value (Int 2) ] ]
+    (q_string
+       ~inputs:[ Arg_rules rules ]
+       (empty_db ())
+       "[:find ?n
+         :in $ %
+         :where [(identity 2) ?n]
+                (my-vals ?n)]");
+  assert_equal_query
+    "q_string applies function bindings after rules supplied through %"
+    [ [ Result_value (Int 2) ] ]
+    (q_string
+       ~inputs:[ Arg_rules rules ]
+       (empty_db ())
+       "[:find ?n
+         :in $ %
+         :where (my-vals ?n)
+                [(identity 2) ?n]]");
+  assert_equal_query
+    "q_string filters conflicting scalar function bindings"
+    []
+    (q_string
+       (empty_db ())
+       "[:find ?n
+         :where [(identity 1) ?n]
+                [(identity 2) ?n]]");
+  assert_equal_query
+    "q_string filters conflicting destructured function bindings"
+    []
+    (q_string
+       (empty_db ())
+       "[:find ?n ?x
+         :where [(identity [3 4]) [?n ?x]]
+                [(identity [1 2]) [?n ?x]]]");
+  let db =
+    empty_db ()
+    |> db_with
+      [ Add (Entity_id 1, "age", Int 15)
+      ; Add (Entity_id 2, "age", Int 35)
+      ]
+  in
+  assert_equal_query
+    "q_string does not run functions when relation inputs are empty"
+    []
+    (q_string
+       db
+       "[:find ?e ?y
+         :where [?e :salary ?x]
+                [(+ ?x 100) ?y]]")
+
 let test_q_predicates_and_functions_reject_unbound_inputs () =
   assert_raises_invalid_arg
     "q predicates reject unbound variables"
@@ -17832,6 +17900,7 @@ let () =
   test_q_functions_filter_on_none ();
   test_q_function_binding_conflicts_filter_rows ();
   test_q_function_bindings_interact_with_rules ();
+  test_q_parsed_rule_inputs_interact_with_function_bindings ();
   test_q_predicates_and_functions_reject_unbound_inputs ();
   test_q_builtin_get_else_get_some_and_missing ();
   test_q_builtin_get_map_values ();

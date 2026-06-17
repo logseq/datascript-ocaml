@@ -346,6 +346,7 @@ type query_input = Datascript_types.query_input =
   | Input_predicate of string * (query_result list -> bool)
   | Input_function of string * (query_result list -> query_result list option)
   | Input_aggregate of string * (query_result list -> query_result)
+  | Input_rules of query_rule list
   | Input_ignore
   | Input_scalar_decl of string
   | Input_collection_decl of string
@@ -368,6 +369,7 @@ type query_arg = Datascript_types.query_arg =
   | Arg_predicate of (query_result list -> bool)
   | Arg_function of (query_result list -> query_result list option)
   | Arg_aggregate of (query_result list -> query_result)
+  | Arg_rules of query_rule list
 
 type aggregate = Datascript_types.aggregate =
   | Count
@@ -6907,6 +6909,7 @@ let apply_query_input db bindings = function
   | Input_function _ ->
     bindings
   | Input_aggregate _ -> bindings
+  | Input_rules _ -> bindings
   | Input_ignore -> bindings
   | Input_scalar_decl _
   | Input_collection_decl _
@@ -7052,6 +7055,7 @@ let query_input_of_arg decl arg =
   | Input_scalar_decl var, Arg_predicate predicate -> Input_predicate (var, predicate)
   | Input_scalar_decl var, Arg_function f -> Input_function (var, f)
   | Input_scalar_decl var, Arg_aggregate f -> Input_aggregate (var, f)
+  | Input_rules_decl, Arg_rules rules -> Input_rules rules
   | Input_scalar_decl _, _
   | Input_collection_decl _, _
   | Input_collection_ignore_decl, _
@@ -7072,6 +7076,7 @@ let query_input_of_arg decl arg =
     | Input_predicate _
     | Input_function _
     | Input_aggregate _
+    | Input_rules _
     | Input_relation _
     | Input_ignore
     | Input_source_decl _
@@ -7096,6 +7101,7 @@ let query_input_binding_label = function
   | Input_predicate (var, _)
   | Input_function (var, _)
   | Input_aggregate (var, _) -> query_input_var_label var
+  | Input_rules _ -> "%"
   | Input_collection_ignore _
   | Input_ignore -> "_"
   | Input_nested_collection _
@@ -7104,7 +7110,8 @@ let query_input_binding_label = function
   | Input_nested_tuple _
   | Input_nested_relation _ -> "[...]"
 
-let query_input_consumes_argument = function
+let query_input_consumes_argument ~consume_rules = function
+  | Input_rules_decl -> consume_rules
   | Input_scalar_decl _
   | Input_collection_decl _
   | Input_collection_ignore_decl
@@ -7115,7 +7122,6 @@ let query_input_consumes_argument = function
   | Input_nested_tuple_decl _
   | Input_nested_relation_decl _ -> true
   | Input_source_decl _
-  | Input_rules_decl
   | Input_scalar _
   | Input_entity_ref _
   | Input_collection _
@@ -7128,9 +7134,10 @@ let query_input_consumes_argument = function
   | Input_predicate _
   | Input_function _
   | Input_aggregate _
+  | Input_rules _
   | Input_ignore -> false
 
-let query_input_arity_error declarations provided =
+let query_input_arity_error ~consume_rules declarations provided =
   let labels =
     declarations
     |> List.map query_input_binding_label
@@ -7138,7 +7145,7 @@ let query_input_arity_error declarations provided =
   in
   let required =
     declarations
-    |> List.filter query_input_consumes_argument
+    |> List.filter (query_input_consumes_argument ~consume_rules)
     |> List.length
     |> ( + ) 1
   in
@@ -7149,9 +7156,9 @@ let query_input_arity_error declarations provided =
        required
        provided)
 
-let bind_query_inputs declarations args =
+let bind_query_inputs ~consume_rules declarations args =
   let provided = List.length args + 1 in
-  let arity_error () = query_input_arity_error declarations provided in
+  let arity_error () = query_input_arity_error ~consume_rules declarations provided in
   let rec bind acc declarations args =
     match declarations with
     | [] ->
@@ -7164,7 +7171,8 @@ let bind_query_inputs declarations args =
       :: rest ->
       bind (input :: acc) rest args
     | Input_collection_ignore _ as input :: rest -> bind (input :: acc) rest args
-    | (Input_source_decl _ | Input_rules_decl) as input :: rest -> bind (input :: acc) rest args
+    | Input_source_decl _ as input :: rest -> bind (input :: acc) rest args
+    | Input_rules_decl as input :: rest when not consume_rules -> bind (input :: acc) rest args
     | decl :: rest ->
       (match args with
        | [] -> arity_error ()
@@ -7185,9 +7193,17 @@ let query_callables_of_inputs inputs =
          | _ -> callables)
        empty_query_callables
 
+let query_rules_of_inputs inputs =
+  inputs
+  |> List.concat_map (function
+    | Input_rules rules -> rules
+    | _ -> [])
+
 let initial_query_context db query input_args =
-  let inputs = bind_query_inputs query.inputs input_args in
-  query_callables_of_inputs inputs, List.fold_left (apply_query_input db) [ [] ] inputs
+  let inputs = bind_query_inputs ~consume_rules:(query.rules = []) query.inputs input_args in
+  ( query_callables_of_inputs inputs
+  , List.fold_left (apply_query_input db) [ [] ] inputs
+  , query_rules_of_inputs inputs )
 
 let matching_rules rules name arity =
   List.filter (fun rule -> rule.rule_name = name && List.length rule.rule_params = arity) rules
@@ -8644,6 +8660,11 @@ let parse_collection_function symbol args output =
   | "tuple", terms -> TupleFunction (List.map parse_pattern_term terms, output_var)
   | _ -> parse_core_value_function symbol args output
 
+let parse_flat_value_function symbol args output_vars =
+  match symbol, args with
+  | "identity", [ term ] -> GroundTermTuple (parse_pattern_term term, output_vars)
+  | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
+
 let parse_output_var = function
   | QueryFormSymbol "_" -> "_"
   | QueryFormSymbol symbol -> query_symbol_name symbol
@@ -9191,6 +9212,12 @@ let rec parse_pattern_clause = function
     (match arithmetic_op_of_symbol symbol with
      | Some op -> ArithmeticValue (op, List.map parse_pattern_term args, query_symbol_name output)
      | None -> parse_string_transform_function symbol args output)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ; (QueryFormVector _ | QueryFormList _ as output)
+      ] ->
+    parse_flat_value_function symbol args (parse_output_vars output)
   | (QueryFormVector (QueryFormSymbol rule_name :: args)
     | QueryFormList (QueryFormSymbol rule_name :: args))
     when is_plain_rule_symbol rule_name ->
@@ -9417,6 +9444,7 @@ let vars_of_input = function
   | Input_collection_decl var ->
     [ var ]
   | Input_collection_ignore _
+  | Input_rules _
   | Input_ignore
   | Input_collection_ignore_decl
   | Input_ignore_decl
@@ -9452,6 +9480,7 @@ let source_of_input = function
   | Input_predicate _
   | Input_function _
   | Input_aggregate _
+  | Input_rules _
   | Input_scalar_decl _
   | Input_collection_decl _
   | Input_collection_ignore_decl
@@ -10068,9 +10097,15 @@ let pull_string ?visitor db input entity_ref =
 let pull_many_string ?visitor db input entity_refs =
   pull_many ?visitor db (parse_pull_pattern_string db input) entity_refs
 
+let query_rules_and_where query input_rules =
+  let rules = validate_rule_arities (query.rules @ input_rules) in
+  let names = rule_names rules in
+  List.map (resolve_dynamic_rule names) rules, List.map (resolve_dynamic_rule_clause names) query.where
+
 let q_sources ?(inputs = []) db sources query =
-  let callables, input_bindings = initial_query_context db query inputs in
-  let bindings = eval_clauses ~callables db sources query.rules input_bindings query.where in
+  let callables, input_bindings, input_rules = initial_query_context db query inputs in
+  let rules, where = query_rules_and_where query input_rules in
+  let bindings = eval_clauses ~callables db sources rules input_bindings where in
   if has_aggregates query.find then
     if query.with_vars = [] then
       aggregate_rows ~callables db sources bindings query.find
@@ -10089,8 +10124,9 @@ let q_string ?inputs db input =
   q ?inputs db (parse_query_string_with_pull_context ~default_pull_db:db input)
 
 let q_with ?(inputs = []) db with_vars query =
-  let callables, input_bindings = initial_query_context db query inputs in
-  let bindings = eval_clauses ~callables db [] query.rules input_bindings query.where in
+  let callables, input_bindings, input_rules = initial_query_context db query inputs in
+  let rules, where = query_rules_and_where query input_rules in
+  let bindings = eval_clauses ~callables db [] rules input_bindings where in
   let with_vars = query.with_vars @ with_vars |> List.sort_uniq compare in
   if has_aggregates query.find then
     aggregate_rows_with ~callables db [] bindings query.find with_vars

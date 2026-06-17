@@ -344,6 +344,7 @@ type query_input = Datascript_types.query_input =
   | Input_predicate of string * (query_result list -> bool)
   | Input_function of string * (query_result list -> query_result list option)
   | Input_aggregate of string * (query_result list -> query_result)
+  | Input_rules of query_rule list
   | Input_ignore
   | Input_scalar_decl of string
   | Input_collection_decl of string
@@ -366,6 +367,7 @@ type query_arg = Datascript_types.query_arg =
   | Arg_predicate of (query_result list -> bool)
   | Arg_function of (query_result list -> query_result list option)
   | Arg_aggregate of (query_result list -> query_result)
+  | Arg_rules of query_rule list
 
 type aggregate = Datascript_types.aggregate =
   | Count

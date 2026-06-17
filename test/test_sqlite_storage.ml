@@ -285,6 +285,26 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
                ; Rule ("friend-name", [ QVar "e"; QVar "friend_name" ])
                ]
            });
+      let friend_name_rules =
+        [ { rule_name = "friend-name"
+          ; rule_params = [ "e"; "friend_name" ]
+          ; rule_body =
+              [ Pattern (QVar "e", QAttr "friend", QVar "friend")
+              ; Pattern (QVar "friend", QAttr "name", QVar "friend_name")
+              ]
+          }
+        ]
+      in
+      assert_equal_query
+        "SQLite restored db supports parsed rule inputs supplied through %"
+        [ [ Result_value (String "Petr") ] ]
+        (q_string
+           ~inputs:[ Arg_rules friend_name_rules ]
+           (conn_db restored)
+           "[:find ?friend-name
+             :in $ %
+             :where [?e :name \"Ivan\"]
+                    (friend-name ?e ?friend-name)]");
       ignore
         (transact_conn
            restored
