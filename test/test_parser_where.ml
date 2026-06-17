@@ -69,6 +69,64 @@ let test_parser_where__rule_expr () =
   assert_equal "rule expr symbol constant" (Rule ("friends", [ QValue (Symbol "something") ])) (Parser.parse_clause (list [ sym "friends"; sym "something" ]));
   assert_invalid "rule requires arguments" (fun () -> ignore (Parser.parse_clause (list [ sym "friends" ])))
 
+let test_parser_where__clause_helper_batch () =
+  assert_equal
+    "parse_data_pattern_clause parses tx-op patterns"
+    (PatternTxOp (QVar "e", QAttr "name", QVar "v", QVar "tx", QVar "op"))
+    (Parser.parse_data_pattern_clause [ sym "?e"; kw "name"; sym "?v"; sym "?tx"; sym "?op" ]);
+  assert_equal
+    "parse_data_pattern_clause parses relation patterns"
+    (SourceRelationPattern ("$", [ QVar "e"; QVar "v" ]))
+    (Parser.parse_data_pattern_clause [ sym "?e"; sym "?v" ]);
+  assert_equal
+    "parse_rule_expr parses rule arguments"
+    ("friend", [ QVar "e"; QValue (String "Ivan") ])
+    (Parser.parse_rule_expr "friend" [ sym "?e"; str "Ivan" ]);
+  assert_invalid "parse_rule_expr rejects missing args" (fun () ->
+    ignore (Parser.parse_rule_expr "friend" []));
+  assert_equal
+    "parse_source_pattern_clause parses sourced rules"
+    (SourceRule ("other", "friend", [ QVar "e" ]))
+    (Parser.parse_source_pattern_clause "other" [ sym "friend"; sym "?e" ]);
+  assert_equal
+    "parse_source_pattern_clause parses sourced tx patterns"
+    (SourcePatternTx ("other", QVar "e", QAttr "name", QVar "v", QVar "tx"))
+    (Parser.parse_source_pattern_clause "other" [ sym "?e"; kw "name"; sym "?v"; sym "?tx" ]);
+  assert_equal
+    "parse_missing_clause parses default missing"
+    (Missing (QVar "e", "name"))
+    (Parser.parse_missing_clause [ sym "?e"; kw "name" ]);
+  assert_equal
+    "parse_missing_clause parses sourced missing"
+    (SourceMissing ("other", QVar "e", "name"))
+    (Parser.parse_missing_clause [ sym "$other"; sym "?e"; kw "name" ]);
+  assert_equal
+    "parse_get_else_clause parses default get-else"
+    (GetElse (QVar "e", "name", String "unknown", "out"))
+    (Parser.parse_get_else_clause [ sym "?e"; kw "name"; str "unknown" ] "?out");
+  assert_equal
+    "parse_get_else_clause parses sourced get-else"
+    (SourceGetElse ("other", QVar "e", "name", String "unknown", "out"))
+    (Parser.parse_get_else_clause [ sym "$other"; sym "?e"; kw "name"; str "unknown" ] "?out");
+  assert_equal
+    "parse_two_output_vars parses output tuples"
+    ("attr", "value")
+    (Parser.parse_two_output_vars (vec [ sym "?attr"; sym "?value" ]));
+  assert_equal
+    "parse_get_some_clause parses default get-some"
+    (GetSome (QVar "e", [ "name"; "age" ], "attr", "value"))
+    (Parser.parse_get_some_clause [ sym "?e"; kw "name"; kw "age" ] (vec [ sym "?attr"; sym "?value" ]));
+  assert_equal
+    "parse_get_some_clause parses sourced get-some"
+    (SourceGetSome ("other", QVar "e", [ "name" ], "attr", "value"))
+    (Parser.parse_get_some_clause [ sym "$other"; sym "?e"; kw "name" ] (vec [ sym "?attr"; sym "?value" ]));
+  assert_equal
+    "parse_get_clause parses get with default"
+    (GetDefaultValue (QVar "m", QValue (Keyword "name"), QValue (String "unknown"), "out"))
+    (Parser.parse_get_clause [ sym "?m"; kw "name"; str "unknown" ] "?out");
+  assert_invalid "parse_get_clause rejects too few args" (fun () ->
+    ignore (Parser.parse_get_clause [ sym "?m" ] "?out"))
+
 let test_parser_where__not_clause () =
   assert_equal
     "not clause"
@@ -114,5 +172,6 @@ let () =
   test_parser_where__test_pred ();
   test_parser_where__test_fn ();
   test_parser_where__rule_expr ();
+  test_parser_where__clause_helper_batch ();
   test_parser_where__not_clause ();
   test_parser_where__or_clause ()

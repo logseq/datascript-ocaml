@@ -284,6 +284,14 @@ module Parser : sig
   val equality_predicate_of_symbol : string -> equality_predicate option
   val arithmetic_op_of_symbol : string -> arithmetic_op option
   val query_attr_name : query_form -> attr
+  val parse_data_pattern_clause : query_form list -> query_clause
+  val parse_rule_expr : string -> query_form list -> string * query_term list
+  val parse_source_pattern_clause : string -> query_form list -> query_clause
+  val parse_missing_clause : query_form list -> query_clause
+  val parse_get_else_clause : query_form list -> string -> query_clause
+  val parse_two_output_vars : query_form -> string * string
+  val parse_get_some_clause : query_form list -> query_form -> query_clause
+  val parse_get_clause : query_form list -> string -> query_clause
   val parse_binding : query_form -> input_binding
   val parse_in : query_form -> query_input list
   val parse_with : query_form -> string list

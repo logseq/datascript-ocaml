@@ -737,3 +737,130 @@ let arithmetic_op_of_symbol = function
 let query_attr_name = function
   | QueryFormKeyword attr | QueryFormString attr -> attr
   | _ -> invalid_arg "expected query attribute"
+
+let parse_data_pattern_clause = function
+  | [ e; a; v ] ->
+    Pattern
+      ( parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v )
+  | [ e; a; v; tx ] ->
+    PatternTx
+      ( parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v
+      , parse_pattern_term ~entity_position:true ~source_position:false tx )
+  | [ e; a; v; tx; op ] ->
+    PatternTxOp
+      ( parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v
+      , parse_pattern_term ~entity_position:true ~source_position:false tx
+      , parse_pattern_term ~source_position:false op )
+  | [] -> invalid_arg "pattern could not be empty"
+  | terms -> SourceRelationPattern ("$", List.map (parse_pattern_term ~source_position:false) terms)
+
+let parse_rule_expr rule_name args =
+  match args with
+  | [] -> invalid_arg "rule-expr requires at least one argument"
+  | args -> rule_name, List.map (parse_pattern_term ~source_position:false) args
+
+let parse_source_pattern_clause source_name terms =
+  match terms with
+  | [ (QueryFormList (QueryFormSymbol rule_name :: args)
+      | QueryFormVector (QueryFormSymbol rule_name :: args))
+    ] ->
+    let rule_name, args = parse_rule_expr rule_name args in
+    SourceRule (source_name, rule_name, args)
+  | QueryFormSymbol rule_name :: args when is_plain_rule_symbol rule_name ->
+    let rule_name, args = parse_rule_expr rule_name args in
+    SourceRule (source_name, rule_name, args)
+  | [ e; a; v ] ->
+    SourcePattern
+      ( source_name
+      , parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v )
+  | [ e; a; v; tx ] ->
+    SourcePatternTx
+      ( source_name
+      , parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v
+      , parse_pattern_term ~entity_position:true ~source_position:false tx )
+  | [ e; a; v; tx; op ] ->
+    SourcePatternTxOp
+      ( source_name
+      , parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , parse_pattern_term ~lookup_ref_position:true ~source_position:false v
+      , parse_pattern_term ~entity_position:true ~source_position:false tx
+      , parse_pattern_term ~source_position:false op )
+  | [] -> invalid_arg "source pattern could not be empty"
+  | terms -> SourceRelationPattern (source_name, List.map (parse_pattern_term ~source_position:false) terms)
+
+let parse_missing_clause = function
+  | [ entity; attr ] ->
+    Missing (parse_pattern_term ~entity_position:true entity, query_attr_name attr)
+  | QueryFormSymbol source :: entity :: attr :: [] when is_query_source_symbol source ->
+    SourceMissing
+      (query_source_name source, parse_pattern_term ~entity_position:true entity, query_attr_name attr)
+  | _ -> invalid_arg "missing? requires an entity and an attribute"
+
+let parse_get_else_clause args output =
+  let output_var = query_symbol_name output in
+  match args with
+  | [ entity; attr; default ] ->
+    GetElse
+      ( parse_pattern_term ~entity_position:true entity
+      , query_attr_name attr
+      , query_value_of_form default
+      , output_var )
+  | QueryFormSymbol source :: entity :: attr :: default :: [] when is_query_source_symbol source ->
+    SourceGetElse
+      ( query_source_name source
+      , parse_pattern_term ~entity_position:true entity
+      , query_attr_name attr
+      , query_value_of_form default
+      , output_var )
+  | _ -> invalid_arg "get-else requires an entity, an attribute, a default, and an output"
+
+let parse_two_output_vars = function
+  | QueryFormVector [ QueryFormSymbol left; QueryFormSymbol right ]
+  | QueryFormList [ QueryFormSymbol left; QueryFormSymbol right ] ->
+    query_symbol_name left, query_symbol_name right
+  | _ -> invalid_arg "expected two output variables"
+
+let parse_get_some_clause args output =
+  let attr_var, value_var = parse_two_output_vars output in
+  let build entity attrs =
+    match attrs with
+    | [] -> invalid_arg "get-some requires at least one attribute"
+    | attrs ->
+      GetSome
+        ( parse_pattern_term ~entity_position:true entity
+        , List.map query_attr_name attrs
+        , attr_var
+        , value_var )
+  in
+  match args with
+  | QueryFormSymbol source :: entity :: attrs when is_query_source_symbol source ->
+    (match attrs with
+     | [] -> invalid_arg "get-some requires at least one attribute"
+     | attrs ->
+       SourceGetSome
+         ( query_source_name source
+         , parse_pattern_term ~entity_position:true entity
+         , List.map query_attr_name attrs
+         , attr_var
+         , value_var ))
+  | entity :: attrs -> build entity attrs
+  | [] -> invalid_arg "get-some requires an entity and attributes"
+
+let parse_get_clause args output =
+  match args with
+  | [ map; key ] -> GetValue (parse_pattern_term map, parse_pattern_term key, query_symbol_name output)
+  | [ map; key; default ] ->
+    GetDefaultValue
+      (parse_pattern_term map, parse_pattern_term key, parse_pattern_term default, query_symbol_name output)
+  | _ -> invalid_arg "get requires a map, a key, an optional default, and an output"
