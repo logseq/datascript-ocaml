@@ -96,10 +96,6 @@ let assert_equal_query_set label expected actual =
   let normalize rows = List.sort_uniq compare rows in
   if normalize expected <> normalize actual then failf "%s: unexpected query result" label
 
-let assert_float_nan label = function
-  | Float value when classify_float value = FP_nan -> ()
-  | value -> failf "%s: expected NaN, got %s" label (debug_value value)
-
 let assert_equal_tempids label expected actual =
   if expected <> actual then
     let format tempids =
@@ -2484,87 +2480,6 @@ let test_upstream_components_and_explode_parity_batch () =
          :where [_ :children ?e]
                 [?e :name ?n]]")
 
-let test_serializable_round_trips_db_state () =
-  let db =
-    empty_db
-      ~schema:
-        [ "aka", many
-        ; "created-at", indexed
-        ; "name", unique_identity
-        ; "uuid", indexed
-        ]
-      ()
-    |> db_with
-         [ Entity
-             { db_id = Some (Entity_id 1)
-             ; attrs =
-                 [ "name", One_value (String "Ivan")
-                 ; "aka", Many_values [ String "IV"; String "Terrible" ]
-                 ; "created-at", One_value (Instant 1_710_000_123_456)
-                 ; "uuid", One_value (Uuid "65ec87fb-0000-0000-0000-000000000001")
-                 ]
-             }
-         ]
-    |> db_with [ Add (Entity_id 1, "name", String "Petr") ]
-  in
-  let restored = serializable db |> from_serializable in
-  assert_equal_datoms
-    "from_serializable restores active datoms"
-    (datoms db Eavt ())
-    (datoms restored Eavt ());
-  assert_equal_datoms
-    "from_serializable restores history datoms"
-    (datoms (history db) Eavt ())
-    (datoms (history restored) Eavt ());
-  if entid restored "name" (String "Petr") <> Some 1 then
-    failwith "from_serializable should preserve schema";
-  let raw_ref_snapshot =
-    { serializable_schema = [ "friend", ref_attr ]
-    ; serializable_datoms =
-        [ datom ~e:1 ~a:"friend" ~v:(Int 2) ()
-        ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
-        ]
-    ; serializable_history_datoms =
-        [ datom ~e:1 ~a:"friend" ~v:(Int 2) ()
-        ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
-        ]
-    ; serializable_historical = false
-    ; serializable_max_eid = 2
-    ; serializable_max_tx = tx0
-    }
-  in
-  let raw_ref_db = from_serializable raw_ref_snapshot in
-  assert_equal_datoms
-    "from_serializable normalizes raw numeric ref datoms by schema"
-    [ datom ~e:1 ~a:"friend" ~v:(Ref 2) () ]
-    (datoms raw_ref_db Eavt ~e:1 ~a:"friend" ());
-  match pull raw_ref_db [ Pull_ref ("friend", [ Pull_attr "name" ]) ] (Entity_id 1) with
-  | Some entity ->
-    assert_equal_pulled_attrs
-      "pull should expand from_serializable raw numeric refs"
-      [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
-      entity
-  | None -> failwith "expected pull to find from_serializable entity with raw ref"
-
-let test_db_from_reader_string_parses_datascript_db_literals () =
-  let db =
-    db_from_reader_string
-      "#datascript/DB {:schema {:name {:db/unique :db.unique/identity}
-                                :friend {:db/valueType :db.type/ref}}
-                       :datoms [[1 :age 44 536870913]
-                                [1 :name \"Petr\" 536870913]
-                                [2 :friend 1 536870914]
-                                [3 :name \"DefaultTx\"]]}"
-  in
-  assert_equal_triples
-    "db_from_reader_string restores active datoms from #datascript/DB"
-    [ 1, "age", Int 44; 1, "name", String "Petr"; 2, "friend", Ref 1; 3, "name", String "DefaultTx" ]
-    (datoms db Eavt ());
-  if entid db "name" (String "Petr") <> Some 1 then
-    failwith "db_from_reader_string should restore schema";
-  if datoms (history db) Eavt () <> datoms db Eavt () then
-    failwith "db_from_reader_string should initialize history datoms"
-
 let test_storage_round_trips_db_state () =
   let storage = memory_storage () in
   let db =
@@ -3621,23 +3536,6 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     ]
     (datoms collection_value_db Eavt ~e:1 ~a:"aka" ()
      @ datoms collection_value_db Eavt ~e:1 ~a:"friend" ())
-
-let test_nan_values_round_trip_and_match_index_values () =
-  let nan = Float Float.nan in
-  let db =
-    empty_db ~schema:[ "nan", indexed ] ()
-    |> db_with [ Add (Entity_id 1, "nan", nan) ]
-  in
-  (match Option.bind (entity db (Entity_id 1)) (fun entity -> entity_attr entity "nan") with
-   | Some (One_value value) -> assert_float_nan "entity should expose stored NaN" value
-   | _ -> failwith "entity should expose stored NaN");
-  (match datoms db Avet ~a:"nan" ~v:nan () with
-   | [ { v; _ } ] -> assert_float_nan "AVET value lookup should find NaN" v
-   | _ -> failwith "AVET value lookup should find NaN");
-  let restored = db |> serializable |> from_serializable in
-  (match Option.bind (entity restored (Entity_id 1)) (fun entity -> entity_attr entity "nan") with
-   | Some (One_value value) -> assert_float_nan "from_serializable should preserve NaN" value
-   | _ -> failwith "from_serializable should preserve NaN")
 
 let test_edn_reader_parses_common_literals () =
   (match read_edn "\"left\\bright\\fform\\u0020feed\\u0041\"" with
@@ -18064,8 +17962,6 @@ let () =
   test_entity_maps_expand_reverse_nested_entity_values ();
   test_entity_maps_expand_many_reverse_nested_entity_values ();
   test_upstream_components_and_explode_parity_batch ();
-  test_serializable_round_trips_db_state ();
-  test_db_from_reader_string_parses_datascript_db_literals ();
   test_storage_round_trips_db_state ();
   test_restore_attaches_storage_and_settings ();
   test_store_uses_attached_storage ();
@@ -18087,7 +17983,6 @@ let () =
   test_parse_query_finds_values ();
   test_edn_reader_parses_query_and_pull_strings ();
   test_edn_string_top_level_apis ();
-  test_nan_values_round_trip_and_match_index_values ();
   test_query__test_symbol_comparison ();
   test_db_with_string_matches_upstream_validation_messages ();
   test_edn_reader_parses_transaction_and_schema_strings ();

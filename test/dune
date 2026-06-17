@@ -29,6 +29,11 @@
  (libraries datascript))
 
 (test
+ (name test_serialize)
+ (modules test_serialize)
+ (libraries datascript))
+
+(test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
  (libraries datascript logseq_sqlite_storage unix))

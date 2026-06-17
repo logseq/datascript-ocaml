@@ -106,6 +106,18 @@ module Schema : sig
   val reverse_ref : attr -> attr
 end
 
+module Serialize : sig
+  type context =
+    { next_db_uid : unit -> int
+    ; validate_schema : schema -> schema
+    ; normalize_datom_for_schema : schema -> datom -> datom
+    ; refresh_db_indexes : db -> db
+    }
+
+  val serializable : db -> serializable_db
+  val from_serializable : context -> serializable_db -> db
+end
+
 val tx0 : tx
 val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
 val is_datom : datom -> bool

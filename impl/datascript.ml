@@ -19,6 +19,7 @@ module Db = Db
 module Entity = Entity
 module Lru = Lru
 module Schema = Schema
+module Serialize = Serialize
 
 let max_entity_id = 0x7fffffff
 
@@ -301,35 +302,17 @@ let filter db pred =
   in
   refresh_db_identity { db with filter_pred = Some filter_pred }
 
-let serializable db =
-  { serializable_schema = db.schema
-  ; serializable_datoms = db.datoms
-  ; serializable_history_datoms = db.history_datoms
-  ; serializable_historical = db.historical
-  ; serializable_max_eid = db.max_eid
-  ; serializable_max_tx = db.max_tx
+let serializable = Serialize.serializable
+
+let serialize_context : Serialize.context =
+  { next_db_uid
+  ; validate_schema
+  ; normalize_datom_for_schema
+  ; refresh_db_indexes
   }
 
 let from_serializable snapshot =
-  let schema = validate_schema snapshot.serializable_schema in
-  let datoms = List.map (normalize_datom_for_schema schema) snapshot.serializable_datoms in
-  let history_datoms = List.map (normalize_datom_for_schema schema) snapshot.serializable_history_datoms in
-  refresh_db_indexes
-    { db_uid = next_db_uid ()
-    ; schema
-    ; datoms
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; history_datoms
-    ; historical = snapshot.serializable_historical
-    ; max_eid = snapshot.serializable_max_eid
-    ; max_tx = snapshot.serializable_max_tx
-    ; filter_pred = None
-    ; storage_ref = None
-    ; tx_fns = []
-    }
+  Serialize.from_serializable serialize_context snapshot
 
 let storage_root_address = "datascript/root"
 let storage_tail_address = "datascript/tail"
