@@ -273,6 +273,335 @@ let inspect ?(read_only = false) db_path =
     ; root_index_addresses
     }
 
+let logseq_schema_default_attr =
+  { cardinality = One
+  ; unique = None
+  ; indexed = false
+  ; is_component = false
+  ; no_history = false
+  ; doc = None
+  ; value_type = None
+  ; tuple_attrs = None
+  ; tuple_types = None
+  }
+
+let keyword_of_transit = function
+  | Logseq_transit.Keyword value -> Some value
+  | _ -> None
+
+let bool_of_transit = function
+  | Logseq_transit.Bool value -> Some value
+  | _ -> None
+
+let string_of_transit = function
+  | Logseq_transit.String value -> Some value
+  | _ -> None
+
+let logseq_cardinality_of_transit = function
+  | Logseq_transit.Keyword "db.cardinality/many" -> Many
+  | Logseq_transit.Keyword "db.cardinality/one" -> One
+  | _ -> One
+
+let logseq_unique_of_transit = function
+  | Logseq_transit.Keyword "db.unique/value" -> Some Value
+  | Logseq_transit.Keyword "db.unique/identity" -> Some Identity
+  | _ -> None
+
+let logseq_value_type_of_transit = function
+  | Logseq_transit.Keyword "db.type/ref" -> Some RefType
+  | Logseq_transit.Keyword "db.type/tuple" -> Some TupleType
+  | Logseq_transit.Keyword "db.type/string" -> Some StringType
+  | Logseq_transit.Keyword "db.type/keyword" -> Some KeywordType
+  | Logseq_transit.Keyword "db.type/number" -> Some NumberType
+  | Logseq_transit.Keyword "db.type/uuid" -> Some UuidType
+  | Logseq_transit.Keyword "db.type/instant" -> Some InstantType
+  | _ -> None
+
+let logseq_schema_attr_of_transit = function
+  | Logseq_transit.Map props ->
+    List.fold_left
+      (fun schema (key, value) ->
+        match keyword_of_transit key with
+        | Some "db/cardinality" ->
+          { schema with cardinality = logseq_cardinality_of_transit value }
+        | Some "db/unique" -> { schema with unique = logseq_unique_of_transit value }
+        | Some "db/index" ->
+          { schema with indexed = Option.value ~default:false (bool_of_transit value) }
+        | Some "db/isComponent" ->
+          { schema with is_component = Option.value ~default:false (bool_of_transit value) }
+        | Some "db/noHistory" ->
+          { schema with no_history = Option.value ~default:false (bool_of_transit value) }
+        | Some "db/doc" -> { schema with doc = string_of_transit value }
+        | Some "db/valueType" ->
+          { schema with value_type = logseq_value_type_of_transit value }
+        | Some _ | None -> schema)
+      logseq_schema_default_attr
+      props
+  | _ -> logseq_schema_default_attr
+
+type shallow_reader = { mutable shallow_cache : string array }
+
+let shallow_cache_code_digits = 44
+let shallow_base_char_code = Char.code '0'
+
+let shallow_cache_code_to_index text =
+  match String.length text with
+  | 2 -> Char.code text.[1] - shallow_base_char_code
+  | 3 ->
+    ((Char.code text.[1] - shallow_base_char_code) * shallow_cache_code_digits)
+    + (Char.code text.[2] - shallow_base_char_code)
+  | _ -> -1
+
+let shallow_cacheable text = String.length text > 3
+
+let shallow_is_cache_code text =
+  String.length text >= 2 && String.length text <= 3 && text.[0] = '^'
+  && not (String.equal text "^ ")
+
+let shallow_remember reader text =
+  if shallow_cacheable text then reader.shallow_cache <- Array.append reader.shallow_cache [| text |]
+
+let shallow_decode_string reader text =
+  if shallow_is_cache_code text then
+    let index = shallow_cache_code_to_index text in
+    if index >= 0 && index < Array.length reader.shallow_cache then reader.shallow_cache.(index) else text
+  else begin
+    shallow_remember reader text;
+    text
+  end
+
+let shallow_keyword reader = function
+  | `String text ->
+    let text = shallow_decode_string reader text in
+    if starts_with "~:" text then Some (String.sub text 2 (String.length text - 2)) else None
+  | _ -> None
+
+let shallow_bool = function
+  | `Bool value -> Some value
+  | _ -> None
+
+let rec shallow_scan reader = function
+  | `String text ->
+    ignore (shallow_decode_string reader text)
+  | `List values -> List.iter (shallow_scan reader) values
+  | `Assoc entries -> List.iter (fun (key, value) -> shallow_scan reader (`String key); shallow_scan reader value) entries
+  | `Tuple values -> List.iter (shallow_scan reader) values
+  | `Variant (tag, value) ->
+    shallow_scan reader (`String tag);
+    Option.iter (shallow_scan reader) value
+  | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `Floatlit _ -> ()
+
+let rec shallow_pairs = function
+  | key :: value :: rest -> (key, value) :: shallow_pairs rest
+  | [] | [ _ ] -> []
+
+let shallow_value_type reader value =
+  match shallow_keyword reader value with
+  | Some "db.type/ref" -> Some RefType
+  | Some "db.type/tuple" -> Some TupleType
+  | Some "db.type/string" -> Some StringType
+  | Some "db.type/keyword" -> Some KeywordType
+  | Some "db.type/number" -> Some NumberType
+  | Some "db.type/uuid" -> Some UuidType
+  | Some "db.type/instant" -> Some InstantType
+  | Some _ | None -> None
+
+let shallow_unique reader value =
+  match shallow_keyword reader value with
+  | Some "db.unique/value" -> Some Value
+  | Some "db.unique/identity" -> Some Identity
+  | Some _ | None -> None
+
+let shallow_schema_attr reader = function
+  | `List (`String "^ " :: props) ->
+    List.fold_left
+      (fun schema (key, value) ->
+        match shallow_keyword reader key with
+        | Some "db/cardinality" ->
+          let cardinality =
+            match shallow_keyword reader value with
+            | Some "db.cardinality/many" -> Many
+            | _ -> One
+          in
+          { schema with cardinality }
+        | Some "db/unique" -> { schema with unique = shallow_unique reader value }
+        | Some "db/index" ->
+          { schema with indexed = Option.value ~default:false (shallow_bool value) }
+        | Some "db/isComponent" ->
+          { schema with is_component = Option.value ~default:false (shallow_bool value) }
+        | Some "db/noHistory" ->
+          { schema with no_history = Option.value ~default:false (shallow_bool value) }
+        | Some "db/valueType" ->
+          { schema with value_type = shallow_value_type reader value }
+        | Some "db/doc" ->
+          (match value with
+           | `String text -> { schema with doc = Some (shallow_decode_string reader text) }
+           | _ -> schema)
+        | Some _ | None ->
+          shallow_scan reader value;
+          schema)
+      logseq_schema_default_attr
+      (shallow_pairs props)
+  | json ->
+    shallow_scan reader json;
+    logseq_schema_default_attr
+
+let shallow_schema_of_root_content content =
+  let reader = { shallow_cache = [||] } in
+  match Yojson.Safe.from_string content with
+  | `List (`String "^ " :: entries) ->
+    shallow_pairs entries
+    |> List.find_map (fun (key, value) ->
+      match shallow_keyword reader key, value with
+      | Some "schema", `List (`String "^ " :: schema_entries) ->
+        Some
+          (schema_entries
+           |> shallow_pairs
+           |> List.filter_map (fun (attr, schema) ->
+             match shallow_keyword reader attr with
+             | Some attr -> Some (attr, shallow_schema_attr reader schema)
+             | None ->
+               shallow_scan reader schema;
+               None))
+      | _ ->
+        shallow_scan reader value;
+        None)
+  | _ -> None
+
+let logseq_root_content ?(read_only = false) db_path =
+  match select_single_string ~read_only db_path "select content from kvs where addr = 0 limit 1;" with
+  | Some content -> content
+  | None -> invalid_arg "Logseq graph has no root metadata row"
+
+let logseq_root_entries ?(read_only = false) db_path =
+  match Logseq_transit.of_string (logseq_root_content ~read_only db_path) with
+  | Logseq_transit.Map entries -> entries
+  | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
+
+let schema_of_logseq_graph ?(read_only = false) db_path =
+  let content = logseq_root_content ~read_only db_path in
+  try
+    let root_entries =
+      match Logseq_transit.of_string content with
+      | Logseq_transit.Map entries -> entries
+      | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
+    in
+    match lookup_transit_key "schema" root_entries with
+    | Some (Logseq_transit.Map entries) ->
+      entries
+      |> List.filter_map (fun (attr, schema) ->
+        match keyword_of_transit attr with
+        | Some attr -> Some (attr, logseq_schema_attr_of_transit schema)
+        | None -> None)
+    | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
+    | None -> invalid_arg "Logseq graph root metadata has no :schema"
+  with
+  | Logseq_transit.Decode_error _ | Yojson.Json_error _ ->
+    (match shallow_schema_of_root_content content with
+     | Some schema -> schema
+     | None -> invalid_arg "Logseq graph root metadata has no decodable :schema")
+
+let int_of_shallow_string text =
+  match int_of_string_opt text with
+  | Some value -> value
+  | None -> invalid_arg ("invalid Logseq integer value: " ^ text)
+
+let rec logseq_value_of_shallow_json reader = function
+  | `Null -> Nil
+  | `Bool value -> Bool value
+  | `Int value -> Int value
+  | `Intlit value -> Int (int_of_shallow_string value)
+  | `Float value -> Float value
+  | `Floatlit value -> Float (float_of_string value)
+  | `String text ->
+    let text = shallow_decode_string reader text in
+    if starts_with "~:" text then Keyword (String.sub text 2 (String.length text - 2))
+    else if starts_with "~$" text then Symbol (String.sub text 2 (String.length text - 2))
+    else if starts_with "~i" text then Int (int_of_shallow_string (String.sub text 2 (String.length text - 2)))
+    else if starts_with "~u" text then Uuid (String.sub text 2 (String.length text - 2))
+    else if starts_with "~?" text then
+      (match String.sub text 2 (String.length text - 2) with
+       | "t" -> Bool true
+       | "f" -> Bool false
+       | value -> invalid_arg ("invalid Logseq boolean value: " ^ value))
+    else if text = "~_" then Nil
+    else if starts_with "~~" text || starts_with "~^" text || starts_with "~`" text then
+      String (String.sub text 1 (String.length text - 1))
+    else
+      String text
+  | `List (`String "^ " :: entries) ->
+    Map
+      (shallow_pairs entries
+       |> List.map (fun (key, value) ->
+         logseq_value_of_shallow_json reader key, logseq_value_of_shallow_json reader value))
+  | `List values -> List (List.map (logseq_value_of_shallow_json reader) values)
+  | `Assoc entries ->
+    Map
+      (entries
+       |> List.map (fun (key, value) ->
+         String (shallow_decode_string reader key), logseq_value_of_shallow_json reader value))
+  | `Tuple values -> List (List.map (logseq_value_of_shallow_json reader) values)
+  | `Variant (tag, value) ->
+    List
+      [ String (shallow_decode_string reader tag)
+      ; Option.value ~default:Nil (Option.map (logseq_value_of_shallow_json reader) value)
+      ]
+
+let logseq_attr_of_shallow_json reader = function
+  | `String text ->
+    let text = shallow_decode_string reader text in
+    if starts_with "~:" text then String.sub text 2 (String.length text - 2) else text
+  | _ -> invalid_arg "Logseq datom attr must be a Transit keyword string"
+
+let logseq_int_of_shallow_json reader = function
+  | `Int value -> value
+  | `Intlit value -> int_of_shallow_string value
+  | `String text ->
+    let text = shallow_decode_string reader text in
+    if starts_with "~i" text then int_of_shallow_string (String.sub text 2 (String.length text - 2))
+    else int_of_shallow_string text
+  | _ -> invalid_arg "Logseq datom integer field must be an integer"
+
+let logseq_datom_of_shallow_json reader = function
+  | `List [ entity; attr; value; tx ] ->
+    datom
+      ~e:(logseq_int_of_shallow_json reader entity)
+      ~a:(logseq_attr_of_shallow_json reader attr)
+      ~v:(logseq_value_of_shallow_json reader value)
+      ~tx:(logseq_int_of_shallow_json reader tx)
+      ()
+  | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
+
+let logseq_datoms_of_row content =
+  let reader = { shallow_cache = [||] } in
+  match Yojson.Safe.from_string content with
+  | `List (`String "^ " :: entries) ->
+    shallow_pairs entries
+    |> List.find_map (fun (key, value) ->
+      match shallow_keyword reader key, value with
+      | Some "keys", `List datoms -> Some (List.map (logseq_datom_of_shallow_json reader) datoms)
+      | _ ->
+        shallow_scan reader value;
+        None)
+    |> Option.value ~default:[]
+  | _ -> []
+
+let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
+  let limit_sql =
+    match limit with
+    | None -> ""
+    | Some limit -> " limit " ^ string_of_int limit
+  in
+  run_sql
+    ~read_only
+    db_path
+    ("select content from kvs where addr not in (0, 1) and content like '%~:keys%' order by addr"
+     ^ limit_sql
+     ^ ";")
+  |> String.split_on_char '\n'
+  |> List.filter (fun line -> String.trim line <> "")
+  |> List.concat_map logseq_datoms_of_row
+
 let delete_sql addresses =
   match addresses with
   | [] -> ""

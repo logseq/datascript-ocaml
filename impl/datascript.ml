@@ -7284,6 +7284,34 @@ and query_term_string = function
   | QSource source -> "$" ^ source
   | QWildcard -> "_"
 
+and query_output_var_string var =
+  if var = "_" then "_" else query_input_var_label var
+
+and query_output_binding_string = function
+  | [ var ] -> query_output_var_string var
+  | vars -> "[" ^ String.concat " " (List.map query_output_var_string vars) ^ "]"
+
+and query_call_string symbol terms =
+  "(" ^ String.concat " " (symbol :: List.map query_term_string terms) ^ ")"
+
+and numeric_predicate_symbol = function
+  | ZeroNumber -> "zero?"
+  | PositiveNumber -> "pos?"
+  | NegativeNumber -> "neg?"
+  | EvenInteger -> "even?"
+  | OddInteger -> "odd?"
+
+and arithmetic_op_symbol = function
+  | AddNumbers -> "+"
+  | SubtractNumbers -> "-"
+  | MultiplyNumbers -> "*"
+  | DivideNumbers -> "/"
+  | IncrementNumber -> "inc"
+  | DecrementNumber -> "dec"
+  | QuotientNumbers -> "quot"
+  | RemainderNumbers -> "rem"
+  | ModuloNumbers -> "mod"
+
 and query_clause_string = function
   | Pattern (e, a, v) ->
     "[" ^ String.concat " " (List.map query_term_string [ e; a; v ]) ^ "]"
@@ -7299,14 +7327,80 @@ and query_clause_string = function
     "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string [ e; a; v; tx; op ]) ^ "]"
   | SourceRelationPattern (source, terms) ->
     "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string terms) ^ "]"
+  | NumericPredicate (predicate, term) ->
+    "[" ^ query_call_string (numeric_predicate_symbol predicate) [ term ] ^ "]"
+  | ArithmeticValue (op, terms, output_var) ->
+    "["
+    ^ query_call_string (arithmetic_op_symbol op) terms
+    ^ " "
+    ^ query_output_var_string output_var
+    ^ "]"
+  | DynamicPredicate (name, terms) -> "[" ^ query_call_string name terms ^ "]"
+  | DynamicFunction (name, terms, output_vars) ->
+    "[" ^ query_call_string name terms ^ " " ^ query_output_binding_string output_vars ^ "]"
+  | DynamicFunctionCollection (name, terms, output_var) ->
+    "[" ^ query_call_string name terms ^ " [" ^ query_output_var_string output_var ^ " ...]]"
+  | DynamicFunctionRelation (name, terms, output_vars) ->
+    "["
+    ^ query_call_string name terms
+    ^ " [["
+    ^ String.concat " " (List.map query_output_var_string output_vars)
+    ^ "]]]"
   | Not clauses | SourceNot (_, clauses) -> query_not_clause_string clauses
+  | Or branches | SourceOr (_, branches) -> query_or_clause_string branches
+  | OrJoin (vars, branches) | SourceOrJoin (_, vars, branches) ->
+    query_or_join_clause_string [] vars branches
+  | OrJoinRequired (required_vars, vars, branches) | SourceOrJoinRequired (_, required_vars, vars, branches) ->
+    query_or_join_clause_string required_vars vars branches
   | clause -> "<" ^ string_of_int (List.length (vars_of_clause clause)) ^ "-var clause>"
 
 and query_not_clause_string clauses =
   "(not " ^ String.concat " " (List.map query_clause_string clauses) ^ ")"
 
+and query_branch_string = function
+  | [ clause ] -> query_clause_string clause
+  | clauses -> "(and " ^ String.concat " " (List.map query_clause_string clauses) ^ ")"
+
+and query_or_clause_string branches =
+  "(or " ^ String.concat " " (List.map query_branch_string branches) ^ ")"
+
+and query_or_join_vars_string required_vars vars =
+  let free = List.map query_input_var_label vars in
+  match required_vars with
+  | [] -> "[" ^ String.concat " " free ^ "]"
+  | required_vars ->
+    let required = "[" ^ String.concat " " (List.map query_input_var_label required_vars) ^ "]" in
+    "[" ^ String.concat " " (required :: free) ^ "]"
+
+and query_or_join_clause_string required_vars vars branches =
+  "(or-join "
+  ^ query_or_join_vars_string required_vars vars
+  ^ " "
+  ^ String.concat " " (List.map query_branch_string branches)
+  ^ ")"
+
 and query_var_set_string vars =
   "#{" ^ String.concat " " (List.map query_input_var_label vars) ^ "}"
+
+and query_var_sets_string var_sets =
+  "[" ^ String.concat " " (List.map query_var_set_string var_sets) ^ "]"
+
+and unbound_vars_of_terms bindings terms =
+  let bound_vars = List.map fst bindings in
+  terms
+  |> vars_of_query_terms
+  |> List.filter (fun var -> not (List.mem var bound_vars))
+  |> List.sort_uniq compare
+
+and ensure_query_terms_bound bindings terms clause_string =
+  match unbound_vars_of_terms bindings terms with
+  | [] -> ()
+  | unbound_vars ->
+    invalid_arg
+      ( "Insufficient bindings: "
+      ^ query_var_set_string unbound_vars
+      ^ " not bound in "
+      ^ clause_string )
 
 and ensure_not_has_outer_binding bindings clauses =
   let clause_vars = clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare in
@@ -7330,12 +7424,28 @@ and ensure_or_branch_vars_match bindings branches =
   match List.map (free_vars_of_branch bound_vars) branches with
   | [] | [ _ ] -> ()
   | expected :: rest ->
-    if List.exists (( <> ) expected) rest then invalid_arg "or branches must use same free vars"
+    let branch_vars = expected :: rest in
+    if List.exists (( <> ) expected) rest then
+      invalid_arg
+        ( "All clauses in 'or' must use same set of free vars, had "
+        ^ query_var_sets_string branch_vars
+        ^ " in "
+        ^ query_or_clause_string branches )
 
 and ensure_join_vars_bound bindings vars =
   let bound_vars = List.map fst bindings in
   if List.exists (fun var -> not (List.mem var bound_vars)) vars then
     invalid_arg "insufficient bindings"
+
+and ensure_join_vars_bound_in_clause bindings vars clause_string =
+  let bound_vars = List.map fst bindings in
+  let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) vars in
+  if unbound_vars <> [] then
+    invalid_arg
+      ( "Insufficient bindings: "
+      ^ query_var_set_string unbound_vars
+      ^ " not bound in "
+      ^ clause_string )
 
 and ensure_or_join_branches_cover_listed_vars bindings vars branches =
   let bound_vars = List.map fst bindings in
@@ -7411,7 +7521,9 @@ and eval_dynamic_predicate_clause callables db sources bindings name terms =
   match callable_predicate callables name with
   | Some predicate ->
     if predicate (collect_dynamic_query_terms_exn db sources bindings terms) then [ bindings ] else []
-  | None -> invalid_arg ("unknown predicate input: " ^ name)
+  | None ->
+    invalid_arg
+      ("Unknown predicate '" ^ name ^ " in " ^ query_clause_string (DynamicPredicate (name, terms)))
 
 and eval_dynamic_function_clause callables db sources bindings name terms output_vars =
   match callable_function callables name with
@@ -7422,7 +7534,9 @@ and eval_dynamic_function_clause callables db sources bindings name terms output
         | Some bindings -> [ bindings ]
         | None -> [])
      | None -> [])
-  | None -> invalid_arg ("unknown function input: " ^ name)
+  | None ->
+    invalid_arg
+      ("Unknown function '" ^ name ^ " in " ^ query_clause_string (DynamicFunction (name, terms, output_vars)))
 
 and eval_dynamic_function_collection_clause callables db sources bindings name terms output_var =
   match callable_function callables name with
@@ -7439,7 +7553,12 @@ and eval_dynamic_function_collection_clause callables db sources bindings name t
         | None -> [])
      | Some _ -> invalid_arg "dynamic collection function output must return one collection"
      | None -> [])
-  | None -> invalid_arg ("unknown function input: " ^ name)
+  | None ->
+    invalid_arg
+      ( "Unknown function '"
+      ^ name
+      ^ " in "
+      ^ query_clause_string (DynamicFunctionCollection (name, terms, output_var)) )
 
 and eval_dynamic_function_relation_clause callables db sources bindings name terms output_vars =
   match callable_function callables name with
@@ -7456,7 +7575,12 @@ and eval_dynamic_function_relation_clause callables db sources bindings name ter
         | None -> [])
      | Some _ -> invalid_arg "dynamic relation function output must return one collection"
      | None -> [])
-  | None -> invalid_arg ("unknown function input: " ^ name)
+  | None ->
+    invalid_arg
+      ( "Unknown function '"
+      ^ name
+      ^ " in "
+      ^ query_clause_string (DynamicFunctionRelation (name, terms, output_vars)) )
 
 and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sources rules bindings = function
   | Pattern (e_term, a_term, v_term) ->
@@ -7500,6 +7624,7 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
   | ValuePredicate (predicate, term) ->
     eval_type_predicate_clause db bindings predicate term
   | NumericPredicate (predicate, term) ->
+    ensure_query_terms_bound bindings [ term ] (query_clause_string (NumericPredicate (predicate, term)));
     eval_numeric_predicate_clause db bindings predicate term
   | ComparisonPredicate (predicate, left_term, right_term) ->
     eval_comparison_predicate_clause db bindings predicate left_term right_term
@@ -7508,6 +7633,7 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
   | EqualityPredicate (predicate, terms) ->
     eval_equality_predicate_clause db bindings predicate terms
   | ArithmeticValue (op, terms, output_var) ->
+    ensure_query_terms_bound bindings terms (query_clause_string (ArithmeticValue (op, terms, output_var)));
     eval_arithmetic_clause db bindings op terms output_var
   | CompareValue (left_term, right_term, output_var) ->
     eval_compare_value_clause db bindings left_term right_term output_var
@@ -7726,7 +7852,10 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
     |> List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables clause_db sources rules [ projected_binding ] clauses)
     |> List.filter_map (merge_projected_binding clause_db vars bindings)
   | OrJoinRequired (required_vars, vars, branches) ->
-    ensure_join_vars_bound bindings required_vars;
+    ensure_join_vars_bound_in_clause
+      bindings
+      required_vars
+      (query_or_join_clause_string required_vars vars branches);
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding (required_vars @ vars |> List.sort_uniq compare) bindings in
     branches
@@ -7734,7 +7863,10 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
     |> List.filter_map (merge_projected_binding db vars bindings)
   | SourceOrJoinRequired (source, required_vars, vars, branches) ->
     let clause_db = source_db db sources source in
-    ensure_join_vars_bound bindings required_vars;
+    ensure_join_vars_bound_in_clause
+      bindings
+      required_vars
+      (query_or_join_clause_string required_vars vars branches);
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding (required_vars @ vars |> List.sort_uniq compare) bindings in
     branches
@@ -7808,6 +7940,9 @@ let query_symbol_name symbol =
     String.sub symbol 1 (String.length symbol - 1)
   else
     invalid_arg ("expected query variable symbol: " ^ symbol)
+
+let query_callable_name symbol =
+  if String.length symbol > 1 && symbol.[0] = '?' then query_symbol_name symbol else symbol
 
 let is_plain_input_symbol symbol =
   String.length symbol > 0
@@ -8307,7 +8442,7 @@ let parse_core_value_function symbol args output =
   | "rand", _ -> invalid_arg "rand requires no arguments"
   | "rand-int", [ bound ] -> RandomIntValue (parse_pattern_term bound, output_var)
   | "rand-int", _ -> invalid_arg "rand-int requires one argument"
-  | _ -> invalid_arg ("unsupported function: " ^ symbol)
+  | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, [ output_var ])
 
 let parse_collection_function symbol args output =
   let output_var = query_symbol_name output in
@@ -8505,8 +8640,13 @@ let parse_rule_var = function
 
 let ensure_distinct_rule_vars clause_name required free =
   let vars = required @ free in
-  if List.length vars <> List.length (List.sort_uniq compare vars) then
-    invalid_arg (clause_name ^ " rule variables must be distinct");
+  (if List.length vars <> List.length (List.sort_uniq compare vars) then
+    let message =
+      match clause_name with
+      | "rule" -> "Rule variables should be distinct"
+      | _ -> clause_name ^ " rule variables must be distinct"
+    in
+    invalid_arg message);
   required, free
 
 let parse_rule_vars clause_name = function
@@ -8676,7 +8816,7 @@ let rec parse_pattern_clause = function
         | QueryFormVector (QueryFormSymbol symbol :: args))
       ]
     when String.length symbol > 1 && symbol.[0] = '?' ->
-    DynamicPredicate (query_symbol_name symbol, List.map parse_pattern_term args)
+    DynamicPredicate (query_callable_name symbol, List.map parse_pattern_term args)
   | QueryFormVector
       [ (QueryFormList (QueryFormSymbol symbol :: args)
         | QueryFormVector (QueryFormSymbol symbol :: args))
@@ -8685,13 +8825,13 @@ let rec parse_pattern_clause = function
     when String.length symbol > 1 && symbol.[0] = '?' ->
     (match parse_collection_output_var output with
      | Some output_var ->
-       DynamicFunctionCollection (query_symbol_name symbol, List.map parse_pattern_term args, output_var)
+       DynamicFunctionCollection (query_callable_name symbol, List.map parse_pattern_term args, output_var)
      | None ->
        (match parse_relation_output_vars output with
         | Some output_vars ->
-          DynamicFunctionRelation (query_symbol_name symbol, List.map parse_pattern_term args, output_vars)
+          DynamicFunctionRelation (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
         | None ->
-          DynamicFunction (query_symbol_name symbol, List.map parse_pattern_term args, parse_output_vars output)))
+          DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, parse_output_vars output)))
   | QueryFormVector
       [ (QueryFormList [ QueryFormSymbol "empty?"; term ]
         | QueryFormVector [ QueryFormSymbol "empty?"; term ])
@@ -8858,8 +8998,7 @@ let rec parse_pattern_clause = function
      | _, _, _, _, Some _, _, _, _ ->
        invalid_arg ("predicate requires one argument: " ^ symbol)
      | None, None, None, None, None, None, None, _ ->
-       let rule_name, args = parse_rule_expr symbol args in
-       Rule (rule_name, args))
+       DynamicPredicate (query_callable_name symbol, List.map parse_pattern_term args))
   | QueryFormVector
       [ (QueryFormList (QueryFormSymbol symbol :: args)
         | QueryFormVector (QueryFormSymbol symbol :: args))
@@ -8916,9 +9055,23 @@ let validate_rule_arities rules =
     rules;
   rules
 
+let is_rule_head = function
+  | QueryFormVector (QueryFormSymbol _ :: _)
+  | QueryFormList (QueryFormSymbol _ :: _) -> true
+  | _ -> false
+
+let is_rule_form = function
+  | QueryFormVector (head :: _)
+  | QueryFormList (head :: _) -> is_rule_head head
+  | _ -> false
+
+let unwrap_extra_rules_nesting = function
+  | [ (QueryFormVector inner | QueryFormList inner) ] when List.for_all is_rule_form inner -> inner
+  | rules -> rules
+
 let parse_rules = function
   | Some (QueryFormVector rules | QueryFormList rules) ->
-    rules |> List.map parse_rule |> validate_rule_arities
+    unwrap_extra_rules_nesting rules |> List.map parse_rule |> validate_rule_arities
   | Some _ -> invalid_arg "query :rules must be a vector or list"
   | None -> []
 
@@ -9375,6 +9528,34 @@ let rec has_rule_clause = function
   | DynamicFunctionRelation _ ->
     false
 
+let rule_names rules =
+  rules |> List.map (fun rule -> rule.rule_name) |> List.sort_uniq compare
+
+let rec resolve_dynamic_rule_clause names = function
+  | DynamicPredicate (name, terms) when List.mem name names -> Rule (name, terms)
+  | SourceClause (source, DynamicPredicate (name, terms)) when List.mem name names ->
+    SourceRule (source, name, terms)
+  | SourceClause (source, clause) -> SourceClause (source, resolve_dynamic_rule_clause names clause)
+  | Not clauses -> Not (List.map (resolve_dynamic_rule_clause names) clauses)
+  | SourceNot (source, clauses) -> SourceNot (source, List.map (resolve_dynamic_rule_clause names) clauses)
+  | NotJoin (vars, clauses) -> NotJoin (vars, List.map (resolve_dynamic_rule_clause names) clauses)
+  | SourceNotJoin (source, vars, clauses) ->
+    SourceNotJoin (source, vars, List.map (resolve_dynamic_rule_clause names) clauses)
+  | Or branches -> Or (List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOr (source, branches) -> SourceOr (source, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | OrJoin (vars, branches) -> OrJoin (vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOrJoin (source, vars, branches) ->
+    SourceOrJoin (source, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | OrJoinRequired (required_vars, vars, branches) ->
+    OrJoinRequired (required_vars, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOrJoinRequired (source, required_vars, vars, branches) ->
+    SourceOrJoinRequired
+      (source, required_vars, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | clause -> clause
+
+let resolve_dynamic_rule names rule =
+  { rule with rule_body = List.map (resolve_dynamic_rule_clause names) rule.rule_body }
+
 let sources_of_find_spec = function
   | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> named_source source
   | Find_aggregate (_, terms) -> sources_of_query_terms terms
@@ -9585,13 +9766,19 @@ let parse_query_return form =
   let return, find = parse_find_return (query_form_section "find" entries) in
   let in_form = query_form_section "in" entries in
   ensure_distinct_input_rules_var in_form;
-  let where = parse_where (query_form_section "where" entries) in
+  let rules = parse_rules (query_form_section "rules" entries) in
+  let rule_names = rule_names rules in
+  let rules = List.map (resolve_dynamic_rule rule_names) rules in
+  let where =
+    parse_where (query_form_section "where" entries)
+    |> List.map (resolve_dynamic_rule_clause rule_names)
+  in
   let inputs = parse_inputs in_form |> infer_default_inputs in_form find where in
   let query =
     { find
     ; inputs
     ; with_vars = parse_with_section (query_form_section "with" entries)
-    ; rules = parse_rules (query_form_section "rules" entries)
+    ; rules
     ; where
     }
     |> validate_query

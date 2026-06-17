@@ -120,7 +120,60 @@ let test_existing_logseq_graph_is_recognized_read_only () =
       failwith "Logseq graph root should expose eavt/aevt/avet addresses";
     if before <> after then failwith "read-only inspection should not modify the graph file"
 
+let test_existing_logseq_graph_schema_supports_query_and_transact () =
+  if (not (sqlite3_available ())) || not (Sys.file_exists default_logseq_graph_db) then
+    prerr_endline "Skipping Logseq graph query/transact smoke: sqlite3 or demo graph is unavailable"
+  else
+    let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    let block_name_schema =
+      match List.assoc_opt "block/name" schema with
+      | Some schema -> schema
+      | None -> failwith "Logseq graph schema should expose :block/name"
+    in
+    if not block_name_schema.indexed then failwith ":block/name should be indexed in Logseq schema";
+    let db = empty_db ~schema () in
+    let report = transact db [ Add (Entity_id 1, "block/name", String "from-logseq-schema") ] in
+    assert_equal_int
+      "query synthetic datom with Logseq schema"
+      1
+      (List.length
+         (q_string
+            report.db_after
+            "[:find ?e :where [?e :block/name \"from-logseq-schema\"]]"));
+    if before <> after then failwith "read-only schema loading should not modify the graph file"
+
+let test_existing_logseq_graph_datoms_support_query_and_transact () =
+  if (not (sqlite3_available ())) || not (Sys.file_exists default_logseq_graph_db) then
+    prerr_endline "Skipping Logseq graph datom query/transact smoke: sqlite3 or demo graph is unavailable"
+  else
+    let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true ~limit:1 default_logseq_graph_db in
+    let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    if not (List.exists (fun datom -> datom.e = 1 && datom.a = "block/name" && datom.v = String "root tag") datoms)
+    then failwith "Logseq graph datoms should include the root tag page name";
+    let db = init_db ~schema datoms in
+    assert_equal_int
+      "query decoded Logseq graph datom"
+      1
+      (List.length (q_string db "[:find ?e :where [?e :block/name \"root tag\"]]"));
+    let report =
+      transact db [ Add (Entity_id 9_999_999, "block/name", String "ocaml local graph smoke") ]
+    in
+    assert_equal_int
+      "transact against decoded Logseq graph schema"
+      1
+      (List.length
+         (q_string
+            report.db_after
+            "[:find ?e :where [?e :block/name \"ocaml local graph smoke\"]]"));
+    if before <> after then failwith "read-only datom loading should not modify the graph file"
+
 let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
-  test_existing_logseq_graph_is_recognized_read_only ()
+  test_existing_logseq_graph_is_recognized_read_only ();
+  test_existing_logseq_graph_schema_supports_query_and_transact ();
+  test_existing_logseq_graph_datoms_support_query_and_transact ()

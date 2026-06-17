@@ -7583,7 +7583,7 @@ let test_parse_query_validates_structure () =
                [ QueryFormKeyword "find"
                ; QueryFormSymbol "?e"
                ; QueryFormKeyword "where"
-               ; QueryFormVector [ QueryFormList [ QueryFormSymbol "known"; QueryFormSymbol "?e" ] ]
+               ; QueryFormList [ QueryFormSymbol "known"; QueryFormSymbol "?e" ]
                ])));
   assert_raises_invalid_arg_message
     "parse_query rejects vector rule invocations without arguments"
@@ -7611,7 +7611,7 @@ let test_parse_query_validates_structure () =
                ; QueryFormKeyword "in"
                ; QueryFormSymbol "%"
                ; QueryFormKeyword "where"
-               ; QueryFormVector [ QueryFormList [ QueryFormSymbol "known" ] ]
+               ; QueryFormList [ QueryFormSymbol "known" ]
                ])));
   assert_raises_invalid_arg_message
     "parse_query rejects source-qualified list rule invocations without arguments"
@@ -7627,10 +7627,10 @@ let test_parse_query_validates_structure () =
                ; QueryFormSymbol "$people"
                ; QueryFormSymbol "%"
                ; QueryFormKeyword "where"
-               ; QueryFormVector [ QueryFormSymbol "$people"; QueryFormList [ QueryFormSymbol "known" ] ]
+               ; QueryFormList [ QueryFormSymbol "$people"; QueryFormSymbol "known" ]
                ])));
   assert_raises_invalid_arg_message
-    "parse_query rejects source-qualified wrapped vector rule invocations without arguments"
+    "parse_query rejects source-qualified vector rule invocations without arguments"
     "rule-expr requires at least one argument"
     (fun () ->
        ignore
@@ -7643,8 +7643,7 @@ let test_parse_query_validates_structure () =
                ; QueryFormSymbol "$people"
                ; QueryFormSymbol "%"
                ; QueryFormKeyword "where"
-               ; QueryFormVector
-                   [ QueryFormSymbol "$people"; QueryFormVector [ QueryFormSymbol "known" ] ]
+               ; QueryFormVector [ QueryFormSymbol "$people"; QueryFormSymbol "known" ]
                ])));
   assert_raises_invalid_arg
     "parse_query rejects undeclared named sources in where"
@@ -7843,7 +7842,23 @@ let test_parse_query_with_and_rules_match_upstream_messages () =
          (parse_query_string
             "[:find ?e :in % :where (rule ?e)
              :rules [[(rule ?x) [_]]
-                     [(rule ?x ?y) [_]]]"))
+                     [(rule ?x ?y) [_]]]]"));
+  assert_raises_invalid_arg_message
+    "parse_query rejects duplicate rule vars like upstream parser-rules"
+    "Rule variables should be distinct"
+    (fun () ->
+       ignore
+         (parse_query_string
+            "[:find ?e :in % :where (rule ?e)
+             :rules [[(rule ?x ?y ?x) [_]]]]"));
+  assert_raises_invalid_arg_message
+    "parse_query rejects duplicate required rule vars like upstream parser-rules"
+    "Rule variables should be distinct"
+    (fun () ->
+       ignore
+         (parse_query_string
+            "[:find ?e :in % :where (rule ?e)
+             :rules [[(rule [?x ?y] ?z ?x) [_]]]]"))
 
 let test_q_input_arity_matches_upstream_validation_messages () =
   let db = empty_db () in
@@ -9880,6 +9895,39 @@ let test_q_builtin_ground_bindings () =
          :in ?in
          :where [(ground ?in) [[?x _ ?z] ...]]]")
 
+let test_q_builtin_function_insufficient_bindings_match_upstream_messages () =
+  let db = empty_db () in
+  assert_raises_invalid_arg_message
+    "q predicate reports unknown callables like upstream query-fns"
+    "Unknown predicate 'fun in [(fun ?e)]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_collection [ Result_value (Int 1) ] ]
+            db
+            "[:find ?e
+              :in [?e ...]
+              :where [(fun ?e)]]"));
+  assert_raises_invalid_arg_message
+    "q function reports unknown callables like upstream query-fns"
+    "Unknown function 'fun in [(fun ?e) ?x]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_collection [ Result_value (Int 1) ] ]
+            db
+            "[:find ?e ?x
+              :in [?e ...]
+              :where [(fun ?e) ?x]]"));
+  assert_raises_invalid_arg_message
+    "q predicate reports insufficient bindings like upstream query-fns"
+    "Insufficient bindings: #{?x} not bound in [(zero? ?x)]"
+    (fun () -> ignore (q_string db "[:find ?x :where [(zero? ?x)]]"));
+  assert_raises_invalid_arg_message
+    "q function reports insufficient bindings like upstream query-fns"
+    "Insufficient bindings: #{?x} not bound in [(inc ?x) ?y]"
+    (fun () -> ignore (q_string db "[:find ?x :where [(inc ?x) ?y]]"))
+
 let test_q_not_filters_matching_bindings () =
   let db =
     empty_db ~schema:[ "likes", many ] ()
@@ -10163,6 +10211,29 @@ let test_q_or_rejects_branches_with_different_free_vars () =
                    ]
                ]
            }))
+
+let test_q_or_matches_upstream_error_messages () =
+  let db = empty_db () in
+  assert_raises_invalid_arg_message
+    "q or reports free-var branch mismatch like upstream"
+    "All clauses in 'or' must use same set of free vars, had [#{?e} #{?a ?e}] in (or [?e :name _] [?e :age ?a])"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?e
+              :where (or [?e :name _]
+                         [?e :age ?a])]"));
+  assert_raises_invalid_arg_message
+    "q or-join reports required vars not bound like upstream"
+    "Insufficient bindings: #{?e} not bound in (or-join [[?e]] [?e :name \"Ivan\"])"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?e
+              :where (or-join [[?e]]
+                       [?e :name \"Ivan\"])]"))
 
 let test_q_or_allows_branch_vars_bound_by_outer_clauses () =
   let db =
@@ -15467,6 +15538,67 @@ let test_filter_composes_and_rejects_writes () =
     "db_with rejects filtered db writes"
     (fun () -> ignore (db_with [ Add (Entity_id 3, "name", String "Oleg") ] filtered))
 
+let test_filter_predicates_read_unfiltered_db_like_upstream () =
+  let db =
+    empty_db ~schema:[ "aka", many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "aka", Many_values [ String "I"; String "Great" ]
+                 ; "password", One_value (String "<SECRET>")
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "aka", Many_values [ String "Terrible"; String "IV" ]
+                 ; "password", One_value (String "<PROTECTED>")
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 3)
+             ; attrs =
+                 [ "name", One_value (String "Nikolai")
+                 ; "aka", Many_values [ String "II" ]
+                 ; "password", One_value (String "<UNKNOWN>")
+                 ]
+             }
+         ]
+  in
+  let aka_count db entity_id =
+    match entity db (Entity_id entity_id) with
+    | Some entity ->
+      (match entity_attr entity "aka" with
+       | Some (Many_values values) -> List.length values
+       | Some (One_value _) -> 1
+       | Some (One_entity _) -> 1
+       | Some (Many_entities values) -> List.length values
+       | None -> 0)
+    | None -> 0
+  in
+  let remove_ivan _ datom = datom.e <> 2 in
+  let long_akas udb datom =
+    datom.a <> "aka" || aka_count udb datom.e <= 1 ||
+    (match datom.v with
+     | String value -> String.length value >= 4
+     | _ -> false)
+  in
+  let aka_query = "[:find ?v :where [_ :aka ?v]]" in
+  assert_equal_query_set
+    "filter predicate can read unfiltered entity attrs"
+    [ [ Result_value (String "Great") ]
+    ; [ Result_value (String "Terrible") ]
+    ; [ Result_value (String "II") ]
+    ]
+    (q_string (filter db long_akas) aka_query);
+  assert_equal_query_set
+    "composed filter predicates read the same unfiltered base"
+    [ [ Result_value (String "Great") ]; [ Result_value (String "II") ] ]
+    (q_string (filter db remove_ivan |> fun db -> filter db long_akas) aka_query)
+
 let test_schema_and_with_schema () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
@@ -16418,6 +16550,7 @@ let () =
   test_q_untuple_ignores_placeholder_outputs ();
   test_q_untuple_accepts_list_values ();
   test_q_builtin_ground_bindings ();
+  test_q_builtin_function_insufficient_bindings_match_upstream_messages ();
   test_q_not_filters_matching_bindings ();
   test_q_not_rejects_clauses_without_outer_bindings ();
   test_q_not_insufficient_bindings_match_upstream_messages ();
@@ -16426,6 +16559,7 @@ let () =
   test_q_not_matches_upstream_edge_cases ();
   test_q_or_unions_branch_results ();
   test_q_or_rejects_branches_with_different_free_vars ();
+  test_q_or_matches_upstream_error_messages ();
   test_q_or_allows_branch_vars_bound_by_outer_clauses ();
   test_q_or_join_projects_join_variables ();
   test_q_or_join_binds_listed_branch_variables ();
@@ -16561,6 +16695,7 @@ let () =
   test_pull_many_preserves_missing_entities ();
   test_filter_limits_read_apis ();
   test_filter_composes_and_rejects_writes ();
+  test_filter_predicates_read_unfiltered_db_like_upstream ();
   test_schema_and_with_schema ();
   test_schema_transactions_install_schema_attrs ();
   test_schema_accepts_db_type_alias ();
