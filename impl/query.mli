@@ -108,6 +108,14 @@ val query_output_binding_string : string list -> string
 val query_call_string : value_to_string:(value -> string) -> string -> query_term list -> string
 val numeric_predicate_symbol : numeric_predicate -> string
 val arithmetic_op_symbol : arithmetic_op -> string
+val query_clause_string : value_to_string:(value -> string) -> query_clause -> string
+val query_not_clause_string : value_to_string:(value -> string) -> query_clause list -> string
+val query_or_clause_string : value_to_string:(value -> string) -> query_clause list list -> string
+val query_or_join_vars_string : string list -> string list -> string
+val query_or_join_clause_string :
+  value_to_string:(value -> string) -> string list -> string list -> query_clause list list -> string
+val query_var_set_string : string list -> string
+val query_var_sets_string : string list list -> string
 val query_input_binding_string : input_binding -> string
 val query_input_decl_binding_string : query_input -> string
 val query_input_binding_label : query_input -> string

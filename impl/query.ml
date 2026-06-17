@@ -507,6 +507,113 @@ let arithmetic_op_symbol = function
   | RemainderNumbers -> "rem"
   | ModuloNumbers -> "mod"
 
+let rec query_clause_string ~value_to_string = function
+  | Pattern (e, a, v) ->
+    "["
+    ^ String.concat " " (List.map (query_term_string ~value_to_string) [ e; a; v ])
+    ^ "]"
+  | PatternTx (e, a, v, tx) ->
+    "["
+    ^ String.concat " " (List.map (query_term_string ~value_to_string) [ e; a; v; tx ])
+    ^ "]"
+  | PatternTxOp (e, a, v, tx, op) ->
+    "["
+    ^ String.concat " " (List.map (query_term_string ~value_to_string) [ e; a; v; tx; op ])
+    ^ "]"
+  | SourcePattern (source, e, a, v) ->
+    "["
+    ^ String.concat " " (("$" ^ source) :: List.map (query_term_string ~value_to_string) [ e; a; v ])
+    ^ "]"
+  | SourcePatternTx (source, e, a, v, tx) ->
+    "["
+    ^ String.concat " " (("$" ^ source) :: List.map (query_term_string ~value_to_string) [ e; a; v; tx ])
+    ^ "]"
+  | SourcePatternTxOp (source, e, a, v, tx, op) ->
+    "["
+    ^ String.concat " " (("$" ^ source) :: List.map (query_term_string ~value_to_string) [ e; a; v; tx; op ])
+    ^ "]"
+  | SourceRelationPattern (source, terms) ->
+    "["
+    ^ String.concat " " (("$" ^ source) :: List.map (query_term_string ~value_to_string) terms)
+    ^ "]"
+  | NumericPredicate (predicate, term) ->
+    "[" ^ query_call_string ~value_to_string (numeric_predicate_symbol predicate) [ term ] ^ "]"
+  | ReFindPredicate (pattern, value) ->
+    "[" ^ query_call_string ~value_to_string "re-find" [ pattern; value ] ^ "]"
+  | ReMatchesPredicate (pattern, value) ->
+    "[" ^ query_call_string ~value_to_string "re-matches" [ pattern; value ] ^ "]"
+  | ArithmeticValue (op, terms, output_var) ->
+    "["
+    ^ query_call_string ~value_to_string (arithmetic_op_symbol op) terms
+    ^ " "
+    ^ query_output_var_string output_var
+    ^ "]"
+  | DynamicPredicate (name, terms) ->
+    "[" ^ query_call_string ~value_to_string name terms ^ "]"
+  | DynamicFunction (name, terms, output_vars) ->
+    "["
+    ^ query_call_string ~value_to_string name terms
+    ^ " "
+    ^ query_output_binding_string output_vars
+    ^ "]"
+  | DynamicFunctionCollection (name, terms, output_var) ->
+    "["
+    ^ query_call_string ~value_to_string name terms
+    ^ " ["
+    ^ query_output_var_string output_var
+    ^ " ...]]"
+  | DynamicFunctionRelation (name, terms, output_vars) ->
+    "["
+    ^ query_call_string ~value_to_string name terms
+    ^ " [["
+    ^ String.concat " " (List.map query_output_var_string output_vars)
+    ^ "]]]"
+  | Not clauses | SourceNot (_, clauses) -> query_not_clause_string ~value_to_string clauses
+  | Or branches | SourceOr (_, branches) -> query_or_clause_string ~value_to_string branches
+  | OrJoin (vars, branches) | SourceOrJoin (_, vars, branches) ->
+    query_or_join_clause_string ~value_to_string [] vars branches
+  | OrJoinRequired (required_vars, vars, branches) | SourceOrJoinRequired (_, required_vars, vars, branches) ->
+    query_or_join_clause_string ~value_to_string required_vars vars branches
+  | clause -> "<" ^ string_of_int (List.length (vars_of_clause clause)) ^ "-var clause>"
+
+and query_not_clause_string ~value_to_string clauses =
+  "(not "
+  ^ String.concat " " (List.map (query_clause_string ~value_to_string) clauses)
+  ^ ")"
+
+and query_branch_string ~value_to_string = function
+  | [ clause ] -> query_clause_string ~value_to_string clause
+  | clauses ->
+    "(and "
+    ^ String.concat " " (List.map (query_clause_string ~value_to_string) clauses)
+    ^ ")"
+
+and query_or_clause_string ~value_to_string branches =
+  "(or "
+  ^ String.concat " " (List.map (query_branch_string ~value_to_string) branches)
+  ^ ")"
+
+and query_or_join_vars_string required_vars vars =
+  let free = List.map query_input_var_label vars in
+  match required_vars with
+  | [] -> "[" ^ String.concat " " free ^ "]"
+  | required_vars ->
+    let required = "[" ^ String.concat " " (List.map query_input_var_label required_vars) ^ "]" in
+    "[" ^ String.concat " " (required :: free) ^ "]"
+
+and query_or_join_clause_string ~value_to_string required_vars vars branches =
+  "(or-join "
+  ^ query_or_join_vars_string required_vars vars
+  ^ " "
+  ^ String.concat " " (List.map (query_branch_string ~value_to_string) branches)
+  ^ ")"
+
+let query_var_set_string vars =
+  "#{" ^ String.concat " " (List.map query_input_var_label vars) ^ "}"
+
+let query_var_sets_string var_sets =
+  "[" ^ String.concat " " (List.map query_var_set_string var_sets) ^ "]"
+
 let rec query_input_binding_string = function
   | Bind_scalar var -> query_input_var_label var
   | Bind_ignore -> "_"

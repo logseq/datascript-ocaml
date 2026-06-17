@@ -426,6 +426,7 @@ let test_query_namespace__test_query_string_helpers () =
   let value_to_string = function
     | String value -> "\"" ^ value ^ "\""
     | Keyword value -> ":" ^ value
+    | Bool value -> if value then "true" else "false"
     | Int value -> string_of_int value
     | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
   in
@@ -467,6 +468,72 @@ let test_query_namespace__test_query_string_helpers () =
     "mod"
     (Query.arithmetic_op_symbol ModuloNumbers)
 
+let test_query_namespace__test_query_clause_string_helpers () =
+  let value_to_string = function
+    | String value -> "\"" ^ value ^ "\""
+    | Keyword value -> ":" ^ value
+    | Bool value -> if value then "true" else "false"
+    | Int value -> string_of_int value
+    | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
+  in
+  assert_equal_string
+    "query_clause_string formats data patterns"
+    "[?e :name \"Ivan\"]"
+    (Query.query_clause_string
+       ~value_to_string
+       (Pattern (QVar "e", QAttr "name", QValue (String "Ivan"))));
+  assert_equal_string
+    "query_clause_string formats source relation patterns"
+    "[$other ?name :active]"
+    (Query.query_clause_string
+       ~value_to_string
+       (SourceRelationPattern ("other", [ QVar "name"; QValue (Keyword "active") ])));
+  assert_equal_string
+    "query_clause_string formats dynamic collection functions"
+    "[(children ?e) [?child ...]]"
+    (Query.query_clause_string
+       ~value_to_string
+       (DynamicFunctionCollection ("children", [ QVar "e" ], "child")));
+  assert_equal_string
+    "query_clause_string formats dynamic relation functions"
+    "[(pairs ?e) [[?left _]]]"
+    (Query.query_clause_string
+       ~value_to_string
+       (DynamicFunctionRelation ("pairs", [ QVar "e" ], [ "left"; "_" ])));
+  assert_equal_string
+    "query_clause_string formats not clauses"
+    "(not [?e :hidden true])"
+    (Query.query_clause_string
+       ~value_to_string
+       (Not [ Pattern (QVar "e", QAttr "hidden", QValue (Bool true)) ]));
+  assert_equal_string
+    "query_clause_string formats required or-join vars"
+    "(or-join [[?e] ?name] [?e :name ?name] (and [?other :name ?name] [?other :kind :person]))"
+    (Query.query_clause_string
+       ~value_to_string
+       (OrJoinRequired
+          ( [ "e" ]
+          , [ "name" ]
+          , [ [ Pattern (QVar "e", QAttr "name", QVar "name") ]
+            ; [ Pattern (QVar "other", QAttr "name", QVar "name")
+              ; Pattern (QVar "other", QAttr "kind", QValue (Keyword "person"))
+              ]
+            ] )));
+  assert_equal_string
+    "query_clause_string formats unknown clauses by var count"
+    "<2-var clause>"
+    (Query.query_clause_string
+       ~value_to_string
+       (NotJoin ([ "e" ], [ Pattern (QVar "e", QAttr "name", QVar "name") ])));
+  assert_equal_string
+    "query_var_set_string formats query variables"
+    "#{?a ?b}"
+    (Query.query_var_set_string [ "a"; "b" ]);
+  assert_equal_string
+    "query_var_sets_string formats query var set collections"
+    "[#{?a} #{}]"
+    (Query.query_var_sets_string [ [ "a" ]; [] ])
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
@@ -477,4 +544,5 @@ let () =
   test_query_namespace__test_callable_helpers ();
   test_query_namespace__test_rule_helpers ();
   test_query_namespace__test_variable_discovery_helpers ();
-  test_query_namespace__test_query_string_helpers ()
+  test_query_namespace__test_query_string_helpers ();
+  test_query_namespace__test_query_clause_string_helpers ()
