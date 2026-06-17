@@ -249,3 +249,81 @@ let aggregate_input_values aggregate extra_args values =
   | SampleVar _
   | CustomVar _ ->
     values
+
+let query_input_var_label var =
+  if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
+
+let rec query_input_binding_string = function
+  | Bind_scalar var -> query_input_var_label var
+  | Bind_ignore -> "_"
+  | Bind_collection binding -> "[" ^ query_input_binding_string binding ^ " ...]"
+  | Bind_tuple bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
+
+let query_input_decl_binding_string = function
+  | Input_collection_decl var -> "[" ^ query_input_var_label var ^ " ...]"
+  | Input_tuple_decl vars -> "[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]"
+  | Input_relation_decl vars -> "[[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]]"
+  | Input_nested_collection_decl binding -> "[" ^ query_input_binding_string binding ^ " ...]"
+  | Input_nested_tuple_decl bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
+  | Input_nested_relation_decl bindings ->
+    "[[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]]"
+  | Input_scalar_decl var -> query_input_var_label var
+  | Input_collection_ignore_decl -> "[_ ...]"
+  | Input_ignore_decl -> "_"
+  | Input_rules_decl -> "%"
+  | Input_source_decl source -> source
+  | _ -> "[...]"
+
+let query_input_binding_label = function
+  | Input_scalar_decl var
+  | Input_collection_decl var -> query_input_var_label var
+  | Input_collection_ignore_decl
+  | Input_ignore_decl -> "_"
+  | Input_rules_decl -> "%"
+  | Input_source_decl source -> source
+  | Input_nested_collection_decl _
+  | Input_tuple_decl _
+  | Input_relation_decl _
+  | Input_nested_tuple_decl _
+  | Input_nested_relation_decl _ -> "[...]"
+  | Input_scalar (var, _)
+  | Input_entity_ref (var, _)
+  | Input_collection (var, _)
+  | Input_predicate (var, _)
+  | Input_function (var, _)
+  | Input_aggregate (var, _) -> query_input_var_label var
+  | Input_rules _ -> "%"
+  | Input_collection_ignore _
+  | Input_ignore -> "_"
+  | Input_nested_collection _
+  | Input_tuple _
+  | Input_relation _
+  | Input_nested_tuple _
+  | Input_nested_relation _ -> "[...]"
+
+let query_input_consumes_argument ~consume_rules = function
+  | Input_rules_decl -> consume_rules
+  | Input_scalar_decl _
+  | Input_collection_decl _
+  | Input_collection_ignore_decl
+  | Input_ignore_decl
+  | Input_nested_collection_decl _
+  | Input_tuple_decl _
+  | Input_relation_decl _
+  | Input_nested_tuple_decl _
+  | Input_nested_relation_decl _ -> true
+  | Input_source_decl _
+  | Input_scalar _
+  | Input_entity_ref _
+  | Input_collection _
+  | Input_collection_ignore _
+  | Input_nested_collection _
+  | Input_tuple _
+  | Input_relation _
+  | Input_nested_tuple _
+  | Input_nested_relation _
+  | Input_predicate _
+  | Input_function _
+  | Input_aggregate _
+  | Input_rules _
+  | Input_ignore -> false

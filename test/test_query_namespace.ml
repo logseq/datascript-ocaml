@@ -14,6 +14,9 @@ let assert_equal_grouped_bindings label expected actual =
 let assert_equal_string_list label expected actual =
   if expected <> actual then failf "%s: expected a different string list" label
 
+let assert_equal_string label expected actual =
+  if expected <> actual then failf "%s: expected %S but got %S" label expected actual
+
 let assert_equal_aggregate label expected actual =
   if expected <> actual then failf "%s: expected a different aggregate" label
 
@@ -131,7 +134,44 @@ let test_query_namespace__test_find_grouping_helpers () =
        ; Find_aggregate (Count, [ QVar "age" ])
        ])
 
+let test_query_namespace__test_input_label_helpers () =
+  assert_equal_string "query_input_var_label adds a question mark" "?name" (Query.query_input_var_label "name");
+  assert_equal_string
+    "query_input_var_label preserves existing query prefixes"
+    "$source"
+    (Query.query_input_var_label "$source");
+  assert_equal_string
+    "query_input_binding_string formats nested tuple bindings"
+    "[?name [_ ...] [?city ?country]]"
+    (Query.query_input_binding_string
+       (Bind_tuple
+          [ Bind_scalar "name"
+          ; Bind_collection Bind_ignore
+          ; Bind_tuple [ Bind_scalar "city"; Bind_scalar "?country" ]
+          ]));
+  assert_equal_string
+    "query_input_decl_binding_string formats relation declarations"
+    "[[?name ?age]]"
+    (Query.query_input_decl_binding_string (Input_relation_decl [ "name"; "age" ]));
+  assert_equal_string
+    "query_input_binding_label formats rules declarations"
+    "%"
+    (Query.query_input_binding_label Input_rules_decl);
+  assert_equal_string
+    "query_input_binding_label formats bound scalar inputs"
+    "?name"
+    (Query.query_input_binding_label (Input_scalar ("name", Result_value (String "Ivan"))));
+  if not (Query.query_input_consumes_argument ~consume_rules:true Input_rules_decl) then
+    failwith "rules input should consume an argument when requested";
+  if Query.query_input_consumes_argument ~consume_rules:false Input_rules_decl then
+    failwith "rules input should not consume an argument when rules are implicit";
+  if not (Query.query_input_consumes_argument ~consume_rules:false (Input_tuple_decl [ "name" ])) then
+    failwith "tuple declarations should consume query input arguments";
+  if Query.query_input_consumes_argument ~consume_rules:true (Input_source_decl "$other") then
+    failwith "source declarations should not consume query input arguments"
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
-  test_query_namespace__test_find_grouping_helpers ()
+  test_query_namespace__test_find_grouping_helpers ();
+  test_query_namespace__test_input_label_helpers ()

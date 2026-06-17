@@ -3896,29 +3896,9 @@ let apply_query_input db bindings = function
   | Input_rules_decl ->
     bindings
 
-let query_input_var_label var =
-  if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
+let query_input_var_label = Query.query_input_var_label
 
-let rec query_input_binding_string = function
-  | Bind_scalar var -> query_input_var_label var
-  | Bind_ignore -> "_"
-  | Bind_collection binding -> "[" ^ query_input_binding_string binding ^ " ...]"
-  | Bind_tuple bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
-
-let query_input_decl_binding_string = function
-  | Input_collection_decl var -> "[" ^ query_input_var_label var ^ " ...]"
-  | Input_tuple_decl vars -> "[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]"
-  | Input_relation_decl vars -> "[[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]]"
-  | Input_nested_collection_decl binding -> "[" ^ query_input_binding_string binding ^ " ...]"
-  | Input_nested_tuple_decl bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
-  | Input_nested_relation_decl bindings ->
-    "[[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]]"
-  | Input_scalar_decl var -> query_input_var_label var
-  | Input_collection_ignore_decl -> "[_ ...]"
-  | Input_ignore_decl -> "_"
-  | Input_rules_decl -> "%"
-  | Input_source_decl source -> source
-  | _ -> "[...]"
+let query_input_decl_binding_string = Query.query_input_decl_binding_string
 
 let query_result_input_string = function
   | Result_value value -> edn_string_of_value value
@@ -4054,59 +4034,9 @@ let query_input_of_arg decl arg =
     | Input_rules_decl), _ ->
     invalid_arg "bound query inputs do not consume supplied arguments"
 
-let query_input_binding_label = function
-  | Input_scalar_decl var
-  | Input_collection_decl var -> query_input_var_label var
-  | Input_collection_ignore_decl
-  | Input_ignore_decl -> "_"
-  | Input_rules_decl -> "%"
-  | Input_source_decl source -> source
-  | Input_nested_collection_decl _
-  | Input_tuple_decl _
-  | Input_relation_decl _
-  | Input_nested_tuple_decl _
-  | Input_nested_relation_decl _ -> "[...]"
-  | Input_scalar (var, _)
-  | Input_entity_ref (var, _)
-  | Input_collection (var, _)
-  | Input_predicate (var, _)
-  | Input_function (var, _)
-  | Input_aggregate (var, _) -> query_input_var_label var
-  | Input_rules _ -> "%"
-  | Input_collection_ignore _
-  | Input_ignore -> "_"
-  | Input_nested_collection _
-  | Input_tuple _
-  | Input_relation _
-  | Input_nested_tuple _
-  | Input_nested_relation _ -> "[...]"
+let query_input_binding_label = Query.query_input_binding_label
 
-let query_input_consumes_argument ~consume_rules = function
-  | Input_rules_decl -> consume_rules
-  | Input_scalar_decl _
-  | Input_collection_decl _
-  | Input_collection_ignore_decl
-  | Input_ignore_decl
-  | Input_nested_collection_decl _
-  | Input_tuple_decl _
-  | Input_relation_decl _
-  | Input_nested_tuple_decl _
-  | Input_nested_relation_decl _ -> true
-  | Input_source_decl _
-  | Input_scalar _
-  | Input_entity_ref _
-  | Input_collection _
-  | Input_collection_ignore _
-  | Input_nested_collection _
-  | Input_tuple _
-  | Input_relation _
-  | Input_nested_tuple _
-  | Input_nested_relation _
-  | Input_predicate _
-  | Input_function _
-  | Input_aggregate _
-  | Input_rules _
-  | Input_ignore -> false
+let query_input_consumes_argument = Query.query_input_consumes_argument
 
 let query_input_arity_error ~consume_rules declarations provided =
   let labels =
@@ -7190,6 +7120,11 @@ module Query = struct
   let aggregate_callable_vars = Query_impl.aggregate_callable_vars
   let split_aggregate_terms = Query_impl.split_aggregate_terms
   let aggregate_input_values = Query_impl.aggregate_input_values
+  let query_input_var_label = Query_impl.query_input_var_label
+  let query_input_binding_string = Query_impl.query_input_binding_string
+  let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
+  let query_input_binding_label = Query_impl.query_input_binding_label
+  let query_input_consumes_argument = Query_impl.query_input_consumes_argument
 end
 
 let q = Query.q

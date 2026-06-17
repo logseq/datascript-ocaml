@@ -406,6 +406,11 @@ module Query : sig
   val aggregate_callable_vars : aggregate -> string list
   val split_aggregate_terms : query_term list -> query_term list * query_term
   val aggregate_input_values : aggregate -> query_result list -> query_result list -> query_result list
+  val query_input_var_label : string -> string
+  val query_input_binding_string : input_binding -> string
+  val query_input_decl_binding_string : query_input -> string
+  val query_input_binding_label : query_input -> string
+  val query_input_consumes_argument : consume_rules:bool -> query_input -> bool
 end
 
 val q : ?inputs:query_arg list -> db -> query -> query_result list list
