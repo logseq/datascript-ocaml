@@ -14566,6 +14566,77 @@ let test_storage_backed_connections_restore_and_continue () =
       [ 1, "name", String "Ivan"; 2, "name", String "Petr"; 3, "name", String "Oleg" ]
       (datoms db Eavt ())
 
+let test_storage_backed_connections_compact_overflowing_tail () =
+  let storage = memory_storage () in
+  let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
+  let stored_tail () =
+    match storage.storage_restore "datascript/tail" with
+    | Some (Storage_tail tail) -> tail
+    | Some (Storage_db _) -> failwith "storage tail address should contain a tail payload"
+    | None -> failwith "storage-backed conn should always keep a tail payload"
+  in
+  let count_tail_datoms tail =
+    tail |> List.concat |> List.length
+  in
+  ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
+  ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Oleg") ]);
+  ignore
+    (transact_conn
+       conn
+       (List.init 30 (fun index ->
+          let entity_id = index + 3 in
+          Add (Entity_id entity_id, "name", String (string_of_int entity_id)))));
+  let tail = stored_tail () in
+  assert_equal_int "storage tail keeps groups before overflow" 3 (List.length tail);
+  assert_equal_int "storage tail keeps datoms before overflow" 32 (count_tail_datoms tail);
+  ignore (transact_conn conn [ Add (Entity_id 33, "name", String "Petr") ]);
+  if stored_tail () <> [] then
+    failwith "storage-backed conn should compact and clear an overflowing tail";
+  (match restore storage with
+   | None -> failwith "storage should restore after tail compaction"
+   | Some db ->
+     assert_equal_triples
+       "compacted storage root should include all datoms through the overflow tx"
+       (List.init 33 (fun index ->
+          let entity_id = index + 1 in
+          let name =
+            match entity_id with
+            | 1 -> "Ivan"
+            | 2 -> "Oleg"
+            | 33 -> "Petr"
+            | _ -> string_of_int entity_id
+          in
+          entity_id, "name", String name))
+       (datoms db Eavt ()));
+  ignore (transact_conn conn [ Add (Entity_id 34, "name", String "Anna") ]);
+  let tail = stored_tail () in
+  assert_equal_int "storage tail starts over after compaction" 1 (List.length tail);
+  assert_equal_int "storage tail stores later datoms after compaction" 1 (count_tail_datoms tail);
+  let restored =
+    match restore_conn storage with
+    | Some conn -> conn
+    | None -> failwith "restore_conn should restore compacted storage"
+  in
+  assert_equal_triples
+    "restore_conn should replay fresh tail after compaction"
+    [ 34, "name", String "Anna" ]
+    (datoms (conn_db restored) Eavt ~e:34 ());
+  ignore
+    (transact_conn
+       restored
+       (List.init 44 (fun index ->
+          let entity_id = index + 35 in
+          Add (Entity_id entity_id, "name", String (string_of_int entity_id)))));
+  if stored_tail () <> [] then
+    failwith "restored storage-backed conn should compact overflowing tail";
+  match restore storage with
+  | None -> failwith "storage should restore after restored-conn compaction"
+  | Some db ->
+    assert_equal_triples
+      "restored-conn compaction should keep later transactions"
+      [ 34, "name", String "Anna"; 78, "name", String "78" ]
+      (List.filter (fun datom -> datom.e = 34 || datom.e = 78) (datoms db Eavt ()))
+
 let test_storage_backed_connections_honor_skip_store_metadata () =
   let storage = memory_storage () in
   let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
@@ -18044,6 +18115,7 @@ let () =
   test_bang_connection_api_aliases ();
   test_connection_reports_strip_skip_store_metadata ();
   test_storage_backed_connections_restore_and_continue ();
+  test_storage_backed_connections_compact_overflowing_tail ();
   test_storage_backed_connections_honor_skip_store_metadata ();
   test_storage_backed_conn_from_db_and_datoms_store_initial_root ();
   test_retract_entity_removes_entity_and_incoming_refs ();

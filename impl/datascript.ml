@@ -994,6 +994,11 @@ let store ?storage db =
 let store_tail storage tail =
   storage.storage_store [ storage_tail_address, Storage_tail tail ] []
 
+let storage_tail_compaction_threshold = 32
+
+let storage_tail_datom_count tail =
+  tail |> List.concat |> List.length
+
 let restore_root_snapshot storage =
   match storage.storage_restore storage_root_address with
   | Some (Storage_db snapshot) -> Some snapshot
@@ -2831,8 +2836,14 @@ let transact_conn ?(tx_meta = []) conn tx_data =
      | None -> ()
      | Some storage ->
        if report.tx_data <> [] then begin
-         conn.storage_tail <- conn.storage_tail @ [ report.tx_data ];
-         store_tail storage conn.storage_tail
+         let tail = conn.storage_tail @ [ report.tx_data ] in
+         if storage_tail_datom_count tail > storage_tail_compaction_threshold then begin
+           store ~storage report.db_after;
+           conn.storage_tail <- []
+         end else begin
+           conn.storage_tail <- tail;
+           store_tail storage conn.storage_tail
+         end
        end);
   notify_listeners conn report;
   report
