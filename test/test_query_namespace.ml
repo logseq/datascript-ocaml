@@ -5,6 +5,9 @@ let failf fmt = Printf.ksprintf failwith fmt
 let assert_equal_query label expected actual =
   if expected <> actual then failf "%s: unexpected query result" label
 
+let assert_equal_query_rows label expected actual =
+  if expected <> actual then failf "%s: unexpected query rows" label
+
 let assert_equal_query_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional query result" label
 
@@ -170,8 +173,44 @@ let test_query_namespace__test_input_label_helpers () =
   if Query.query_input_consumes_argument ~consume_rules:true (Input_source_decl "$other") then
     failwith "source declarations should not consume query input arguments"
 
+let test_query_namespace__test_input_shape_helpers () =
+  assert_equal_query_option
+    "values_of_collection_result unwraps vectors"
+    (Some [ Result_value (String "a"); Result_value (String "b") ])
+    (Query.values_of_collection_result (Result_value (Vector [ String "a"; String "b" ])));
+  assert_equal_query_option
+    "values_of_collection_result drops tuple nil slots"
+    (Some [ Result_value (Int 1); Result_value (Int 3) ])
+    (Query.values_of_collection_result (Result_value (Tuple [ Some (Int 1); None; Some (Int 3) ])));
+  assert_equal_query_option
+    "values_of_collection_result rejects scalar values"
+    None
+    (Query.values_of_collection_result (Result_value (String "not-a-collection")));
+  assert_equal_query
+    "row_of_collection_result preserves tuple nil slots"
+    [ Result_value (Int 1); Result_value Nil; Result_value (Int 3) ]
+    (Query.row_of_collection_result (Result_value (Tuple [ Some (Int 1); None; Some (Int 3) ])));
+  assert_equal_query
+    "row_of_collection_result wraps scalar values"
+    [ Result_value (String "scalar") ]
+    (Query.row_of_collection_result (Result_value (String "scalar")));
+  assert_equal_query
+    "row_of_scalar_sequence unwraps scalar sequence values"
+    [ Result_value (Keyword "left"); Result_value (Keyword "right") ]
+    (Query.row_of_scalar_sequence (Result_value (List [ Keyword "left"; Keyword "right" ])));
+  assert_raises_invalid_arg "row_of_scalar_sequence rejects non-sequence scalars" (fun () ->
+    ignore (Query.row_of_scalar_sequence (Result_value (Keyword "value"))));
+  assert_equal_query_rows
+    "rows_of_map_entries converts map entries to relation rows"
+    [ [ Result_value (Keyword "a"); Result_value (Int 1) ]
+    ; [ Result_value (Keyword "b"); Result_value (Vector [ Int 2; Int 3 ]) ]
+    ]
+    (Query.rows_of_map_entries
+       [ Keyword "a", Int 1; Keyword "b", Vector [ Int 2; Int 3 ] ])
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
-  test_query_namespace__test_input_label_helpers ()
+  test_query_namespace__test_input_label_helpers ();
+  test_query_namespace__test_input_shape_helpers ()

@@ -411,6 +411,10 @@ module Query : sig
   val query_input_decl_binding_string : query_input -> string
   val query_input_binding_label : query_input -> string
   val query_input_consumes_argument : consume_rules:bool -> query_input -> bool
+  val values_of_collection_result : query_result -> query_result list option
+  val row_of_collection_result : query_result -> query_result list
+  val row_of_scalar_sequence : query_result -> query_result list
+  val rows_of_map_entries : (value * value) list -> query_result list list
 end
 
 val q : ?inputs:query_arg list -> db -> query -> query_result list list

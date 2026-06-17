@@ -327,3 +327,24 @@ let query_input_consumes_argument ~consume_rules = function
   | Input_aggregate _
   | Input_rules _
   | Input_ignore -> false
+
+let values_of_collection_result = function
+  | Result_value (List values | Vector values | Set values) -> Some (List.map (fun value -> Result_value value) values)
+  | Result_value (Tuple values) ->
+    Some (values |> List.filter_map (Option.map (fun value -> Result_value value)))
+  | _ -> None
+
+let row_of_collection_result = function
+  | Result_value (List values | Vector values | Set values) -> List.map (fun value -> Result_value value) values
+  | Result_value (Tuple values) ->
+    values |> List.map (function Some value -> Result_value value | None -> Result_value Nil)
+  | value -> [ value ]
+
+let row_of_scalar_sequence value =
+  match values_of_collection_result value with
+  | Some row -> row
+  | None -> invalid_arg "query input argument does not match :in binding"
+
+let rows_of_map_entries entries =
+  entries
+  |> List.map (fun (key, value) -> [ Result_value key; Result_value value ])

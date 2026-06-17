@@ -3911,23 +3911,9 @@ let query_result_collection_string values =
   "[" ^ String.concat " " (List.map query_result_input_string values) ^ "]"
 
 let query_input_of_arg decl arg =
-  let values_of_collection_result = function
-    | Result_value (List values | Vector values | Set values) -> Some (List.map (fun value -> Result_value value) values)
-    | Result_value (Tuple values) ->
-      Some (values |> List.filter_map (Option.map (fun value -> Result_value value)))
-    | _ -> None
-  in
-  let row_of_collection_value = function
-    | Result_value (List values | Vector values | Set values) -> List.map (fun value -> Result_value value) values
-    | Result_value (Tuple values) ->
-      values |> List.map (function Some value -> Result_value value | None -> Result_value Nil)
-    | value -> [ value ]
-  in
-  let row_of_scalar_sequence value =
-    match values_of_collection_result value with
-    | Some row -> row
-    | None -> invalid_arg "query input argument does not match :in binding"
-  in
+  let values_of_collection_result = Query.values_of_collection_result in
+  let row_of_collection_value = Query.row_of_collection_result in
+  let row_of_scalar_sequence = Query.row_of_scalar_sequence in
   let cannot_bind_value_to kind value =
     invalid_arg
       ( "Cannot bind value "
@@ -3956,10 +3942,7 @@ let query_input_of_arg decl arg =
       else
         row
   in
-  let rows_of_map entries =
-    entries
-    |> List.map (fun (key, value) -> [ Result_value key; Result_value value ])
-  in
+  let rows_of_map = Query.rows_of_map_entries in
   match decl, arg with
   | Input_ignore_decl, _ -> Input_ignore
   | Input_scalar_decl var, Arg_scalar value -> Input_scalar (var, value)
@@ -7125,6 +7108,10 @@ module Query = struct
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
   let query_input_binding_label = Query_impl.query_input_binding_label
   let query_input_consumes_argument = Query_impl.query_input_consumes_argument
+  let values_of_collection_result = Query_impl.values_of_collection_result
+  let row_of_collection_result = Query_impl.row_of_collection_result
+  let row_of_scalar_sequence = Query_impl.row_of_scalar_sequence
+  let rows_of_map_entries = Query_impl.rows_of_map_entries
 end
 
 let q = Query.q
