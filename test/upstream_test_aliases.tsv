@@ -1,0 +1,32 @@
+# Upstream cljs/cljc test coverage aliases for script/diff_upstream_tests.sh.
+# Format: upstream_file<TAB>upstream_deftest<TAB>ocaml_test_function
+# Use "-" only for explicit non-goals.
+components.cljc	test-components	test_upstream_components_and_explode_parity_batch
+components.cljc	test-components-multival	test_upstream_components_and_explode_parity_batch
+conn.cljc	test-ways-to-create-conn	test_conn_helpers_and_reset
+conn.cljc	test-reset-conn!	test_conn_helpers_and_reset
+datafy.cljc	test-navigation	-
+explode.cljc	test-explode	test_upstream_components_and_explode_parity_batch
+explode.cljc	test-explode-ref	test_upstream_components_and_explode_parity_batch
+explode.cljc	test-explode-nested-maps	test_upstream_components_and_explode_parity_batch
+explode.cljc	test-circular-refs	test_upstream_components_and_explode_parity_batch
+filter.cljc	test-filter-db	test_filter_and_entity_upstream_edge_parity_batch
+ident.cljc	test-q	test_upstream_ident_parity_batch
+ident.cljc	test-transact!	test_upstream_ident_parity_batch
+ident.cljc	test-entity	test_upstream_ident_parity_batch
+ident.cljc	test-pull	test_upstream_ident_parity_batch
+index.cljc	test-datoms	test_upstream_index_api_parity_batch
+index.cljc	test-datom	test_upstream_index_api_parity_batch
+index.cljc	test-seek-datoms	test_upstream_index_api_parity_batch
+index.cljc	test-rseek-datoms	test_upstream_index_api_parity_batch
+index.cljc	test-index-range	test_upstream_index_api_parity_batch
+query.cljc	test-nested-bindings	test_q_nested_relation_map_inputs
+query_find_specs.cljc	test-find-specs	test_q_return_find_specs_match_upstream_cases
+query_fns.cljc	test-exceptions	test_q_builtin_function_insufficient_bindings_match_upstream_messages
+query_fns.cljc	test-issue-180	test_q_with_dynamic_callable_inputs
+query_fns.cljc	test-issue-445	test_q_with_lookup_ref_inputs_in_entity_builtins
+query_return_map.cljc	test-find-specs	test_q_return_map_string_upstream_shape_batch
+query_v3.cljc	test-validation	test_q_input_arity_matches_upstream_validation_messages
+storage.cljs	test-db-with-tail	test_db_with_tail_replays_groups_and_skips_invalid_groups
+validation.cljc	test-with-validation	test_db_with_string_matches_upstream_validation_messages
+validation.cljc	test-unique	test_unique_value_rejects_duplicate_values

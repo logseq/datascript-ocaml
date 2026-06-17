@@ -3600,7 +3600,21 @@ let test_edn_string_top_level_apis () =
        ]
   then failwith "pull_many_string should preserve requested order and missing entities"
 
-let test_q_string_matches_plain_symbol_constants () =
+let test_query__test_symbol_comparison () =
+  assert_equal_query
+    "query.cljc test-symbol-comparison matches plain symbols in relation sources"
+    [ [ Result_value (Int 2) ] ]
+    (q_sources_string
+       (empty_db ())
+       [ ( "$"
+         , Relation_source
+             [ [ Result_value (Int 1); Result_attr "s"; Result_value (Symbol "a") ]
+             ; [ Result_value (Int 2); Result_attr "s"; Result_value (Symbol "b") ]
+             ] )
+       ]
+       "[:find ?e
+         :in $
+         :where [?e :s b]]");
   let db =
     empty_db ()
     |> db_with_string "[{:db/id 1 :s a} {:db/id 2 :s b}]"
@@ -18046,7 +18060,7 @@ let () =
   test_edn_reader_parses_query_and_pull_strings ();
   test_edn_string_top_level_apis ();
   test_nan_values_round_trip_and_match_index_values ();
-  test_q_string_matches_plain_symbol_constants ();
+  test_query__test_symbol_comparison ();
   test_db_with_string_matches_upstream_validation_messages ();
   test_edn_reader_parses_transaction_and_schema_strings ();
   test_edn_reader_parses_common_literals ();
