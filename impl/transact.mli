@@ -37,3 +37,37 @@ val remap_value_ref : context -> entity_id -> entity_id -> value -> value
 val remap_datom_entity : context -> entity_id -> entity_id -> datom -> datom
 val remap_resolved_tx_value : context -> entity_id -> entity_id -> tx_value -> tx_value
 val remap_tempid_entity : entity_id -> entity_id -> (string * entity_id) list -> (string * entity_id) list
+
+type apply_context =
+  { resolve_context : context
+  ; is_filtered : db -> bool
+  ; schema_from_transaction_datoms : strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_fields : attr list
+  ; current_attr_value : datom list -> entity_id -> attr -> value option
+  ; add_entity_attr_value : db -> tx -> datom list -> entity_id -> attr -> value -> datom list * datom list
+  ; same_fact : datom -> datom -> bool
+  ; add_user_datom_with_report : db -> tx -> datom list -> datom -> datom list * datom list
+  ; is_tuple_attr : db -> attr -> bool
+  ; tuple_attrs_for_source : db -> attr -> (attr * attr list) list
+  ; is_unique_identity : db -> attr -> bool
+  ; with_db_datoms : db -> datom list -> db
+  ; retract_user_attr_with_report : db -> tx -> datom list -> entity_id -> attr -> value option -> datom list * datom list
+  ; retract_active_datom_with_report : tx -> datom list -> entity_id -> attr -> value option -> datom list * datom list
+  ; retract_entity_with_report : db -> tx -> datom list -> entity_id -> datom list * datom list
+  ; compare_and_set_matches : db -> datom list -> entity_id -> attr -> value option -> bool
+  ; compare_and_set_failure_message : db -> datom list -> entity_id -> attr -> value option -> string
+  ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
+  ; normalize_datom_for_schema : schema -> datom -> datom
+  ; add_active_datom_with_report : ?allow_tuple:bool -> db -> tx -> datom list -> datom -> datom list * datom list
+  ; validate_explicit_upsert_target : db -> datom list -> entity_id -> (attr * tx_value) list -> unit
+  ; entity_unique_identity : db -> datom list -> (attr * tx_value) list -> entity_id option
+  ; value_equal : value -> value -> bool
+  ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
+  ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool
+  ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
+  ; history_datoms_for_schema : schema -> datom list -> datom list
+  ; refresh_db_indexes : db -> db
+  ; refresh_db_identity : db -> db
+  }
+
+val apply_tx : apply_context -> tx_op list -> db -> db * (string * entity_id) list * datom list
