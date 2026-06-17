@@ -13683,6 +13683,39 @@ let test_parse_pull_pattern_accepts_top_level_lists () =
       [ kw "name", Pulled_scalar (String "Ivan") ]
       entity
 
+let test_parse_pull_pattern_accepts_string_db_id () =
+  let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
+  let assert_pull label pattern expected =
+    match pull db pattern (Entity_id 1) with
+    | None -> failf "expected %s to pull the entity" label
+    | Some entity -> assert_equal_pulled_attrs label expected entity
+  in
+  assert_pull
+    "parse_pull_pattern treats string :db/id as db/id"
+    (parse_pull_pattern db (QueryFormVector [ QueryFormString ":db/id" ]))
+    [ kw "db/id", Pulled_scalar (Int 1) ];
+  (match pull_string db "[\":db/id\"]" (Entity_id 1) with
+   | None -> failwith "expected pull_string string :db/id to pull the entity"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "pull_string treats string :db/id as db/id"
+       [ kw "db/id", Pulled_scalar (Int 1) ]
+       entity);
+  assert_pull
+    "parse_pull_pattern aliases string :db/id"
+    (parse_pull_pattern
+       db
+       (QueryFormVector
+          [ QueryFormVector [ QueryFormString ":db/id"; QueryFormKeyword "as"; QueryFormKeyword "id" ] ]))
+    [ kw "id", Pulled_scalar (Int 1) ];
+  assert_pull
+    "parse_pull_pattern applies vector xform to string :db/id"
+    (parse_pull_pattern
+       db
+       (QueryFormVector
+          [ QueryFormVector [ QueryFormString ":db/id"; QueryFormKeyword "xform"; QueryFormSymbol "vector" ] ]))
+    [ kw "db/id", Pulled_many [ Pulled_scalar (Int 1) ] ]
+
 let test_parse_pull_pattern_aliases_attributes () =
   let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
   let pattern =
@@ -16690,6 +16723,7 @@ let () =
   test_pull_selects_requested_attributes ();
   test_parse_pull_pattern_selects_attributes_and_refs ();
   test_parse_pull_pattern_accepts_top_level_lists ();
+  test_parse_pull_pattern_accepts_string_db_id ();
   test_parse_pull_pattern_aliases_attributes ();
   test_parse_pull_pattern_accepts_upstream_alias_value_forms ();
   test_parse_pull_pattern_defaults_attributes ();

@@ -4555,6 +4555,7 @@ let validate_pull_attr_name db attr =
 
 let validate_pull_string_attr_name db attr =
   match attr with
+  | ":db/id" -> "db/id"
   | "limit" | "default" -> invalid_arg ("reserved pull string attr name: " ^ attr)
   | _ -> validate_pull_attr_name db attr
 
