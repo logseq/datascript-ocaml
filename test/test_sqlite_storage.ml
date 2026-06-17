@@ -94,6 +94,9 @@ let unique_identity =
 let ref_attr =
   { indexed with indexed = false; value_type = Some RefType }
 
+let ref_many =
+  { ref_attr with cardinality = Many }
+
 let test_sqlite_storage_round_trips_ocaml_payloads () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage round trip: sqlite3 is not available"
@@ -449,6 +452,96 @@ let test_sqlite_storage_backed_query_result_shapes_after_restore () =
         <> Query_tuple_map (Some [ String "a", Result_value (Int 25); String "n", Result_value (String "Ivan") ])
       then failwith "SQLite restored db should support tuple return maps")
 
+let test_sqlite_storage_backed_lookup_ref_transacts_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed lookup-ref transact test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn =
+        create_conn
+          ~schema:[ "name", unique_identity; "email", unique_identity; "friend", ref_attr; "friends", ref_many; "age", indexed ]
+          ~storage
+          ()
+      in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 1, "email", String "ivan@example.com")
+           ; Add (Entity_id 2, "name", String "Petr")
+           ; Add (Entity_id 2, "email", String "petr@example.com")
+           ; Add (Entity_id 3, "name", String "Oleg")
+           ; Add (Entity_id 3, "email", String "oleg@example.com")
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for lookup-ref transact test"
+      in
+      ignore
+        (transact_conn
+           restored
+           [ Add (Lookup_ref ("name", String "Ivan"), "age", Int 35)
+           ; Add (Lookup_ref ("email", String "ivan@example.com"), "friend", Ref_to (Lookup_ref ("name", String "Petr")))
+           ; Add (Lookup_ref ("name", String "Ivan"), "friends", Ref_to (Lookup_ref ("name", String "Petr")))
+           ; Add (Lookup_ref ("name", String "Ivan"), "friends", Ref_to (Lookup_ref ("name", String "Oleg")))
+           ]);
+      let restored_again =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn after lookup-ref transacts"
+      in
+      assert_equal_query
+        "SQLite storage persists lookup-ref add entity ids"
+        [ [ Result_value (Int 35) ] ]
+        (q_string
+           (conn_db restored_again)
+           "[:find ?age :where [[:name \"Ivan\"] :age ?age]]");
+      assert_equal_query
+        "SQLite storage persists lookup-ref ref values"
+        [ [ Result_value (String "Petr") ] ]
+        (q_string
+           (conn_db restored_again)
+           "[:find ?name
+             :where [[:name \"Ivan\"] :friend ?friend]
+                    [?friend :name ?name]]");
+      assert_equal_query
+        "SQLite storage persists lookup-ref cardinality-many ref values"
+        [ [ Result_value (String "Oleg") ]; [ Result_value (String "Petr") ] ]
+        (q_string
+           (conn_db restored_again)
+           "[:find ?name
+             :where [[:name \"Ivan\"] :friends ?friend]
+                    [?friend :name ?name]]");
+      ignore
+        (transact_conn
+           restored_again
+           [ CompareAndSet
+               ( Lookup_ref ("name", String "Ivan")
+               , "friend"
+               , Some (Ref_to (Lookup_ref ("name", String "Petr")))
+               , Ref_to (Lookup_ref ("name", String "Oleg")) )
+           ; Retract (Lookup_ref ("name", String "Ivan"), "age", Some (Int 35))
+           ]);
+      let final_db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore final lookup-ref db"
+      in
+      assert_equal_query
+        "SQLite storage persists lookup-ref CAS ref updates"
+        [ [ Result_value (String "Oleg") ] ]
+        (q_string
+           final_db
+           "[:find ?name
+             :where [[:name \"Ivan\"] :friend ?friend]
+                    [?friend :name ?name]]");
+      assert_equal_query
+        "SQLite storage persists lookup-ref retracts"
+        []
+        (q_string final_db "[:find ?age :where [[:name \"Ivan\"] :age ?age]]"))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -633,6 +726,7 @@ let () =
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
   test_sqlite_storage_backed_query_result_shapes_after_restore ();
+  test_sqlite_storage_backed_lookup_ref_transacts_after_restore ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

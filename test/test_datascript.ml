@@ -3307,6 +3307,74 @@ let test_lookup_refs_accept_unique_value_attrs () =
        entity
    | None -> failwith "expected unique value lookup ref pull to resolve")
 
+let test_lookup_ref_transaction_upstream_parity_batch () =
+  let base =
+    empty_db ~schema:[ "name", unique_identity; "email", unique_value; "friend", ref_attr; "friends", ref_many; "age", indexed ] ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "email", One_value (String "@1") ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "email", One_value (String "@2") ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "email", One_value (String "@3") ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Sergey"); "email", One_value (String "@4") ] }
+         ]
+  in
+  let ivan = Lookup_ref ("name", String "Ivan") in
+  let petr = Lookup_ref ("name", String "Petr") in
+  let oleg = Lookup_ref ("name", String "Oleg") in
+  let db =
+    base
+    |> db_with [ Add (ivan, "age", Int 35) ]
+    |> db_with [ Entity { db_id = Some ivan; attrs = [ "age", One_value (Int 36) ] } ]
+    |> db_with [ Add (Entity_id 1, "friend", Ref_to petr) ]
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "friend", One_value (Ref_to oleg) ] } ]
+    |> db_with [ Entity { db_id = Some (Entity_id 2); attrs = [ "_friend", One_value (Ref_to ivan) ] } ]
+    |> db_with [ Add (Entity_id 1, "friends", Ref_to petr); Add (Entity_id 1, "friends", Ref_to oleg) ]
+  in
+  assert_equal_triples
+    "lookup refs transact through entity ids and ref values"
+    [ 1, "age", Int 36
+    ; 1, "email", String "@1"
+    ; 1, "friend", Ref 2
+    ; 1, "friends", Ref 2
+    ; 1, "friends", Ref 3
+    ; 1, "name", String "Ivan"
+    ; 2, "email", String "@2"
+    ; 2, "name", String "Petr"
+    ; 3, "email", String "@3"
+    ; 3, "name", String "Oleg"
+    ; 4, "email", String "@4"
+    ; 4, "name", String "Sergey"
+    ]
+    (datoms db Eavt ());
+  let db =
+    db
+    |> db_with [ CompareAndSet (ivan, "name", Some (String "Ivan"), String "Vanya") ]
+    |> db_with [ CompareAndSet (Entity_id 1, "friend", Some (Ref_to (Lookup_ref ("name", String "Petr"))), Ref_to (Lookup_ref ("name", String "Sergey"))) ]
+    |> db_with [ Retract (Lookup_ref ("name", String "Vanya"), "age", Some (Int 36)) ]
+    |> db_with [ Retract (Entity_id 1, "friends", Some (Ref_to (Lookup_ref ("name", String "Oleg")))) ]
+  in
+  assert_equal_triples
+    "lookup refs transact through CAS and retract operations"
+    [ 1, "email", String "@1"
+    ; 1, "friend", Ref 4
+    ; 1, "friends", Ref 2
+    ; 1, "name", String "Vanya"
+    ; 2, "email", String "@2"
+    ; 2, "name", String "Petr"
+    ; 3, "email", String "@3"
+    ; 3, "name", String "Oleg"
+    ; 4, "email", String "@4"
+    ; 4, "name", String "Sergey"
+    ]
+    (datoms db Eavt ());
+  assert_raises_invalid_arg_message
+    "lookup refs in add entity position must resolve like upstream"
+    "Nothing found for entity id [:name \"Missing\"]"
+    (fun () -> ignore (db_with [ Add (Lookup_ref ("name", String "Missing"), "age", Int 10) ] base));
+  assert_raises_invalid_arg_message
+    "lookup refs in entity-map db/id must resolve like upstream"
+    "Nothing found for entity id [:name \"Missing\"]"
+    (fun () -> ignore (db_with [ Entity { db_id = Some (Lookup_ref ("name", String "Missing")); attrs = [ "age", One_value (Int 10) ] } ] base))
+
 let test_q_finds_values () =
   let db =
     empty_db ~schema:[ "likes", many ] ()
@@ -17588,6 +17656,7 @@ let () =
   test_lookup_refs_reject_non_unique_attrs ();
   test_q_rejects_unresolved_lookup_refs ();
   test_lookup_refs_accept_unique_value_attrs ();
+  test_lookup_ref_transaction_upstream_parity_batch ();
   test_q_finds_values ();
   test_parse_query_finds_values ();
   test_edn_reader_parses_query_and_pull_strings ();
