@@ -171,7 +171,35 @@ let test_string_helpers () =
   assert_equal_string_list
     "split_regex_limited stops at the requested part count"
     [ "a"; "b-c" ]
-    (Built_ins.split_regex_limited "a1b-c" "[0-9]+" 2)
+    (Built_ins.split_regex_limited "a1b-c" "[0-9]+" 2);
+  assert_equal_string
+    "reverse_string reverses characters"
+    "desserts"
+    (Built_ins.reverse_string "stressed");
+  assert_equal_string
+    "capitalize_string uppercases first and lowercases rest"
+    "Hello"
+    (Built_ins.capitalize_string "hELLO");
+  assert_equal_string
+    "trim_left_with removes matching leading chars"
+    "body--"
+    (Built_ins.trim_left_with (( = ) '-') "--body--");
+  assert_equal_string
+    "trim_right_with removes matching trailing chars"
+    "--body"
+    (Built_ins.trim_right_with (( = ) '-') "--body--");
+  assert_equal_string
+    "trim_with removes matching chars on both sides"
+    "body"
+    (Built_ins.trim_with (( = ) '-') "--body--");
+  assert_equal_bool
+    "is_newline accepts lf"
+    true
+    (Built_ins.is_newline '\n');
+  assert_equal_bool
+    "is_newline rejects spaces"
+    false
+    (Built_ins.is_newline ' ')
 
 let test_aggregate_result () =
   let values =

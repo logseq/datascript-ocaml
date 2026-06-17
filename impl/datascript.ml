@@ -3009,40 +3009,12 @@ let eval_string_split_lines_clause db bindings value_term output_var =
      | None -> [])
   | Some _ | None -> []
 
-let reverse_string value =
-  String.init (String.length value) (fun index -> value.[String.length value - index - 1])
-
-let capitalize_string value =
-  match String.length value with
-  | 0 -> value
-  | length ->
-    String.make 1 (Char.uppercase_ascii value.[0])
-    ^ String.lowercase_ascii (String.sub value 1 (length - 1))
-
-let trim_left_with pred value =
-  let length = String.length value in
-  let rec first_non_matching index =
-    if index >= length then length
-    else if pred value.[index] then first_non_matching (index + 1)
-    else index
-  in
-  let start = first_non_matching 0 in
-  String.sub value start (length - start)
-
-let trim_right_with pred value =
-  let rec last_non_matching index =
-    if index < 0 then -1
-    else if pred value.[index] then last_non_matching (index - 1)
-    else index
-  in
-  String.sub value 0 (last_non_matching (String.length value - 1) + 1)
-
-let trim_with pred value =
-  value |> trim_left_with pred |> trim_right_with pred
-
-let is_newline = function
-  | '\n' | '\r' -> true
-  | _ -> false
+let reverse_string = Built_ins.reverse_string
+let capitalize_string = Built_ins.capitalize_string
+let trim_left_with = Built_ins.trim_left_with
+let trim_right_with = Built_ins.trim_right_with
+let trim_with = Built_ins.trim_with
+let is_newline = Built_ins.is_newline
 
 let eval_string_transform_clause db bindings term output_var transform =
   match eval_query_term db bindings term with

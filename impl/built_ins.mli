@@ -39,6 +39,12 @@ val regex_matches : string -> string -> string option
 val regex_seq : string -> string -> string list
 val split_regex : string -> string -> string list
 val split_regex_limited : string -> string -> int -> string list
+val reverse_string : string -> string
+val capitalize_string : string -> string
+val trim_left_with : (char -> bool) -> string -> string
+val trim_right_with : (char -> bool) -> string -> string
+val trim_with : (char -> bool) -> string -> string
+val is_newline : char -> bool
 val aggregate_result : aggregate -> query_result list -> query_result
 val value_is_truthy : value -> bool
 val boolean_and_value : value list -> value
