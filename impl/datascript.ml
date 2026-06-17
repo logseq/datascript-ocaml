@@ -279,6 +279,8 @@ type query_clause = Datascript_types.query_clause =
   | ReFindValue of query_term * query_term * string
   | ReMatchesValue of query_term * query_term * string
   | ReSeqValue of query_term * query_term * string
+  | ReFindPredicate of query_term * query_term
+  | ReMatchesPredicate of query_term * query_term
   | StringBlankValue of query_term
   | StringSplitValue of query_term * query_term * string
   | StringSplitLimitValue of query_term * query_term * query_term * string
@@ -5910,6 +5912,14 @@ let eval_regex_string_clause db bindings pattern_term value_term output_var f =
         | None -> []))
   | Some _ | None -> []
 
+let eval_regex_predicate_clause db bindings pattern_term value_term f =
+  match collect_query_terms db bindings [ pattern_term; value_term ] with
+  | Some [ pattern_result; Result_value (String value) ] ->
+    (match Option.bind (regex_pattern_of_result pattern_result) (fun pattern -> f pattern value) with
+     | Some _ -> [ bindings ]
+     | None -> [])
+  | Some _ | None -> []
+
 let eval_re_seq_value_clause db bindings pattern_term value_term output_var =
   match collect_query_terms db bindings [ pattern_term; value_term ] with
   | Some [ pattern_result; Result_value (String value) ] ->
@@ -7360,6 +7370,9 @@ and vars_of_clause = function
   | ReMatchesValue (pattern, value, output)
   | ReSeqValue (pattern, value, output) ->
     output :: vars_of_query_terms [ pattern; value ]
+  | ReFindPredicate (pattern, value)
+  | ReMatchesPredicate (pattern, value) ->
+    vars_of_query_terms [ pattern; value ]
   | StringBlankValue term -> vars_of_query_term term
   | StringSplitValue (value, separator, output) -> output :: vars_of_query_terms [ value; separator ]
   | StringSplitLimitValue (value, separator, limit, output) ->
@@ -7458,6 +7471,10 @@ and query_clause_string = function
     "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string terms) ^ "]"
   | NumericPredicate (predicate, term) ->
     "[" ^ query_call_string (numeric_predicate_symbol predicate) [ term ] ^ "]"
+  | ReFindPredicate (pattern, value) ->
+    "[" ^ query_call_string "re-find" [ pattern; value ] ^ "]"
+  | ReMatchesPredicate (pattern, value) ->
+    "[" ^ query_call_string "re-matches" [ pattern; value ] ^ "]"
   | ArithmeticValue (op, terms, output_var) ->
     "["
     ^ query_call_string (arithmetic_op_symbol op) terms
@@ -7617,7 +7634,8 @@ and clause_calls_rule name = function
   | HashMapValue _ | ArrayMapValue _ | TupleFunction _ | StringReplaceValue _ | StringReplaceFirstValue _
   | StringEscapeValue _ | StringBlankValue _ | StringSplitValue _ | StringSplitLimitValue _
   | StringSplitLinesValue _
-  | RePatternValue _ | ReFindValue _ | ReMatchesValue _ | ReSeqValue _ | RangeEndValue _ | RangeValue _
+  | RePatternValue _ | ReFindValue _ | ReMatchesValue _ | ReSeqValue _ | ReFindPredicate _
+  | ReMatchesPredicate _ | RangeEndValue _ | RangeValue _
   | RangeStepValue _ | UntupleFunction _ | Predicate _ | Function _ | DynamicPredicate _ | DynamicFunction _
   | DynamicFunctionCollection _ | DynamicFunctionRelation _ ->
     false
@@ -7869,6 +7887,10 @@ and eval_clause
     eval_regex_string_clause db bindings pattern_term value_term output_var regex_matches
   | ReSeqValue (pattern_term, value_term, output_var) ->
     eval_re_seq_value_clause db bindings pattern_term value_term output_var
+  | ReFindPredicate (pattern_term, value_term) ->
+    eval_regex_predicate_clause db bindings pattern_term value_term regex_find
+  | ReMatchesPredicate (pattern_term, value_term) ->
+    eval_regex_predicate_clause db bindings pattern_term value_term regex_matches
   | StringBlankValue term ->
     eval_string_blank_clause db bindings term
   | StringSplitValue (value_term, separator_term, output_var) ->
@@ -9196,6 +9218,16 @@ let rec parse_pattern_clause = function
       ] ->
     invalid_arg "complement requires one predicate symbol"
   | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "re-find"; pattern; value ]
+        | QueryFormVector [ QueryFormSymbol "re-find"; pattern; value ])
+      ] ->
+    ReFindPredicate (parse_pattern_term pattern, parse_pattern_term value)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "re-matches"; pattern; value ]
+        | QueryFormVector [ QueryFormSymbol "re-matches"; pattern; value ])
+      ] ->
+    ReMatchesPredicate (parse_pattern_term pattern, parse_pattern_term value)
+  | QueryFormVector
       [ (QueryFormList (QueryFormSymbol symbol :: args)
         | QueryFormVector (QueryFormSymbol symbol :: args))
       ] ->
@@ -9603,6 +9635,8 @@ let rec sources_of_clause = function
   | StringEscapeValue (collection, key, _)
   | ReFindValue (collection, key, _)
   | ReMatchesValue (collection, key, _)
+  | ReFindPredicate (collection, key)
+  | ReMatchesPredicate (collection, key)
   | ReSeqValue (collection, key, _)
   | StringSplitValue (collection, key, _)
   | RangeValue (collection, key, _) ->
@@ -9742,6 +9776,8 @@ let rec has_rule_clause = function
   | ReFindValue _
   | ReMatchesValue _
   | ReSeqValue _
+  | ReFindPredicate _
+  | ReMatchesPredicate _
   | StringBlankValue _
   | StringSplitValue _
   | StringSplitLimitValue _
@@ -9897,6 +9933,8 @@ let rec clause_uses_default_source = function
   | ReFindValue _
   | ReMatchesValue _
   | ReSeqValue _
+  | ReFindPredicate _
+  | ReMatchesPredicate _
   | StringBlankValue _
   | StringSplitValue _
   | StringSplitLimitValue _

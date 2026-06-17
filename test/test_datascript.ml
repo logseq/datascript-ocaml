@@ -8640,6 +8640,401 @@ let test_q_upstream_query_cljc_parity_batch () =
          :in [[?k ?m] ...] ?m-key
          :where [(get ?m ?m-key) ?m-value]]")
 
+let test_query__test_joins () =
+  test_q_upstream_query_cljc_parity_batch ()
+
+let test_query__test_q_many () =
+  test_q_upstream_query_cljc_parity_batch ()
+
+let test_query__test_q_coll () =
+  let relation =
+    Relation_source
+      [ [ Result_entity 1; Result_attr "name"; Result_value (String "Ivan") ]
+      ; [ Result_entity 1; Result_attr "age"; Result_value (Int 19) ]
+      ; [ Result_entity 1; Result_attr "aka"; Result_value (String "dragon_killer_94") ]
+      ; [ Result_entity 1; Result_attr "aka"; Result_value (String "-=autobot=-") ]
+      ]
+  in
+  assert_equal_query
+    "query.cljc test-q-coll queries relation source datoms"
+    [ [ Result_value (String "Ivan"); Result_value (Int 19) ] ]
+    (q_sources_string
+       (empty_db ())
+       [ "$", relation ]
+       "[:find ?n ?a
+         :in $
+         :where [?e :aka \"dragon_killer_94\"]
+                [?e :name ?n]
+                [?e :age ?a]]");
+  let long_relation =
+    Relation_source
+      [ [ Result_entity 1
+        ; Result_attr "name"
+        ; Result_value (String "Ivan")
+        ; Result_value (Int 945)
+        ; Result_value (Keyword "db/add")
+        ]
+      ; [ Result_entity 1
+        ; Result_attr "age"
+        ; Result_value (Int 39)
+        ; Result_value (Int 999)
+        ; Result_value (Keyword "db/retract")
+        ]
+      ]
+  in
+  assert_equal_query
+    "query.cljc test-q-coll matches short patterns over long tuples"
+    [ [ Result_entity 1; Result_value (String "Ivan") ] ]
+    (q_sources_string
+       (empty_db ())
+       [ "$", long_relation ]
+       "[:find ?e ?v
+         :in $
+         :where [?e :name ?v]]");
+  assert_equal_query
+    "query.cljc test-q-coll matches full long tuples"
+    [ [ Result_entity 1
+      ; Result_attr "age"
+      ; Result_value (Int 39)
+      ; Result_value (Int 999)
+      ]
+    ]
+    (q_sources_string
+       (empty_db ())
+       [ "$", long_relation ]
+       "[:find ?e ?a ?v ?t
+         :in $
+         :where [?e ?a ?v ?t :db/retract]]")
+
+let test_query__test_q_in () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
+         ]
+  in
+  assert_equal_query
+    "query.cljc test-q-in binds scalar attr and value inputs"
+    [ [ Result_entity 1 ]; [ Result_entity 3 ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_attr "name"); Arg_scalar (Result_value (String "Ivan")) ]
+       db
+       "[:find ?e :in $ ?attr ?value :where [?e ?attr ?value]]");
+  assert_equal_query
+    "query.cljc test-q-in supports named db inputs"
+    [ [ Result_attr "age"; Result_value (Int 15) ]
+    ; [ Result_attr "name"; Result_value (String "Ivan") ]
+    ]
+    (q_sources_string
+       ~inputs:[ Arg_scalar (Result_entity 1) ]
+       (empty_db ())
+       [ "db", Db_source db ]
+       "[:find ?a ?v
+         :in $db ?e
+         :where [$db ?e ?a ?v]]");
+  assert_equal_query
+    "query.cljc test-q-in joins a db with a relation source"
+    [ [ Result_entity 1; Result_value (String "ivan@mail.ru") ]
+    ; [ Result_entity 2; Result_value (String "petr@gmail.com") ]
+    ; [ Result_entity 3; Result_value (String "ivan@mail.ru") ]
+    ]
+    (q_sources_string
+       db
+       [ ( "b"
+         , Relation_source
+             [ [ Result_value (String "Ivan"); Result_value (String "ivan@mail.ru") ]
+             ; [ Result_value (String "Petr"); Result_value (String "petr@gmail.com") ]
+             ] )
+       ]
+       "[:find ?e ?email
+         :in $ $b
+         :where [?e :name ?n]
+                [$b ?n ?email]]");
+  assert_equal_query
+    "query.cljc test-q-in supports queries without db sources"
+    [ [ Result_value (Int 10); Result_value (Int 20) ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_value (Int 10)); Arg_scalar (Result_value (Int 20)) ]
+       (empty_db ())
+       "[:find ?a ?b :in ?a ?b]")
+
+let test_query__test_bindings () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
+         ]
+  in
+  assert_equal_query
+    "query.cljc test-bindings handles relation bindings"
+    [ [ Result_entity 1; Result_value (String "ivan@mail.ru") ]
+    ; [ Result_entity 2; Result_value (String "petr@gmail.com") ]
+    ; [ Result_entity 3; Result_value (String "ivan@mail.ru") ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_relation
+             [ [ Result_value (String "Ivan"); Result_value (String "ivan@mail.ru") ]
+             ; [ Result_value (String "Petr"); Result_value (String "petr@gmail.com") ]
+             ]
+         ]
+       db
+       "[:find ?e ?email
+         :in $ [[?n ?email]]
+         :where [?e :name ?n]]");
+  assert_equal_query
+    "query.cljc test-bindings handles tuple bindings"
+    [ [ Result_entity 3 ] ]
+    (q_string
+       ~inputs:[ Arg_tuple [ Result_value (String "Ivan"); Result_value (Int 37) ] ]
+       db
+       "[:find ?e
+         :in $ [?name ?age]
+         :where [?e :name ?name]
+                [?e :age ?age]]");
+  assert_equal_query
+    "query.cljc test-bindings handles collection bindings"
+    [ [ Result_attr "age"; Result_value (Int 15) ]
+    ; [ Result_attr "name"; Result_value (String "Ivan") ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar (Result_entity 1)
+         ; Arg_collection [ Result_attr "name"; Result_attr "age" ]
+         ]
+       db
+       "[:find ?attr ?value
+         :in $ ?e [?attr ...]
+         :where [?e ?attr ?value]]");
+  assert_equal_query
+    "query.cljc test-bindings treats empty collection inputs as empty relations"
+    []
+    (q_sources_string
+       ~inputs:[ Arg_collection [] ]
+       (empty_db ())
+       [ "$", Relation_source [ [ Result_entity 1; Result_attr "name"; Result_value (String "Ivan") ] ] ]
+       "[:find ?id
+         :in $ [?id ...]
+         :where [?id :age _]]");
+  assert_equal_query
+    "query.cljc test-bindings supports input placeholders"
+    [ [ Result_value (Keyword "x"); Result_value (Keyword "z") ] ]
+    (q_string
+       ~inputs:[ Arg_tuple [ Result_value (Keyword "x"); Result_value (Keyword "y"); Result_value (Keyword "z") ] ]
+       (empty_db ())
+       "[:find ?x ?z :in [?x _ ?z]]");
+  assert_equal_query
+    "query.cljc test-bindings supports relation input placeholders"
+    [ [ Result_value (Keyword "a"); Result_value (Keyword "c") ]
+    ; [ Result_value (Keyword "x"); Result_value (Keyword "z") ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_relation
+             [ [ Result_value (Keyword "x"); Result_value (Keyword "y"); Result_value (Keyword "z") ]
+             ; [ Result_value (Keyword "a"); Result_value (Keyword "b"); Result_value (Keyword "c") ]
+             ]
+         ]
+       (empty_db ())
+       "[:find ?x ?z :in [[?x _ ?z]]]");
+  assert_raises_invalid_arg_message
+    "query.cljc test-bindings reports scalar supplied to tuple"
+    "Cannot bind value :a to tuple [?a ?b]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_scalar (Result_value (Keyword "a")) ]
+            (empty_db ())
+            "[:find ?a ?b :in [?a ?b]]"));
+  assert_raises_invalid_arg_message
+    "query.cljc test-bindings reports scalar supplied to collection"
+    "Cannot bind value :a to collection [?a ...]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_scalar (Result_value (Keyword "a")) ]
+            (empty_db ())
+            "[:find ?a :in [?a ...]]"));
+  assert_raises_invalid_arg_message
+    "query.cljc test-bindings reports short tuple inputs"
+    "Not enough elements in a collection [:a] to bind tuple [?a ?b]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_scalar (Result_value (List [ Keyword "a" ])) ]
+            (empty_db ())
+            "[:find ?a ?b :in [?a ?b]]"))
+
+let test_query__test_nested_bindings () =
+  assert_equal_query
+    "query.cljc test-nested-bindings handles map relation inputs"
+    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_value (Map [ Keyword "a", Int 1; Keyword "b", Int 2; Keyword "c", Int 3 ])) ]
+       (empty_db ())
+       "[:find ?k ?v
+         :in [[?k ?v] ...]
+         :where [(> ?v 1)]]");
+  let minmax = function
+    | [ Result_value (List values) ] ->
+      (match values with
+       | [] -> None
+       | first :: rest ->
+         let min_value, max_value =
+           List.fold_left
+             (fun (min_value, max_value) -> function
+                | Int value -> min min_value value, max max_value value
+                | _ -> min_value, max_value)
+             (match first with
+              | Int value -> value, value
+              | _ -> 0, 0)
+             rest
+         in
+         Some [ Result_value (Int min_value); Result_value (Int max_value) ])
+    | _ -> None
+  in
+  assert_equal_query
+    "query.cljc test-nested-bindings handles dynamic tuple outputs"
+    [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 4) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int 5); Result_value (Int 7) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", List [ Int 1; Int 2; Int 3; Int 4 ]
+                   ; Keyword "b", List [ Int 5; Int 6; Int 7 ]
+                   ; Keyword "c", List [ Int 3 ]
+                   ]))
+         ; Arg_function minmax
+         ]
+       (empty_db ())
+       "[:find ?k ?min ?max
+         :in [[?k ?v] ...] ?minmax
+         :where [(?minmax ?v) [?min ?max]]
+                [(> ?max ?min)]]");
+  let range_values = function
+    | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+      let rec collect value acc =
+        if value >= max_value then List.rev acc
+        else collect (value + 1) (Int value :: acc)
+      in
+      Some [ Result_value (List (collect min_value [])) ]
+    | _ -> None
+  in
+  assert_equal_query
+    "query.cljc test-nested-bindings handles dynamic collection outputs"
+    [ [ Result_value (Keyword "a"); Result_value (Int 2) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int 4) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int 6) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", List [ Int 1; Int 7 ]
+                   ; Keyword "b", List [ Int 2; Int 4 ]
+                   ]))
+         ; Arg_function range_values
+         ]
+       (empty_db ())
+       "[:find ?k ?x
+         :in [[?k [?min ?max]] ...] ?range
+         :where [(?range ?min ?max) [?x ...]]
+                [(even? ?x)]]")
+
+let test_query__test_built_in_get () =
+  test_q_upstream_query_cljc_parity_batch ()
+
+let test_query__test_join_unrelated () =
+  let five = function
+    | [] -> Some [ Result_value (Int 5) ]
+    | _ -> None
+  in
+  assert_equal_query
+    "query.cljc test-join-unrelated filters unrelated dynamic function rows"
+    []
+    (q_string
+       ~inputs:[ Arg_function five ]
+       (empty_db () |> db_with [ Entity { db_id = None; attrs = [ "person/name", One_value (String "Joe") ] } ])
+       "[:find ?name
+         :in $ ?my-fn
+         :where [?e :person/name ?name]
+                [(?my-fn) ?result]
+                [(< ?result 3)]]")
+
+let test_query__test_constant_substitution () =
+  let attrs = [ "a"; "b"; "c" ] in
+  let rec entities entity_id acc =
+    if entity_id = 0 then acc
+    else
+      let attrs =
+        attrs
+        |> List.map (fun attr -> attr, One_value (String (string_of_int entity_id ^ attr)))
+      in
+      entities (entity_id - 1) (Entity { db_id = Some (Entity_id entity_id); attrs } :: acc)
+  in
+  let db =
+    empty_db ~schema:[ "a", indexed; "b", indexed; "c", indexed ] ()
+    |> db_with (entities 10 [])
+  in
+  assert_equal_query
+    "query.cljc test-constant-substitution resolves entity+attr constants"
+    [ [ Result_value (String "5b") ] ]
+    (q_string db "[:find ?v :where [5 :b ?v]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution resolves entity+value constants"
+    [ [ Result_attr "b" ] ]
+    (q_string db "[:find ?a :where [5 ?a \"5b\"]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution resolves attr+value constants"
+    [ [ Result_entity 5 ] ]
+    (q_string db "[:find ?e :where [?e :b \"5b\"]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution accepts entity and attr inputs"
+    [ [ Result_entity 5; Result_attr "b"; Result_value (String "5b") ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_entity 5); Arg_scalar (Result_attr "b") ]
+       db
+       "[:find ?e ?a ?v
+         :in $ ?e ?a
+         :where [?e ?a ?v]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution self-joins attr and value inputs"
+    [ [ Result_entity 5; Result_attr "b"; Result_value (String "5b") ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_attr "b"); Arg_scalar (Result_value (String "5b")) ]
+       db
+       "[:find ?e2 ?a ?v
+         :in $ ?a ?v
+         :where [?e ?a ?v]
+                [?e2 ?a ?v]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution resolves all attrs for entity input"
+    [ [ Result_attr "a"; Result_value (String "5a") ]
+    ; [ Result_attr "b"; Result_value (String "5b") ]
+    ; [ Result_attr "c"; Result_value (String "5c") ]
+    ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_entity 5) ]
+       db
+       "[:find ?a ?v
+         :in $ ?e
+         :where [?e ?a ?v]]");
+  assert_equal_query
+    "query.cljc test-constant-substitution resolves entity+attr from value constants"
+    [ [ Result_entity 5; Result_attr "b" ] ]
+    (q_string db "[:find ?e ?a :where [?e ?a \"5b\"]]")
+
 let test_q_reverse_ref_patterns () =
   let db =
     empty_db ~schema:[ "parent", ref_attr; "person/parent", ref_attr ] ()
@@ -10104,6 +10499,25 @@ let test_q_builtin_regex_values () =
     "q re-find produces no rows when the pattern does not match"
     []
     (q (empty_db ()) no_match_query)
+
+let test_query__test_built_in_regex () =
+  assert_equal_query
+    "query.cljc test-built-in-regex matches regex patterns from inputs"
+    [ [ Result_value (String "aXb") ]; [ Result_value (String "abcX") ] ]
+    (q_string
+       ~inputs:
+         [ Arg_collection
+             [ Result_value (String "abc")
+             ; Result_value (String "abcX")
+             ; Result_value (String "aXb")
+             ]
+         ; Arg_scalar (Result_value (String "X"))
+         ]
+       (empty_db ())
+       "[:find ?name
+         :in [?name ...] ?key
+         :where [(re-pattern ?key) ?pattern]
+                [(re-find ?pattern ?name)]]")
 
 let test_q_builtin_string_blank_and_split_values () =
   let blank_query =
@@ -18108,6 +18522,15 @@ let () =
   test_q_joins_clauses ();
   test_q_short_data_patterns_match_upstream ();
   test_q_upstream_query_cljc_parity_batch ();
+  test_query__test_joins ();
+  test_query__test_q_many ();
+  test_query__test_q_coll ();
+  test_query__test_q_in ();
+  test_query__test_bindings ();
+  test_query__test_nested_bindings ();
+  test_query__test_built_in_get ();
+  test_query__test_join_unrelated ();
+  test_query__test_constant_substitution ();
   test_q_reverse_ref_patterns ();
   test_q_predicates_filter_bound_values ();
   test_q_predicates_without_free_variables_filter_all_rows ();
@@ -18149,6 +18572,7 @@ let () =
   test_q_builtin_string_replace_regex_values ();
   test_q_builtin_string_escape_values ();
   test_q_builtin_regex_values ();
+  test_query__test_built_in_regex ();
   test_q_builtin_string_blank_and_split_values ();
   test_q_builtin_vector_values ();
   test_q_builtin_vector_captures_bound_row_values ();

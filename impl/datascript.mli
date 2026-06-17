@@ -277,6 +277,8 @@ type query_clause = Datascript_types.query_clause =
   | ReFindValue of query_term * query_term * string
   | ReMatchesValue of query_term * query_term * string
   | ReSeqValue of query_term * query_term * string
+  | ReFindPredicate of query_term * query_term
+  | ReMatchesPredicate of query_term * query_term
   | StringBlankValue of query_term
   | StringSplitValue of query_term * query_term * string
   | StringSplitLimitValue of query_term * query_term * query_term * string
