@@ -6178,10 +6178,17 @@ let source default_db sources name =
   | None ->
     if name = "$" then Db_source default_db else invalid_arg ("unknown query source: " ^ name)
 
+let sources_with_root_default db sources =
+  if List.mem_assoc "$" sources then sources else ("$", Db_source db) :: sources
+
 let source_db default_db sources name =
   match source default_db sources name with
   | Db_source db -> db
   | Relation_source _ -> invalid_arg ("query source is not a database: " ^ name)
+
+let query_source_db = function
+  | Db_source db -> db
+  | Relation_source _ -> invalid_arg "query source is not a database"
 
 let match_relation_row db bindings terms row =
   let rec match_terms binding terms row =
@@ -6194,8 +6201,8 @@ let match_relation_row db bindings terms row =
   in
   match_terms (Some bindings) terms row
 
-let match_source_pattern default_db sources source_name bindings terms =
-  match source default_db sources source_name with
+let match_query_source_pattern default_db source bindings terms =
+  match source with
   | Db_source source_db ->
     (match terms with
      | [ e_term; a_term; v_term ] ->
@@ -6211,6 +6218,9 @@ let match_source_pattern default_db sources source_name bindings terms =
   | Relation_source rows ->
     rows
     |> List.filter_map (fun row -> match_relation_row default_db bindings terms row)
+
+let match_source_pattern default_db sources source_name bindings terms =
+  match_query_source_pattern default_db (source default_db sources source_name) bindings terms
 
 let match_relation_source_pattern default_db sources source_name bindings terms =
   let attr_term_of_short_pattern = function
@@ -7202,10 +7212,22 @@ let merge_projected_binding db vars outer_binding inner_binding =
             | None -> Some binding))
        (Some outer_binding)
 
-let rec eval_clauses ?(active_rules = []) ?(callables = empty_query_callables) db sources rules bindings clauses =
+let rec eval_clauses
+    ?(active_rules = [])
+    ?(callables = empty_query_callables)
+    ?default_source
+    db
+    sources
+    rules
+    bindings
+    clauses =
+  let default_source = Option.value default_source ~default:(source db sources "$") in
   List.fold_left
     (fun bindings clause ->
-      List.concat_map (fun binding -> eval_clause ~active_rules ~callables db sources rules binding clause) bindings)
+      List.concat_map
+        (fun binding ->
+           eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+        bindings)
     bindings
     clauses
 
@@ -7642,13 +7664,22 @@ and eval_dynamic_function_relation_clause callables db sources bindings name ter
       ^ " in "
       ^ query_clause_string (DynamicFunctionRelation (name, terms, output_vars)) )
 
-and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sources rules bindings = function
+and eval_clause
+    ?(active_rules = [])
+    ?(callables = empty_query_callables)
+    ?default_source
+    db
+    sources
+    rules
+    bindings =
+  let default_source = Option.value default_source ~default:(source db sources "$") in
+  function
   | Pattern (e_term, a_term, v_term) ->
-    match_source_pattern db sources "$" bindings [ e_term; a_term; v_term ]
+    match_query_source_pattern db default_source bindings [ e_term; a_term; v_term ]
   | PatternTx (e_term, a_term, v_term, tx_term) ->
-    match_source_pattern db sources "$" bindings [ e_term; a_term; v_term; tx_term ]
+    match_query_source_pattern db default_source bindings [ e_term; a_term; v_term; tx_term ]
   | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) ->
-    match_source_pattern db sources "$" bindings [ e_term; a_term; v_term; tx_term; op_term ]
+    match_query_source_pattern db default_source bindings [ e_term; a_term; v_term; tx_term; op_term ]
   | SourcePattern (source, e_term, a_term, v_term) ->
     match_source_pattern db sources source bindings [ e_term; a_term; v_term ]
   | SourcePatternTx (source, e_term, a_term, v_term, tx_term) ->
@@ -7658,15 +7689,15 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
   | SourceRelationPattern (source, terms) ->
     match_relation_source_pattern db sources source bindings terms
   | Missing (entity_term, attr) ->
-    eval_missing_clause (source_db db sources "$") bindings entity_term attr
+    eval_missing_clause (query_source_db default_source) bindings entity_term attr
   | SourceMissing (source, entity_term, attr) ->
     eval_missing_clause (source_db db sources source) bindings entity_term attr
   | GetElse (entity_term, attr, default, output_var) ->
-    eval_get_else_clause (source_db db sources "$") bindings entity_term attr default output_var
+    eval_get_else_clause (query_source_db default_source) bindings entity_term attr default output_var
   | SourceGetElse (source, entity_term, attr, default, output_var) ->
     eval_get_else_clause (source_db db sources source) bindings entity_term attr default output_var
   | GetSome (entity_term, attrs, attr_var, value_var) ->
-    eval_get_some_clause (source_db db sources "$") bindings entity_term attrs attr_var value_var
+    eval_get_some_clause (query_source_db default_source) bindings entity_term attrs attr_var value_var
   | SourceGetSome (source, entity_term, attrs, attr_var, value_var) ->
     eval_get_some_clause (source_db db sources source) bindings entity_term attrs attr_var value_var
   | GetValue (map_term, key_term, output_var) ->
@@ -7865,51 +7896,108 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
   | DynamicFunctionRelation (name, terms, output_binding) ->
     eval_dynamic_function_relation_clause callables db sources bindings name terms output_binding
   | SourceClause (source_name, clause) ->
-    ignore (source db sources source_name);
-    eval_clause ~active_rules ~callables db sources rules bindings clause
+    let clause_db = source_db db sources source_name in
+    eval_clause
+      ~active_rules
+      ~callables
+      ~default_source:(Db_source clause_db)
+      clause_db
+      sources
+      rules
+      bindings
+      clause
   | Not clauses ->
     ensure_not_has_outer_binding bindings clauses;
-    (match eval_clauses ~active_rules ~callables db sources rules [ bindings ] clauses with
+    (match eval_clauses ~active_rules ~callables ~default_source db sources rules [ bindings ] clauses with
      | [] -> [ bindings ]
      | _ -> [])
   | SourceNot (source, clauses) ->
     let clause_db = source_db db sources source in
+    let sources = sources_with_root_default db sources in
     ensure_not_has_outer_binding bindings clauses;
-    (match eval_clauses ~active_rules ~callables clause_db sources rules [ bindings ] clauses with
+    (match
+       eval_clauses
+         ~active_rules
+         ~callables
+         ~default_source:(Db_source clause_db)
+         clause_db
+         sources
+         rules
+         [ bindings ]
+         clauses
+     with
      | [] -> [ bindings ]
      | _ -> [])
   | NotJoin (vars, clauses) ->
     ensure_join_vars_bound bindings vars;
     let projected_binding = project_binding vars bindings in
-    (match eval_clauses ~active_rules ~callables db sources rules [ projected_binding ] clauses with
+    (match eval_clauses ~active_rules ~callables ~default_source db sources rules [ projected_binding ] clauses with
      | [] -> [ bindings ]
      | _ -> [])
   | SourceNotJoin (source, vars, clauses) ->
     let clause_db = source_db db sources source in
+    let sources = sources_with_root_default db sources in
     ensure_join_vars_bound bindings vars;
     let projected_binding = project_binding vars bindings in
-    (match eval_clauses ~active_rules ~callables clause_db sources rules [ projected_binding ] clauses with
+    (match
+       eval_clauses
+         ~active_rules
+         ~callables
+         ~default_source:(Db_source clause_db)
+         clause_db
+         sources
+         rules
+         [ projected_binding ]
+         clauses
+     with
      | [] -> [ bindings ]
      | _ -> [])
   | Or branches ->
     ensure_or_branch_vars_match bindings branches;
-    List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables db sources rules [ bindings ] clauses) branches
+    List.concat_map
+      (fun clauses -> eval_clauses ~active_rules ~callables ~default_source db sources rules [ bindings ] clauses)
+      branches
   | SourceOr (source, branches) ->
     let clause_db = source_db db sources source in
+    let sources = sources_with_root_default db sources in
     ensure_or_branch_vars_match bindings branches;
-    List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables clause_db sources rules [ bindings ] clauses) branches
+    List.concat_map
+      (fun clauses ->
+         eval_clauses
+           ~active_rules
+           ~callables
+           ~default_source:(Db_source clause_db)
+           clause_db
+           sources
+           rules
+           [ bindings ]
+           clauses)
+      branches
   | OrJoin (vars, branches) ->
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding vars bindings in
     branches
-    |> List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables db sources rules [ projected_binding ] clauses)
+    |> List.concat_map
+         (fun clauses ->
+            eval_clauses ~active_rules ~callables ~default_source db sources rules [ projected_binding ] clauses)
     |> List.filter_map (merge_projected_binding db vars bindings)
   | SourceOrJoin (source, vars, branches) ->
     let clause_db = source_db db sources source in
+    let sources = sources_with_root_default db sources in
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding vars bindings in
     branches
-    |> List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables clause_db sources rules [ projected_binding ] clauses)
+    |> List.concat_map
+         (fun clauses ->
+            eval_clauses
+              ~active_rules
+              ~callables
+              ~default_source:(Db_source clause_db)
+              clause_db
+              sources
+              rules
+              [ projected_binding ]
+              clauses)
     |> List.filter_map (merge_projected_binding clause_db vars bindings)
   | OrJoinRequired (required_vars, vars, branches) ->
     ensure_join_vars_bound_in_clause
@@ -7919,10 +8007,13 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding (required_vars @ vars |> List.sort_uniq compare) bindings in
     branches
-    |> List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables db sources rules [ projected_binding ] clauses)
+    |> List.concat_map
+         (fun clauses ->
+            eval_clauses ~active_rules ~callables ~default_source db sources rules [ projected_binding ] clauses)
     |> List.filter_map (merge_projected_binding db vars bindings)
   | SourceOrJoinRequired (source, required_vars, vars, branches) ->
     let clause_db = source_db db sources source in
+    let sources = sources_with_root_default db sources in
     ensure_join_vars_bound_in_clause
       bindings
       required_vars
@@ -7930,7 +8021,17 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
     ensure_or_join_branches_cover_listed_vars bindings vars branches;
     let projected_binding = project_binding (required_vars @ vars |> List.sort_uniq compare) bindings in
     branches
-    |> List.concat_map (fun clauses -> eval_clauses ~active_rules ~callables clause_db sources rules [ projected_binding ] clauses)
+    |> List.concat_map
+         (fun clauses ->
+            eval_clauses
+              ~active_rules
+              ~callables
+              ~default_source:(Db_source clause_db)
+              clause_db
+              sources
+              rules
+              [ projected_binding ]
+              clauses)
     |> List.filter_map (merge_projected_binding clause_db vars bindings)
   | Rule (name, terms) ->
     let key = rule_call_key db "" name bindings terms in
@@ -7940,7 +8041,15 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
       | None -> []
       | Some rule_binding ->
         let rule_callables = rule_invocation_callables callables bindings rule terms in
-        eval_clauses ~active_rules:(key :: active_rules) ~callables:rule_callables db sources rules [ rule_binding ] rule.rule_body
+        eval_clauses
+          ~active_rules:(key :: active_rules)
+          ~callables:rule_callables
+          ~default_source
+          db
+          sources
+          rules
+          [ rule_binding ]
+          rule.rule_body
         |> List.filter_map (fun rule_binding -> propagate_rule_binding db bindings rule_binding rule terms))
   | SourceRule (source, name, terms) ->
     let rule_db = source_db db sources source in
@@ -7951,7 +8060,15 @@ and eval_clause ?(active_rules = []) ?(callables = empty_query_callables) db sou
       | None -> []
       | Some rule_binding ->
         let rule_callables = rule_invocation_callables callables bindings rule terms in
-        eval_clauses ~active_rules:(key :: active_rules) ~callables:rule_callables rule_db sources rules [ rule_binding ] rule.rule_body
+        eval_clauses
+          ~active_rules:(key :: active_rules)
+          ~callables:rule_callables
+          ~default_source:(Db_source rule_db)
+          rule_db
+          sources
+          rules
+          [ rule_binding ]
+          rule.rule_body
         |> List.filter_map (fun rule_binding -> propagate_rule_binding rule_db bindings rule_binding rule terms))
 
 let section_forms = function

@@ -11016,6 +11016,121 @@ let test_q_source_qualified_composite_clauses () =
     [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
     (q_sources (empty_db ()) [ "names", Db_source names; "ages", Db_source ages ] source_or_query)
 
+let test_q_not_or_upstream_source_and_relation_batch () =
+  let names =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg") ] }
+         ]
+  in
+  let ages =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int 10) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 20) ] }
+         ]
+  in
+  assert_equal_query
+    "q source-qualified nested not keeps the selected default source"
+    [ [ Result_entity 1 ] ]
+    (q_sources_string
+       names
+       [ "ages", Db_source ages ]
+       "[:find ?e
+         :in $ $ages
+         :where [?e :name]
+                ($ages not (not [?e :age 10]))]");
+  assert_equal_query
+    "q source-qualified nested not can override the nested default source"
+    [ [ Result_entity 1 ] ]
+    (q_sources_string
+       names
+       [ "ages", Db_source ages ]
+       "[:find ?e
+         :in $ $ages
+         :where [?e :name]
+                ($ages not ($ not [?e :name \"Ivan\"]))]");
+  assert_equal_query
+    "q source-qualified nested or keeps the selected default source"
+    [ [ Result_entity 1 ] ]
+    (q_sources_string
+       names
+       [ "ages", Db_source ages ]
+       "[:find ?e
+         :in $ $ages
+         :where [?e :name]
+                ($ages or (or [?e :age 10]))]");
+  assert_equal_query
+    "q source-qualified nested or can override the nested default source"
+    [ [ Result_entity 1 ] ]
+    (q_sources_string
+       names
+       [ "ages", Db_source ages ]
+       "[:find ?e
+         :in $ $ages
+         :where [?e :name]
+                ($ages or ($ or [?e :name \"Ivan\"]))]");
+  let xs =
+    Relation_source
+      [ [ Result_value (Keyword "a1"); Result_value (Keyword "b1"); Result_value (Keyword "c1") ]
+      ; [ Result_value (Keyword "a2"); Result_value (Keyword "b2"); Result_value (Keyword "c2") ]
+      ; [ Result_value (Keyword "a3"); Result_value (Keyword "b3"); Result_value (Keyword "c3") ]
+      ]
+  in
+  let ys =
+    Relation_source
+      [ [ Result_value (Keyword "a1"); Result_value (Keyword "b1"); Result_value (Keyword "d1") ]
+      ; [ Result_value (Keyword "a2"); Result_value (Keyword "b2*"); Result_value (Keyword "d2") ]
+      ; [ Result_value (Keyword "a4"); Result_value (Keyword "b4"); Result_value (Keyword "c4") ]
+      ]
+  in
+  assert_equal_query
+    "q or-join relation sources join only by listed vars and keep outer row values"
+    [ [ Result_value (Keyword "a1"); Result_value (Keyword "b1"); Result_value (Keyword "c1") ]
+    ; [ Result_value (Keyword "a2"); Result_value (Keyword "b2"); Result_value (Keyword "c2") ]
+    ]
+    (q_sources
+       (empty_db ())
+       [ "xs", xs; "ys", ys ]
+       { find = [ Find_var "a"; Find_var "b"; Find_var "c" ]
+       ; inputs = []
+       ; with_vars = []
+       ; rules = []
+       ; where =
+           [ SourceRelationPattern ("xs", [ QVar "a"; QVar "b"; QVar "c" ])
+           ; OrJoin
+               ( [ "a" ]
+               , [ [ SourceRelationPattern ("ys", [ QVar "a"; QVar "b"; QVar "d" ]) ] ] )
+           ]
+       });
+  assert_equal_query
+    "q or-join relation sources can bind projected vars from branches with different arity"
+    [ [ Result_value (Keyword "a1"); Result_value (Keyword "c1") ]
+    ; [ Result_value (Keyword "a2"); Result_value (Keyword "c2") ]
+    ]
+    (q_sources
+       (empty_db ())
+       [ ( "xs"
+         , Relation_source
+             [ [ Result_value (Keyword "a1"); Result_value (Keyword "b1"); Result_value (Keyword "c1") ] ] )
+       ; ( "ys"
+         , Relation_source
+             [ [ Result_value (Keyword "a2"); Result_value (Keyword "c2") ] ] )
+       ]
+       { find = [ Find_var "a"; Find_var "c" ]
+       ; inputs = []
+       ; with_vars = []
+       ; rules = []
+       ; where =
+           [ OrJoin
+               ( [ "a"; "c" ]
+               , [ [ SourceRelationPattern ("xs", [ QVar "a"; QVar "b"; QVar "c" ]) ]
+                 ; [ SourceRelationPattern ("ys", [ QVar "a"; QVar "c" ]) ]
+                 ] )
+           ]
+       })
+
 let test_q_with_scalar_inputs () =
   let db =
     empty_db ()
@@ -17777,6 +17892,7 @@ let () =
   test_q_or_join_constant_substitution ();
   test_q_or_join_required_vars_use_outer_bindings ();
   test_q_source_qualified_composite_clauses ();
+  test_q_not_or_upstream_source_and_relation_batch ();
   test_q_with_scalar_inputs ();
   test_q_with_entity_ref_inputs ();
   test_q_with_lookup_ref_collection_inputs ();

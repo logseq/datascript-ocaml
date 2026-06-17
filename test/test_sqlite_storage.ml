@@ -542,6 +542,63 @@ let test_sqlite_storage_backed_lookup_ref_transacts_after_restore () =
         []
         (q_string final_db "[:find ?age :where [[:name \"Ivan\"] :age ?age]]"))
 
+let test_sqlite_storage_backed_not_or_queries_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed not/or query test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 1, "age", Int 10)
+           ; Add (Entity_id 2, "name", String "Ivan")
+           ; Add (Entity_id 2, "age", Int 20)
+           ; Add (Entity_id 3, "name", String "Oleg")
+           ; Add (Entity_id 3, "age", Int 10)
+           ; Add (Entity_id 4, "name", String "Oleg")
+           ; Add (Entity_id 4, "age", Int 20)
+           ]);
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db for not/or queries"
+      in
+      assert_equal_query
+        "SQLite restored db supports not query clauses"
+        [ [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        (q_string db "[:find ?e :where [?e :name] (not [?e :name \"Ivan\"])]");
+      assert_equal_query
+        "SQLite restored db supports not-join query clauses"
+        [ [ Result_entity 1; Result_value (Int 10) ]
+        ; [ Result_entity 2; Result_value (Int 20) ]
+        ]
+        (q_string
+           db
+           "[:find ?e ?a
+             :where [?e :name]
+                    [?e :age ?a]
+                    (not-join [?e]
+                      [?e :name \"Oleg\"]
+                      [?e :age ?a])]");
+      assert_equal_query
+        "SQLite restored db supports or query clauses"
+        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        (q_string db "[:find ?e :where (or [?e :name \"Oleg\"] [?e :age 10])]");
+      assert_equal_query
+        "SQLite restored db supports or-join query clauses"
+        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        (q_string
+           db
+           "[:find ?e
+             :in $ ?a
+             :where (or-join [?e ?a]
+                      [?e :age ?a]
+                      [?e :name \"Oleg\"])]"
+           ~inputs:[ Arg_scalar (Result_value (Int 10)) ]))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -727,6 +784,7 @@ let () =
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
   test_sqlite_storage_backed_query_result_shapes_after_restore ();
   test_sqlite_storage_backed_lookup_ref_transacts_after_restore ();
+  test_sqlite_storage_backed_not_or_queries_after_restore ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();
