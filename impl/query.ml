@@ -606,6 +606,281 @@ let sources_of_find_spec = function
   | Find_aggregate (_, terms) -> sources_of_query_terms terms
   | Find_var _ | Find_pull _ | Find_pull_var _ -> []
 
+let rec has_rule_clause = function
+  | Rule _ | SourceRule _ -> true
+  | SourceClause (_, clause) -> has_rule_clause clause
+  | Not clauses | SourceNot (_, clauses) | NotJoin (_, clauses) | SourceNotJoin (_, _, clauses) ->
+    List.exists has_rule_clause clauses
+  | Or branches | SourceOr (_, branches) | OrJoin (_, branches) | SourceOrJoin (_, _, branches) ->
+    List.exists (List.exists has_rule_clause) branches
+  | OrJoinRequired (_, _, branches) | SourceOrJoinRequired (_, _, _, branches) ->
+    List.exists (List.exists has_rule_clause) branches
+  | Pattern _
+  | PatternTx _
+  | PatternTxOp _
+  | SourcePattern _
+  | SourcePatternTx _
+  | SourcePatternTxOp _
+  | SourceRelationPattern _
+  | Missing _
+  | SourceMissing _
+  | GetElse _
+  | SourceGetElse _
+  | GetSome _
+  | SourceGetSome _
+  | GetValue _
+  | GetDefaultValue _
+  | CountValue _
+  | EmptyValue _
+  | NotEmptyValue _
+  | ContainsValue _
+  | ValuePredicate _
+  | NumericPredicate _
+  | ComparisonPredicate _
+  | ComparisonPredicateN _
+  | EqualityPredicate _
+  | ArithmeticValue _
+  | CompareValue _
+  | ExtremumValue _
+  | BooleanPredicate _
+  | BooleanNotPredicate _
+  | BooleanNotValue _
+  | IdentityValue _
+  | BooleanAndPredicate _
+  | BooleanAndValue _
+  | BooleanOrPredicate _
+  | BooleanOrValue _
+  | RandomValue _
+  | RandomIntValue _
+  | DifferPredicate _
+  | IdenticalPredicate _
+  | TypeValue _
+  | MetaValue _
+  | NameValue _
+  | NamespaceValue _
+  | KeywordFromName _
+  | KeywordFromNamespaceName _
+  | StringIncludesValue _
+  | StringStartsWithValue _
+  | StringEndsWithValue _
+  | StringLowerCaseValue _
+  | StringUpperCaseValue _
+  | StringCapitalizeValue _
+  | StringReverseValue _
+  | StringTrimValue _
+  | StringTrimLeftValue _
+  | StringTrimRightValue _
+  | StringTrimNewlineValue _
+  | StringIndexOfValue _
+  | StringLastIndexOfValue _
+  | StringSubstringValue _
+  | StringBuildValue _
+  | PrintStringValue _
+  | PrintLineStringValue _
+  | PrStringValue _
+  | PrnStringValue _
+  | StringJoinPlainValue _
+  | StringJoinValue _
+  | StringReplaceValue _
+  | StringReplaceFirstValue _
+  | StringEscapeValue _
+  | RePatternValue _
+  | ReFindValue _
+  | ReMatchesValue _
+  | ReSeqValue _
+  | ReFindPredicate _
+  | ReMatchesPredicate _
+  | StringBlankValue _
+  | StringSplitValue _
+  | StringSplitLimitValue _
+  | StringSplitLinesValue _
+  | Ground _
+  | GroundCollection _
+  | GroundTuple _
+  | GroundRelation _
+  | GroundTerm _
+  | GroundTermCollection _
+  | GroundTermTuple _
+  | GroundTermRelation _
+  | VectorValue _
+  | ListValue _
+  | SetValue _
+  | HashMapValue _
+  | ArrayMapValue _
+  | RangeEndValue _
+  | RangeValue _
+  | RangeStepValue _
+  | TupleFunction _
+  | UntupleFunction _
+  | Predicate _
+  | Function _
+  | DynamicPredicate _
+  | DynamicFunction _
+  | DynamicFunctionCollection _
+  | DynamicFunctionRelation _ ->
+    false
+
+let rule_names rules =
+  rules |> List.map (fun rule -> rule.rule_name) |> List.sort_uniq compare
+
+let rec resolve_dynamic_rule_clause names = function
+  | DynamicPredicate (name, terms) when List.mem name names -> Rule (name, terms)
+  | SourceClause (source, DynamicPredicate (name, terms)) when List.mem name names ->
+    SourceRule (source, name, terms)
+  | SourceClause (source, clause) -> SourceClause (source, resolve_dynamic_rule_clause names clause)
+  | Not clauses -> Not (List.map (resolve_dynamic_rule_clause names) clauses)
+  | SourceNot (source, clauses) -> SourceNot (source, List.map (resolve_dynamic_rule_clause names) clauses)
+  | NotJoin (vars, clauses) -> NotJoin (vars, List.map (resolve_dynamic_rule_clause names) clauses)
+  | SourceNotJoin (source, vars, clauses) ->
+    SourceNotJoin (source, vars, List.map (resolve_dynamic_rule_clause names) clauses)
+  | Or branches -> Or (List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOr (source, branches) -> SourceOr (source, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | OrJoin (vars, branches) -> OrJoin (vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOrJoin (source, vars, branches) ->
+    SourceOrJoin (source, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | OrJoinRequired (required_vars, vars, branches) ->
+    OrJoinRequired (required_vars, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | SourceOrJoinRequired (source, required_vars, vars, branches) ->
+    SourceOrJoinRequired
+      (source, required_vars, vars, List.map (List.map (resolve_dynamic_rule_clause names)) branches)
+  | clause -> clause
+
+let resolve_dynamic_rule names rule =
+  { rule with rule_body = List.map (resolve_dynamic_rule_clause names) rule.rule_body }
+
+let find_spec_uses_default_source = function
+  | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> source = "$"
+  | Find_var _ | Find_pull _ | Find_pull_var _ | Find_aggregate _ -> false
+
+let rec clause_uses_default_source = function
+  | SourceClause (source, clause) -> source = "$" || clause_uses_default_source clause
+  | SourcePattern (source, _, _, _)
+  | SourcePatternTx (source, _, _, _, _)
+  | SourcePatternTxOp (source, _, _, _, _, _)
+  | SourceRelationPattern (source, _)
+  | SourceMissing (source, _, _)
+  | SourceGetElse (source, _, _, _, _)
+  | SourceGetSome (source, _, _, _, _)
+  | SourceRule (source, _, _) ->
+    source = "$"
+  | SourceNot (source, clauses)
+  | SourceNotJoin (source, _, clauses) ->
+    source = "$" || List.exists clause_uses_default_source clauses
+  | SourceOr (source, branches)
+  | SourceOrJoin (source, _, branches)
+  | SourceOrJoinRequired (source, _, _, branches) ->
+    source = "$" || List.exists (List.exists clause_uses_default_source) branches
+  | Not clauses | NotJoin (_, clauses) -> List.exists clause_uses_default_source clauses
+  | Or branches | OrJoin (_, branches) | OrJoinRequired (_, _, branches) ->
+    List.exists (List.exists clause_uses_default_source) branches
+  | Pattern _
+  | PatternTx _
+  | PatternTxOp _ ->
+    true
+  | Missing _
+  | GetElse _
+  | GetSome _
+  | GetValue _
+  | GetDefaultValue _
+  | CountValue _
+  | EmptyValue _
+  | NotEmptyValue _
+  | ContainsValue _
+  | ValuePredicate _
+  | NumericPredicate _
+  | ComparisonPredicate _
+  | ComparisonPredicateN _
+  | EqualityPredicate _
+  | ArithmeticValue _
+  | CompareValue _
+  | ExtremumValue _
+  | BooleanPredicate _
+  | BooleanNotPredicate _
+  | BooleanNotValue _
+  | IdentityValue _
+  | BooleanAndPredicate _
+  | BooleanAndValue _
+  | BooleanOrPredicate _
+  | BooleanOrValue _
+  | RandomValue _
+  | RandomIntValue _
+  | DifferPredicate _
+  | IdenticalPredicate _
+  | TypeValue _
+  | MetaValue _
+  | NameValue _
+  | NamespaceValue _
+  | KeywordFromName _
+  | KeywordFromNamespaceName _
+  | StringIncludesValue _
+  | StringStartsWithValue _
+  | StringEndsWithValue _
+  | StringLowerCaseValue _
+  | StringUpperCaseValue _
+  | StringCapitalizeValue _
+  | StringReverseValue _
+  | StringTrimValue _
+  | StringTrimLeftValue _
+  | StringTrimRightValue _
+  | StringTrimNewlineValue _
+  | StringIndexOfValue _
+  | StringLastIndexOfValue _
+  | StringSubstringValue _
+  | StringBuildValue _
+  | PrintStringValue _
+  | PrintLineStringValue _
+  | PrStringValue _
+  | PrnStringValue _
+  | StringJoinPlainValue _
+  | StringJoinValue _
+  | StringReplaceValue _
+  | StringReplaceFirstValue _
+  | StringEscapeValue _
+  | RePatternValue _
+  | ReFindValue _
+  | ReMatchesValue _
+  | ReSeqValue _
+  | ReFindPredicate _
+  | ReMatchesPredicate _
+  | StringBlankValue _
+  | StringSplitValue _
+  | StringSplitLimitValue _
+  | StringSplitLinesValue _
+  | Ground _
+  | GroundCollection _
+  | GroundTuple _
+  | GroundRelation _
+  | GroundTerm _
+  | GroundTermCollection _
+  | GroundTermTuple _
+  | GroundTermRelation _
+  | VectorValue _
+  | ListValue _
+  | SetValue _
+  | HashMapValue _
+  | ArrayMapValue _
+  | RangeEndValue _
+  | RangeValue _
+  | RangeStepValue _
+  | TupleFunction _
+  | UntupleFunction _
+  | Predicate _
+  | Function _
+  | DynamicPredicate _
+  | DynamicFunction _
+  | DynamicFunctionCollection _
+  | DynamicFunctionRelation _
+  | Rule _ ->
+    false
+
+let infer_default_inputs in_form find where inputs =
+  match in_form with
+  | Some _ -> inputs
+  | None ->
+    if List.exists find_spec_uses_default_source find || List.exists clause_uses_default_source where
+    then Input_source_decl "$" :: inputs
+    else inputs
+
 let query_input_var_label var =
   if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
 

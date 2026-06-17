@@ -107,6 +107,14 @@ val sources_of_query_terms : query_term list -> string list
 val sources_of_optional_query_term : query_term option -> string list
 val sources_of_clause : query_clause -> string list
 val sources_of_find_spec : find_spec -> string list
+val has_rule_clause : query_clause -> bool
+val rule_names : query_rule list -> string list
+val resolve_dynamic_rule_clause : string list -> query_clause -> query_clause
+val resolve_dynamic_rule : string list -> query_rule -> query_rule
+val find_spec_uses_default_source : find_spec -> bool
+val clause_uses_default_source : query_clause -> bool
+val infer_default_inputs :
+  query_form option -> find_spec list -> query_clause list -> query_input list -> query_input list
 val query_input_var_label : string -> string
 val query_term_string : value_to_string:(value -> string) -> query_term -> string
 val query_output_var_string : string -> string

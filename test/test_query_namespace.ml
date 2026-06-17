@@ -533,6 +533,120 @@ let test_query_namespace__test_source_discovery_helpers () =
     [ "amounts" ]
     (Query.sources_of_find_spec (Find_aggregate (Sum, [ QSource "amounts"; QVar "amount" ])))
 
+let test_query_namespace__test_rule_source_analysis_helpers () =
+  if not (Query.has_rule_clause (Rule ("parent", [ QVar "e" ]))) then
+    failwith "has_rule_clause should detect direct rule clauses";
+  if
+    not
+      (Query.has_rule_clause
+         (SourceOr
+            ( "other"
+            , [ [ Pattern (QVar "e", QAttr "name", QVar "name") ]
+              ; [ SourceRule ("other", "parent", [ QVar "e" ]) ]
+              ] )))
+  then
+    failwith "has_rule_clause should recurse through source/or branches";
+  if Query.has_rule_clause (DynamicPredicate ("parent", [ QVar "e" ])) then
+    failwith "has_rule_clause should ignore dynamic predicates before rule resolution";
+  assert_equal_string_list
+    "rule_names sorts and deduplicates rule names"
+    [ "ancestor"; "parent" ]
+    (Query.rule_names
+       [ { rule_name = "parent"; rule_params = [ "e" ]; rule_body = [] }
+       ; { rule_name = "ancestor"; rule_params = [ "e" ]; rule_body = [] }
+       ; { rule_name = "parent"; rule_params = [ "e"; "child" ]; rule_body = [] }
+       ]);
+  if
+    Query.resolve_dynamic_rule_clause [ "parent" ] (DynamicPredicate ("parent", [ QVar "e" ]))
+    <> Rule ("parent", [ QVar "e" ])
+  then
+    failwith "resolve_dynamic_rule_clause should resolve matching dynamic predicates";
+  if
+    Query.resolve_dynamic_rule_clause
+      [ "parent" ]
+      (SourceClause ("other", DynamicPredicate ("parent", [ QVar "e" ])))
+    <> SourceRule ("other", "parent", [ QVar "e" ])
+  then
+    failwith "resolve_dynamic_rule_clause should preserve sources for resolved rules";
+  if
+    Query.resolve_dynamic_rule_clause
+      [ "parent" ]
+      (Not [ Or [ [ DynamicPredicate ("parent", [ QVar "e" ]) ] ] ])
+    <> Not [ Or [ [ Rule ("parent", [ QVar "e" ]) ] ] ]
+  then
+    failwith "resolve_dynamic_rule_clause should recurse through nested branches";
+  if
+    Query.resolve_dynamic_rule_clause [ "parent" ] (DynamicPredicate ("large?", [ QVar "e" ]))
+    <> DynamicPredicate ("large?", [ QVar "e" ])
+  then
+    failwith "resolve_dynamic_rule_clause should leave non-rule predicates unchanged";
+  let rule =
+    { rule_name = "ancestor"
+    ; rule_params = [ "e"; "child" ]
+    ; rule_body =
+        [ DynamicPredicate ("parent", [ QVar "e"; QVar "child" ])
+        ; DynamicPredicate ("large?", [ QVar "child" ])
+        ]
+    }
+  in
+  assert_equal_rules
+    "resolve_dynamic_rule resolves every clause in a rule body"
+    [ { rule with
+        rule_body =
+          [ Rule ("parent", [ QVar "e"; QVar "child" ])
+          ; DynamicPredicate ("large?", [ QVar "child" ])
+          ]
+      }
+    ]
+    [ Query.resolve_dynamic_rule [ "parent" ] rule ];
+  if not (Query.find_spec_uses_default_source (Find_pull_source ("$", "e", [ Pull_id ]))) then
+    failwith "find_spec_uses_default_source should detect explicit default pull sources";
+  if Query.find_spec_uses_default_source (Find_pull_source ("other", "e", [ Pull_id ])) then
+    failwith "find_spec_uses_default_source should ignore named pull sources";
+  if Query.find_spec_uses_default_source (Find_pull ("e", [ Pull_id ])) then
+    failwith "find_spec_uses_default_source should ignore implicit pull specs";
+  if not (Query.clause_uses_default_source (Pattern (QVar "e", QAttr "name", QVar "name"))) then
+    failwith "clause_uses_default_source should treat bare patterns as default-source clauses";
+  if
+    Query.clause_uses_default_source
+      (SourceClause ("other", SourcePattern ("other", QVar "e", QAttr "name", QVar "name")))
+  then
+    failwith "clause_uses_default_source should ignore named-only source clauses";
+  if
+    not
+      (Query.clause_uses_default_source
+         (SourceNot
+            ( "other"
+            , [ SourcePattern ("other", QVar "e", QAttr "name", QVar "name")
+              ; Pattern (QVar "e", QAttr "age", QVar "age")
+              ] )))
+  then
+    failwith "clause_uses_default_source should recurse through nested clauses";
+  assert_equal_inputs
+    "infer_default_inputs adds default source for queries without explicit :in"
+    [ Input_source_decl "$"; Input_scalar_decl "name" ]
+    (Query.infer_default_inputs
+       None
+       [ Find_pull_source ("$", "e", [ Pull_id ]) ]
+       []
+       [ Input_scalar_decl "name" ]);
+  assert_equal_inputs
+    "infer_default_inputs does not add default source when :in is explicit"
+    [ Input_scalar_decl "name" ]
+    (Query.infer_default_inputs
+       (Some (QueryFormVector []))
+       [ Find_pull_source ("$", "e", [ Pull_id ]) ]
+       []
+       [ Input_scalar_decl "name" ]);
+  assert_equal_inputs
+    "infer_default_inputs leaves named-source-only queries unchanged"
+    [ Input_source_decl "$other" ]
+    (Query.infer_default_inputs
+       None
+       []
+       [ SourcePattern ("other", QVar "e", QAttr "name", QVar "name") ]
+       [ Input_source_decl "$other" ])
+
 let test_query_namespace__test_query_string_helpers () =
   let value_to_string = function
     | String value -> "\"" ^ value ^ "\""
@@ -719,6 +833,7 @@ let () =
   test_query_namespace__test_rule_helpers ();
   test_query_namespace__test_variable_discovery_helpers ();
   test_query_namespace__test_source_discovery_helpers ();
+  test_query_namespace__test_rule_source_analysis_helpers ();
   test_query_namespace__test_query_string_helpers ();
   test_query_namespace__test_query_clause_string_helpers ();
   test_query_namespace__test_binding_validation_helpers ()
