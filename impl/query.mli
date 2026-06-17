@@ -132,6 +132,13 @@ val ensure_join_vars_bound_in_clause : (string * query_result) list -> string li
 val ensure_or_join_branches_cover_listed_vars :
   (string * query_result) list -> string list -> query_clause list list -> unit
 val clause_calls_rule : string -> query_clause -> bool
+val matching_rules_for_call :
+  (string * string * query_result option list) list ->
+  string * string * query_result option list ->
+  query_rule list ->
+  string ->
+  int ->
+  query_rule list
 val query_input_binding_string : input_binding -> string
 val query_input_decl_binding_string : query_input -> string
 val query_input_binding_label : query_input -> string

@@ -723,6 +723,13 @@ let rec clause_calls_rule name = function
   | DynamicFunctionCollection _ | DynamicFunctionRelation _ ->
     false
 
+let matching_rules_for_call active_rules key rules name arity =
+  let candidates = matching_rules_exn rules name arity in
+  if List.mem key active_rules then
+    List.filter (fun rule -> not (List.exists (clause_calls_rule name) rule.rule_body)) candidates
+  else
+    candidates
+
 let rec query_input_binding_string = function
   | Bind_scalar var -> query_input_var_label var
   | Bind_ignore -> "_"

@@ -408,7 +408,41 @@ let test_query_namespace__test_rule_helpers () =
   then
     failwith "clause_calls_rule should recurse through or-join branches";
   if Query.clause_calls_rule "parent" (DynamicPredicate ("parent", [ QVar "e" ])) then
-    failwith "clause_calls_rule should ignore predicate names"
+    failwith "clause_calls_rule should ignore predicate names";
+  let recursive_parent =
+    { rule_name = "parent"
+    ; rule_params = [ "e"; "child" ]
+    ; rule_body =
+        [ Rule ("parent", [ QVar "e"; QVar "middle" ])
+        ; Rule ("parent", [ QVar "middle"; QVar "child" ])
+        ]
+    }
+  in
+  let terminal_parent =
+    { rule_name = "parent"
+    ; rule_params = [ "e"; "child" ]
+    ; rule_body = [ Pattern (QVar "e", QAttr "parent", QVar "child") ]
+    }
+  in
+  let rule_call_key = "", "parent", [ Some (Result_entity 1); Some (Result_entity 2) ] in
+  assert_equal_rules
+    "matching_rules_for_call returns all candidates when call is not active"
+    [ recursive_parent; terminal_parent ]
+    (Query.matching_rules_for_call
+       []
+       rule_call_key
+       [ recursive_parent; terminal_parent ]
+       "parent"
+       2);
+  assert_equal_rules
+    "matching_rules_for_call filters recursive candidates when call is active"
+    [ terminal_parent ]
+    (Query.matching_rules_for_call
+       [ rule_call_key ]
+       rule_call_key
+       [ recursive_parent; terminal_parent ]
+       "parent"
+       2)
 
 let test_query_namespace__test_variable_discovery_helpers () =
   assert_equal_string_list

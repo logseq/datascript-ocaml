@@ -3982,8 +3982,6 @@ let initial_query_context db query input_args =
   , List.fold_left (apply_query_input db) [ [] ] inputs
   , query_rules_of_inputs inputs )
 
-let matching_rules_exn = Query.matching_rules_exn
-
 let project_binding = Query.project_binding
 
 let merge_projected_binding db vars outer_binding inner_binding =
@@ -4046,18 +4044,11 @@ and ensure_join_vars_bound_in_clause bindings vars clause_string =
 and ensure_or_join_branches_cover_listed_vars bindings vars branches =
   Query.ensure_or_join_branches_cover_listed_vars bindings vars branches
 
-and clause_calls_rule name clause =
-  Query.clause_calls_rule name clause
-
 and rule_call_key db source name bindings terms =
   source, name, List.map (eval_query_term db bindings) terms
 
 and matching_rules_for_call active_rules key rules name arity =
-  let candidates = matching_rules_exn rules name arity in
-  if List.mem key active_rules then
-    List.filter (fun rule -> not (List.exists (clause_calls_rule name) rule.rule_body)) candidates
-  else
-    candidates
+  Query.matching_rules_for_call active_rules key rules name arity
 
 and eval_dynamic_query_term db sources bindings = function
   | QSource source -> Some (Result_db (source_db db sources source))
@@ -6717,6 +6708,7 @@ module Query = struct
   let ensure_join_vars_bound_in_clause = Query_impl.ensure_join_vars_bound_in_clause
   let ensure_or_join_branches_cover_listed_vars = Query_impl.ensure_or_join_branches_cover_listed_vars
   let clause_calls_rule = Query_impl.clause_calls_rule
+  let matching_rules_for_call = Query_impl.matching_rules_for_call
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
   let query_input_binding_label = Query_impl.query_input_binding_label
