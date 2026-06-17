@@ -33,6 +33,7 @@ let refresh_db_identity db =
   { db with db_uid = next_db_uid () }
 
 module Db = Db
+module Entity = Entity
 module Lru = Lru
 module Schema = Schema
 
@@ -2497,68 +2498,6 @@ let index_range db attr ?start ?stop () =
     Option.fold ~none:true ~some:(fun start -> compare_value d.v start >= 0) start
     && Option.fold ~none:true ~some:(fun stop -> compare_value d.v stop <= 0) stop)
 
-let tx_value_of_attr_values db attr values =
-  let values = List.sort compare_value values in
-  match cardinality db attr, values with
-  | Many, values -> Many_values values
-  | One, value :: _ -> One_value value
-  | One, [] -> Many_values []
-
-let entity_has_forward_attrs db entity_id =
-  datoms db Eavt ~e:entity_id () <> []
-
-let entity_visible_attr_values db attr values =
-  if is_ref_attr db attr then
-    values
-    |> List.filter (function
-      | Ref entity_id -> entity_has_forward_attrs db entity_id
-      | _ -> true)
-  else
-    values
-
-let group_forward_entity_attrs db entity_id =
-  let add_attr groups d =
-    match List.assoc_opt d.a groups with
-    | None -> (d.a, [ d.v ]) :: groups
-    | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
-  in
-  datoms db Eavt ~e:entity_id ()
-  |> List.fold_left add_attr []
-  |> List.filter_map (fun (attr, values) ->
-    match entity_visible_attr_values db attr values with
-    | [] -> None
-    | values -> Some (attr, tx_value_of_attr_values db attr values))
-
-let group_reverse_entity_attrs db entity_id =
-  datoms db Eavt ()
-  |> List.filter_map (fun d ->
-    match d.v with
-    | Ref ref_id when ref_id = entity_id -> Some (reverse_ref d.a, d.a, Ref d.e)
-    | _ -> None)
-  |> List.fold_left
-       (fun groups (reverse_attr, forward_attr, value) ->
-         match List.assoc_opt reverse_attr groups with
-         | None -> (reverse_attr, (forward_attr, [ value ])) :: groups
-         | Some (_, values) ->
-           (reverse_attr, (forward_attr, value :: values)) :: List.remove_assoc reverse_attr groups)
-       []
-  |> List.map (fun (attr, (forward_attr, values)) ->
-    let values = List.sort compare_value values in
-    if is_component db forward_attr then
-      match values with
-      | value :: _ -> attr, One_value value
-      | [] -> attr, Many_values []
-    else
-      attr, Many_values values)
-
-let group_entity_attrs db entity_id =
-  match group_forward_entity_attrs db entity_id with
-  | [] -> []
-  | forward_attrs ->
-    forward_attrs
-    @ group_reverse_entity_attrs db entity_id
-    |> List.sort (fun (left, _) (right, _) -> compare left right)
-
 let rec entity_id_of_ref db = function
   | Entity_id entity_id -> Some entity_id
   | Lookup_ref (attr, value) ->
@@ -2610,98 +2549,36 @@ and resolve_ref_value db = function
     resolve_values [] values
   | value -> Some (normalize_value value)
 
+let entity_context =
+  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; all_datoms = (fun db -> datoms db Eavt ())
+  ; compare_value
+  ; cardinality
+  ; is_ref_attr
+  ; is_component
+  ; reverse_ref
+  ; is_reverse_ref
+  ; entity_id_of_ref
+  }
+
 let entity db entity_ref =
-  match entity_id_of_ref db entity_ref with
-  | None -> None
-  | Some entity_id ->
-    (match group_entity_attrs db entity_id with
-     | [] -> None
-     | attrs -> Some { id = entity_id; db; attrs })
+  Entity.entity entity_context db entity_ref
 
-let entity_attr_raw (entity : entity) = function
-  | "db/id" -> Some (One_value (Int entity.id))
-  | attr -> List.assoc_opt attr entity.attrs
+let entity_attr_raw = Entity.entity_attr_raw
 
-let rec materialized_tx_entity db visited entity_id =
-  if List.mem entity_id visited then
-    Some { db_id = Some (Entity_id entity_id); attrs = [] }
-  else
-    match entity db (Entity_id entity_id) with
-    | None -> None
-    | Some entity ->
-      let attrs = List.filter (fun (attr, _) -> not (is_reverse_ref attr)) entity.attrs in
-      Some { db_id = Some (Entity_id entity_id); attrs }
+let entity_attr entity attr =
+  Entity.entity_attr entity_context entity attr
 
-and materialize_ref_values db visited = function
-  | One_value (Ref entity_id) ->
-    (match materialized_tx_entity db visited entity_id with
-     | Some entity -> One_entity entity
-     | None -> One_value (Ref entity_id))
-  | Many_values values
-    when List.for_all (function Ref _ -> true | _ -> false) values ->
-    let entities =
-      values
-      |> List.filter_map (function
-        | Ref entity_id -> materialized_tx_entity db visited entity_id
-        | _ -> None)
-      |> List.sort (fun left right -> compare left.db_id right.db_id)
-    in
-    if entities = [] && values <> [] then Many_values values else Many_entities entities
-  | value -> value
+let entity_db = Entity.entity_db
 
-let entity_attr (entity : entity) attr =
-  entity_attr_raw entity attr
-  |> Option.map (materialize_ref_values entity.db [ entity.id ])
+let is_entity = Entity.is_entity
 
-let entity_db (entity : entity) = entity.db
+let entity_equal = Entity.entity_equal
 
-let is_entity (_ : entity) = true
+let entity_hash = Entity.entity_hash
 
-let entity_equal (left : entity) (right : entity) =
-  left.id = right.id && left.db.db_uid = right.db.db_uid
-
-let entity_hash (entity : entity) =
-  Hashtbl.hash (entity.db.db_uid, entity.id)
-
-let touch ent =
-  let rec touch_entity visited (entity : entity) =
-    let attrs =
-      entity.attrs
-      |> List.map (fun (attr, tx_value) -> attr, touch_attr_value entity.db visited attr tx_value)
-    in
-    { entity with attrs }
-  and touch_attr_value db visited attr tx_value =
-    let component_attr = if is_reverse_ref attr then reverse_ref attr else attr in
-    if not (is_component db component_attr) then
-      tx_value
-    else
-      match tx_value with
-      | One_value (Ref entity_id) ->
-        (match touched_tx_entity db visited entity_id with
-         | Some entity -> One_entity entity
-         | None -> tx_value)
-      | Many_values values ->
-        let entities =
-          values
-          |> List.filter_map (function
-            | Ref entity_id -> touched_tx_entity db visited entity_id
-            | _ -> None)
-          |> List.sort (fun left right -> compare left.db_id right.db_id)
-        in
-        if entities = [] && values <> [] then tx_value else Many_entities entities
-      | One_value _ | One_entity _ | Many_entities _ -> tx_value
-  and touched_tx_entity db visited entity_id =
-    if List.mem entity_id visited then
-      Some { db_id = Some (Entity_id entity_id); attrs = [] }
-    else
-      match entity db (Entity_id entity_id) with
-      | None -> None
-      | Some entity ->
-        let touched = touch_entity (entity_id :: visited) entity in
-        let attrs = List.filter (fun (attr, _) -> not (is_reverse_ref attr)) touched.attrs in
-        Some { db_id = Some (Entity_id touched.id); attrs }
-  in
-  touch_entity [ ent.id ] ent
+let touch entity =
+  Entity.touch entity_context entity
 
 let pull_key_of_attr attr = Keyword attr
 

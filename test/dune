@@ -14,6 +14,11 @@
  (libraries datascript))
 
 (test
+ (name test_entity)
+ (modules test_entity)
+ (libraries datascript))
+
+(test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
  (libraries datascript logseq_sqlite_storage unix))
