@@ -9,6 +9,9 @@ let assert_equal_value label expected actual =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d but got %d" label expected actual
 
+let assert_equal_result label expected actual =
+  if expected <> actual then failf "%s: query results did not match" label
+
 let assert_equal_value_option label expected actual =
   match expected, actual with
   | None, None -> ()
@@ -56,8 +59,53 @@ let test_extremum_value () =
     (Int 9)
     (Built_ins.extremum_value MaximumValue (Int 3) [ Int 9; Int 4 ])
 
+let test_aggregate_result () =
+  let values =
+    [ Result_value (Int 1); Result_value (Int 2); Result_value (Int 2); Result_value (Float 3.5) ]
+  in
+  assert_equal_result "count counts all rows" (Result_value (Int 4)) (Built_ins.aggregate_result Count values);
+  assert_equal_result
+    "count-distinct counts unique query results"
+    (Result_value (Int 3))
+    (Built_ins.aggregate_result CountDistinct values);
+  assert_equal_result
+    "distinct returns a normalized set of scalar values"
+    (Result_value (Set [ Int 1; Int 2; Float 3.5 ]))
+    (Built_ins.aggregate_result Distinct values);
+  assert_equal_result "sum preserves float totals" (Result_value (Float 8.5)) (Built_ins.aggregate_result Sum values);
+  assert_equal_result "avg returns a float" (Result_value (Float 2.125)) (Built_ins.aggregate_result Avg values);
+  assert_equal_result
+    "median sorts numeric values"
+    (Result_value (Float 2.0))
+    (Built_ins.aggregate_result Median values);
+  assert_equal_result
+    "variance uses population variance"
+    (Result_value (Float 0.796875))
+    (Built_ins.aggregate_result Variance values);
+  assert_equal_result
+    "min uses aggregate result ordering"
+    (Result_value (Int 1))
+    (Built_ins.aggregate_result Min values);
+  assert_equal_result
+    "max uses aggregate result ordering"
+    (Result_value (Float 3.5))
+    (Built_ins.aggregate_result Max values);
+  assert_equal_result
+    "min n returns an ordered tuple"
+    (Result_value (Tuple [ Some (Int 1); Some (Int 2) ]))
+    (Built_ins.aggregate_result (MinN 2) values);
+  assert_equal_result
+    "max n returns an ordered tuple"
+    (Result_value (Tuple [ Some (Int 2); Some (Float 3.5) ]))
+    (Built_ins.aggregate_result (MaxN 2) values);
+  assert_raises_invalid_arg "avg rejects empty input" (fun () ->
+    ignore (Built_ins.aggregate_result Avg []));
+  assert_raises_invalid_arg "dynamic aggregate amounts must be resolved before evaluation" (fun () ->
+    ignore (Built_ins.aggregate_result (MinNVar "n") values))
+
 let () =
   test_eval_arithmetic ();
   test_normalized_comparison ();
   test_extremum_value ();
+  test_aggregate_result ();
   print_endline "test_built_ins ok"

@@ -14,6 +14,7 @@ module Built_ins : sig
   val eval_arithmetic : arithmetic_op -> value list -> value option
   val normalized_comparison : int -> int
   val extremum_value : extremum_op -> value -> value list -> value
+  val aggregate_result : aggregate -> query_result list -> query_result
   val value_is_truthy : value -> bool
   val boolean_and_value : value list -> value
   val boolean_or_value : value list -> value
