@@ -7550,7 +7550,7 @@ let query_rules_and_where query input_rules =
   let names = rule_names rules in
   List.map (resolve_dynamic_rule names) rules, List.map (resolve_dynamic_rule_clause names) query.where
 
-let q_sources ?(inputs = []) db sources query =
+let q_sources_raw ?(inputs = []) db sources query =
   let callables, input_bindings, input_rules = initial_query_context db query inputs in
   let rules, where = query_rules_and_where query input_rules in
   let bindings = eval_clauses ~callables db sources rules input_bindings where in
@@ -7566,12 +7566,7 @@ let q_sources ?(inputs = []) db sources query =
     |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
     |> List.sort_uniq compare
 
-let q ?inputs db query = q_sources ?inputs db [] query
-
-let q_string ?inputs db input =
-  q ?inputs db (parse_query_string_with_pull_context ~default_pull_db:db input)
-
-let q_with ?(inputs = []) db with_vars query =
+let q_with_raw ?(inputs = []) db with_vars query =
   let callables, input_bindings, input_rules = initial_query_context db query inputs in
   let rules, where = query_rules_and_where query input_rules in
   let bindings = eval_clauses ~callables db [] rules input_bindings where in
@@ -7581,79 +7576,38 @@ let q_with ?(inputs = []) db with_vars query =
   else
     non_aggregate_rows_with db [] bindings query.find with_vars
 
-let q_with_string ?inputs db with_vars input =
-  q_with ?inputs db with_vars (parse_query_string_with_pull_context ~default_pull_db:db input)
+module Query_impl = Query
 
-let q_sources_string ?inputs db sources input =
-  let pull_db_for_source source =
-    match List.assoc_opt source sources with
-    | Some (Db_source source_db) -> source_db
-    | Some (Relation_source _) -> empty_db ()
-    | None when source = "$" -> db
-    | None -> empty_db ()
-  in
-  let default_pull_db = pull_db_for_source "$" in
-  q_sources
-    ?inputs
-    db
-    sources
-    (parse_query_string_with_pull_context ~default_pull_db ~pull_db_for_source input)
+let query_context : Query_impl.context =
+  { empty_db = (fun () -> empty_db ())
+  ; q_sources = q_sources_raw
+  ; q_with = q_with_raw
+  ; parse_query_string_with_pull_context
+  ; parse_query_return_string_with_pull_context
+  ; parse_query_return_map_string_with_pull_context
+  ; compare_value
+  }
 
-let q_return ?inputs db return query =
-  let rows = q ?inputs db query in
-  match return with
-  | Return_relation -> Query_relation rows
-  | Return_collection ->
-    rows
-    |> List.filter_map (function
-      | value :: _ -> Some value
-      | [] -> None)
-    |> List.sort_uniq compare
-    |> fun values -> Query_collection values
-  | Return_tuple -> Query_tuple (List.nth_opt rows 0)
-  | Return_scalar ->
-    let value =
-      Option.bind
-        (List.nth_opt rows 0)
-        (function
-      | value :: _ -> Some value
-      | [] -> None)
-    in
-    Query_scalar value
+module Query = struct
+  let q = Query_impl.q query_context
+  let q_string = Query_impl.q_string query_context
+  let q_with = Query_impl.q_with query_context
+  let q_with_string = Query_impl.q_with_string query_context
+  let q_sources = Query_impl.q_sources query_context
+  let q_sources_string = Query_impl.q_sources_string query_context
+  let q_return = Query_impl.q_return query_context
+  let q_return_string = Query_impl.q_return_string query_context
+  let q_return_map = Query_impl.q_return_map query_context
+  let q_return_map_string = Query_impl.q_return_map_string query_context
+end
 
-let q_return_string ?inputs db input =
-  let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in
-  q_return ?inputs db return query
-
-let labels_of_return_map = function
-  | Return_keys labels -> List.map (fun label -> Keyword label) labels
-  | Return_syms labels -> List.map (fun label -> Symbol label) labels
-  | Return_strs labels -> List.map (fun label -> String label) labels
-
-let map_query_row labels row =
-  if List.length labels <> List.length row then
-    invalid_arg "return map labels must match find count";
-  List.combine labels row |> List.sort (fun (left, _) (right, _) -> compare_value left right)
-
-let q_return_map ?inputs db return return_map query =
-  let labels = labels_of_return_map return_map in
-  let rows = q ?inputs db query in
-  match return with
-  | Return_relation ->
-    rows
-    |> List.map (map_query_row labels)
-    |> fun rows -> Query_relation_maps rows
-  | Return_tuple ->
-    List.nth_opt rows 0
-    |> Option.map (map_query_row labels)
-    |> fun row -> Query_tuple_map row
-  | Return_collection | Return_scalar ->
-    invalid_arg "return maps require relation or tuple query returns"
-
-let q_return_map_string ?inputs db input =
-  let return, return_map, query =
-    parse_query_return_map_string_with_pull_context ~default_pull_db:db input
-  in
-  match return_map with
-  | Some return_map -> q_return_map ?inputs db return return_map query
-  | None -> q_return ?inputs db return query
+let q = Query.q
+let q_string = Query.q_string
+let q_with = Query.q_with
+let q_with_string = Query.q_with_string
+let q_sources = Query.q_sources
+let q_sources_string = Query.q_sources_string
+let q_return = Query.q_return
+let q_return_string = Query.q_return_string
+let q_return_map = Query.q_return_map
+let q_return_map_string = Query.q_return_map_string

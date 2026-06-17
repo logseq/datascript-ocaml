@@ -357,6 +357,32 @@ val parse_query_return : query_form -> query_return * query
 val parse_query_return_string : string -> query_return * query
 val parse_query_return_map : query_form -> query_return * query_return_map option * query
 val parse_query_return_map_string : string -> query_return * query_return_map option * query
+
+module Query : sig
+  val q : ?inputs:query_arg list -> db -> query -> query_result list list
+  val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
+  val q_with : ?inputs:query_arg list -> db -> string list -> query -> query_result list list
+  val q_with_string :
+    ?inputs:query_arg list -> db -> string list -> string -> query_result list list
+  val q_sources :
+    ?inputs:query_arg list ->
+    db ->
+    (string * query_source) list ->
+    query ->
+    query_result list list
+  val q_sources_string :
+    ?inputs:query_arg list ->
+    db ->
+    (string * query_source) list ->
+    string ->
+    query_result list list
+  val q_return : ?inputs:query_arg list -> db -> query_return -> query -> query_output
+  val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
+  val q_return_map :
+    ?inputs:query_arg list -> db -> query_return -> query_return_map -> query -> query_output
+  val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
+end
+
 val q : ?inputs:query_arg list -> db -> query -> query_result list list
 val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
 val q_with : ?inputs:query_arg list -> db -> string list -> query -> query_result list list

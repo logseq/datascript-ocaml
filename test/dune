@@ -94,6 +94,11 @@
  (libraries datascript))
 
 (test
+ (name test_query_namespace)
+ (modules test_query_namespace)
+ (libraries datascript))
+
+(test
  (name test_tuples)
  (modules test_tuples)
  (libraries datascript))
