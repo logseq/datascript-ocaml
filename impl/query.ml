@@ -348,3 +348,46 @@ let row_of_scalar_sequence value =
 let rows_of_map_entries entries =
   entries
   |> List.map (fun (key, value) -> [ Result_value key; Result_value value ])
+
+let query_input_arity_error ~consume_rules declarations provided =
+  let labels =
+    declarations
+    |> List.map query_input_binding_label
+    |> String.concat " "
+  in
+  let required =
+    declarations
+    |> List.filter (query_input_consumes_argument ~consume_rules)
+    |> List.length
+    |> ( + ) 1
+  in
+  invalid_arg
+    (Printf.sprintf
+       "Wrong number of arguments for bindings [%s], %d required, %d provided"
+       labels
+       required
+       provided)
+
+let bind_query_inputs ~query_input_of_arg ~consume_rules declarations args =
+  let provided = List.length args + 1 in
+  let arity_error () = query_input_arity_error ~consume_rules declarations provided in
+  let rec bind acc declarations args =
+    match declarations with
+    | [] ->
+      (match args with
+       | [] -> List.rev acc
+       | _ :: _ -> arity_error ())
+    | (Input_scalar _ | Input_entity_ref _ | Input_collection _ | Input_tuple _ | Input_relation _
+      | Input_nested_collection _ | Input_nested_tuple _ | Input_nested_relation _ | Input_predicate _
+      | Input_function _ | Input_aggregate _ | Input_ignore as input)
+      :: rest ->
+      bind (input :: acc) rest args
+    | Input_collection_ignore _ as input :: rest -> bind (input :: acc) rest args
+    | Input_source_decl _ as input :: rest -> bind (input :: acc) rest args
+    | Input_rules_decl as input :: rest when not consume_rules -> bind (input :: acc) rest args
+    | decl :: rest ->
+      (match args with
+       | [] -> arity_error ()
+       | arg :: args -> bind (query_input_of_arg decl arg :: acc) rest args)
+  in
+  bind [] declarations args

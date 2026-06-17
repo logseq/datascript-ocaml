@@ -415,6 +415,12 @@ module Query : sig
   val row_of_collection_result : query_result -> query_result list
   val row_of_scalar_sequence : query_result -> query_result list
   val rows_of_map_entries : (value * value) list -> query_result list list
+  val bind_query_inputs :
+    query_input_of_arg:(query_input -> query_arg -> query_input) ->
+    consume_rules:bool ->
+    query_input list ->
+    query_arg list ->
+    query_input list
 end
 
 val q : ?inputs:query_arg list -> db -> query -> query_result list list

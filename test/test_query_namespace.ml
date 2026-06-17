@@ -8,6 +8,9 @@ let assert_equal_query label expected actual =
 let assert_equal_query_rows label expected actual =
   if expected <> actual then failf "%s: unexpected query rows" label
 
+let assert_equal_inputs label expected actual =
+  if expected <> actual then failf "%s: unexpected bound query inputs" label
+
 let assert_equal_query_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional query result" label
 
@@ -208,9 +211,66 @@ let test_query_namespace__test_input_shape_helpers () =
     (Query.rows_of_map_entries
        [ Keyword "a", Int 1; Keyword "b", Vector [ Int 2; Int 3 ] ])
 
+let test_query_namespace__test_input_binding_helpers () =
+  let query_input_of_arg decl arg =
+    match decl, arg with
+    | Input_ignore_decl, _ -> Input_ignore
+    | Input_scalar_decl var, Arg_scalar value -> Input_scalar (var, value)
+    | Input_tuple_decl vars, Arg_tuple row -> Input_tuple (vars, row)
+    | Input_rules_decl, Arg_rules rules -> Input_rules rules
+    | _ -> invalid_arg "test conversion does not support this binding"
+  in
+  assert_equal_inputs
+    "bind_query_inputs skips source declarations and binds scalar args"
+    [ Input_source_decl "$other"; Input_scalar ("name", Result_value (String "Ivan")) ]
+    (Query.bind_query_inputs
+       ~query_input_of_arg
+       ~consume_rules:false
+       [ Input_source_decl "$other"; Input_scalar_decl "name" ]
+       [ Arg_scalar (Result_value (String "Ivan")) ]);
+  assert_equal_inputs
+    "bind_query_inputs preserves already bound inputs"
+    [ Input_collection_ignore [ Result_value (Int 1) ]; Input_ignore ]
+    (Query.bind_query_inputs
+       ~query_input_of_arg
+       ~consume_rules:false
+       [ Input_collection_ignore [ Result_value (Int 1) ]; Input_ignore_decl ]
+       [ Arg_scalar (Result_value (String "ignored")) ]);
+  assert_equal_inputs
+    "bind_query_inputs skips rules declarations when rules are implicit"
+    [ Input_rules_decl; Input_scalar ("name", Result_value (String "Oleg")) ]
+    (Query.bind_query_inputs
+       ~query_input_of_arg
+       ~consume_rules:false
+       [ Input_rules_decl; Input_scalar_decl "name" ]
+       [ Arg_scalar (Result_value (String "Oleg")) ]);
+  assert_equal_inputs
+    "bind_query_inputs consumes rules declarations when requested"
+    [ Input_rules []; Input_scalar ("name", Result_value (String "Oleg")) ]
+    (Query.bind_query_inputs
+       ~query_input_of_arg
+       ~consume_rules:true
+       [ Input_rules_decl; Input_scalar_decl "name" ]
+       [ Arg_rules []; Arg_scalar (Result_value (String "Oleg")) ]);
+  assert_raises_invalid_arg "bind_query_inputs rejects too few args" (fun () ->
+    ignore
+      (Query.bind_query_inputs
+         ~query_input_of_arg
+         ~consume_rules:false
+         [ Input_scalar_decl "name" ]
+         []));
+  assert_raises_invalid_arg "bind_query_inputs rejects too many args" (fun () ->
+    ignore
+      (Query.bind_query_inputs
+         ~query_input_of_arg
+         ~consume_rules:false
+         [ Input_scalar_decl "name" ]
+         [ Arg_scalar (Result_value (String "Ivan")); Arg_scalar (Result_value (String "extra")) ]))
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
   test_query_namespace__test_input_label_helpers ();
-  test_query_namespace__test_input_shape_helpers ()
+  test_query_namespace__test_input_shape_helpers ();
+  test_query_namespace__test_input_binding_helpers ()
