@@ -466,6 +466,47 @@ and vars_of_clause = function
 let query_input_var_label var =
   if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
 
+let query_term_string ~value_to_string = function
+  | QVar var -> query_input_var_label var
+  | QEntity entity_id -> string_of_int entity_id
+  | QIdent ident -> ":" ^ ident
+  | QLookupRef (attr, value) -> "[:" ^ attr ^ " " ^ value_to_string value ^ "]"
+  | QAttr attr -> ":" ^ attr
+  | QValue value -> value_to_string value
+  | QSource "$" -> "$"
+  | QSource source -> "$" ^ source
+  | QWildcard -> "_"
+
+let query_output_var_string var =
+  if var = "_" then "_" else query_input_var_label var
+
+let query_output_binding_string = function
+  | [ var ] -> query_output_var_string var
+  | vars -> "[" ^ String.concat " " (List.map query_output_var_string vars) ^ "]"
+
+let query_call_string ~value_to_string symbol terms =
+  "("
+  ^ String.concat " " (symbol :: List.map (query_term_string ~value_to_string) terms)
+  ^ ")"
+
+let numeric_predicate_symbol = function
+  | ZeroNumber -> "zero?"
+  | PositiveNumber -> "pos?"
+  | NegativeNumber -> "neg?"
+  | EvenInteger -> "even?"
+  | OddInteger -> "odd?"
+
+let arithmetic_op_symbol = function
+  | AddNumbers -> "+"
+  | SubtractNumbers -> "-"
+  | MultiplyNumbers -> "*"
+  | DivideNumbers -> "/"
+  | IncrementNumber -> "inc"
+  | DecrementNumber -> "dec"
+  | QuotientNumbers -> "quot"
+  | RemainderNumbers -> "rem"
+  | ModuloNumbers -> "mod"
+
 let rec query_input_binding_string = function
   | Bind_scalar var -> query_input_var_label var
   | Bind_ignore -> "_"

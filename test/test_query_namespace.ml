@@ -422,6 +422,51 @@ let test_query_namespace__test_variable_discovery_helpers () =
     [ "e"; "v" ]
     (Query.vars_of_clause (SourceClause ("$", Pattern (QVar "e", QAttr "name", QVar "v"))))
 
+let test_query_namespace__test_query_string_helpers () =
+  let value_to_string = function
+    | String value -> "\"" ^ value ^ "\""
+    | Keyword value -> ":" ^ value
+    | Int value -> string_of_int value
+    | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
+  in
+  assert_equal_string
+    "query_term_string formats vars"
+    "?name"
+    (Query.query_term_string ~value_to_string (QVar "name"));
+  assert_equal_string
+    "query_term_string formats lookup refs through the value printer"
+    "[:user/email \"a@example.com\"]"
+    (Query.query_term_string
+       ~value_to_string
+       (QLookupRef ("user/email", String "a@example.com")));
+  assert_equal_string
+    "query_term_string formats named sources"
+    "$other"
+    (Query.query_term_string ~value_to_string (QSource "other"));
+  assert_equal_string
+    "query_output_var_string preserves wildcards"
+    "_"
+    (Query.query_output_var_string "_");
+  assert_equal_string
+    "query_output_binding_string formats tuple outputs"
+    "[?name _]"
+    (Query.query_output_binding_string [ "name"; "_" ]);
+  assert_equal_string
+    "query_call_string formats callable invocations"
+    "(get ?profile :prefs)"
+    (Query.query_call_string
+       ~value_to_string
+       "get"
+       [ QVar "profile"; QValue (Keyword "prefs") ]);
+  assert_equal_string
+    "numeric_predicate_symbol formats odd?"
+    "odd?"
+    (Query.numeric_predicate_symbol OddInteger);
+  assert_equal_string
+    "arithmetic_op_symbol formats modulo"
+    "mod"
+    (Query.arithmetic_op_symbol ModuloNumbers)
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
@@ -431,4 +476,5 @@ let () =
   test_query_namespace__test_input_binding_helpers ();
   test_query_namespace__test_callable_helpers ();
   test_query_namespace__test_rule_helpers ();
-  test_query_namespace__test_variable_discovery_helpers ()
+  test_query_namespace__test_variable_discovery_helpers ();
+  test_query_namespace__test_query_string_helpers ()

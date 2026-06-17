@@ -4023,44 +4023,23 @@ and vars_of_query_terms terms = Query.vars_of_query_terms terms
 
 and vars_of_clause clause = Query.vars_of_clause clause
 
-and query_term_string = function
-  | QVar var -> query_input_var_label var
-  | QEntity entity_id -> string_of_int entity_id
-  | QIdent ident -> ":" ^ ident
-  | QLookupRef (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
-  | QAttr attr -> ":" ^ attr
-  | QValue value -> edn_string_of_value value
-  | QSource "$" -> "$"
-  | QSource source -> "$" ^ source
-  | QWildcard -> "_"
+and query_term_string term =
+  Query.query_term_string ~value_to_string:edn_string_of_value term
 
 and query_output_var_string var =
-  if var = "_" then "_" else query_input_var_label var
+  Query.query_output_var_string var
 
-and query_output_binding_string = function
-  | [ var ] -> query_output_var_string var
-  | vars -> "[" ^ String.concat " " (List.map query_output_var_string vars) ^ "]"
+and query_output_binding_string vars =
+  Query.query_output_binding_string vars
 
 and query_call_string symbol terms =
-  "(" ^ String.concat " " (symbol :: List.map query_term_string terms) ^ ")"
+  Query.query_call_string ~value_to_string:edn_string_of_value symbol terms
 
-and numeric_predicate_symbol = function
-  | ZeroNumber -> "zero?"
-  | PositiveNumber -> "pos?"
-  | NegativeNumber -> "neg?"
-  | EvenInteger -> "even?"
-  | OddInteger -> "odd?"
+and numeric_predicate_symbol predicate =
+  Query.numeric_predicate_symbol predicate
 
-and arithmetic_op_symbol = function
-  | AddNumbers -> "+"
-  | SubtractNumbers -> "-"
-  | MultiplyNumbers -> "*"
-  | DivideNumbers -> "/"
-  | IncrementNumber -> "inc"
-  | DecrementNumber -> "dec"
-  | QuotientNumbers -> "quot"
-  | RemainderNumbers -> "rem"
-  | ModuloNumbers -> "mod"
+and arithmetic_op_symbol op =
+  Query.arithmetic_op_symbol op
 
 and query_clause_string = function
   | Pattern (e, a, v) ->
@@ -6893,6 +6872,12 @@ module Query = struct
   let vars_of_query_terms = Query_impl.vars_of_query_terms
   let vars_of_clause = Query_impl.vars_of_clause
   let query_input_var_label = Query_impl.query_input_var_label
+  let query_term_string = Query_impl.query_term_string
+  let query_output_var_string = Query_impl.query_output_var_string
+  let query_output_binding_string = Query_impl.query_output_binding_string
+  let query_call_string = Query_impl.query_call_string
+  let numeric_predicate_symbol = Query_impl.numeric_predicate_symbol
+  let arithmetic_op_symbol = Query_impl.arithmetic_op_symbol
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
   let query_input_binding_label = Query_impl.query_input_binding_label
