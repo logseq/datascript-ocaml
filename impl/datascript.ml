@@ -3530,13 +3530,7 @@ let resolve_dynamic_aggregate = Query.resolve_dynamic_aggregate
 
 let aggregate_param_vars = Query.aggregate_param_vars
 
-let aggregate_callable_vars = Query.aggregate_callable_vars
-
-let query_term_vars terms =
-  terms
-  |> List.filter_map (function
-    | QVar var -> Some var
-    | QEntity _ | QIdent _ | QLookupRef _ | QAttr _ | QValue _ | QSource _ | QWildcard -> None)
+let query_term_vars = Query.query_term_vars
 
 let eval_query_term_with_sources db sources bindings = function
   | QSource source -> Some (Result_db (source_db db sources source))
@@ -5884,152 +5878,12 @@ let parse_with_section = function
 
 let parse_with form = parse_with_section (Some form)
 
-let vars_of_find_spec = function
-  | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) ->
-    [ var ]
-  | Find_aggregate (aggregate, terms) ->
-    query_term_vars terms @ aggregate_param_vars aggregate @ aggregate_callable_vars aggregate
-  | Find_pull_var (var, pattern_var) | Find_pull_source_var (_, var, pattern_var) ->
-    [ var; pattern_var ]
-
-let rec vars_of_input_binding = function
-  | Bind_scalar var -> [ var ]
-  | Bind_ignore -> []
-  | Bind_collection binding -> vars_of_input_binding binding
-  | Bind_tuple bindings -> bindings |> List.concat_map vars_of_input_binding
-
-let vars_of_input = function
-  | Input_scalar (var, _)
-  | Input_entity_ref (var, _)
-  | Input_collection (var, _)
-  | Input_predicate (var, _)
-  | Input_function (var, _)
-  | Input_aggregate (var, _)
-  | Input_scalar_decl var
-  | Input_collection_decl var ->
-    [ var ]
-  | Input_collection_ignore _
-  | Input_rules _
-  | Input_ignore
-  | Input_collection_ignore_decl
-  | Input_ignore_decl
-  | Input_rules_decl ->
-    []
-  | Input_nested_collection (binding, _)
-  | Input_nested_collection_decl binding ->
-    vars_of_input_binding binding
-  | Input_tuple (vars, _)
-  | Input_relation (vars, _)
-  | Input_tuple_decl vars
-  | Input_relation_decl vars ->
-    List.filter (( <> ) "_") vars
-  | Input_nested_tuple (bindings, _)
-  | Input_nested_relation (bindings, _)
-  | Input_nested_tuple_decl bindings ->
-    bindings |> List.concat_map vars_of_input_binding
-  | Input_nested_relation_decl bindings -> bindings |> List.concat_map vars_of_input_binding
-  | Input_source_decl _ -> []
-
-let source_of_input = function
-  | Input_source_decl source -> Some source
-  | Input_scalar _
-  | Input_entity_ref _
-  | Input_collection _
-  | Input_collection_ignore _
-  | Input_ignore
-  | Input_nested_collection _
-  | Input_tuple _
-  | Input_relation _
-  | Input_nested_tuple _
-  | Input_nested_relation _
-  | Input_predicate _
-  | Input_function _
-  | Input_aggregate _
-  | Input_rules _
-  | Input_scalar_decl _
-  | Input_collection_decl _
-  | Input_collection_ignore_decl
-  | Input_ignore_decl
-  | Input_rules_decl
-  | Input_nested_collection_decl _
-  | Input_tuple_decl _
-  | Input_relation_decl _
-  | Input_nested_tuple_decl _
-  | Input_nested_relation_decl _ ->
-    None
-
-let sources_of_clause = Query.sources_of_clause
-
 let has_rule_clause = Query.has_rule_clause
 let rule_names = Query.rule_names
 let resolve_dynamic_rule_clause = Query.resolve_dynamic_rule_clause
 let resolve_dynamic_rule = Query.resolve_dynamic_rule
-let sources_of_find_spec = Query.sources_of_find_spec
 let infer_default_inputs = Query.infer_default_inputs
-
-let ensure_distinct_input_vars inputs =
-  let vars = List.concat_map vars_of_input inputs in
-  if List.length vars <> List.length (List.sort_uniq compare vars) then
-    invalid_arg "Vars used in :in should be distinct"
-
-let ensure_distinct_input_sources inputs =
-  let sources = List.filter_map source_of_input inputs in
-  if List.length sources <> List.length (List.sort_uniq compare sources) then
-    invalid_arg "Vars used in :in should be distinct"
-
-let format_query_vars vars =
-  vars
-  |> List.map (fun var -> "?" ^ var)
-  |> String.concat " "
-  |> Printf.sprintf "[%s]"
-
-let format_source_vars sources =
-  sources
-  |> List.map (fun source -> if source = "$" then "$" else "$" ^ source)
-  |> String.concat " "
-  |> Printf.sprintf "[%s]"
-
-let validate_query query =
-  ensure_distinct_input_vars query.inputs;
-  ensure_distinct_input_sources query.inputs;
-  if List.length query.with_vars <> List.length (List.sort_uniq compare query.with_vars) then
-    invalid_arg "Vars used in :with should be distinct";
-  let declared_sources = List.filter_map source_of_input query.inputs |> List.sort_uniq compare in
-  let used_sources =
-    List.concat_map sources_of_find_spec query.find @ List.concat_map sources_of_clause query.where
-    |> List.sort_uniq compare
-  in
-  let unknown_sources = List.filter (fun source -> not (List.mem source declared_sources)) used_sources in
-  let available_vars =
-    List.concat_map vars_of_input query.inputs
-    @ List.concat_map vars_of_clause query.where
-    |> List.sort_uniq compare
-  in
-  let unknown_find_vars =
-    query.find
-    |> List.concat_map vars_of_find_spec
-    |> List.sort_uniq compare
-    |> List.filter (fun var -> not (List.mem var available_vars))
-  in
-  (match unknown_find_vars with
-   | [] -> query
-   | _ :: _ -> invalid_arg ("Query for unknown vars: " ^ format_query_vars unknown_find_vars))
-  |> fun query ->
-  let unknown_with_vars =
-    query.with_vars |> List.filter (fun var -> not (List.mem var available_vars))
-  in
-  (match unknown_with_vars with
-   | [] -> query
-   | _ :: _ -> invalid_arg ("Query for unknown vars: " ^ format_query_vars unknown_with_vars))
-  |> fun query ->
-  let find_vars = List.concat_map vars_of_find_spec query.find |> List.sort_uniq compare in
-  let shared_vars = List.filter (fun var -> List.mem var find_vars) query.with_vars in
-  match shared_vars with
-  | [] ->
-    (match unknown_sources with
-     | [] -> query
-     | _ :: _ -> invalid_arg ("Where uses unknown source vars: " ^ format_source_vars unknown_sources))
-  | _ :: _ -> invalid_arg (":find and :with should not use same variables: " ^ format_query_vars shared_vars)
+let validate_query = Query.validate_query
 
 let parse_where = function
   | Some (QueryFormVector clauses | QueryFormList clauses) -> List.map parse_pattern_clause clauses
@@ -6288,6 +6142,16 @@ module Query = struct
   let find_spec_uses_default_source = Query_impl.find_spec_uses_default_source
   let clause_uses_default_source = Query_impl.clause_uses_default_source
   let infer_default_inputs = Query_impl.infer_default_inputs
+  let query_term_vars = Query_impl.query_term_vars
+  let vars_of_find_spec = Query_impl.vars_of_find_spec
+  let vars_of_input_binding = Query_impl.vars_of_input_binding
+  let vars_of_input = Query_impl.vars_of_input
+  let source_of_input = Query_impl.source_of_input
+  let ensure_distinct_input_vars = Query_impl.ensure_distinct_input_vars
+  let ensure_distinct_input_sources = Query_impl.ensure_distinct_input_sources
+  let format_query_vars = Query_impl.format_query_vars
+  let format_source_vars = Query_impl.format_source_vars
+  let validate_query = Query_impl.validate_query
   let query_input_var_label = Query_impl.query_input_var_label
   let query_term_string = Query_impl.query_term_string
   let query_output_var_string = Query_impl.query_output_var_string

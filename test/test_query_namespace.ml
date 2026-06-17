@@ -647,6 +647,84 @@ let test_query_namespace__test_rule_source_analysis_helpers () =
        [ SourcePattern ("other", QVar "e", QAttr "name", QVar "name") ]
        [ Input_source_decl "$other" ])
 
+let test_query_namespace__test_query_validation_helpers () =
+  assert_equal_string_list
+    "query_term_vars preserves query var order and duplicates"
+    [ "e"; "e"; "name" ]
+    (Query.query_term_vars [ QVar "e"; QSource "other"; QVar "e"; QVar "name"; QWildcard ]);
+  assert_equal_string_list
+    "vars_of_find_spec includes aggregate input vars and dynamic aggregate vars"
+    [ "amount"; "n" ]
+    (Query.vars_of_find_spec (Find_aggregate (MinNVar "n", [ QVar "amount" ])));
+  assert_equal_string_list
+    "vars_of_input_binding walks nested bindings"
+    [ "name"; "city"; "country" ]
+    (Query.vars_of_input_binding
+       (Bind_tuple
+          [ Bind_scalar "name"
+          ; Bind_ignore
+          ; Bind_collection (Bind_tuple [ Bind_scalar "city"; Bind_scalar "country" ])
+          ]));
+  assert_equal_string_list
+    "vars_of_input drops ignored tuple columns"
+    [ "name"; "age" ]
+    (Query.vars_of_input (Input_relation_decl [ "name"; "_"; "age" ]));
+  assert_equal_string_list
+    "vars_of_input extracts nested tuple bindings"
+    [ "name"; "city" ]
+    (Query.vars_of_input
+       (Input_nested_tuple_decl [ Bind_scalar "name"; Bind_collection (Bind_scalar "city") ]));
+  (match Query.source_of_input (Input_source_decl "$other") with
+   | Some "$other" -> ()
+   | _ -> failwith "source_of_input should return declared source names");
+  (match Query.source_of_input (Input_scalar_decl "name") with
+   | None -> ()
+   | Some _ -> failwith "source_of_input should ignore non-source inputs");
+  Query.ensure_distinct_input_vars [ Input_scalar_decl "name"; Input_relation_decl [ "age" ] ];
+  assert_raises_invalid_arg_message
+    "ensure_distinct_input_vars rejects repeated vars"
+    "Vars used in :in should be distinct"
+    (fun () -> Query.ensure_distinct_input_vars [ Input_scalar_decl "name"; Input_tuple_decl [ "name" ] ]);
+  Query.ensure_distinct_input_sources [ Input_source_decl "$"; Input_source_decl "$other" ];
+  assert_raises_invalid_arg_message
+    "ensure_distinct_input_sources rejects repeated sources"
+    "Vars used in :in should be distinct"
+    (fun () -> Query.ensure_distinct_input_sources [ Input_source_decl "$"; Input_source_decl "$" ]);
+  assert_equal_string "format_query_vars prints query vars" "[?age ?name]" (Query.format_query_vars [ "age"; "name" ]);
+  assert_equal_string "format_source_vars prints source vars" "[$ $other]" (Query.format_source_vars [ "$"; "other" ]);
+  let valid_query =
+    { find = [ Find_var "e" ]
+    ; inputs = [ Input_source_decl "$" ]
+    ; with_vars = [ "name" ]
+    ; rules = []
+    ; where = [ Pattern (QVar "e", QAttr "name", QVar "name") ]
+    }
+  in
+  if Query.validate_query valid_query <> valid_query then
+    failwith "validate_query should return valid queries unchanged";
+  assert_raises_invalid_arg_message
+    "validate_query rejects unknown find vars"
+    "Query for unknown vars: [?missing]"
+    (fun () -> ignore (Query.validate_query { valid_query with find = [ Find_var "missing" ] }));
+  assert_raises_invalid_arg_message
+    "validate_query rejects unknown with vars"
+    "Query for unknown vars: [?missing]"
+    (fun () -> ignore (Query.validate_query { valid_query with with_vars = [ "missing" ] }));
+  assert_raises_invalid_arg_message
+    "validate_query rejects shared find and with vars"
+    ":find and :with should not use same variables: [?e]"
+    (fun () -> ignore (Query.validate_query { valid_query with with_vars = [ "e" ] }));
+  assert_raises_invalid_arg_message
+    "validate_query rejects undeclared sources"
+    "Where uses unknown source vars: [$other]"
+    (fun () ->
+       ignore
+         (Query.validate_query
+            { valid_query with
+              inputs = [ Input_source_decl "$" ]
+            ; where = [ SourcePattern ("other", QVar "e", QAttr "name", QVar "name") ]
+            }))
+
 let test_query_namespace__test_query_string_helpers () =
   let value_to_string = function
     | String value -> "\"" ^ value ^ "\""
@@ -834,6 +912,7 @@ let () =
   test_query_namespace__test_variable_discovery_helpers ();
   test_query_namespace__test_source_discovery_helpers ();
   test_query_namespace__test_rule_source_analysis_helpers ();
+  test_query_namespace__test_query_validation_helpers ();
   test_query_namespace__test_query_string_helpers ();
   test_query_namespace__test_query_clause_string_helpers ();
   test_query_namespace__test_binding_validation_helpers ()

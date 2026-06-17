@@ -115,6 +115,16 @@ val find_spec_uses_default_source : find_spec -> bool
 val clause_uses_default_source : query_clause -> bool
 val infer_default_inputs :
   query_form option -> find_spec list -> query_clause list -> query_input list -> query_input list
+val query_term_vars : query_term list -> string list
+val vars_of_find_spec : find_spec -> string list
+val vars_of_input_binding : input_binding -> string list
+val vars_of_input : query_input -> string list
+val source_of_input : query_input -> string option
+val ensure_distinct_input_vars : query_input list -> unit
+val ensure_distinct_input_sources : query_input list -> unit
+val format_query_vars : string list -> string
+val format_source_vars : string list -> string
+val validate_query : query -> query
 val query_input_var_label : string -> string
 val query_term_string : value_to_string:(value -> string) -> query_term -> string
 val query_output_var_string : string -> string
