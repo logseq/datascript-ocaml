@@ -101,6 +101,8 @@ val result_of_datom_v : datom -> query_result
 val result_of_datom_tx : datom -> query_result
 val result_of_datom_op : datom -> query_result
 val result_of_ref : query_result -> query_result
+val entity_id_of_resolved_query_result :
+  validate_entity_id:(int -> entity_id) -> query_result option -> entity_id option
 val query_callables_of_inputs : query_input list -> query_callables
 val query_rules_of_inputs : query_input list -> query_rule list
 val matching_rules : query_rule list -> string -> int -> query_rule list

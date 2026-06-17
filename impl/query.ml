@@ -332,6 +332,12 @@ let result_of_ref = function
   | Result_value (Ref eid) -> Result_entity eid
   | result -> result
 
+let entity_id_of_resolved_query_result ~validate_entity_id = function
+  | Some (Result_entity entity_id) -> Some entity_id
+  | Some (Result_value (Int entity_id)) -> Some (validate_entity_id entity_id)
+  | Some (Result_value (Ref entity_id)) -> Some entity_id
+  | _ -> None
+
 let query_callables_of_inputs inputs =
   inputs
   |> List.fold_left

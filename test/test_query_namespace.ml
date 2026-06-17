@@ -17,6 +17,9 @@ let assert_equal_rules label expected actual =
 let assert_equal_query_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional query result" label
 
+let assert_equal_int_option label expected actual =
+  if expected <> actual then failf "%s: unexpected optional integer result" label
+
 let assert_equal_grouped_bindings label expected actual =
   if expected <> actual then failf "%s: unexpected grouped bindings" label
 
@@ -104,7 +107,33 @@ let test_query_namespace__test_query_result_helpers () =
   assert_equal_query_option
     "result_of_ref leaves non-ref results unchanged"
     (Result_value (String "Ivan"))
-    (Query.result_of_ref (Result_value (String "Ivan")))
+    (Query.result_of_ref (Result_value (String "Ivan")));
+  let validate_entity_id entity_id =
+    if entity_id <= 0 then invalid_arg "invalid entity id";
+    entity_id
+  in
+  assert_equal_int_option
+    "entity_id_of_resolved_query_result accepts entity results"
+    (Some 42)
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_entity 42)));
+  assert_equal_int_option
+    "entity_id_of_resolved_query_result validates integer results"
+    (Some 43)
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 43))));
+  assert_equal_int_option
+    "entity_id_of_resolved_query_result accepts ref values"
+    (Some 44)
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Ref 44))));
+  assert_equal_int_option
+    "entity_id_of_resolved_query_result rejects non-entity values"
+    None
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (String "Ivan"))));
+  assert_equal_int_option
+    "entity_id_of_resolved_query_result rejects missing values"
+    None
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id None);
+  assert_raises_invalid_arg "entity_id_of_resolved_query_result validates integer ids" (fun () ->
+    ignore (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 0)))))
 
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then

@@ -2233,11 +2233,8 @@ let lookup_ref_entity_id_of_value db = function
     entity_id_of_ref db (Lookup_ref (attr, value))
   | _ -> None
 
-let entity_id_of_resolved_query_result = function
-  | Some (Result_entity entity_id) -> Some entity_id
-  | Some (Result_value (Int entity_id)) -> Some (validate_entity_id entity_id)
-  | Some (Result_value (Ref entity_id)) -> Some entity_id
-  | _ -> None
+let entity_id_of_resolved_query_result =
+  Query.entity_id_of_resolved_query_result ~validate_entity_id
 
 let query_result_entity_id db result =
   match result with
@@ -5230,6 +5227,7 @@ module Query = struct
   let result_of_datom_tx = Query_impl.result_of_datom_tx
   let result_of_datom_op = Query_impl.result_of_datom_op
   let result_of_ref = Query_impl.result_of_ref
+  let entity_id_of_resolved_query_result = Query_impl.entity_id_of_resolved_query_result
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules
