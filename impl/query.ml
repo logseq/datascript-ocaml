@@ -121,3 +121,103 @@ let q_return_map_string context ?inputs db input =
   match return_map with
   | Some return_map -> q_return_map context ?inputs db return return_map query
   | None -> q_return context ?inputs db return query
+
+let has_aggregates find =
+  List.exists
+    (function
+      | Find_aggregate _ -> true
+      | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> false)
+    find
+
+let aggregate_amount_value var binding =
+  match List.assoc_opt var binding with
+  | Some (Result_value (Int amount)) when amount >= 0 -> amount
+  | Some (Result_value (Int _)) -> invalid_arg "aggregate amount must be non-negative"
+  | Some _ -> invalid_arg "aggregate amount must be an integer"
+  | None -> invalid_arg ("aggregate amount variable is unbound: " ^ var)
+
+let resolve_dynamic_aggregate aggregate group_bindings =
+  let binding =
+    match group_bindings with
+    | first :: _ -> first
+    | [] -> []
+  in
+  match aggregate with
+  | MinNVar var -> MinN (aggregate_amount_value var binding)
+  | MaxNVar var -> MaxN (aggregate_amount_value var binding)
+  | RandNVar var -> RandN (aggregate_amount_value var binding)
+  | SampleVar var -> Sample (aggregate_amount_value var binding)
+  | aggregate -> aggregate
+
+let aggregate_param_vars = function
+  | MinNVar var | MaxNVar var | RandNVar var | SampleVar var -> [ var ]
+  | Count
+  | CountDistinct
+  | Distinct
+  | Sum
+  | Avg
+  | Median
+  | Variance
+  | Stddev
+  | Min
+  | Max
+  | MinN _
+  | MaxN _
+  | Rand
+  | RandN _
+  | Sample _
+  | CustomVar _
+  | Custom _ -> []
+
+let aggregate_callable_vars = function
+  | CustomVar var -> [ var ]
+  | Count
+  | CountDistinct
+  | Distinct
+  | Sum
+  | Avg
+  | Median
+  | Variance
+  | Stddev
+  | Min
+  | Max
+  | MinN _
+  | MaxN _
+  | Rand
+  | RandN _
+  | Sample _
+  | MinNVar _
+  | MaxNVar _
+  | RandNVar _
+  | SampleVar _
+  | Custom _ -> []
+
+let split_aggregate_terms terms =
+  match List.rev terms with
+  | [] -> invalid_arg "aggregate requires at least one argument"
+  | value_term :: reversed_extra_terms -> List.rev reversed_extra_terms, value_term
+
+let aggregate_input_values aggregate extra_args values =
+  match aggregate with
+  | Custom _ -> extra_args @ values
+  | Count
+  | CountDistinct
+  | Distinct
+  | Sum
+  | Avg
+  | Median
+  | Variance
+  | Stddev
+  | Min
+  | Max
+  | MinN _
+  | MaxN _
+  | Rand
+  | RandN _
+  | Sample _
+  | MinNVar _
+  | MaxNVar _
+  | RandNVar _
+  | SampleVar _
+  | CustomVar _ ->
+    values

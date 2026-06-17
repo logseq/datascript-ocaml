@@ -3530,77 +3530,15 @@ let collect_find_specs db sources bindings find =
   in
   collect [] find
 
-let has_aggregates find =
-  List.exists
-    (function
-      | Find_aggregate _ -> true
-      | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> false)
-    find
+let has_aggregates = Query.has_aggregates
 
 let aggregate_result = Built_ins.aggregate_result
 
-let aggregate_amount_value var binding =
-  match List.assoc_opt var binding with
-  | Some (Result_value (Int amount)) when amount >= 0 -> amount
-  | Some (Result_value (Int _)) -> invalid_arg "aggregate amount must be non-negative"
-  | Some _ -> invalid_arg "aggregate amount must be an integer"
-  | None -> invalid_arg ("aggregate amount variable is unbound: " ^ var)
+let resolve_dynamic_aggregate = Query.resolve_dynamic_aggregate
 
-let resolve_dynamic_aggregate aggregate group_bindings =
-  let binding =
-    match group_bindings with
-    | first :: _ -> first
-    | [] -> []
-  in
-  match aggregate with
-  | MinNVar var -> MinN (aggregate_amount_value var binding)
-  | MaxNVar var -> MaxN (aggregate_amount_value var binding)
-  | RandNVar var -> RandN (aggregate_amount_value var binding)
-  | SampleVar var -> Sample (aggregate_amount_value var binding)
-  | aggregate -> aggregate
+let aggregate_param_vars = Query.aggregate_param_vars
 
-let aggregate_param_vars = function
-  | MinNVar var | MaxNVar var | RandNVar var | SampleVar var -> [ var ]
-  | Count
-  | CountDistinct
-  | Distinct
-  | Sum
-  | Avg
-  | Median
-  | Variance
-  | Stddev
-  | Min
-  | Max
-  | MinN _
-  | MaxN _
-  | Rand
-  | RandN _
-  | Sample _
-  | CustomVar _
-  | Custom _ -> []
-
-let aggregate_callable_vars = function
-  | CustomVar var -> [ var ]
-  | Count
-  | CountDistinct
-  | Distinct
-  | Sum
-  | Avg
-  | Median
-  | Variance
-  | Stddev
-  | Min
-  | Max
-  | MinN _
-  | MaxN _
-  | Rand
-  | RandN _
-  | Sample _
-  | MinNVar _
-  | MaxNVar _
-  | RandNVar _
-  | SampleVar _
-  | Custom _ -> []
+let aggregate_callable_vars = Query.aggregate_callable_vars
 
 let query_term_vars terms =
   terms
@@ -3612,10 +3550,7 @@ let eval_query_term_with_sources db sources bindings = function
   | QSource source -> Some (Result_db (source_db db sources source))
   | term -> eval_query_term db bindings term
 
-let split_aggregate_terms terms =
-  match List.rev terms with
-  | [] -> invalid_arg "aggregate requires at least one argument"
-  | value_term :: reversed_extra_terms -> List.rev reversed_extra_terms, value_term
+let split_aggregate_terms = Query.split_aggregate_terms
 
 let aggregate_extra_args db sources group_bindings terms =
   let extra_terms, _ = split_aggregate_terms terms in
@@ -3639,30 +3574,7 @@ let aggregate_values db sources group_bindings terms =
     (fun binding -> eval_query_term_with_sources db sources binding value_term)
     group_bindings
 
-let aggregate_input_values aggregate extra_args values =
-  match aggregate with
-  | Custom _ -> extra_args @ values
-  | Count
-  | CountDistinct
-  | Distinct
-  | Sum
-  | Avg
-  | Median
-  | Variance
-  | Stddev
-  | Min
-  | Max
-  | MinN _
-  | MaxN _
-  | Rand
-  | RandN _
-  | Sample _
-  | MinNVar _
-  | MaxNVar _
-  | RandNVar _
-  | SampleVar _
-  | CustomVar _ ->
-    values
+let aggregate_input_values = Query.aggregate_input_values
 
 type query_callables =
   { callable_predicates : (string * (query_result list -> bool)) list
@@ -7290,6 +7202,13 @@ module Query = struct
   let q_return_string = Query_impl.q_return_string query_context
   let q_return_map = Query_impl.q_return_map query_context
   let q_return_map_string = Query_impl.q_return_map_string query_context
+  let has_aggregates = Query_impl.has_aggregates
+  let aggregate_amount_value = Query_impl.aggregate_amount_value
+  let resolve_dynamic_aggregate = Query_impl.resolve_dynamic_aggregate
+  let aggregate_param_vars = Query_impl.aggregate_param_vars
+  let aggregate_callable_vars = Query_impl.aggregate_callable_vars
+  let split_aggregate_terms = Query_impl.split_aggregate_terms
+  let aggregate_input_values = Query_impl.aggregate_input_values
 end
 
 let q = Query.q

@@ -5,6 +5,20 @@ let failf fmt = Printf.ksprintf failwith fmt
 let assert_equal_query label expected actual =
   if expected <> actual then failf "%s: unexpected query result" label
 
+let assert_equal_string_list label expected actual =
+  if expected <> actual then failf "%s: expected a different string list" label
+
+let assert_equal_aggregate label expected actual =
+  if expected <> actual then failf "%s: expected a different aggregate" label
+
+let assert_equal_terms label expected actual =
+  if expected <> actual then failf "%s: expected different aggregate terms" label
+
+let assert_raises_invalid_arg label f =
+  match f () with
+  | _ -> failf "%s: expected Invalid_argument" label
+  | exception Invalid_argument _ -> ()
+
 let test_query_namespace__test_public_query_api () =
   let db =
     empty_db ()
@@ -30,4 +44,50 @@ let test_query_namespace__test_public_query_api () =
   then
     failwith "Query.q_return_map_string should expose return-map query API"
 
-let () = test_query_namespace__test_public_query_api ()
+let test_query_namespace__test_aggregate_helpers () =
+  if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then
+    failwith "Query.has_aggregates should detect aggregate find specs";
+  if Query.has_aggregates [ Find_var "amount" ] then
+    failwith "Query.has_aggregates should ignore non-aggregate find specs";
+  assert_equal_aggregate
+    "dynamic min amount resolves from the first group binding"
+    (MinN 2)
+    (Query.resolve_dynamic_aggregate
+       (MinNVar "n")
+       [ [ "n", Result_value (Int 2); "amount", Result_value (Int 10) ] ]);
+  assert_raises_invalid_arg "dynamic aggregate amount must be non-negative" (fun () ->
+    ignore (Query.resolve_dynamic_aggregate (SampleVar "n") [ [ "n", Result_value (Int (-1)) ] ]));
+  assert_raises_invalid_arg "dynamic aggregate amount must be bound" (fun () ->
+    ignore (Query.resolve_dynamic_aggregate (MaxNVar "n") []));
+  assert_equal_string_list
+    "aggregate_param_vars reports amount variables"
+    [ "n" ]
+    (Query.aggregate_param_vars (RandNVar "n"));
+  assert_equal_string_list
+    "aggregate_callable_vars reports custom aggregate variables"
+    [ "agg" ]
+    (Query.aggregate_callable_vars (CustomVar "agg"));
+  assert_equal_terms
+    "split_aggregate_terms returns extra args and the value term"
+    ([ QVar "n"; QValue (String "tag") ], QVar "amount")
+    (Query.split_aggregate_terms [ QVar "n"; QValue (String "tag"); QVar "amount" ]);
+  assert_raises_invalid_arg "split_aggregate_terms rejects empty terms" (fun () ->
+    ignore (Query.split_aggregate_terms []));
+  assert_equal_query
+    "custom aggregate receives extra args before values"
+    [ Result_value (Int 9); Result_value (Int 1); Result_value (Int 2) ]
+    (Query.aggregate_input_values
+       (Custom (fun values -> Result_value (Int (List.length values))))
+       [ Result_value (Int 9) ]
+       [ Result_value (Int 1); Result_value (Int 2) ]);
+  assert_equal_query
+    "built-in aggregate ignores extra args after parse-time resolution"
+    [ Result_value (Int 1); Result_value (Int 2) ]
+    (Query.aggregate_input_values
+       Sum
+       [ Result_value (Int 9) ]
+       [ Result_value (Int 1); Result_value (Int 2) ])
+
+let () =
+  test_query_namespace__test_public_query_api ();
+  test_query_namespace__test_aggregate_helpers ()
