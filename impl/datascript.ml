@@ -4775,81 +4775,7 @@ let parse_collection_output_var = Parser_impl.parse_collection_output_var
 let parse_relation_output_vars = Parser_impl.parse_relation_output_vars
 
 let parse_ground_function = Parser_impl.parse_ground_function
-let parse_value_metadata_function = Parser_impl.parse_value_metadata_function
-
-let parse_string_transform_function symbol args output =
-  let output_var = query_symbol_name output in
-  match symbol, args with
-  | "clojure.string/lower-case", [ term ] -> StringLowerCaseValue (parse_pattern_term term, output_var)
-  | "clojure.string/upper-case", [ term ] -> StringUpperCaseValue (parse_pattern_term term, output_var)
-  | "clojure.string/capitalize", [ term ] -> StringCapitalizeValue (parse_pattern_term term, output_var)
-  | "clojure.string/reverse", [ term ] -> StringReverseValue (parse_pattern_term term, output_var)
-  | "clojure.string/trim", [ term ] -> StringTrimValue (parse_pattern_term term, output_var)
-  | "clojure.string/triml", [ term ] -> StringTrimLeftValue (parse_pattern_term term, output_var)
-  | "clojure.string/trimr", [ term ] -> StringTrimRightValue (parse_pattern_term term, output_var)
-  | "clojure.string/trim-newline", [ term ] -> StringTrimNewlineValue (parse_pattern_term term, output_var)
-  | "clojure.string/index-of", [ value; needle ] ->
-    StringIndexOfValue (parse_pattern_term value, parse_pattern_term needle, output_var)
-  | "clojure.string/last-index-of", [ value; needle ] ->
-    StringLastIndexOfValue (parse_pattern_term value, parse_pattern_term needle, output_var)
-  | "str", terms -> StringBuildValue (List.map parse_pattern_term terms, output_var)
-  | "print-str", terms -> PrintStringValue (List.map parse_pattern_term terms, output_var)
-  | "println-str", terms -> PrintLineStringValue (List.map parse_pattern_term terms, output_var)
-  | "pr-str", terms -> PrStringValue (List.map parse_pattern_term terms, output_var)
-  | "prn-str", terms -> PrnStringValue (List.map parse_pattern_term terms, output_var)
-  | "clojure.string/join", [ collection ] ->
-    StringJoinPlainValue (parse_pattern_term collection, output_var)
-  | "clojure.string/join", [ separator; collection ] ->
-    StringJoinValue (parse_pattern_term separator, parse_pattern_term collection, output_var)
-  | "clojure.string/replace", [ value; pattern; replacement ] ->
-    StringReplaceValue
-      (parse_pattern_term value, parse_pattern_term pattern, parse_pattern_term replacement, output_var)
-  | "clojure.string/replace-first", [ value; pattern; replacement ] ->
-    StringReplaceFirstValue
-      (parse_pattern_term value, parse_pattern_term pattern, parse_pattern_term replacement, output_var)
-  | "clojure.string/escape", [ value; replacements ] ->
-    StringEscapeValue (parse_pattern_term value, parse_pattern_term replacements, output_var)
-  | "re-pattern", [ pattern ] -> RePatternValue (parse_pattern_term pattern, output_var)
-  | "re-find", [ pattern; value ] ->
-    ReFindValue (parse_pattern_term pattern, parse_pattern_term value, output_var)
-  | "re-matches", [ pattern; value ] ->
-    ReMatchesValue (parse_pattern_term pattern, parse_pattern_term value, output_var)
-  | "re-seq", [ pattern; value ] ->
-    ReSeqValue (parse_pattern_term pattern, parse_pattern_term value, output_var)
-  | "clojure.string/split", [ value; separator ] ->
-    StringSplitValue (parse_pattern_term value, parse_pattern_term separator, output_var)
-  | "clojure.string/split", [ value; separator; limit ] ->
-    StringSplitLimitValue
-      (parse_pattern_term value, parse_pattern_term separator, parse_pattern_term limit, output_var)
-  | "clojure.string/split-lines", [ value ] ->
-    StringSplitLinesValue (parse_pattern_term value, output_var)
-  | "subs", [ value; start ] ->
-    StringSubstringValue (parse_pattern_term value, parse_pattern_term start, None, output_var)
-  | "subs", [ value; start; end_ ] ->
-    StringSubstringValue
-      (parse_pattern_term value, parse_pattern_term start, Some (parse_pattern_term end_), output_var)
-  | ( "clojure.string/lower-case"
-    | "clojure.string/upper-case"
-    | "clojure.string/capitalize"
-    | "clojure.string/reverse"
-    | "clojure.string/trim"
-    | "clojure.string/triml"
-    | "clojure.string/trimr"
-    | "clojure.string/trim-newline" ), _ ->
-    invalid_arg (symbol ^ " requires one argument")
-  | ("clojure.string/index-of" | "clojure.string/last-index-of"), _ ->
-    invalid_arg (symbol ^ " requires two arguments")
-  | "clojure.string/join", _ -> invalid_arg "clojure.string/join requires one or two arguments"
-  | ("clojure.string/replace" | "clojure.string/replace-first"), _ ->
-    invalid_arg (symbol ^ " requires three arguments")
-  | "clojure.string/escape", _ -> invalid_arg "clojure.string/escape requires two arguments"
-  | "re-pattern", _ -> invalid_arg "re-pattern requires one argument"
-  | ("re-find" | "re-matches" | "re-seq"), _ ->
-    invalid_arg (symbol ^ " requires two arguments")
-  | "clojure.string/split", _ -> invalid_arg "clojure.string/split requires two or three arguments"
-  | "clojure.string/split-lines", _ -> invalid_arg "clojure.string/split-lines requires one argument"
-  | "subs", _ -> invalid_arg "subs requires two or three arguments"
-  | _ -> parse_value_metadata_function symbol args output
+let parse_string_transform_function = Parser_impl.parse_string_transform_function
 
 let parse_join_vars clause_name = function
   | QueryFormVector vars ->
@@ -5481,6 +5407,7 @@ module Parser = struct
   let dynamic_ground_term = Parser_impl.dynamic_ground_term
   let parse_ground_function = Parser_impl.parse_ground_function
   let parse_value_metadata_function = Parser_impl.parse_value_metadata_function
+  let parse_string_transform_function = Parser_impl.parse_string_transform_function
   let parse_binding = parse_binding
   let parse_in = parse_in
   let parse_with = parse_with

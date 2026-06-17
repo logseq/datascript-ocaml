@@ -74,3 +74,4 @@ val ground_relation_rows_of_form : query_form -> value list list
 val dynamic_ground_term : query_form -> query_term option
 val parse_ground_function : query_form list -> query_form -> query_clause
 val parse_value_metadata_function : string -> query_form list -> string -> query_clause
+val parse_string_transform_function : string -> query_form list -> string -> query_clause

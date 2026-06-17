@@ -187,6 +187,40 @@ let test_parser_where__value_function_helper_batch () =
   assert_invalid "parse_value_metadata_function validates name arity" (fun () ->
     ignore (Parser.parse_value_metadata_function "name" [ sym "?x"; sym "?y" ] "?out"))
 
+let test_parser_where__string_transform_helper_batch () =
+  assert_equal
+    "parse_string_transform_function parses lower-case"
+    (StringLowerCaseValue (QVar "s", "out"))
+    (Parser.parse_string_transform_function "clojure.string/lower-case" [ sym "?s" ] "?out");
+  assert_equal
+    "parse_string_transform_function parses join with separator"
+    (StringJoinValue (QValue (String ","), QVar "xs", "out"))
+    (Parser.parse_string_transform_function "clojure.string/join" [ str ","; sym "?xs" ] "?out");
+  assert_equal
+    "parse_string_transform_function parses replace"
+    (StringReplaceValue (QVar "s", QValue (String "a"), QValue (String "b"), "out"))
+    (Parser.parse_string_transform_function "clojure.string/replace" [ sym "?s"; str "a"; str "b" ] "?out");
+  assert_equal
+    "parse_string_transform_function parses split with limit"
+    (StringSplitLimitValue (QVar "s", QValue (String ","), QValue (Int 2), "out"))
+    (Parser.parse_string_transform_function "clojure.string/split" [ sym "?s"; str ","; int 2 ] "?out");
+  assert_equal
+    "parse_string_transform_function parses subs without end"
+    (StringSubstringValue (QVar "s", QValue (Int 1), None, "out"))
+    (Parser.parse_string_transform_function "subs" [ sym "?s"; int 1 ] "?out");
+  assert_equal
+    "parse_string_transform_function parses subs with end"
+    (StringSubstringValue (QVar "s", QValue (Int 1), Some (QValue (Int 3)), "out"))
+    (Parser.parse_string_transform_function "subs" [ sym "?s"; int 1; int 3 ] "?out");
+  assert_equal
+    "parse_string_transform_function falls through to metadata/value functions"
+    (TypeValue (QVar "x", "out"))
+    (Parser.parse_string_transform_function "type" [ sym "?x" ] "?out");
+  assert_invalid "parse_string_transform_function validates replace arity" (fun () ->
+    ignore (Parser.parse_string_transform_function "clojure.string/replace" [ sym "?s"; str "a" ] "?out"));
+  assert_invalid "parse_string_transform_function validates split arity" (fun () ->
+    ignore (Parser.parse_string_transform_function "clojure.string/split" [ sym "?s" ] "?out"))
+
 let test_parser_where__not_clause () =
   assert_equal
     "not clause"
@@ -234,5 +268,6 @@ let () =
   test_parser_where__rule_expr ();
   test_parser_where__clause_helper_batch ();
   test_parser_where__value_function_helper_batch ();
+  test_parser_where__string_transform_helper_batch ();
   test_parser_where__not_clause ();
   test_parser_where__or_clause ()

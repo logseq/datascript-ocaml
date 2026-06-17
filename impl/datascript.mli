@@ -300,6 +300,7 @@ module Parser : sig
   val dynamic_ground_term : query_form -> query_term option
   val parse_ground_function : query_form list -> query_form -> query_clause
   val parse_value_metadata_function : string -> query_form list -> string -> query_clause
+  val parse_string_transform_function : string -> query_form list -> string -> query_clause
   val parse_binding : query_form -> input_binding
   val parse_in : query_form -> query_input list
   val parse_with : query_form -> string list
