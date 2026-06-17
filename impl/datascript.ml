@@ -2,10 +2,11 @@ include Datascript_types
 
 module Built_ins = Built_ins
 module Conn = Conn
+module Db_impl = Db
 
 type conn = Conn.t
 
-let tx0 = Db.tx0
+let tx0 = Db_impl.tx0
 
 let next_db_uid =
   let counter = ref 0 in
@@ -16,7 +17,6 @@ let next_db_uid =
 let refresh_db_identity db =
   { db with db_uid = next_db_uid () }
 
-module Db = Db
 module Entity = Entity
 module Lru = Lru
 module Lookup_refs = Lookup_refs
@@ -35,9 +35,9 @@ let validate_entity_id entity_id =
     invalid_arg ("highest supported entity id exceeded: " ^ string_of_int entity_id);
   entity_id
 
-let datom = Db.datom
+let datom = Db_impl.datom
 
-let is_datom = Db.is_datom
+let is_datom = Db_impl.is_datom
 
 let validate_schema = Schema.validate_schema
 
@@ -317,9 +317,9 @@ let is_reverse_ref = Schema.is_reverse_ref
 
 let reverse_ref = Schema.reverse_ref
 
-let value_equal = Db.value_equal
+let value_equal = Db_impl.value_equal
 
-let same_fact = Db.same_fact
+let same_fact = Db_impl.same_fact
 
 let without_entity_attr e a datoms =
   List.filter (fun d -> d.e <> e || d.a <> a) datoms
@@ -1897,36 +1897,10 @@ let tempid ?part ?value () =
 
 let resolve_tempid ?db:_ tempids tempid = List.assoc_opt tempid tempids
 
-let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual = expected) maybe
-
-let matches_value maybe expected =
-  Option.fold ~none:true ~some:(fun actual -> value_equal actual expected) maybe
-
 let is_avet_accessible db attr =
   is_ref_attr db attr
   || is_unique db attr
   || is_indexed db attr
-
-let indexed_attr_required_message attr =
-  "Attribute :" ^ attr ^ " should be marked as :db/index true"
-
-let validate_index_access db index attr =
-  match index, attr with
-  | Avet, Some attr when not (is_avet_accessible db attr) ->
-    invalid_arg (indexed_attr_required_message attr)
-  | _ -> ()
-
-let indexed_visible_datoms db index =
-  let datoms =
-    match index with
-    | Eavt -> db.eavt_index
-    | Aevt -> db.aevt_index
-    | Avet -> db.avet_index
-    | Vaet -> db.vaet_index
-  in
-  match db.filter_pred with
-  | None -> datoms
-  | Some pred -> List.filter pred datoms
 
 let rec resolve_index_entity_ref db = function
   | Entity_id entity_id -> Some entity_id
@@ -1987,30 +1961,36 @@ let resolve_index_value_option_for_optional_attr db attr value =
   | Some attr -> resolve_index_value_option_for_attr db attr value
   | None -> resolve_index_value_option db value
 
-let resolve_index_entity_ref_option db = Option.map (fun entity_ref ->
+let resolve_index_entity_ref_exn db entity_ref =
   match resolve_index_entity_ref db entity_ref with
   | Some entity_id -> entity_id
-  | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
+  | None -> invalid_arg (unresolved_entity_ref_message entity_ref)
+
+let db_index_context : Db_impl.index_context =
+  { is_avet_accessible
+  ; resolve_entity_ref = resolve_index_entity_ref_exn
+  ; resolve_value_for_optional_attr =
+      (fun db attr value -> resolve_index_value_option_for_optional_attr db attr (Some value) |> Option.get)
+  ; resolve_value_for_attr = resolve_index_value_for_attr
+  ; compare_value
+  ; first_nonzero
+  }
 
 let datoms db index ?e ?a ?v ?tx () =
-  validate_index_access db index a;
-  let v = resolve_index_value_option_for_optional_attr db a v in
-  indexed_visible_datoms db index
-  |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value v d.v && matches tx d.tx)
+  Db_impl.datoms db_index_context db index ?e ?a ?v ?tx ()
 
 let datoms_ref db index ?e ?a ?v ?tx () =
-  let e = resolve_index_entity_ref_option db e in
-  datoms db index ?e ?a ?v ?tx ()
+  Db_impl.datoms_ref db_index_context db index ?e ?a ?v ?tx ()
 
-let diff = Db.diff
+let diff = Db_impl.diff
 
-let db_hash = Db.hash
+let db_hash = Db_impl.hash
 
-let db_hash_cache_size = Db.hash_cache_size
+let db_hash_cache_size = Db_impl.hash_cache_size
 
-let squuid = Db.squuid
+let squuid = Db_impl.squuid
 
-let squuid_time_millis = Db.squuid_time_millis
+let squuid_time_millis = Db_impl.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
   let context : Conn.reset_context =
@@ -2021,84 +2001,25 @@ let reset_conn ?(tx_meta = []) conn db =
 let reset_conn_bang ?tx_meta conn db = reset_conn ?tx_meta conn db
 
 let find_datom db index ?e ?a ?v ?tx () =
-  match datoms db index ?e ?a ?v ?tx () with
-  | first :: _ -> Some first
-  | [] -> None
+  Db_impl.find_datom db_index_context db index ?e ?a ?v ?tx ()
 
 let find_datom_ref db index ?e ?a ?v ?tx () =
-  match datoms_ref db index ?e ?a ?v ?tx () with
-  | first :: _ -> Some first
-  | [] -> None
-
-let compare_optional actual = function
-  | Some expected -> compare actual expected
-  | None -> 0
-
-let compare_optional_with compare_item actual = function
-  | Some expected -> compare_item actual expected
-  | None -> 0
-
-let compare_datom_to_bound index d e a v tx =
-  match index with
-  | Eavt ->
-    first_nonzero
-      [ compare_optional d.e e
-      ; compare_optional d.a a
-      ; compare_optional_with compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
-  | Aevt ->
-    first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional d.e e
-      ; compare_optional_with compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
-  | Avet ->
-    first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional_with compare_value d.v v
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
-  | Vaet ->
-    first_nonzero
-      [ compare_optional_with compare_value d.v v
-      ; compare_optional d.a a
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
+  Db_impl.find_datom_ref db_index_context db index ?e ?a ?v ?tx ()
 
 let seek_datoms db index ?e ?a ?v ?tx () =
-  validate_index_access db index a;
-  let v = resolve_index_value_option_for_optional_attr db a v in
-  datoms db index ()
-  |> List.filter (fun d -> compare_datom_to_bound index d e a v tx >= 0)
+  Db_impl.seek_datoms db_index_context db index ?e ?a ?v ?tx ()
 
 let seek_datoms_ref db index ?e ?a ?v ?tx () =
-  let e = resolve_index_entity_ref_option db e in
-  seek_datoms db index ?e ?a ?v ?tx ()
+  Db_impl.seek_datoms_ref db_index_context db index ?e ?a ?v ?tx ()
 
 let rseek_datoms db index ?e ?a ?v ?tx () =
-  validate_index_access db index a;
-  let v = resolve_index_value_option_for_optional_attr db a v in
-  datoms db index ()
-  |> List.filter (fun d -> compare_datom_to_bound index d e a v tx <= 0)
-  |> List.rev
+  Db_impl.rseek_datoms db_index_context db index ?e ?a ?v ?tx ()
 
 let rseek_datoms_ref db index ?e ?a ?v ?tx () =
-  let e = resolve_index_entity_ref_option db e in
-  rseek_datoms db index ?e ?a ?v ?tx ()
+  Db_impl.rseek_datoms_ref db_index_context db index ?e ?a ?v ?tx ()
 
 let index_range db attr ?start ?stop () =
-  if not (is_avet_accessible db attr) then
-    invalid_arg (indexed_attr_required_message attr);
-  let start = resolve_index_value_option_for_attr db attr start in
-  let stop = resolve_index_value_option_for_attr db attr stop in
-  datoms db Avet ~a:attr ()
-  |> List.filter (fun d ->
-    Option.fold ~none:true ~some:(fun start -> compare_value d.v start >= 0) start
-    && Option.fold ~none:true ~some:(fun stop -> compare_value d.v stop <= 0) stop)
+  Db_impl.index_range db_index_context db attr ?start ?stop ()
 
 let rec entity_id_of_ref db = function
   | Entity_id entity_id -> Some entity_id
@@ -7611,3 +7532,27 @@ let q_return = Query.q_return
 let q_return_string = Query.q_return_string
 let q_return_map = Query.q_return_map
 let q_return_map_string = Query.q_return_map_string
+
+let db_datoms = datoms
+let db_datoms_ref = datoms_ref
+let db_find_datom = find_datom
+let db_find_datom_ref = find_datom_ref
+let db_seek_datoms = seek_datoms
+let db_seek_datoms_ref = seek_datoms_ref
+let db_rseek_datoms = rseek_datoms
+let db_rseek_datoms_ref = rseek_datoms_ref
+let db_index_range = index_range
+
+module Db = struct
+  include Db_impl
+
+  let datoms = db_datoms
+  let datoms_ref = db_datoms_ref
+  let find_datom = db_find_datom
+  let find_datom_ref = db_find_datom_ref
+  let seek_datoms = db_seek_datoms
+  let seek_datoms_ref = db_seek_datoms_ref
+  let rseek_datoms = db_rseek_datoms
+  let rseek_datoms_ref = db_rseek_datoms_ref
+  let index_range = db_index_range
+end

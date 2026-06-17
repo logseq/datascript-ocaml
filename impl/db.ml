@@ -10,6 +10,15 @@ let value_equal = Util.value_equal
 
 let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
 
+type index_context =
+  { is_avet_accessible : db -> attr -> bool
+  ; resolve_entity_ref : db -> entity_ref -> entity_id
+  ; resolve_value_for_optional_attr : db -> attr option -> value -> value
+  ; resolve_value_for_attr : db -> attr -> value -> value
+  ; compare_value : value -> value -> int
+  ; first_nonzero : int list -> int
+  }
+
 let hash_cache : (int, int) Hashtbl.t = Hashtbl.create 128
 
 let hash db =
@@ -42,6 +51,115 @@ let visible_datoms db index =
   match db.filter_pred with
   | None -> datoms
   | Some pred -> List.filter pred datoms
+
+let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual = expected) maybe
+
+let matches_value maybe expected =
+  Option.fold ~none:true ~some:(fun actual -> value_equal actual expected) maybe
+
+let indexed_attr_required_message attr =
+  "Attribute :" ^ attr ^ " should be marked as :db/index true"
+
+let validate_index_access context db index attr =
+  match index, attr with
+  | Avet, Some attr when not (context.is_avet_accessible db attr) ->
+    invalid_arg (indexed_attr_required_message attr)
+  | _ -> ()
+
+let resolved_entity_ref_option context db = Option.map (context.resolve_entity_ref db)
+
+let resolved_value_option_for_optional_attr context db attr =
+  Option.map (context.resolve_value_for_optional_attr db attr)
+
+let datoms context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  let v = resolved_value_option_for_optional_attr context db a v in
+  visible_datoms db index
+  |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value v d.v && matches tx d.tx)
+
+let datoms_ref context db index ?e ?a ?v ?tx () =
+  let e = resolved_entity_ref_option context db e in
+  datoms context db index ?e ?a ?v ?tx ()
+
+let find_datom context db index ?e ?a ?v ?tx () =
+  match datoms context db index ?e ?a ?v ?tx () with
+  | first :: _ -> Some first
+  | [] -> None
+
+let find_datom_ref context db index ?e ?a ?v ?tx () =
+  match datoms_ref context db index ?e ?a ?v ?tx () with
+  | first :: _ -> Some first
+  | [] -> None
+
+let compare_optional actual = function
+  | Some expected -> compare actual expected
+  | None -> 0
+
+let compare_optional_with compare_item actual = function
+  | Some expected -> compare_item actual expected
+  | None -> 0
+
+let compare_datom_to_bound context index d e a v tx =
+  match index with
+  | Eavt ->
+    context.first_nonzero
+      [ compare_optional d.e e
+      ; compare_optional d.a a
+      ; compare_optional_with context.compare_value d.v v
+      ; compare_optional d.tx tx
+      ]
+  | Aevt ->
+    context.first_nonzero
+      [ compare_optional d.a a
+      ; compare_optional d.e e
+      ; compare_optional_with context.compare_value d.v v
+      ; compare_optional d.tx tx
+      ]
+  | Avet ->
+    context.first_nonzero
+      [ compare_optional d.a a
+      ; compare_optional_with context.compare_value d.v v
+      ; compare_optional d.e e
+      ; compare_optional d.tx tx
+      ]
+  | Vaet ->
+    context.first_nonzero
+      [ compare_optional_with context.compare_value d.v v
+      ; compare_optional d.a a
+      ; compare_optional d.e e
+      ; compare_optional d.tx tx
+      ]
+
+let seek_datoms context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  let v = resolved_value_option_for_optional_attr context db a v in
+  datoms context db index ()
+  |> List.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
+
+let seek_datoms_ref context db index ?e ?a ?v ?tx () =
+  let e = resolved_entity_ref_option context db e in
+  seek_datoms context db index ?e ?a ?v ?tx ()
+
+let rseek_datoms context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  let v = resolved_value_option_for_optional_attr context db a v in
+  datoms context db index ()
+  |> List.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
+  |> List.rev
+
+let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
+  let e = resolved_entity_ref_option context db e in
+  rseek_datoms context db index ?e ?a ?v ?tx ()
+
+let index_range context db attr ?start ?stop () =
+  if not (context.is_avet_accessible db attr) then
+    invalid_arg (indexed_attr_required_message attr);
+  let start = Option.map (context.resolve_value_for_attr db attr) start in
+  let stop = Option.map (context.resolve_value_for_attr db attr) stop in
+  datoms context db Avet ~a:attr ()
+  |> List.filter (fun d ->
+    Option.fold ~none:true ~some:(fun start -> context.compare_value d.v start >= 0) start
+    && Option.fold ~none:true ~some:(fun stop -> context.compare_value d.v stop <= 0) stop)
 
 let diff left right =
   let left_datoms = visible_datoms left Eavt in

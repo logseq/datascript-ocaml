@@ -57,6 +57,20 @@ let assert_equal_triples label expected actual =
     in
     failf "%s: expected [%s], got [%s]" label (format expected) (format triples)
 
+let indexed =
+  { cardinality = One
+  ; unique = None
+  ; indexed = true
+  ; is_component = false
+  ; no_history = false
+  ; doc = None
+  ; value_type = None
+  ; tuple_attrs = None
+  ; tuple_types = None
+  }
+
+let unique_identity = { indexed with unique = Some Identity }
+
 let test_db__test_defrecord_updatable () =
   let value = { x = Keyword "ignored"; tag = "kept" } in
   let updated = { value with x = String "updated" } in
@@ -123,8 +137,36 @@ let test_db__test_diff () =
     [ 1, "a", Int 1 ]
     both
 
+let test_db__test_index_api () =
+  let db =
+    empty_db ~schema:[ "name", indexed; "email", unique_identity ] ()
+    |> db_with
+         [ Add (Entity_id 1, "name", String "Ivan")
+         ; Add (Entity_id 1, "email", String "ivan@example.com")
+         ; Add (Entity_id 2, "name", String "Oleg")
+         ; Add (Entity_id 2, "email", String "oleg@example.com")
+         ]
+  in
+  assert_equal_triples
+    "Db.datoms exposes index lookup through the db namespace"
+    [ 1, "name", String "Ivan" ]
+    (Db.datoms db Avet ~a:"name" ~v:(String "Ivan") ());
+  assert_equal_triples
+    "Db.datoms_ref resolves lookup-ref entity bounds through the db namespace"
+    [ 1, "email", String "ivan@example.com"; 1, "name", String "Ivan" ]
+    (Db.datoms_ref db Eavt ~e:(Lookup_ref ("email", String "ivan@example.com")) ());
+  assert_equal_triples
+    "Db.seek_datoms exposes ordered index seeks through the db namespace"
+    [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
+    (Db.seek_datoms db Avet ~a:"name" ~v:(String "I") ());
+  assert_equal_triples
+    "Db.index_range exposes AVET ranges through the db namespace"
+    [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
+    (Db.index_range db "name" ~start:(String "I") ~stop:(String "P") ())
+
 let () =
   test_db__test_defrecord_updatable ();
   test_db__test_db_hash_cache ();
   test_db__test_uuid ();
-  test_db__test_diff ()
+  test_db__test_diff ();
+  test_db__test_index_api ()
