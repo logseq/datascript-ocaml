@@ -653,3 +653,87 @@ let parse_return_map_section entries =
   | [] -> None
   | [ section ] -> Some section
   | _ -> invalid_arg "Only one of :keys/:syms/:strs must be present"
+
+let lookup_ref_of_form = function
+  | QueryFormVector [ QueryFormKeyword attr; value ] ->
+    Some (attr, query_value_of_form value)
+  | _ -> None
+
+let parse_pattern_term
+      ?(entity_position = false)
+      ?(attr_position = false)
+      ?(lookup_ref_position = false)
+      ?(source_position = true)
+      form =
+  match lookup_ref_of_form form with
+  | Some (attr, value) when entity_position -> QLookupRef (attr, value)
+  | Some (attr, value) when lookup_ref_position -> QValue (Ref_to (Lookup_ref (attr, value)))
+  | _ ->
+    (match form with
+     | QueryFormSymbol "_" -> QWildcard
+     | QueryFormSymbol symbol when String.length symbol > 0 && symbol.[0] = '?' ->
+       QVar (query_symbol_name symbol)
+     | QueryFormSymbol symbol when source_position && is_query_source_symbol symbol ->
+       QSource (query_source_name symbol)
+     | QueryFormSymbol symbol -> QValue (Symbol symbol)
+     | QueryFormInt entity_id when entity_position -> QEntity entity_id
+     | QueryFormKeyword attr when attr_position -> QAttr attr
+     | QueryFormKeyword value -> QValue (Keyword value)
+     | QueryFormInt value -> QValue (Int value)
+     | QueryFormFloat value -> QValue (Float value)
+     | QueryFormString value -> QValue (String value)
+     | QueryFormBool value -> QValue (Bool value)
+     | QueryFormNil -> QValue Nil
+     | QueryFormVector _ | QueryFormList _ | QueryFormSet _ | QueryFormTagged _ | QueryFormMap _ as form ->
+       QValue (query_value_of_form form))
+
+let comparison_predicate_of_symbol = function
+  | "<" -> Some LessThan
+  | ">" -> Some GreaterThan
+  | "<=" -> Some LessOrEqual
+  | ">=" -> Some GreaterOrEqual
+  | _ -> None
+
+let value_predicate_of_symbol = function
+  | "number?" -> Some NumberValue
+  | "integer?" -> Some IntegerValue
+  | "string?" -> Some StringValue
+  | "boolean?" -> Some BooleanValue
+  | "keyword?" -> Some KeywordValue
+  | _ -> None
+
+let numeric_predicate_of_symbol = function
+  | "zero?" -> Some ZeroNumber
+  | "pos?" -> Some PositiveNumber
+  | "neg?" -> Some NegativeNumber
+  | "even?" -> Some EvenInteger
+  | "odd?" -> Some OddInteger
+  | _ -> None
+
+let boolean_predicate_of_symbol = function
+  | "true?" -> Some TrueValue
+  | "false?" -> Some FalseValue
+  | "nil?" -> Some NilValue
+  | "some?" -> Some SomeValue
+  | _ -> None
+
+let equality_predicate_of_symbol = function
+  | "=" | "==" -> Some EqualValues
+  | "!=" | "not=" -> Some NotEqualValues
+  | _ -> None
+
+let arithmetic_op_of_symbol = function
+  | "+" -> Some AddNumbers
+  | "-" -> Some SubtractNumbers
+  | "*" -> Some MultiplyNumbers
+  | "/" -> Some DivideNumbers
+  | "quot" -> Some QuotientNumbers
+  | "rem" -> Some RemainderNumbers
+  | "mod" -> Some ModuloNumbers
+  | "inc" -> Some IncrementNumber
+  | "dec" -> Some DecrementNumber
+  | _ -> None
+
+let query_attr_name = function
+  | QueryFormKeyword attr | QueryFormString attr -> attr
+  | _ -> invalid_arg "expected query attribute"

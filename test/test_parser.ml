@@ -279,6 +279,51 @@ let test_parser__return_map_helpers () =
          ; QueryFormKeyword "strs", vec [ sym "name" ]
          ]))
 
+let test_parser__pattern_term_helpers () =
+  assert_equal
+    "lookup_ref_of_form parses keyword lookup refs"
+    (Some ("email", String "a@example.com"))
+    (Parser.lookup_ref_of_form (vec [ QueryFormKeyword "email"; QueryFormString "a@example.com" ]));
+  assert_equal
+    "lookup_ref_of_form rejects non lookup refs"
+    None
+    (Parser.lookup_ref_of_form (vec [ sym "?e"; QueryFormKeyword "name" ]));
+  assert_equal
+    "parse_pattern_term parses entity-position lookup refs"
+    (QLookupRef ("email", String "a@example.com"))
+    (Parser.parse_pattern_term
+       ~entity_position:true
+       (vec [ QueryFormKeyword "email"; QueryFormString "a@example.com" ]));
+  assert_equal
+    "parse_pattern_term parses lookup-ref-position refs as constants"
+    (QValue (Ref_to (Lookup_ref ("email", String "a@example.com"))))
+    (Parser.parse_pattern_term
+       ~lookup_ref_position:true
+       (vec [ QueryFormKeyword "email"; QueryFormString "a@example.com" ]));
+  assert_equal "parse_pattern_term parses vars" (QVar "name") (Parser.parse_pattern_term (sym "?name"));
+  assert_equal "parse_pattern_term parses sources" (QSource "other") (Parser.parse_pattern_term (sym "$other"));
+  assert_equal
+    "parse_pattern_term keeps source-looking symbols outside source position"
+    (QValue (Symbol "$other"))
+    (Parser.parse_pattern_term ~source_position:false (sym "$other"));
+  assert_equal
+    "parse_pattern_term parses attributes in attr position"
+    (QAttr "name")
+    (Parser.parse_pattern_term ~attr_position:true (QueryFormKeyword "name"));
+  assert_equal
+    "parse_pattern_term parses entity ids in entity position"
+    (QEntity 42)
+    (Parser.parse_pattern_term ~entity_position:true (QueryFormInt 42));
+  assert_equal "comparison_predicate_of_symbol parses <" (Some LessThan) (Parser.comparison_predicate_of_symbol "<");
+  assert_equal "value_predicate_of_symbol parses keyword?" (Some KeywordValue) (Parser.value_predicate_of_symbol "keyword?");
+  assert_equal "numeric_predicate_of_symbol parses odd?" (Some OddInteger) (Parser.numeric_predicate_of_symbol "odd?");
+  assert_equal "boolean_predicate_of_symbol parses some?" (Some SomeValue) (Parser.boolean_predicate_of_symbol "some?");
+  assert_equal "equality_predicate_of_symbol parses not=" (Some NotEqualValues) (Parser.equality_predicate_of_symbol "not=");
+  assert_equal "arithmetic_op_of_symbol parses mod" (Some ModuloNumbers) (Parser.arithmetic_op_of_symbol "mod");
+  assert_equal_string "query_attr_name parses keywords" "name" (Parser.query_attr_name (QueryFormKeyword "name"));
+  assert_equal_string "query_attr_name parses strings" "name" (Parser.query_attr_name (QueryFormString "name"));
+  assert_invalid "query_attr_name rejects other forms" (fun () -> ignore (Parser.query_attr_name (sym "?name")))
+
 let () =
   test_parser__bindings ();
   test_parser__in ();
@@ -288,4 +333,5 @@ let () =
   test_parser__aggregate_and_find_arg_helpers ();
   test_parser__output_var_helpers ();
   test_parser__input_binding_helpers ();
-  test_parser__return_map_helpers ()
+  test_parser__return_map_helpers ();
+  test_parser__pattern_term_helpers ()

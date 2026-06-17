@@ -269,6 +269,21 @@ module Parser : sig
   val parse_with_section : query_form option -> string list
   val parse_return_map_labels : string -> query_form -> string list
   val parse_return_map_section : (query_form * query_form) list -> query_return_map option
+  val lookup_ref_of_form : query_form -> (attr * value) option
+  val parse_pattern_term :
+    ?entity_position:bool ->
+    ?attr_position:bool ->
+    ?lookup_ref_position:bool ->
+    ?source_position:bool ->
+    query_form ->
+    query_term
+  val comparison_predicate_of_symbol : string -> comparison_predicate option
+  val value_predicate_of_symbol : string -> value_predicate option
+  val numeric_predicate_of_symbol : string -> numeric_predicate option
+  val boolean_predicate_of_symbol : string -> boolean_predicate option
+  val equality_predicate_of_symbol : string -> equality_predicate option
+  val arithmetic_op_of_symbol : string -> arithmetic_op option
+  val query_attr_name : query_form -> attr
   val parse_binding : query_form -> input_binding
   val parse_in : query_form -> query_input list
   val parse_with : query_form -> string list
