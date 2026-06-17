@@ -292,6 +292,14 @@ module Parser : sig
   val parse_two_output_vars : query_form -> string * string
   val parse_get_some_clause : query_form list -> query_form -> query_clause
   val parse_get_clause : query_form list -> string -> query_clause
+  val parse_core_value_function : string -> query_form list -> string -> query_clause
+  val parse_collection_function : string -> query_form list -> string -> query_clause
+  val parse_flat_value_function : string -> query_form list -> string list -> query_clause
+  val ground_values_of_form : query_form -> value list
+  val ground_relation_rows_of_form : query_form -> value list list
+  val dynamic_ground_term : query_form -> query_term option
+  val parse_ground_function : query_form list -> query_form -> query_clause
+  val parse_value_metadata_function : string -> query_form list -> string -> query_clause
   val parse_binding : query_form -> input_binding
   val parse_in : query_form -> query_input list
   val parse_with : query_form -> string list

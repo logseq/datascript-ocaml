@@ -864,3 +864,105 @@ let parse_get_clause args output =
     GetDefaultValue
       (parse_pattern_term map, parse_pattern_term key, parse_pattern_term default, query_symbol_name output)
   | _ -> invalid_arg "get requires a map, a key, an optional default, and an output"
+
+let parse_core_value_function symbol args output =
+  let output_var = query_symbol_name output in
+  match symbol, args with
+  | "identity", [ term ] -> IdentityValue (parse_pattern_term term, output_var)
+  | "and", terms -> BooleanAndValue (List.map parse_pattern_term terms, output_var)
+  | "or", terms -> BooleanOrValue (List.map parse_pattern_term terms, output_var)
+  | "compare", [ left; right ] -> CompareValue (parse_pattern_term left, parse_pattern_term right, output_var)
+  | "compare", _ -> invalid_arg "compare requires two arguments"
+  | "min", [] | "max", [] -> invalid_arg (symbol ^ " requires at least one argument")
+  | "min", terms -> ExtremumValue (MinimumValue, List.map parse_pattern_term terms, output_var)
+  | "max", terms -> ExtremumValue (MaximumValue, List.map parse_pattern_term terms, output_var)
+  | "rand", [] -> RandomValue output_var
+  | "rand", _ -> invalid_arg "rand requires no arguments"
+  | "rand-int", [ bound ] -> RandomIntValue (parse_pattern_term bound, output_var)
+  | "rand-int", _ -> invalid_arg "rand-int requires one argument"
+  | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, [ output_var ])
+
+let parse_collection_function symbol args output =
+  let output_var = query_symbol_name output in
+  match symbol, args with
+  | "vector", terms -> VectorValue (List.map parse_pattern_term terms, output_var)
+  | "list", terms -> ListValue (List.map parse_pattern_term terms, output_var)
+  | "set", terms -> SetValue (List.map parse_pattern_term terms, output_var)
+  | "hash-map", terms ->
+    if List.length terms mod 2 <> 0 then invalid_arg "hash-map requires an even number of arguments";
+    HashMapValue (List.map parse_pattern_term terms, output_var)
+  | "array-map", terms ->
+    if List.length terms mod 2 <> 0 then invalid_arg "array-map requires an even number of arguments";
+    ArrayMapValue (List.map parse_pattern_term terms, output_var)
+  | "range", [ end_ ] -> RangeEndValue (parse_pattern_term end_, output_var)
+  | "range", [ start; end_ ] -> RangeValue (parse_pattern_term start, parse_pattern_term end_, output_var)
+  | "range", [ start; end_; step ] ->
+    RangeStepValue (parse_pattern_term start, parse_pattern_term end_, parse_pattern_term step, output_var)
+  | "range", _ -> invalid_arg "range requires one, two, or three arguments"
+  | "tuple", terms -> TupleFunction (List.map parse_pattern_term terms, output_var)
+  | _ -> parse_core_value_function symbol args output
+
+let parse_flat_value_function symbol args output_vars =
+  match symbol, args with
+  | "identity", [ term ] -> GroundTermTuple (parse_pattern_term term, output_vars)
+  | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
+
+let ground_values_of_form = function
+  | QueryFormVector values | QueryFormList values -> List.map query_value_of_form values
+  | _ -> invalid_arg "ground tuple output requires a vector or list value"
+
+let ground_relation_rows_of_form = function
+  | QueryFormVector rows | QueryFormList rows -> List.map ground_values_of_form rows
+  | _ -> invalid_arg "ground relation output requires a vector or list value"
+
+let dynamic_ground_term = function
+  | QueryFormSymbol symbol
+    when (String.length symbol > 0 && symbol.[0] = '?') || is_query_source_symbol symbol ->
+    Some (parse_pattern_term (QueryFormSymbol symbol))
+  | _ -> None
+
+let parse_ground_function args output =
+  match args, output with
+  | [ value_form ], QueryFormSymbol output_symbol when Option.is_some (dynamic_ground_term value_form) ->
+    GroundTerm (Option.get (dynamic_ground_term value_form), parse_output_var (QueryFormSymbol output_symbol))
+  | [ value_form ], QueryFormVector [ QueryFormSymbol output_symbol; QueryFormSymbol "..." ]
+  | [ value_form ], QueryFormList [ QueryFormSymbol output_symbol; QueryFormSymbol "..." ]
+    when Option.is_some (dynamic_ground_term value_form) ->
+    GroundTermCollection (Option.get (dynamic_ground_term value_form), query_symbol_name output_symbol)
+  | [ value_form ], QueryFormVector [ (QueryFormVector _ | QueryFormList _ as output_form) ]
+  | [ value_form ], QueryFormList [ (QueryFormVector _ | QueryFormList _ as output_form) ]
+  | [ value_form ], QueryFormVector [ (QueryFormVector _ | QueryFormList _ as output_form); QueryFormSymbol "..." ]
+  | [ value_form ], QueryFormList [ (QueryFormVector _ | QueryFormList _ as output_form); QueryFormSymbol "..." ]
+    when Option.is_some (dynamic_ground_term value_form) ->
+    GroundTermRelation (Option.get (dynamic_ground_term value_form), parse_output_vars output_form)
+  | [ value_form ], (QueryFormVector _ | QueryFormList _ as output_form)
+    when Option.is_some (dynamic_ground_term value_form) ->
+    GroundTermTuple (Option.get (dynamic_ground_term value_form), parse_output_vars output_form)
+  | [ value_form ], QueryFormSymbol output_symbol ->
+    Ground (query_value_of_form value_form, parse_output_var (QueryFormSymbol output_symbol))
+  | [ value_form ], QueryFormVector [ QueryFormSymbol output_symbol; QueryFormSymbol "..." ]
+  | [ value_form ], QueryFormList [ QueryFormSymbol output_symbol; QueryFormSymbol "..." ] ->
+    GroundCollection (ground_values_of_form value_form, query_symbol_name output_symbol)
+  | [ value_form ], QueryFormVector [ (QueryFormVector _ | QueryFormList _ as output_form) ]
+  | [ value_form ], QueryFormList [ (QueryFormVector _ | QueryFormList _ as output_form) ]
+  | [ value_form ], QueryFormVector [ (QueryFormVector _ | QueryFormList _ as output_form); QueryFormSymbol "..." ]
+  | [ value_form ], QueryFormList [ (QueryFormVector _ | QueryFormList _ as output_form); QueryFormSymbol "..." ] ->
+    GroundRelation (ground_relation_rows_of_form value_form, parse_output_vars output_form)
+  | [ value_form ], (QueryFormVector _ | QueryFormList _ as output_form) ->
+    GroundTuple (ground_values_of_form value_form, parse_output_vars output_form)
+  | [ _ ], _ -> invalid_arg "ground output must be a variable or tuple binding"
+  | _ -> invalid_arg "ground requires one argument"
+
+let parse_value_metadata_function symbol args output =
+  let output_var = query_symbol_name output in
+  match symbol, args with
+  | "type", [ term ] -> TypeValue (parse_pattern_term term, output_var)
+  | "meta", [ term ] -> MetaValue (parse_pattern_term term, output_var)
+  | "name", [ term ] -> NameValue (parse_pattern_term term, output_var)
+  | "namespace", [ term ] -> NamespaceValue (parse_pattern_term term, output_var)
+  | "keyword", [ term ] -> KeywordFromName (parse_pattern_term term, output_var)
+  | "keyword", [ namespace; name ] ->
+    KeywordFromNamespaceName (parse_pattern_term namespace, parse_pattern_term name, output_var)
+  | ("type" | "meta" | "name" | "namespace"), _ -> invalid_arg (symbol ^ " requires one argument")
+  | "keyword", _ -> invalid_arg "keyword requires one or two arguments"
+  | _ -> parse_collection_function symbol args output
