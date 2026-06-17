@@ -34,6 +34,7 @@ let refresh_db_identity db =
 
 module Db = Db
 module Lru = Lru
+module Schema = Schema
 
 let max_entity_id = 0x7fffffff
 
@@ -48,41 +49,7 @@ let datom = Db.datom
 
 let is_datom = Db.is_datom
 
-let validate_schema schema =
-  let is_tuple_attr attr =
-    match List.assoc_opt attr schema with
-    | Some { tuple_attrs = Some _; _ } -> true
-    | _ -> false
-  in
-  let is_many_attr attr =
-    match List.assoc_opt attr schema with
-    | Some { cardinality = Many; _ } -> true
-    | _ -> false
-  in
-  List.iter
-    (fun (attr, spec) ->
-      if spec.is_component && spec.value_type <> Some RefType then
-        invalid_arg ("component attribute requires ref value type: " ^ attr);
-      if spec.value_type = Some TupleType && spec.tuple_attrs = None && spec.tuple_types = None then
-        invalid_arg ("tuple value type requires tuple attrs or tuple types: " ^ attr);
-      (match spec.tuple_types with
-       | Some [] -> invalid_arg ("tuple types cannot be empty: " ^ attr)
-       | _ -> ());
-      match spec.tuple_attrs with
-      | None -> ()
-      | Some [] -> invalid_arg ("tuple attrs cannot be empty: " ^ attr)
-      | Some source_attrs ->
-        if spec.cardinality = Many then
-          invalid_arg ("tuple attrs must be cardinality one: " ^ attr);
-        List.iter
-          (fun source_attr ->
-            if is_tuple_attr source_attr then
-              invalid_arg ("tuple attrs cannot depend on another tuple attr: " ^ attr);
-            if is_many_attr source_attr then
-              invalid_arg ("tuple attrs cannot depend on cardinality many attr: " ^ attr))
-          source_attrs)
-    schema;
-  schema
+let validate_schema = Schema.validate_schema
 
 let is_db (_ : db) = true
 
@@ -238,12 +205,7 @@ let rec normalize_value = function
 let normalize_datom_value d =
   { d with v = normalize_value d.v }
 
-let schema_attr_by_name schema attr = List.assoc_opt attr schema
-
-let schema_attr_is_ref schema attr =
-  match schema_attr_by_name schema attr with
-  | Some { value_type = Some RefType; _ } -> true
-  | _ -> false
+let schema_attr_is_ref = Schema.schema_attr_is_ref
 
 let normalize_datom_for_schema schema d =
   let d = normalize_datom_value d in
@@ -254,19 +216,7 @@ let normalize_datom_for_schema schema d =
   else
     d
 
-let schema_attr_is_tuple = function
-  | Some { tuple_attrs = Some _; _ } -> true
-  | _ -> false
-
-let schema_attr_is_avet_accessible schema attr =
-  attr = "db/ident"
-  || schema_attr_is_tuple (schema_attr_by_name schema attr)
-  ||
-  match schema_attr_by_name schema attr with
-  | Some { value_type = Some RefType; _ }
-  | Some { unique = Some _; _ }
-  | Some { indexed = true; _ } -> true
-  | _ -> false
+let schema_attr_is_avet_accessible = Schema.schema_attr_is_avet_accessible
 
 let datom_has_ref_value = function
   | { v = Ref _; _ } -> true
@@ -315,10 +265,7 @@ let empty_db ?(schema = []) ?storage () =
     ; tx_fns = []
     }
 
-let schema_has_no_history schema attr =
-  match List.assoc_opt attr schema with
-  | Some { no_history = true; _ } -> true
-  | _ -> false
+let schema_has_no_history = Schema.schema_has_no_history
 
 let history_datoms_for_schema schema tx_data =
   List.filter (fun d -> not (schema_has_no_history schema d.a)) tx_data
@@ -704,29 +651,9 @@ let tuple_attrs_for_source db source_attr =
     | Some source_attrs when List.mem source_attr source_attrs -> Some (attr, source_attrs)
     | _ -> None)
 
-let split_namespaced_attr attr =
-  match String.index_opt attr '/' with
-  | None -> None, attr
-  | Some index ->
-    let namespace = String.sub attr 0 index in
-    let name = String.sub attr (index + 1) (String.length attr - index - 1) in
-    Some namespace, name
+let is_reverse_ref = Schema.is_reverse_ref
 
-let join_namespaced_attr namespace name =
-  match namespace with
-  | None -> name
-  | Some namespace -> namespace ^ "/" ^ name
-
-let is_reverse_ref attr =
-  let _, name = split_namespaced_attr attr in
-  String.length name > 0 && name.[0] = '_'
-
-let reverse_ref attr =
-  let namespace, name = split_namespaced_attr attr in
-  if is_reverse_ref attr then
-    join_namespaced_attr namespace (String.sub name 1 (String.length name - 1))
-  else
-    join_namespaced_attr namespace ("_" ^ name)
+let reverse_ref = Schema.reverse_ref
 
 let value_equal = Db.value_equal
 
