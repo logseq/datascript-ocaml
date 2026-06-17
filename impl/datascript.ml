@@ -8695,7 +8695,11 @@ let parse_join_vars clause_name = function
 
 let parse_rule_var = function
   | QueryFormSymbol "_" -> invalid_arg "rule variables must not be placeholders"
-  | QueryFormSymbol symbol -> query_symbol_name symbol
+  | QueryFormSymbol symbol ->
+    if String.length symbol > 1 && symbol.[0] = '?' then
+      query_symbol_name symbol
+    else
+      invalid_arg ("Cannot parse var, expected symbol starting with ?, got: " ^ symbol)
   | _ -> invalid_arg "expected rule variable"
 
 let ensure_distinct_rule_vars clause_name required free =

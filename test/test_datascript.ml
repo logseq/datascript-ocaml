@@ -7926,7 +7926,16 @@ let test_parse_query_with_and_rules_match_upstream_messages () =
        ignore
          (parse_query_string
             "[:find ?e :in % :where (rule ?e)
-             :rules [[(rule [?x ?y] ?z ?x) [_]]]]"))
+             :rules [[(rule [?x ?y] ?z ?x) [_]]]]"));
+  assert_raises_invalid_arg_message
+    "parse_query rejects non-query vars in rule heads like upstream query-rules issue-300"
+    "Cannot parse var, expected symbol starting with ?, got: $e1"
+    (fun () ->
+       ignore
+         (parse_query_string
+            "[:find ?e :in $ % :where [?e]
+             :rules [[(rule $e1 ?e2)
+                      [?e1 :ref ?e2]]]]"))
 
 let test_q_input_arity_matches_upstream_validation_messages () =
   let db = empty_db () in
