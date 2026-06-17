@@ -11717,6 +11717,74 @@ let test_q_return_map_shapes () =
     "q_return_map rejects collection returns"
     (fun () -> ignore (q_return_map db Return_collection (Return_keys [ "name" ]) query))
 
+let test_q_return_map_string_upstream_shape_batch () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int 11) ] }
+         ]
+  in
+  let expected_keys =
+    Query_relation_maps
+      [ [ Keyword "a", Result_value (Int 25); Keyword "n", Result_value (String "Ivan") ]
+      ; [ Keyword "a", Result_value (Int 44); Keyword "n", Result_value (String "Petr") ]
+      ; [ Keyword "a", Result_value (Int 11); Keyword "n", Result_value (String "Sergey") ]
+      ]
+  in
+  if
+    q_return_map_string
+      db
+      "[:find ?name ?age
+        :keys n a
+        :where [?e :name ?name]
+               [?e :age ?age]]"
+    <> expected_keys
+  then failwith "q_return_map_string should execute upstream :keys relation maps";
+  let expected_syms =
+    Query_relation_maps
+      [ [ Symbol "a", Result_value (Int 25); Symbol "n", Result_value (String "Ivan") ]
+      ; [ Symbol "a", Result_value (Int 44); Symbol "n", Result_value (String "Petr") ]
+      ; [ Symbol "a", Result_value (Int 11); Symbol "n", Result_value (String "Sergey") ]
+      ]
+  in
+  if
+    q_return_map_string
+      db
+      "[:find ?name ?age
+        :syms n a
+        :where [?e :name ?name]
+               [?e :age ?age]]"
+    <> expected_syms
+  then failwith "q_return_map_string should execute upstream :syms relation maps";
+  let expected_strs =
+    Query_relation_maps
+      [ [ String "a", Result_value (Int 25); String "n", Result_value (String "Ivan") ]
+      ; [ String "a", Result_value (Int 44); String "n", Result_value (String "Petr") ]
+      ; [ String "a", Result_value (Int 11); String "n", Result_value (String "Sergey") ]
+      ]
+  in
+  if
+    q_return_map_string
+      db
+      "[:find ?name ?age
+        :strs n a
+        :where [?e :name ?name]
+               [?e :age ?age]]"
+    <> expected_strs
+  then failwith "q_return_map_string should execute upstream :strs relation maps";
+  if
+    q_return_map_string
+      db
+      "[:find [?name ?age]
+        :keys n a
+        :where [?e :name ?name]
+               [(= ?name \"Ivan\")]
+               [?e :age ?age]]"
+    <> Query_tuple_map (Some [ Keyword "a", Result_value (Int 25); Keyword "n", Result_value (String "Ivan") ])
+  then failwith "q_return_map_string should execute upstream tuple :keys maps"
+
 let test_parse_query_return_map_shapes () =
   let db =
     empty_db ()
@@ -17655,6 +17723,7 @@ let () =
   test_parse_query_return_shapes ();
   test_q_return_find_specs_match_upstream_cases ();
   test_q_return_map_shapes ();
+  test_q_return_map_string_upstream_shape_batch ();
   test_parse_query_return_map_shapes ();
   test_q_resolves_lookup_refs_in_patterns ();
   test_parse_query_resolves_lookup_refs_in_patterns ();

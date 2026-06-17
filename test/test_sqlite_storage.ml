@@ -391,6 +391,64 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
         [ 4, "age", Int 42; 1, "age", Int 44 ]
         (index_range restored_again "age" ~start:(Int 42) ~stop:(Int 44) ()))
 
+let test_sqlite_storage_backed_query_result_shapes_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed query result-shape test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Petr")
+           ; Add (Entity_id 1, "age", Int 44)
+           ; Add (Entity_id 2, "name", String "Ivan")
+           ; Add (Entity_id 2, "age", Int 25)
+           ; Add (Entity_id 3, "name", String "Sergey")
+           ; Add (Entity_id 3, "age", Int 11)
+           ]);
+      let db =
+        match restore_conn storage with
+        | Some conn -> conn_db conn
+        | None -> failwith "SQLite storage should restore conn for query result-shape test"
+      in
+      if
+        q_return_string db "[:find [?name ...] :where [_ :name ?name]]"
+        <> Query_collection
+             [ Result_value (String "Ivan")
+             ; Result_value (String "Petr")
+             ; Result_value (String "Sergey")
+             ]
+      then failwith "SQLite restored db should support collection find specs";
+      if
+        q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
+        <> Query_scalar (Some (Result_value (Int 3)))
+      then failwith "SQLite restored db should support scalar aggregate find specs";
+      if
+        q_return_map_string
+          db
+          "[:find ?name ?age
+            :keys n a
+            :where [?e :name ?name]
+                   [?e :age ?age]]"
+        <> Query_relation_maps
+             [ [ Keyword "a", Result_value (Int 25); Keyword "n", Result_value (String "Ivan") ]
+             ; [ Keyword "a", Result_value (Int 44); Keyword "n", Result_value (String "Petr") ]
+             ; [ Keyword "a", Result_value (Int 11); Keyword "n", Result_value (String "Sergey") ]
+             ]
+      then failwith "SQLite restored db should support relation return maps";
+      if
+        q_return_map_string
+          db
+          "[:find [?name ?age]
+            :strs n a
+            :where [?e :name ?name]
+                   [(= ?name \"Ivan\")]
+                   [?e :age ?age]]"
+        <> Query_tuple_map (Some [ String "a", Result_value (Int 25); String "n", Result_value (String "Ivan") ])
+      then failwith "SQLite restored db should support tuple return maps")
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -574,6 +632,7 @@ let () =
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
+  test_sqlite_storage_backed_query_result_shapes_after_restore ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();
