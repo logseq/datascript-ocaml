@@ -56,6 +56,26 @@ let assert_equal label expected actual =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d, got %d" label expected actual
 
+let assert_equal_query label expected actual =
+  if expected <> actual then
+    failf
+      "%s: expected %d row(s), got %d row(s)"
+      label
+      (List.length expected)
+      (List.length actual)
+
+let many =
+  { cardinality = Many
+  ; unique = None
+  ; indexed = false
+  ; is_component = false
+  ; no_history = false
+  ; doc = None
+  ; value_type = None
+  ; tuple_attrs = None
+  ; tuple_types = None
+  }
+
 let indexed =
   { cardinality = One
   ; unique = None
@@ -67,6 +87,12 @@ let indexed =
   ; tuple_attrs = None
   ; tuple_types = None
   }
+
+let unique_identity =
+  { indexed with unique = Some Identity }
+
+let ref_attr =
+  { indexed with indexed = false; value_type = Some RefType }
 
 let test_sqlite_storage_round_trips_ocaml_payloads () =
   if not (sqlite3_available ()) then
@@ -95,6 +121,81 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
         let names = datoms restored Avet ~a:"name" () in
         if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
+
+let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed query/transact test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let schema =
+        [ "name", unique_identity
+        ; "age", indexed
+        ; "aka", many
+        ; "friend", ref_attr
+        ]
+      in
+      let conn = create_conn ~schema ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 1, "age", Int 15)
+           ; Add (Entity_id 1, "aka", String "Devil")
+           ; Add (Entity_id 1, "aka", String "Tupen")
+           ; Add (Entity_id 1, "friend", Ref 2)
+           ; Add (Entity_id 2, "name", String "Petr")
+           ; Add (Entity_id 2, "age", Int 37)
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore a connection after persisted transactions"
+      in
+      assert_equal_query
+        "restored SQLite conn queries joins"
+        [ [ Result_value (String "Petr") ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?friend-name
+             :where [?e :name \"Ivan\"]
+                    [?e :friend ?friend]
+                    [?friend :name ?friend-name]]");
+      assert_equal_query
+        "restored SQLite conn queries cardinality-many attrs"
+        [ [ Result_value (String "Devil") ]; [ Result_value (String "Tupen") ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?aka :where [1 :aka ?aka]]");
+      assert_equal_query
+        "restored SQLite conn queries transaction ids"
+        [ [ Result_value (String "Ivan"); Result_entity (tx0 + 1) ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?name ?tx :where [1 :name ?name ?tx]]");
+      ignore
+        (transact_conn
+           restored
+           [ Add (Lookup_ref ("name", String "Ivan"), "age", Int 16)
+           ; Retract (Entity_id 1, "aka", Some (String "Devil"))
+           ]);
+      let restored_again =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db after transact on restored conn"
+      in
+      assert_equal_query
+        "SQLite storage persists lookup-ref transact after restore"
+        [ [ Result_entity 1; Result_value (Int 16) ] ]
+        (q_string
+           restored_again
+           "[:find ?e ?age
+             :where [?e :name \"Ivan\"]
+                    [?e :age ?age]]");
+      assert_equal_query
+        "SQLite storage persists retracts after restore"
+        [ [ Result_value (String "Tupen") ] ]
+        (q_string restored_again "[:find ?aka :where [1 :aka ?aka]]"))
 
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
@@ -276,6 +377,7 @@ let test_all_existing_logseq_graph_datoms_support_query_and_transact () =
 let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
+  test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

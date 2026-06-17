@@ -8177,6 +8177,86 @@ let test_q_short_data_patterns_match_upstream () =
     [ [ Result_entity 1 ] ]
     (q_string db "[:find ?e :where [?e :name]]")
 
+let test_q_upstream_query_cljc_parity_batch () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int 15) ] }
+         ]
+  in
+  assert_equal_query
+    "query.cljc test-joins finds entities with an attr"
+    [ [ Result_entity 1 ]; [ Result_entity 2 ]; [ Result_entity 3 ] ]
+    (q_string db "[:find ?e :where [?e :name]]");
+  assert_equal_query
+    "query.cljc test-joins joins constants and variables"
+    [ [ Result_entity 1; Result_value (Int 15) ]
+    ; [ Result_entity 3; Result_value (Int 37) ]
+    ]
+    (q_string
+       db
+       "[:find ?e ?v
+         :where [?e :name \"Ivan\"]
+                [?e :age ?v]]");
+  assert_equal_query
+    "query.cljc test-joins self-joins shared values"
+    [ [ Result_entity 1; Result_entity 1 ]
+    ; [ Result_entity 1; Result_entity 3 ]
+    ; [ Result_entity 2; Result_entity 2 ]
+    ; [ Result_entity 3; Result_entity 1 ]
+    ; [ Result_entity 3; Result_entity 3 ]
+    ]
+    (q_string
+       db
+       "[:find ?e1 ?e2
+         :where [?e1 :name ?n]
+                [?e2 :name ?n]]");
+  let many_db =
+    empty_db ~schema:[ "aka", many ] ()
+    |> db_with
+         [ Add (Entity_id 1, "name", String "Ivan")
+         ; Add (Entity_id 1, "aka", String "ivolga")
+         ; Add (Entity_id 1, "aka", String "pi")
+         ; Add (Entity_id 2, "name", String "Petr")
+         ; Add (Entity_id 2, "aka", String "porosenok")
+         ; Add (Entity_id 2, "aka", String "pi")
+         ]
+  in
+  assert_equal_query
+    "query.cljc test-q-many joins cardinality-many attrs"
+    [ [ Result_value (String "Ivan"); Result_value (String "Ivan") ]
+    ; [ Result_value (String "Ivan"); Result_value (String "Petr") ]
+    ; [ Result_value (String "Petr"); Result_value (String "Ivan") ]
+    ; [ Result_value (String "Petr"); Result_value (String "Petr") ]
+    ]
+    (q_string
+       many_db
+       "[:find ?n1 ?n2
+         :where [?e1 :aka ?x]
+                [?e2 :aka ?x]
+                [?e1 :name ?n1]
+                [?e2 :name ?n2]]");
+  assert_equal_query
+    "query.cljc test-built-in-get binds map inputs as relation rows"
+    [ [ Result_value (Map [ Keyword "d", Int 2 ]); Result_value (Int 2) ] ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", Map [ Keyword "b", Int 1 ]
+                   ; Keyword "c", Map [ Keyword "d", Int 2 ]
+                   ]))
+         ; Arg_scalar (Result_value (Keyword "d"))
+         ]
+       (empty_db ())
+       "[:find ?m ?m-value
+         :in [[?k ?m] ...] ?m-key
+         :where [(get ?m ?m-key) ?m-value]]")
+
 let test_q_reverse_ref_patterns () =
   let db =
     empty_db ~schema:[ "parent", ref_attr; "person/parent", ref_attr ] ()
@@ -9996,7 +10076,16 @@ let test_q_builtin_ground_bindings () =
        (empty_db ())
        "[:find ?x ?z
          :in ?in
-         :where [(ground ?in) [[?x _ ?z] ...]]]")
+         :where [(ground ?in) [[?x _ ?z] ...]]]");
+  assert_equal_query
+    "q_string ground over empty collection input returns no rows"
+    []
+    (q_string
+       ~inputs:[ Arg_collection [] ]
+       (empty_db ())
+       "[:find ?in
+         :in [?in ...]
+         :where [(ground ?in) _]]")
 
 let test_q_builtin_function_insufficient_bindings_match_upstream_messages () =
   let db = empty_db () in
@@ -17094,6 +17183,7 @@ let () =
   test_q_binds_transaction_operation_in_history_patterns ();
   test_q_joins_clauses ();
   test_q_short_data_patterns_match_upstream ();
+  test_q_upstream_query_cljc_parity_batch ();
   test_q_reverse_ref_patterns ();
   test_q_predicates_filter_bound_values ();
   test_q_predicates_without_free_variables_filter_all_rows ();
