@@ -2860,10 +2860,13 @@ let is_avet_accessible db attr =
   || is_unique db attr
   || is_indexed db attr
 
+let indexed_attr_required_message attr =
+  "Attribute :" ^ attr ^ " should be marked as :db/index true"
+
 let validate_index_access db index attr =
   match index, attr with
   | Avet, Some attr when not (is_avet_accessible db attr) ->
-    invalid_arg ("attribute should be indexed for AVET access: " ^ attr)
+    invalid_arg (indexed_attr_required_message attr)
   | _ -> ()
 
 let indexed_visible_datoms db index =
@@ -3076,7 +3079,7 @@ let rseek_datoms_ref db index ?e ?a ?v ?tx () =
 
 let index_range db attr ?start ?stop () =
   if not (is_avet_accessible db attr) then
-    invalid_arg ("attribute should be indexed for index_range: " ^ attr);
+    invalid_arg (indexed_attr_required_message attr);
   let start = resolve_index_value_option_for_attr db attr start in
   let stop = resolve_index_value_option_for_attr db attr stop in
   datoms db Avet ~a:attr ()

@@ -527,6 +527,10 @@ let test_index_range_returns_avet_values_between_bounds () =
     (index_range db "age" ~start:(Int 0) ~stop:(Int 100) ());
   assert_raises_invalid_arg
     "index_range rejects unindexed attrs"
+    (fun () -> ignore (index_range db "alias" ~start:(String "A") ~stop:(String "Z") ()));
+  assert_raises_invalid_arg_message
+    "index_range rejects unindexed attrs with upstream message"
+    "Attribute :alias should be marked as :db/index true"
     (fun () -> ignore (index_range db "alias" ~start:(String "A") ~stop:(String "Z") ()))
 
 let test_indexes_compare_keywords_like_datascript () =
@@ -661,11 +665,17 @@ let test_avet_excludes_unindexed_scalar_attrs () =
   assert_raises_invalid_arg
     "AVET datoms reject unindexed attrs"
     (fun () -> ignore (datoms db Avet ~a:"name" ()));
-  assert_raises_invalid_arg
-    "AVET seek_datoms reject unindexed attrs"
+  assert_raises_invalid_arg_message
+    "AVET datoms reject unindexed attrs with upstream message"
+    "Attribute :name should be marked as :db/index true"
+    (fun () -> ignore (datoms db Avet ~a:"name" ()));
+  assert_raises_invalid_arg_message
+    "AVET seek_datoms reject unindexed attrs with upstream message"
+    "Attribute :name should be marked as :db/index true"
     (fun () -> ignore (seek_datoms db Avet ~a:"name" ()));
-  assert_raises_invalid_arg
-    "AVET rseek_datoms reject unindexed attrs"
+  assert_raises_invalid_arg_message
+    "AVET rseek_datoms reject unindexed attrs with upstream message"
+    "Attribute :name should be marked as :db/index true"
     (fun () -> ignore (rseek_datoms db Avet ~a:"name" ()))
 
 let test_seek_datoms_scans_forward_from_index_tuple () =
