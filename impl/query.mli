@@ -238,6 +238,34 @@ val match_relation_source_pattern :
   (string * query_result) list ->
   query_term list ->
   (string * query_result) list list
+val eval_query_term_with_sources :
+  match_context ->
+  db ->
+  (string * query_source) list ->
+  (string * query_result) list ->
+  query_term ->
+  query_result option
+val collect_dynamic_query_terms_exn :
+  match_context ->
+  db ->
+  (string * query_source) list ->
+  (string * query_result) list ->
+  query_term list ->
+  query_result list
+val aggregate_extra_args :
+  match_context ->
+  db ->
+  (string * query_source) list ->
+  (string * query_result) list list ->
+  query_term list ->
+  query_result list
+val aggregate_values :
+  match_context ->
+  db ->
+  (string * query_source) list ->
+  (string * query_result) list list ->
+  query_term list ->
+  query_result list
 val query_callables_of_inputs : query_input list -> query_callables
 val query_rules_of_inputs : query_input list -> query_rule list
 val matching_rules : query_rule list -> string -> int -> query_rule list

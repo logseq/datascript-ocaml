@@ -597,6 +597,42 @@ let match_relation_source_pattern context default_db sources source_name binding
          [ e_term; attr_term_of_short_pattern a_term; QWildcard ]
      | _ -> invalid_arg ("query source is not a relation: " ^ source_name))
 
+let eval_query_term_with_sources context default_db sources bindings = function
+  | QSource source -> Some (Result_db (source_db default_db sources source))
+  | term -> eval_query_term context bindings term
+
+let collect_dynamic_query_terms_exn context default_db sources bindings terms =
+  let rec collect acc = function
+    | [] -> List.rev acc
+    | term :: rest ->
+      (match eval_query_term_with_sources context default_db sources bindings term with
+       | Some value -> collect (value :: acc) rest
+       | None -> invalid_arg "unbound query variable")
+  in
+  collect [] terms
+
+let aggregate_extra_args context default_db sources group_bindings terms =
+  let extra_terms, _ = split_aggregate_terms terms in
+  let binding =
+    match group_bindings with
+    | first :: _ -> first
+    | [] -> []
+  in
+  let rec collect acc = function
+    | [] -> List.rev acc
+    | term :: rest ->
+      (match eval_query_term_with_sources context default_db sources binding term with
+       | Some value -> collect (value :: acc) rest
+       | None -> invalid_arg "insufficient aggregate argument bindings")
+  in
+  collect [] extra_terms
+
+let aggregate_values context default_db sources group_bindings terms =
+  let _, value_term = split_aggregate_terms terms in
+  List.filter_map
+    (fun binding -> eval_query_term_with_sources context default_db sources binding value_term)
+    group_bindings
+
 let query_callables_of_inputs inputs =
   inputs
   |> List.fold_left

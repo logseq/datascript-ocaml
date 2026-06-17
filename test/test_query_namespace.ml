@@ -556,7 +556,98 @@ let test_query_namespace__test_aggregate_helpers () =
     (Query.aggregate_input_values
        Sum
        [ Result_value (Int 9) ]
-       [ Result_value (Int 1); Result_value (Int 2) ])
+       [ Result_value (Int 1); Result_value (Int 2) ]);
+  let match_context =
+    { Query.result_resolution_context =
+        { validate_entity_id = (fun entity_id -> entity_id)
+        ; resolve_query_value = (fun value -> Some value)
+        ; lookup_ref_entity_id = (fun _ _ -> None)
+        }
+    ; source_db = empty_db ()
+    ; ident_entity_id = (fun _ -> None)
+    ; unresolved_lookup_ref_message = (fun attr _ -> "missing lookup ref: " ^ attr)
+    ; value_equal = Util.value_equal
+    ; coerce_tuple_lookup_value = (fun _ value -> value)
+    }
+  in
+  let default_db = empty_db () in
+  let other_db = empty_db () in
+  let sources = [ "other", Db_source other_db ] in
+  (match Query.eval_query_term_with_sources match_context default_db sources [] (QSource "$") with
+   | Some (Result_db db) when db == default_db -> ()
+   | _ -> failwith "eval_query_term_with_sources should resolve the default source db");
+  (match Query.eval_query_term_with_sources match_context default_db sources [] (QSource "other") with
+   | Some (Result_db db) when db == other_db -> ()
+   | _ -> failwith "eval_query_term_with_sources should resolve named source dbs");
+  assert_equal_query_option
+    "eval_query_term_with_sources delegates non-source terms"
+    (Some (Result_value (String "Ivan")))
+    (Query.eval_query_term_with_sources
+       match_context
+       default_db
+       sources
+       [ "name", Result_value (String "Ivan") ]
+       (QVar "name"));
+  assert_raises_invalid_arg_message
+    "eval_query_term_with_sources rejects unknown sources"
+    "unknown query source: missing"
+    (fun () -> ignore (Query.eval_query_term_with_sources match_context default_db sources [] (QSource "missing")));
+  assert_equal_query
+    "collect_dynamic_query_terms_exn evaluates vars and sources"
+    [ Result_value (String "Ivan"); Result_db other_db ]
+    (Query.collect_dynamic_query_terms_exn
+       match_context
+       default_db
+       sources
+       [ "name", Result_value (String "Ivan") ]
+       [ QVar "name"; QSource "other" ]);
+  assert_raises_invalid_arg_message
+    "collect_dynamic_query_terms_exn reports unbound terms"
+    "unbound query variable"
+    (fun () ->
+       ignore
+         (Query.collect_dynamic_query_terms_exn match_context default_db sources [] [ QVar "missing" ]));
+  (match
+     Query.aggregate_extra_args
+       match_context
+       default_db
+       sources
+       [ [ "n", Result_value (Int 2); "amount", Result_value (Int 10) ]
+       ; [ "n", Result_value (Int 3); "amount", Result_value (Int 20) ]
+       ]
+       [ QVar "n"; QSource "other"; QVar "amount" ]
+   with
+   | [ Result_value (Int 2); Result_db db ] when db == other_db -> ()
+   | _ -> failwith "aggregate_extra_args should use first group binding and resolve source args");
+  assert_equal_query
+    "aggregate_values evaluates the aggregate value term for every group binding"
+    [ Result_value (Int 10); Result_value (Int 20) ]
+    (Query.aggregate_values
+       match_context
+       default_db
+       sources
+       [ [ "amount", Result_value (Int 10) ]; [ "amount", Result_value (Int 20) ] ]
+       [ QVar "amount" ]);
+  assert_equal_query
+    "aggregate_values drops bindings where the value term is unbound"
+    [ Result_value (Int 10) ]
+    (Query.aggregate_values
+       match_context
+       default_db
+       sources
+       [ [ "amount", Result_value (Int 10) ]; [ "name", Result_value (String "missing") ] ]
+       [ QVar "amount" ]);
+  assert_raises_invalid_arg_message
+    "aggregate_extra_args rejects unbound extra args"
+    "insufficient aggregate argument bindings"
+    (fun () ->
+       ignore
+         (Query.aggregate_extra_args
+            match_context
+            default_db
+            sources
+            [ [ "amount", Result_value (Int 10) ] ]
+            [ QVar "missing"; QVar "amount" ]))
 
 let test_query_namespace__test_find_grouping_helpers () =
   let binding =

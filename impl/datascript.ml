@@ -3106,33 +3106,11 @@ let aggregate_param_vars = Query.aggregate_param_vars
 
 let query_term_vars = Query.query_term_vars
 
-let eval_query_term_with_sources db sources bindings = function
-  | QSource source -> Some (Result_db (source_db db sources source))
-  | term -> eval_query_term db bindings term
-
-let split_aggregate_terms = Query.split_aggregate_terms
-
 let aggregate_extra_args db sources group_bindings terms =
-  let extra_terms, _ = split_aggregate_terms terms in
-  let binding =
-    match group_bindings with
-    | first :: _ -> first
-    | [] -> []
-  in
-  let rec collect acc = function
-    | [] -> List.rev acc
-    | term :: rest ->
-      (match eval_query_term_with_sources db sources binding term with
-       | Some value -> collect (value :: acc) rest
-       | None -> invalid_arg "insufficient aggregate argument bindings")
-  in
-  collect [] extra_terms
+  Query.aggregate_extra_args (query_match_context db) db sources group_bindings terms
 
 let aggregate_values db sources group_bindings terms =
-  let _, value_term = split_aggregate_terms terms in
-  List.filter_map
-    (fun binding -> eval_query_term_with_sources db sources binding value_term)
-    group_bindings
+  Query.aggregate_values (query_match_context db) db sources group_bindings terms
 
 let aggregate_input_values = Query.aggregate_input_values
 
@@ -3618,19 +3596,8 @@ and rule_call_key db source name bindings terms =
 and matching_rules_for_call active_rules key rules name arity =
   Query.matching_rules_for_call active_rules key rules name arity
 
-and eval_dynamic_query_term db sources bindings = function
-  | QSource source -> Some (Result_db (source_db db sources source))
-  | term -> eval_query_term db bindings term
-
 and collect_dynamic_query_terms_exn db sources bindings terms =
-  let rec collect acc = function
-    | [] -> List.rev acc
-    | term :: rest ->
-      (match eval_dynamic_query_term db sources bindings term with
-       | Some value -> collect (value :: acc) rest
-       | None -> invalid_arg "unbound query variable")
-  in
-  collect [] terms
+  Query.collect_dynamic_query_terms_exn (query_match_context db) db sources bindings terms
 
 and eval_dynamic_predicate_clause callables db sources bindings name terms =
   match callable_predicate callables name with
@@ -5164,6 +5131,10 @@ module Query = struct
   let match_query_source_pattern = Query_impl.match_query_source_pattern
   let match_source_pattern = Query_impl.match_source_pattern
   let match_relation_source_pattern = Query_impl.match_relation_source_pattern
+  let eval_query_term_with_sources = Query_impl.eval_query_term_with_sources
+  let collect_dynamic_query_terms_exn = Query_impl.collect_dynamic_query_terms_exn
+  let aggregate_extra_args = Query_impl.aggregate_extra_args
+  let aggregate_values = Query_impl.aggregate_values
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules
