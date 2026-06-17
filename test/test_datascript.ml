@@ -100,10 +100,6 @@ let assert_float_nan label = function
   | Float value when classify_float value = FP_nan -> ()
   | value -> failf "%s: expected NaN, got %s" label (debug_value value)
 
-let assert_equal_tx_flags label expected actual =
-  let values = List.map (fun d -> d.e, d.a, d.v, d.added) actual in
-  if expected <> values then failf "%s: unexpected tx flags" label
-
 let assert_equal_tempids label expected actual =
   if expected <> actual then
     let format tempids =
@@ -14718,73 +14714,6 @@ let test_transact__test_transact_bang () =
     [ 1, "aka", String "IV"; 1, "aka", String "Terrible"; 1, "name", String "Ivan" ]
     (datoms (conn_db conn) Eavt ())
 
-let test_connection_listeners_receive_transaction_reports () =
-  let conn = create_conn () in
-  let seen = ref [] in
-  let seen_meta = ref [] in
-  if listen conn "capture" (fun report ->
-       seen := report.tx_data :: !seen;
-       seen_meta := report.tx_meta :: !seen_meta)
-     <> "capture"
-  then
-    failwith "listen should return listener key";
-  ignore (transact_conn ~tx_meta:[ "source", String "listener-test" ] conn [ Add (Entity_id 1, "name", String "Ivan") ]);
-  if !seen <> [ [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") () ] ] then
-    failwith "listener should receive transaction report";
-  if !seen_meta <> [ [ "source", String "listener-test" ] ] then
-    failwith "listener should receive transaction metadata";
-  unlisten conn "capture";
-  ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Petr") ]);
-  if !seen <> [ [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") () ] ] then
-    failwith "unlisten should stop report delivery"
-
-let test_connection_listen_matches_upstream_report_semantics () =
-  let conn = create_conn () in
-  let reports = ref [] in
-  ignore
-    (transact_conn_string
-       conn
-       "[[:db/add -1 :name \"Alex\"]
-         [:db/add -2 :name \"Boris\"]]");
-  ignore (listen conn "test" (fun report -> reports := !reports @ [ report ]));
-  ignore
-    (transact_conn_string
-       ~tx_meta:[ "some-metadata", Int 1 ]
-       conn
-       "[[:db/add -1 :name \"Dima\"]
-         [:db/add -1 :age 19]
-         [:db/add -2 :name \"Evgeny\"]]");
-  ignore
-    (transact_conn_string
-       conn
-       "[[:db/add -1 :name \"Fedor\"]
-         [:db/add 1 :name \"Alex2\"]
-         [:db/retract 2 :name \"Not Boris\"]
-         [:db/retract 4 :name \"Evgeny\"]]");
-  unlisten conn "test";
-  ignore (transact_conn_string conn "[[:db/add -1 :name \"George\"]]");
-  (match !reports with
-   | [ first; second ] ->
-     assert_equal_tx_flags
-       "listen reports first observed tx-data like upstream"
-       [ 3, "name", String "Dima", true
-       ; 3, "age", Int 19, true
-       ; 4, "name", String "Evgeny", true
-       ]
-       first.tx_data;
-     if first.tx_meta <> [ "some-metadata", Int 1 ] then
-       failwith "listen should preserve tx metadata for the first observed report";
-     assert_equal_tx_flags
-       "listen reports replacements and skips no-op retracts like upstream"
-       [ 5, "name", String "Fedor", true
-       ; 1, "name", String "Alex", false
-       ; 1, "name", String "Alex2", true
-       ; 4, "name", String "Evgeny", false
-       ]
-       second.tx_data;
-     if second.tx_meta <> [] then failwith "listen should use empty metadata when none is supplied"
-   | reports -> failf "expected two listener reports, got %d" (List.length reports))
-
 let test_connection_auto_listener_keys () =
   let conn = create_conn () in
   let seen = ref [] in
@@ -18047,63 +17976,6 @@ let test_schema_transactions_install_uuid_and_instant_value_types () =
     "schema-installed uuid valueType rejects mismatched values"
     (fun () -> ignore (db_with [ Add (Entity_id 1, "uuid", String "not-a-uuid-value") ] db))
 
-let test_conn_helpers_and_reset () =
-  let old_db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
-  let new_db = empty_db () |> db_with [ Add (Entity_id 2, "name", String "Petr") ] in
-  let conn = conn_from_db old_db in
-  if not (is_db old_db) then failwith "is_db should accept db values";
-  if not (is_conn conn) then failwith "is_conn should accept conn values";
-  let observed = ref None in
-  ignore (listen conn "reset" (fun report -> observed := Some report));
-  let reset_db = reset_conn ~tx_meta:[ "op", Keyword "reset" ] conn new_db in
-  assert_equal_triples
-    "reset_conn returns the replacement db"
-    [ 2, "name", String "Petr" ]
-    (datoms reset_db Eavt ());
-  assert_equal_triples
-    "reset_conn updates conn db"
-    [ 2, "name", String "Petr" ]
-    (datoms (conn_db conn) Eavt ());
-  (match !observed with
-   | Some report ->
-     assert_equal_tx_flags
-       "reset_conn listener receives retract/add tx data"
-       [ 1, "name", String "Ivan", false; 2, "name", String "Petr", true ]
-       report.tx_data;
-     if report.tx_meta <> [ "op", Keyword "reset" ] then
-       failwith "reset_conn report should preserve tx meta"
-   | None -> failwith "reset_conn should notify listeners");
-  let datom = datom ~e:3 ~a:"name" ~v:(String "Oleg") () in
-  if not (is_datom datom) then failwith "is_datom should accept datom values";
-  let conn = conn_from_datoms [ datom ] in
-  assert_equal_triples
-    "conn_from_datoms initializes conn from raw datoms"
-    [ 3, "name", String "Oleg" ]
-    (datoms (conn_db conn) Eavt ());
-  assert_equal_triples
-    "db aliases conn_db"
-    [ 3, "name", String "Oleg" ]
-    (datoms (db conn) Eavt ());
-  let async_report =
-    transact_async
-      ~tx_meta:[ "op", Keyword "async" ]
-      conn
-      [ Add (Entity_id 3, "age", Int 41) ]
-  in
-  assert_equal_triples
-    "transact_async updates conn db"
-    [ 3, "age", Int 41; 3, "name", String "Oleg" ]
-    (datoms (db conn) Eavt ());
-  if async_report.tx_meta <> [ "op", Keyword "async" ] then
-    failwith "transact_async should preserve tx meta";
-  let db = reset_schema conn [ "tag", many ] in
-  if schema db <> [ "tag", many ] then failwith "reset_schema should return db with new schema";
-  if schema (conn_db conn) <> [ "tag", many ] then failwith "reset_schema should update conn db";
-  match entity db (Entity_id 3) with
-  | Some entity ->
-    if not (is_entity entity) then failwith "is_entity should accept entity values"
-  | None -> failwith "expected entity after reset_schema"
-
 let () =
   test_datom_defaults ();
   test_empty_db ();
@@ -18436,8 +18308,6 @@ let () =
   test_unique_value_rejects_duplicate_values ();
   test_db_with_string_unique_value_matches_upstream_validation ();
   test_transact__test_transact_bang ();
-  test_connection_listeners_receive_transaction_reports ();
-  test_connection_listen_matches_upstream_report_semantics ();
   test_connection_auto_listener_keys ();
   test_bang_connection_api_aliases ();
   test_connection_reports_strip_skip_store_metadata ();
@@ -18527,5 +18397,4 @@ let () =
   test_scalar_value_type_schema_validates_values ();
   test_schema_transactions_install_scalar_value_types ();
   test_uuid_and_instant_value_type_schema_validates_values ();
-  test_schema_transactions_install_uuid_and_instant_value_types ();
-  test_conn_helpers_and_reset ()
+  test_schema_transactions_install_uuid_and_instant_value_types ()

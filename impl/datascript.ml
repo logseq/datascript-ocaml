@@ -1,25 +1,8 @@
 include Datascript_types
 
-type conn =
-  { mutable db : db
-  ; mutable listeners : (string * (tx_report -> unit)) list
-  ; mutable next_listener_id : int
-  ; storage : storage option
-  ; mutable storage_tail : datom list list
-  }
+module Conn = Conn
 
-let tx_meta_skips_store tx_meta =
-  List.exists (function
-    | "skip-store?", Bool true -> true
-    | _ -> false)
-    tx_meta
-
-let tx_meta_without_store_control tx_meta =
-  List.filter
-    (function
-      | "skip-store?", _ -> false
-      | _ -> true)
-    tx_meta
+type conn = Conn.t
 
 let tx0 = Db.tx0
 
@@ -518,79 +501,43 @@ let collect_garbage storage =
   |> List.filter (fun address -> not (List.mem address live))
   |> storage.storage_delete
 
-let make_conn ?storage ?(storage_tail = []) db =
-  let db =
-    match storage with
-    | None -> db
-    | Some _ -> { db with storage_ref = storage }
-  in
-  { db; listeners = []; next_listener_id = 0; storage; storage_tail }
+let conn_creation_context : Conn.creation_context =
+  { empty_db; init_db; store }
 
 let create_conn ?schema ?storage () =
-  let db = empty_db ?schema ?storage () in
-  let db =
-    match storage with
-    | None -> db
-    | Some storage ->
-      store ~storage db;
-      { db with storage_ref = Some storage }
-  in
-  make_conn ?storage db
+  Conn.create conn_creation_context ?schema ?storage ()
 
 let conn_from_db db =
-  match db.storage_ref with
-  | None -> make_conn db
-  | Some storage ->
-    store ~storage db;
-    make_conn ~storage db
+  Conn.from_db conn_creation_context db
 
-let conn_from_datoms ?schema ?storage datoms = conn_from_db (init_db ?schema ?storage datoms)
+let conn_from_datoms ?schema ?storage datoms =
+  Conn.from_datoms conn_creation_context ?schema ?storage datoms
 
-let conn_db conn = conn.db
+let conn_db = Conn.db
 
 let db = conn_db
 
-let is_conn (_ : conn) = true
+let is_conn = Conn.is_conn
 
-let listen conn key callback =
-  conn.listeners <- (key, callback) :: List.remove_assoc key conn.listeners;
-  key
+let listen = Conn.listen
 
 let listen_bang = listen
 
-let listen_auto conn callback =
-  let rec next_key () =
-    conn.next_listener_id <- conn.next_listener_id + 1;
-    let key = "listener-" ^ string_of_int conn.next_listener_id in
-    if List.mem_assoc key conn.listeners then next_key () else key
-  in
-  listen conn (next_key ()) callback
+let listen_auto = Conn.listen_auto
 
 let listen_bang_auto = listen_auto
 
-let unlisten conn key =
-  conn.listeners <- List.remove_assoc key conn.listeners
+let unlisten = Conn.unlisten
 
 let unlisten_bang = unlisten
-
-let notify_listeners conn report =
-  conn.listeners
-  |> List.rev
-  |> List.iter (fun (_, callback) -> callback report)
 
 let schema db = db.schema
 
 let with_schema db schema = refresh_db_indexes (refresh_db_identity { db with schema = validate_schema schema })
 
 let reset_schema conn schema =
-  let db = with_schema conn.db schema in
-  conn.db <- db;
-  (match conn.storage with
-   | None -> ()
-   | Some storage ->
-     store ~storage db;
-     conn.storage_tail <- []);
-  db
+  let context : Conn.schema_context = { store; with_schema } in
+  Conn.reset_schema context conn schema
 
 let reset_schema_bang = reset_schema
 
@@ -2239,9 +2186,8 @@ let restore storage =
     Some { db with storage_ref = Some storage }
 
 let restore_conn storage =
-  match restore storage with
-  | None -> None
-  | Some db -> Some (make_conn ~storage ~storage_tail:(restore_tail_groups storage) db)
+  let context : Conn.restore_context = { restore; restore_tail_groups } in
+  Conn.restore context storage
 
 let transact ?(tx_meta = []) db tx_ops =
   let db_after, tempids, tx_data = apply_tx tx_ops db in
@@ -2250,25 +2196,15 @@ let transact ?(tx_meta = []) db tx_ops =
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops
 
 let transact_conn ?(tx_meta = []) conn tx_data =
-  let skip_store = tx_meta_skips_store tx_meta in
-  let report = transact ~tx_meta:(tx_meta_without_store_control tx_meta) conn.db tx_data in
-  conn.db <- report.db_after;
-  if not skip_store then
-    (match conn.storage with
-     | None -> ()
-     | Some storage ->
-       if report.tx_data <> [] then begin
-         let tail = conn.storage_tail @ [ report.tx_data ] in
-         if storage_tail_datom_count tail > storage_tail_compaction_threshold then begin
-           store ~storage report.db_after;
-           conn.storage_tail <- []
-         end else begin
-           conn.storage_tail <- tail;
-           store_tail storage conn.storage_tail
-         end
-       end);
-  notify_listeners conn report;
-  report
+  let context : Conn.transact_context =
+    { store
+    ; store_tail
+    ; storage_tail_datom_count
+    ; storage_tail_compaction_threshold
+    ; transact = (fun ~tx_meta db tx_data -> transact ~tx_meta db tx_data)
+    }
+  in
+  Conn.transact context ~tx_meta conn tx_data
 
 let transact_bang ?tx_meta conn tx_data = transact_conn ?tx_meta conn tx_data
 
@@ -2397,24 +2333,10 @@ let squuid = Db.squuid
 let squuid_time_millis = Db.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
-  let db =
-    match conn.storage with
-    | None -> db
-    | Some _ -> { db with storage_ref = conn.storage }
+  let context : Conn.reset_context =
+    { store; datoms = (fun db -> datoms db Eavt ()) }
   in
-  let tx_data =
-    List.map (fun datom -> { datom with added = false }) (datoms conn.db Eavt ())
-    @ datoms db Eavt ()
-  in
-  let report = { db_before = conn.db; db_after = db; tx_data; tempids = []; tx_meta } in
-  conn.db <- db;
-  (match conn.storage with
-   | None -> ()
-   | Some storage ->
-     store ~storage db;
-     conn.storage_tail <- []);
-  notify_listeners conn report;
-  db
+  Conn.reset context ~tx_meta conn db
 
 let reset_conn_bang ?tx_meta conn db = reset_conn ?tx_meta conn db
 

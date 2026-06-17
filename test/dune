@@ -9,6 +9,11 @@
  (libraries datascript))
 
 (test
+ (name test_conn)
+ (modules test_conn)
+ (libraries datascript))
+
+(test
  (name test_db)
  (modules test_db)
  (libraries datascript))
@@ -16,6 +21,11 @@
 (test
  (name test_entity)
  (modules test_entity)
+ (libraries datascript))
+
+(test
+ (name test_listen)
+ (modules test_listen)
  (libraries datascript))
 
 (test

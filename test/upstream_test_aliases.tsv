@@ -3,8 +3,6 @@
 # Use "-" only for explicit non-goals.
 components.cljc	test-components	test_upstream_components_and_explode_parity_batch
 components.cljc	test-components-multival	test_upstream_components_and_explode_parity_batch
-conn.cljc	test-ways-to-create-conn	test_conn_helpers_and_reset
-conn.cljc	test-reset-conn!	test_conn_helpers_and_reset
 datafy.cljc	test-navigation	-
 explode.cljc	test-explode	test_upstream_components_and_explode_parity_batch
 explode.cljc	test-explode-ref	test_upstream_components_and_explode_parity_batch
