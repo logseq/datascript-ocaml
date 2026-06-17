@@ -4017,98 +4017,34 @@ let rec eval_clauses
     bindings
     clauses
 
-and vars_of_query_terms terms = Query.vars_of_query_terms terms
-
 and vars_of_clause clause = Query.vars_of_clause clause
 
 and query_clause_string clause =
   Query.query_clause_string ~value_to_string:edn_string_of_value clause
 
-and query_not_clause_string clauses =
-  Query.query_not_clause_string ~value_to_string:edn_string_of_value clauses
-
-and query_or_clause_string branches =
-  Query.query_or_clause_string ~value_to_string:edn_string_of_value branches
-
 and query_or_join_clause_string required_vars vars branches =
   Query.query_or_join_clause_string ~value_to_string:edn_string_of_value required_vars vars branches
 
-and query_var_set_string vars =
-  Query.query_var_set_string vars
-
-and query_var_sets_string var_sets =
-  Query.query_var_sets_string var_sets
-
-and unbound_vars_of_terms bindings terms =
-  let bound_vars = List.map fst bindings in
-  terms
-  |> vars_of_query_terms
-  |> List.filter (fun var -> not (List.mem var bound_vars))
-  |> List.sort_uniq compare
-
 and ensure_query_terms_bound bindings terms clause_string =
-  match unbound_vars_of_terms bindings terms with
-  | [] -> ()
-  | unbound_vars ->
-    invalid_arg
-      ( "Insufficient bindings: "
-      ^ query_var_set_string unbound_vars
-      ^ " not bound in "
-      ^ clause_string )
+  Query.ensure_query_terms_bound bindings terms clause_string
 
 and ensure_not_has_outer_binding bindings clauses =
-  let clause_vars = clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare in
-  let bound_vars = List.map fst bindings in
-  if clause_vars <> [] && not (List.exists (fun var -> List.mem var bound_vars) clause_vars) then
-    let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) clause_vars in
-    invalid_arg
-      ( "Insufficient bindings: none of "
-      ^ query_var_set_string unbound_vars
-      ^ " is bound in "
-      ^ query_not_clause_string clauses )
+  Query.ensure_not_has_outer_binding ~value_to_string:edn_string_of_value bindings clauses
 
 and vars_of_branch clauses =
-  clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare
-
-and free_vars_of_branch bound_vars clauses =
-  vars_of_branch clauses |> List.filter (fun var -> not (List.mem var bound_vars))
+  Query.vars_of_branch clauses
 
 and ensure_or_branch_vars_match bindings branches =
-  let bound_vars = List.map fst bindings in
-  match List.map (free_vars_of_branch bound_vars) branches with
-  | [] | [ _ ] -> ()
-  | expected :: rest ->
-    let branch_vars = expected :: rest in
-    if List.exists (( <> ) expected) rest then
-      invalid_arg
-        ( "All clauses in 'or' must use same set of free vars, had "
-        ^ query_var_sets_string branch_vars
-        ^ " in "
-        ^ query_or_clause_string branches )
+  Query.ensure_or_branch_vars_match ~value_to_string:edn_string_of_value bindings branches
 
 and ensure_join_vars_bound bindings vars =
-  let bound_vars = List.map fst bindings in
-  if List.exists (fun var -> not (List.mem var bound_vars)) vars then
-    invalid_arg "insufficient bindings"
+  Query.ensure_join_vars_bound bindings vars
 
 and ensure_join_vars_bound_in_clause bindings vars clause_string =
-  let bound_vars = List.map fst bindings in
-  let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) vars in
-  if unbound_vars <> [] then
-    invalid_arg
-      ( "Insufficient bindings: "
-      ^ query_var_set_string unbound_vars
-      ^ " not bound in "
-      ^ clause_string )
+  Query.ensure_join_vars_bound_in_clause bindings vars clause_string
 
 and ensure_or_join_branches_cover_listed_vars bindings vars branches =
-  let bound_vars = List.map fst bindings in
-  let required_vars = List.filter (fun var -> not (List.mem var bound_vars)) vars in
-  branches
-  |> List.iter (fun branch ->
-    let branch_vars = vars_of_branch branch in
-    if List.exists (fun var -> not (List.mem var branch_vars)) required_vars then
-      invalid_arg "or branches must use same free vars")
+  Query.ensure_or_join_branches_cover_listed_vars bindings vars branches
 
 and clause_calls_rule name = function
   | Rule (rule_name, _) | SourceRule (_, rule_name, _) -> rule_name = name
@@ -6806,6 +6742,15 @@ module Query = struct
   let query_or_join_clause_string = Query_impl.query_or_join_clause_string
   let query_var_set_string = Query_impl.query_var_set_string
   let query_var_sets_string = Query_impl.query_var_sets_string
+  let unbound_vars_of_terms = Query_impl.unbound_vars_of_terms
+  let ensure_query_terms_bound = Query_impl.ensure_query_terms_bound
+  let ensure_not_has_outer_binding = Query_impl.ensure_not_has_outer_binding
+  let vars_of_branch = Query_impl.vars_of_branch
+  let free_vars_of_branch = Query_impl.free_vars_of_branch
+  let ensure_or_branch_vars_match = Query_impl.ensure_or_branch_vars_match
+  let ensure_join_vars_bound = Query_impl.ensure_join_vars_bound
+  let ensure_join_vars_bound_in_clause = Query_impl.ensure_join_vars_bound_in_clause
+  let ensure_or_join_branches_cover_listed_vars = Query_impl.ensure_or_join_branches_cover_listed_vars
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
   let query_input_binding_label = Query_impl.query_input_binding_label

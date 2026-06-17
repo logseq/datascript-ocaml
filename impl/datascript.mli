@@ -446,6 +446,21 @@ module Query : sig
     value_to_string:(value -> string) -> string list -> string list -> query_clause list list -> string
   val query_var_set_string : string list -> string
   val query_var_sets_string : string list list -> string
+  val unbound_vars_of_terms : (string * query_result) list -> query_term list -> string list
+  val ensure_query_terms_bound : (string * query_result) list -> query_term list -> string -> unit
+  val ensure_not_has_outer_binding :
+    value_to_string:(value -> string) -> (string * query_result) list -> query_clause list -> unit
+  val vars_of_branch : query_clause list -> string list
+  val free_vars_of_branch : string list -> query_clause list -> string list
+  val ensure_or_branch_vars_match :
+    value_to_string:(value -> string) ->
+    (string * query_result) list ->
+    query_clause list list ->
+    unit
+  val ensure_join_vars_bound : (string * query_result) list -> string list -> unit
+  val ensure_join_vars_bound_in_clause : (string * query_result) list -> string list -> string -> unit
+  val ensure_or_join_branches_cover_listed_vars :
+    (string * query_result) list -> string list -> query_clause list list -> unit
   val query_input_binding_string : input_binding -> string
   val query_input_decl_binding_string : query_input -> string
   val query_input_binding_label : query_input -> string

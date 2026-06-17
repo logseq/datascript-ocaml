@@ -37,6 +37,14 @@ let assert_raises_invalid_arg label f =
   | _ -> failf "%s: expected Invalid_argument" label
   | exception Invalid_argument _ -> ()
 
+let assert_raises_invalid_arg_message label expected f =
+  match f () with
+  | _ -> failf "%s: expected Invalid_argument" label
+  | exception Invalid_argument actual when actual = expected -> ()
+  | exception Invalid_argument actual ->
+    failf "%s: expected Invalid_argument %S but got %S" label expected actual
+  | exception exn -> failf "%s: unexpected exception %s" label (Printexc.to_string exn)
+
 let test_query_namespace__test_public_query_api () =
   let db =
     empty_db ()
@@ -534,6 +542,69 @@ let test_query_namespace__test_query_clause_string_helpers () =
     "[#{?a} #{}]"
     (Query.query_var_sets_string [ [ "a" ]; [] ])
 
+let test_query_namespace__test_binding_validation_helpers () =
+  let value_to_string = function
+    | String value -> "\"" ^ value ^ "\""
+    | Keyword value -> ":" ^ value
+    | Bool value -> if value then "true" else "false"
+    | Int value -> string_of_int value
+    | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
+  in
+  let binding = [ "e", Result_entity 1 ] in
+  assert_equal_string_list
+    "unbound_vars_of_terms returns sorted missing vars"
+    [ "a"; "v" ]
+    (Query.unbound_vars_of_terms binding [ QVar "v"; QVar "e"; QVar "a"; QVar "v" ]);
+  Query.ensure_query_terms_bound binding [ QVar "e"; QValue (String "Ivan") ] "[?e :name \"Ivan\"]";
+  assert_raises_invalid_arg_message
+    "ensure_query_terms_bound reports missing vars"
+    "Insufficient bindings: #{?a ?v} not bound in [?e ?a ?v]"
+    (fun () ->
+       Query.ensure_query_terms_bound binding [ QVar "e"; QVar "a"; QVar "v" ] "[?e ?a ?v]");
+  Query.ensure_not_has_outer_binding
+    ~value_to_string
+    binding
+    [ Pattern (QVar "e", QAttr "name", QValue (String "Ivan")) ];
+  assert_raises_invalid_arg_message
+    "ensure_not_has_outer_binding reports not clauses with no outer vars"
+    "Insufficient bindings: none of #{?e ?name} is bound in (not [?e :name ?name])"
+    (fun () ->
+       Query.ensure_not_has_outer_binding
+         ~value_to_string
+         []
+         [ Pattern (QVar "e", QAttr "name", QVar "name") ]);
+  let branch_a = [ Pattern (QVar "e", QAttr "name", QVar "name") ] in
+  let branch_b = [ Pattern (QVar "e", QAttr "age", QVar "age") ] in
+  assert_equal_string_list
+    "vars_of_branch collects branch vars"
+    [ "e"; "name" ]
+    (Query.vars_of_branch branch_a);
+  assert_equal_string_list
+    "free_vars_of_branch subtracts bound vars"
+    [ "name" ]
+    (Query.free_vars_of_branch [ "e" ] branch_a);
+  assert_raises_invalid_arg_message
+    "ensure_or_branch_vars_match reports mismatched free vars"
+    "All clauses in 'or' must use same set of free vars, had [#{?name} #{?age}] in (or [?e :name ?name] [?e :age ?age])"
+    (fun () -> Query.ensure_or_branch_vars_match ~value_to_string binding [ branch_a; branch_b ]);
+  Query.ensure_join_vars_bound binding [ "e" ];
+  assert_raises_invalid_arg_message
+    "ensure_join_vars_bound keeps its legacy message"
+    "insufficient bindings"
+    (fun () -> Query.ensure_join_vars_bound binding [ "missing" ]);
+  Query.ensure_join_vars_bound_in_clause binding [ "e" ] "(or-join [?e] ...)";
+  assert_raises_invalid_arg_message
+    "ensure_join_vars_bound_in_clause reports missing vars"
+    "Insufficient bindings: #{?missing} not bound in (or-join [?missing] ...)"
+    (fun () ->
+       Query.ensure_join_vars_bound_in_clause binding [ "missing" ] "(or-join [?missing] ...)");
+  Query.ensure_or_join_branches_cover_listed_vars binding [ "name" ] [ branch_a ];
+  assert_raises_invalid_arg_message
+    "ensure_or_join_branches_cover_listed_vars requires listed vars in every branch"
+    "or branches must use same free vars"
+    (fun () ->
+       Query.ensure_or_join_branches_cover_listed_vars binding [ "name" ] [ branch_a; branch_b ])
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
@@ -545,4 +616,5 @@ let () =
   test_query_namespace__test_rule_helpers ();
   test_query_namespace__test_variable_discovery_helpers ();
   test_query_namespace__test_query_string_helpers ();
-  test_query_namespace__test_query_clause_string_helpers ()
+  test_query_namespace__test_query_clause_string_helpers ();
+  test_query_namespace__test_binding_validation_helpers ()

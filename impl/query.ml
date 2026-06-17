@@ -614,6 +614,77 @@ let query_var_set_string vars =
 let query_var_sets_string var_sets =
   "[" ^ String.concat " " (List.map query_var_set_string var_sets) ^ "]"
 
+let unbound_vars_of_terms bindings terms =
+  let bound_vars = List.map fst bindings in
+  terms
+  |> vars_of_query_terms
+  |> List.filter (fun var -> not (List.mem var bound_vars))
+  |> List.sort_uniq compare
+
+let ensure_query_terms_bound bindings terms clause_string =
+  match unbound_vars_of_terms bindings terms with
+  | [] -> ()
+  | unbound_vars ->
+    invalid_arg
+      ( "Insufficient bindings: "
+      ^ query_var_set_string unbound_vars
+      ^ " not bound in "
+      ^ clause_string )
+
+let ensure_not_has_outer_binding ~value_to_string bindings clauses =
+  let clause_vars = clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare in
+  let bound_vars = List.map fst bindings in
+  if clause_vars <> [] && not (List.exists (fun var -> List.mem var bound_vars) clause_vars) then
+    let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) clause_vars in
+    invalid_arg
+      ( "Insufficient bindings: none of "
+      ^ query_var_set_string unbound_vars
+      ^ " is bound in "
+      ^ query_not_clause_string ~value_to_string clauses )
+
+let vars_of_branch clauses =
+  clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare
+
+let free_vars_of_branch bound_vars clauses =
+  vars_of_branch clauses |> List.filter (fun var -> not (List.mem var bound_vars))
+
+let ensure_or_branch_vars_match ~value_to_string bindings branches =
+  let bound_vars = List.map fst bindings in
+  match List.map (free_vars_of_branch bound_vars) branches with
+  | [] | [ _ ] -> ()
+  | expected :: rest ->
+    let branch_vars = expected :: rest in
+    if List.exists (( <> ) expected) rest then
+      invalid_arg
+        ( "All clauses in 'or' must use same set of free vars, had "
+        ^ query_var_sets_string branch_vars
+        ^ " in "
+        ^ query_or_clause_string ~value_to_string branches )
+
+let ensure_join_vars_bound bindings vars =
+  let bound_vars = List.map fst bindings in
+  if List.exists (fun var -> not (List.mem var bound_vars)) vars then
+    invalid_arg "insufficient bindings"
+
+let ensure_join_vars_bound_in_clause bindings vars clause_string =
+  let bound_vars = List.map fst bindings in
+  let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) vars in
+  if unbound_vars <> [] then
+    invalid_arg
+      ( "Insufficient bindings: "
+      ^ query_var_set_string unbound_vars
+      ^ " not bound in "
+      ^ clause_string )
+
+let ensure_or_join_branches_cover_listed_vars bindings vars branches =
+  let bound_vars = List.map fst bindings in
+  let required_vars = List.filter (fun var -> not (List.mem var bound_vars)) vars in
+  branches
+  |> List.iter (fun branch ->
+    let branch_vars = vars_of_branch branch in
+    if List.exists (fun var -> not (List.mem var branch_vars)) required_vars then
+      invalid_arg "or branches must use same free vars")
+
 let rec query_input_binding_string = function
   | Bind_scalar var -> query_input_var_label var
   | Bind_ignore -> "_"
