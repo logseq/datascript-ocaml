@@ -10714,6 +10714,18 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     "q get-else resolves preserved lookup-ref scalar inputs"
     [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan"))); Result_value (String "Unknown") ] ]
     (q db get_else_query);
+  let direct_get_else_query =
+    { find = [ Find_var "height" ]
+    ; inputs = [ Input_entity_ref ("person", Lookup_ref ("name", String "Ivan")) ]
+    ; with_vars = []
+    ; rules = []
+    ; where = [ GetElse (QVar "person", "height", String "Unknown", "height") ]
+    }
+  in
+  assert_equal_query
+    "q get-else resolves lookup-ref entity inputs like upstream issue-445"
+    [ [ Result_value (String "Unknown") ] ]
+    (q db direct_get_else_query);
   let get_some_query =
     { find = [ Find_var "person"; Find_var "attr"; Find_var "value" ]
     ; inputs = [ Input_scalar ("person", Result_value (Ref_to (Lookup_ref ("name", String "Petr")))) ]
@@ -10725,7 +10737,19 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
   assert_equal_query
     "q get-some resolves preserved lookup-ref scalar inputs"
     [ [ Result_value (Ref_to (Lookup_ref ("name", String "Petr"))); Result_attr "age"; Result_value (Int 22) ] ]
-    (q db get_some_query)
+    (q db get_some_query);
+  let direct_get_some_query =
+    { find = [ Find_var "person"; Find_var "attr"; Find_var "value" ]
+    ; inputs = [ Input_entity_ref ("person", Lookup_ref ("name", String "Petr")) ]
+    ; with_vars = []
+    ; rules = []
+    ; where = [ GetSome (QVar "person", [ "weight"; "age"; "height" ], "attr", "value") ]
+    }
+  in
+  assert_equal_query
+    "q get-some resolves lookup-ref entity inputs like upstream issue-445"
+    [ [ Result_entity 2; Result_attr "age"; Result_value (Int 22) ] ]
+    (q db direct_get_some_query)
 
 let test_q_with_relation_inputs () =
   let db =
