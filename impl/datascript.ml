@@ -584,6 +584,23 @@ let rec coerce_tuple_lookup_value db datoms attr value =
       | value -> Some (normalize_value value)
     in
     Tuple (List.map2 coerce_component source_attrs values)
+  | Some { tuple_attrs = Some source_attrs; _ }, Tuple values
+    when List.length source_attrs = List.length values ->
+    let lookup_attr_name = function
+      | Keyword attr | String attr | Symbol attr -> Some attr
+      | _ -> None
+    in
+    let coerce_component source_attr = function
+      | None -> None
+      | Some Nil -> None
+      | Some (Int entity_id) when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+      | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
+        (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
+         | Some entity_id -> Some (Ref entity_id)
+         | None -> Some (normalize_value lookup_ref))
+      | Some value -> Some (normalize_value value)
+    in
+    Tuple (List.map2 coerce_component source_attrs values)
   | _ -> normalize_value value
 
 and entid_in_datoms db datoms attr value =
@@ -1609,6 +1626,21 @@ let apply_tx tx_ops db =
         | Some entity_ref -> mark_entity_tempid entity_tempids entity_ref
         | None -> entity_tempids
       in
+      let tuple_identity_lookup_writes =
+        attrs
+        |> List.filter_map (function
+          | attr, One_value value when is_tuple_attr db attr && is_unique_identity db attr ->
+            (match entid_in_datoms db datoms attr value with
+             | Some target_e when target_e = e -> Some (attr, value)
+             | _ -> None)
+          | _ -> None)
+      in
+      let tuple_identity_write_was_lookup attr value =
+        List.exists
+          (fun (lookup_attr, lookup_value) ->
+            lookup_attr = attr && value_equal lookup_value value)
+          tuple_identity_lookup_writes
+      in
       let add_entity_map_attr_value
             parent_e
             attr
@@ -1617,13 +1649,16 @@ let apply_tx tx_ops db =
         =
         let actual_e, actual_attr, actual_value = normalize_entity_attr_value db parent_e attr value in
         if is_tuple_attr db actual_attr then
-          ( datoms
-          , max_eid
-          , tempids
-          , entity_tempids
-          , tx_data
-          , tuple_sources
-          , (actual_e, actual_attr, actual_value) :: direct_tuple_writes )
+          if tuple_identity_write_was_lookup actual_attr actual_value then
+            datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes
+          else
+            ( datoms
+            , max_eid
+            , tempids
+            , entity_tempids
+            , tx_data
+            , tuple_sources
+            , (actual_e, actual_attr, actual_value) :: direct_tuple_writes )
         else if tuple_attrs_for_source db actual_attr <> [] then
           let datoms, datom_tx_data =
             add_active_datom_with_report db tx datoms (datom ~tx ~e:actual_e ~a:actual_attr ~v:actual_value ())
@@ -3735,11 +3770,18 @@ let match_query_term db term value bindings =
   | QVar name -> bind_var db name (result_of_ref value) bindings
   | _ -> None
 
+let match_value_term_for_datom_attr db bindings v_term datom =
+  match v_term with
+  | QValue value ->
+    let value = coerce_tuple_lookup_value db (visible_datoms db) datom.a value in
+    match_query_term db (QValue value) (result_of_datom_v datom) bindings
+  | _ -> match_query_term db v_term (result_of_datom_v datom) bindings
+
 let match_pattern_clause db bindings e_term a_term v_term datom =
   let ( let* ) = Option.bind in
   let* bindings = match_query_term db e_term (result_of_datom_e datom) bindings in
   let* bindings = match_query_term db a_term (result_of_datom_a datom) bindings in
-  match_query_term db v_term (result_of_datom_v datom) bindings
+  match_value_term_for_datom_attr db bindings v_term datom
 
 let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
   let ( let* ) = Option.bind in
@@ -7174,7 +7216,7 @@ let parse_find form = parse_find_return (Some form)
 let parse_query_value_form = query_value_of_form
 
 let lookup_ref_of_form = function
-  | QueryFormVector [ QueryFormKeyword attr; value ] | QueryFormVector [ QueryFormString attr; value ] ->
+  | QueryFormVector [ QueryFormKeyword attr; value ] ->
     Some (attr, query_value_of_form value)
   | _ -> None
 

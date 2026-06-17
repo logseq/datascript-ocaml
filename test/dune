@@ -89,6 +89,11 @@
  (libraries datascript))
 
 (test
+ (name test_tuples)
+ (modules test_tuples)
+ (libraries datascript))
+
+(test
  (name test_serialize)
  (modules test_serialize)
  (libraries datascript))
