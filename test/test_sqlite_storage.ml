@@ -60,6 +60,10 @@ let assert_equal_query label expected actual =
   if expected <> actual then
     failf "%s: unexpected query result" label
 
+let assert_equal_triples label expected actual =
+  let triples = List.map (fun datom -> datom.e, datom.a, datom.v) actual in
+  if expected <> triples then failf "%s: unexpected datoms" label
+
 let many =
   { cardinality = Many
   ; unique = None
@@ -300,6 +304,93 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
                     [?e :friend ?friend]
                     [?friend :name ?friend-name]]"))
 
+let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed index/query/transact test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn = create_conn ~schema:[ "name", indexed; "age", indexed; "path", indexed ] ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Petr")
+           ; Add (Entity_id 1, "age", Int 44)
+           ; Add (Entity_id 1, "path", List [ Int 1; Int 2 ])
+           ; Add (Entity_id 2, "name", String "Ivan")
+           ; Add (Entity_id 2, "age", Int 25)
+           ; Add (Entity_id 2, "path", List [ Int 1; Int 2; Int 3 ])
+           ; Add (Entity_id 3, "name", String "Sergey")
+           ; Add (Entity_id 3, "age", Int 11)
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for index/query/transact parity"
+      in
+      let restored_db = conn_db restored in
+      assert_equal_triples
+        "SQLite restored db preserves AEVT order"
+        [ 1, "age", Int 44
+        ; 2, "age", Int 25
+        ; 3, "age", Int 11
+        ; 1, "name", String "Petr"
+        ; 2, "name", String "Ivan"
+        ; 3, "name", String "Sergey"
+        ; 1, "path", List [ Int 1; Int 2 ]
+        ; 2, "path", List [ Int 1; Int 2; Int 3 ]
+        ]
+        (datoms restored_db Aevt ());
+      assert_equal_triples
+        "SQLite restored db supports AVET seek across attrs"
+        [ 3, "age", Int 11
+        ; 2, "age", Int 25
+        ; 1, "age", Int 44
+        ; 2, "name", String "Ivan"
+        ; 1, "name", String "Petr"
+        ; 3, "name", String "Sergey"
+        ; 1, "path", List [ Int 1; Int 2 ]
+        ; 2, "path", List [ Int 1; Int 2; Int 3 ]
+        ]
+        (seek_datoms restored_db Avet ~a:"age" ~v:(Int 10) ());
+      assert_equal_triples
+        "SQLite restored db supports AVET reverse seek"
+        [ 1, "name", String "Petr"
+        ; 2, "name", String "Ivan"
+        ; 1, "age", Int 44
+        ; 2, "age", Int 25
+        ; 3, "age", Int 11
+        ]
+        (rseek_datoms restored_db Avet ~a:"name" ~v:(String "Petr") ());
+      assert_equal_triples
+        "SQLite restored db supports index ranges"
+        [ 2, "name", String "Ivan"; 1, "name", String "Petr" ]
+        (index_range restored_db "name" ~start:(String "I") ~stop:(String "Q") ());
+      assert_equal_query
+        "SQLite restored db query sees indexed list values exactly"
+        [ [ Result_entity 1 ] ]
+        (q_string restored_db "[:find ?e :where [?e :path [1 2]]]");
+      ignore
+        (transact_conn
+           restored
+           [ Add (Entity_id 4, "name", String "Nina")
+           ; Add (Entity_id 4, "age", Int 42)
+           ; Add (Entity_id 4, "path", List [ Int 2 ])
+           ]);
+      let restored_again =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db after index parity transact"
+      in
+      assert_equal_query
+        "SQLite storage persists later indexed transacts for queries"
+        [ [ Result_value (String "Nina") ] ]
+        (q_string restored_again "[:find ?name :where [?e :age 42] [?e :name ?name]]");
+      assert_equal_triples
+        "SQLite storage persists later indexed transacts for AVET"
+        [ 4, "age", Int 42; 1, "age", Int 44 ]
+        (index_range restored_again "age" ~start:(Int 42) ~stop:(Int 44) ()))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -482,6 +573,7 @@ let () =
   test_sqlite_storage_round_trips_ocaml_payloads ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
+  test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

@@ -786,6 +786,106 @@ let test_rseek_datoms_continues_across_avet_attributes () =
     [ 2, "age", Int 25; 3, "age", Int 11 ]
     (rseek_datoms db Avet ~a:"age" ~v:(Int 25) ())
 
+let test_upstream_index_api_parity_batch () =
+  let db =
+    empty_db ~schema:[ "age", indexed; "name", indexed ] ()
+    |> db_with
+         [ Add (Entity_id 1, "name", String "Petr")
+         ; Add (Entity_id 1, "age", Int 44)
+         ; Add (Entity_id 2, "name", String "Ivan")
+         ; Add (Entity_id 2, "age", Int 25)
+         ; Add (Entity_id 3, "name", String "Sergey")
+         ; Add (Entity_id 3, "age", Int 11)
+         ]
+  in
+  assert_equal_triples
+    "upstream index parity AEVT sort order"
+    [ 1, "age", Int 44
+    ; 2, "age", Int 25
+    ; 3, "age", Int 11
+    ; 1, "name", String "Petr"
+    ; 2, "name", String "Ivan"
+    ; 3, "name", String "Sergey"
+    ]
+    (datoms db Aevt ());
+  assert_equal_triples
+    "upstream index parity EAVT sort order"
+    [ 1, "age", Int 44
+    ; 1, "name", String "Petr"
+    ; 2, "age", Int 25
+    ; 2, "name", String "Ivan"
+    ; 3, "age", Int 11
+    ; 3, "name", String "Sergey"
+    ]
+    (datoms db Eavt ());
+  assert_equal_triples
+    "upstream index parity AVET sort order"
+    [ 3, "age", Int 11
+    ; 2, "age", Int 25
+    ; 1, "age", Int 44
+    ; 2, "name", String "Ivan"
+    ; 1, "name", String "Petr"
+    ; 3, "name", String "Sergey"
+    ]
+    (datoms db Avet ());
+  assert_equal_triples
+    "upstream index parity find_datom with empty prefix"
+    [ 1, "age", Int 44 ]
+    (match find_datom db Eavt () with
+     | Some datom -> [ datom ]
+     | None -> []);
+  assert_equal_triples
+    "upstream index parity find_datom with entity prefix"
+    [ 2, "age", Int 25 ]
+    (match find_datom db Eavt ~e:2 () with
+     | Some datom -> [ datom ]
+     | None -> []);
+  assert_equal_triples
+    "upstream index parity find_datom with exact tuple"
+    [ 1, "name", String "Petr" ]
+    (match find_datom db Eavt ~e:1 ~a:"name" ~v:(String "Petr") () with
+     | Some datom -> [ datom ]
+     | None -> []);
+  if find_datom db Eavt ~e:1 ~a:"name" ~v:(String "Ivan") () <> None then
+    failwith "find_datom should reject a mismatched exact tuple";
+  if find_datom db Eavt ~e:4 () <> None then
+    failwith "find_datom should return None for a missing entity prefix";
+  if find_datom (empty_db ()) Eavt () <> None then
+    failwith "find_datom on an empty db should return None";
+  if find_datom (empty_db ~schema:[ "age", indexed ] ()) Eavt () <> None then
+    failwith "find_datom on an empty indexed db should return None";
+  assert_raises_invalid_arg_message
+    "upstream index parity datoms rejects missing AVET attr"
+    "Attribute :alias should be marked as :db/index true"
+    (fun () -> ignore (datoms db Avet ~a:"alias" ()));
+  assert_raises_invalid_arg_message
+    "upstream index parity datoms rejects unindexed AVET exact lookup"
+    "Attribute :alias should be marked as :db/index true"
+    (fun () -> ignore (datoms db Avet ~a:"alias" ~v:(String "Ivan") ()));
+  assert_raises_invalid_arg_message
+    "upstream index parity datoms rejects unindexed AVET exact lookup with tx"
+    "Attribute :alias should be marked as :db/index true"
+    (fun () -> ignore (datoms db Avet ~a:"alias" ~v:(String "Ivan") ~tx:1 ()));
+  let path_db =
+    empty_db ~schema:[ "path", indexed ] ()
+    |> db_with
+         [ Add (Entity_id 1, "path", List [ Int 1; Int 2 ])
+         ; Add (Entity_id 2, "path", List [ Int 1; Int 2; Int 3 ])
+         ]
+  in
+  let path_entities value =
+    datoms path_db Avet ~a:"path" ~v:value ()
+    |> List.map (fun datom -> datom.e)
+  in
+  if path_entities (List [ Int 1 ]) <> [] then
+    failwith "AVET sequence exact lookup should reject shorter prefixes";
+  if path_entities (List [ Int 1; Int 2 ]) <> [ 1 ] then
+    failwith "AVET sequence exact lookup should match the shorter stored value";
+  if path_entities (List [ Int 1; Int 2; Int 3 ]) <> [ 2 ] then
+    failwith "AVET sequence exact lookup should match the longer stored value";
+  if path_entities (List [ Int 1; Int 2; Int 3; Int 4 ]) <> [] then
+    failwith "AVET sequence exact lookup should reject longer extensions"
+
 let test_db_with_adds_entities () =
   let schema = [ "aka", many ] in
   let db =
@@ -17326,6 +17426,7 @@ let () =
   test_rseek_datoms_scans_backward_from_index_tuple ();
   test_seek_datoms_continues_across_avet_attributes ();
   test_rseek_datoms_continues_across_avet_attributes ();
+  test_upstream_index_api_parity_batch ();
   test_db_with_adds_entities ();
   test_with_tx_returns_transaction_report ();
   test_entity_map_expands_collection_values_for_many_attrs ();
