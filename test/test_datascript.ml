@@ -1815,6 +1815,48 @@ let test_db_ident_is_builtin_and_resolves_refs () =
       (entity_attr entity "ref")
   | None -> failwith "expected ident entity ref to resolve"
 
+let test_upstream_ident_parity_batch () =
+  let db =
+    empty_db ~schema:[ "ref", ref_attr ] ()
+    |> db_with
+         [ Add (Entity_id 1, "db/ident", Keyword "ent1")
+         ; Add (Entity_id 2, "db/ident", Keyword "ent2")
+         ; Add (Entity_id 2, "ref", Ref_to (Ident "ent1"))
+         ]
+  in
+  if
+    q_return_string db "[:find ?v . :where [:ent2 :ref ?v]]"
+    <> Query_scalar (Some (Result_entity 1))
+  then failwith "ident.cljc query should resolve ident in entity position";
+  if
+    q_return_string db "[:find ?f . :where [?f :ref :ent1]]"
+    <> Query_scalar (Some (Result_entity 2))
+  then failwith "ident.cljc query should resolve ident in ref value position";
+  let db = db_with [ Add (Ident "ent1", "ref", Ref_to (Ident "ent2")) ] db in
+  (match entity db (Ident "ent1") with
+   | Some entity ->
+     assert_equal_tx_value
+       "ident.cljc transact resolves ident entity refs"
+       (Some
+          (One_entity
+             { db_id = Some (Entity_id 2)
+             ; attrs =
+                 [ "db/ident", One_value (Keyword "ent2")
+                 ; "ref", One_value (Ref 1)
+                 ]
+             }))
+       (entity_attr entity "ref")
+   | None -> failwith "ident.cljc entity lookup by ident should resolve");
+  match pull db [ Pull_id; Pull_attr "db/ident" ] (Ident "ent1") with
+  | Some pulled ->
+    assert_equal_pulled_attrs
+      "ident.cljc pull resolves ident entity refs"
+      [ kw "db/id", Pulled_scalar (Int 1)
+      ; kw "db/ident", Pulled_scalar (Keyword "ent1")
+      ]
+      pulled
+  | None -> failwith "ident.cljc pull by ident should resolve"
+
 let test_entid_ref_resolves_entity_refs () =
   let db =
     empty_db ~schema:[ "email", unique_identity; "name", indexed ] ()
@@ -17202,6 +17244,7 @@ let () =
   test_db_with_resolves_explicit_tempids_and_lookup_refs ();
   test_entity_map_allocates_owner_before_ref_tempids ();
   test_db_ident_is_builtin_and_resolves_refs ();
+  test_upstream_ident_parity_batch ();
   test_entid_ref_resolves_entity_refs ();
   test_db_ident_rejects_duplicate_idents_by_default ();
   test_transact_report_exposes_tempids ();
