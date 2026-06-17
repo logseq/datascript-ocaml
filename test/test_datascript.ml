@@ -1446,6 +1446,49 @@ let test_entid_normalizes_unordered_values () =
     2
     (Option.get (entid db "tags" ordered_set))
 
+let test_unique_identity_mixed_values_keep_transitive_ordering () =
+  let uid_values =
+    [ String "2LB4tlJGy"
+    ; String "2ON453J0Z"
+    ; String "2KqLLNbPg"
+    ; String "2L0dcD7yy"
+    ; String "2KqFNrhTZ"
+    ; String "2KdQmItUD"
+    ; String "2O8BcBfIL"
+    ; String "2L4ZbI7nK"
+    ; String "2KotiW36Z"
+    ; String "2O4o-y5J8"
+    ; String "2KimvuGko"
+    ; String "dTR20ficj"
+    ; String "wRmp6bXAx"
+    ; String "rfL-iQOZm"
+    ; String "tya6s422-"
+    ; Int 45619
+    ]
+  in
+  let db =
+    List.fold_left
+      (fun db uid ->
+        db_with
+          [ Entity
+              { db_id = None
+              ; attrs = [ "block/uid", One_value uid ]
+              }
+          ]
+          db)
+      (empty_db ~schema:[ "block/uid", unique_identity ] ())
+      uid_values
+  in
+  datoms db Eavt ()
+  |> List.iter (fun datom ->
+    match entity db (Lookup_ref (datom.a, datom.v)) with
+    | Some _ -> ()
+    | None ->
+      failf
+        "unique identity mixed value lookup should resolve [%s %s]"
+        datom.a
+        (debug_value datom.v))
+
 let test_tempids_are_rejected_in_non_add_ops () =
   let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
   assert_raises_invalid_arg
@@ -16787,6 +16830,7 @@ let () =
   test_set_values_are_order_insensitive ();
   test_init_db_normalizes_set_values ();
   test_entid_normalizes_unordered_values ();
+  test_unique_identity_mixed_values_keep_transitive_ordering ();
   test_tempids_are_rejected_in_non_add_ops ();
   test_value_only_tempids_are_rejected ();
   test_empty_entity_tempids_are_not_entity_usage ();
