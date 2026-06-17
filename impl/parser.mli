@@ -77,3 +77,59 @@ val dynamic_ground_term : query_form -> query_term option
 val parse_ground_function : query_form list -> query_form -> query_clause
 val parse_value_metadata_function : string -> query_form list -> string -> query_clause
 val parse_string_transform_function : string -> query_form list -> string -> query_clause
+
+type query_context =
+  { empty_db : unit -> db
+  ; parse_pull_pattern : db -> query_form -> pull_selector list
+  ; value_of_query_result : query_result -> value option
+  ; string_is_blank : string -> bool
+  ; string_includes : string -> string -> bool
+  ; string_starts_with : string -> string -> bool
+  ; string_ends_with : string -> string -> bool
+  ; matches_value_predicate : value_predicate -> value -> bool
+  ; matches_numeric_predicate : numeric_predicate -> value -> bool
+  ; matches_boolean_predicate : boolean_predicate -> query_result -> bool
+  ; comparison_chain_matches : comparison_predicate -> value list -> bool
+  ; all_values_equal : value list -> bool
+  ; value_has_count : int -> value -> bool
+  ; value_is_not_empty : value -> bool
+  ; value_contains : value -> value -> bool
+  ; split_at : int -> value list -> value list * value list
+  ; values_equal : value -> value -> bool
+  }
+
+val parse_find_form : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> find_spec
+val parse_find_relation : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> find_spec list
+val is_find_form : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> bool
+val parse_find_return : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> query_return * find_spec list
+val parse_find : query_context -> query_form -> query_return * find_spec list
+val parse_complement_predicate_clause : query_context -> string -> query_form list -> query_clause
+val parse_join_vars : string -> query_form -> string list
+val parse_rule_var : query_form -> string
+val ensure_distinct_rule_vars : string -> string list -> string list -> string list * string list
+val parse_rule_vars : string -> query_form -> string list * string list
+val or_join_clause : string list -> string list -> query_clause list list -> query_clause
+val source_or_join_clause : string -> string list -> string list -> query_clause list list -> query_clause
+val ensure_inferred_join_vars : string list -> unit
+val parse_pattern_clause : query_context -> query_form -> query_clause
+val parse_or_branch : query_context -> query_form -> query_clause list
+val parse_rule_head : query_form -> string * string list
+val parse_rule : query_context -> query_form -> query_rule
+val validate_rule_arities : query_rule list -> query_rule list
+val is_rule_head : query_form -> bool
+val is_rule_form : query_form -> bool
+val unwrap_extra_rules_nesting : query_form list -> query_form list
+val parse_rules : query_context -> query_form option -> query_rule list
+val parse_where : query_context -> query_form option -> query_clause list
+val parse_query_return_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> query_return * query
+val parse_query_return : query_context -> query_form -> query_return * query
+val parse_query_return_map_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> query_return * query_return_map option * query
+val parse_query_return_map : query_context -> query_form -> query_return * query_return_map option * query
+val parse_query : query_context -> query_form -> query
+val parse_query_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> query
+val parse_query_string : query_context -> string -> query
+val parse_query_string_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> string -> query
+val parse_query_return_string : query_context -> string -> query_return * query
+val parse_query_return_string_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> string -> query_return * query
+val parse_query_return_map_string : query_context -> string -> query_return * query_return_map option * query
+val parse_query_return_map_string_with_pull_context : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> string -> query_return * query_return_map option * query

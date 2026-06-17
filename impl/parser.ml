@@ -1050,3 +1050,782 @@ let parse_string_transform_function symbol args output =
   | "clojure.string/split-lines", _ -> invalid_arg "clojure.string/split-lines requires one argument"
   | "subs", _ -> invalid_arg "subs requires two or three arguments"
   | _ -> parse_value_metadata_function symbol args output
+
+
+type query_context =
+  { empty_db : unit -> db
+  ; parse_pull_pattern : db -> query_form -> pull_selector list
+  ; value_of_query_result : query_result -> value option
+  ; string_is_blank : string -> bool
+  ; string_includes : string -> string -> bool
+  ; string_starts_with : string -> string -> bool
+  ; string_ends_with : string -> string -> bool
+  ; matches_value_predicate : value_predicate -> value -> bool
+  ; matches_numeric_predicate : numeric_predicate -> value -> bool
+  ; matches_boolean_predicate : boolean_predicate -> query_result -> bool
+  ; comparison_chain_matches : comparison_predicate -> value list -> bool
+  ; all_values_equal : value list -> bool
+  ; value_has_count : int -> value -> bool
+  ; value_is_not_empty : value -> bool
+  ; value_contains : value -> value -> bool
+  ; split_at : int -> value list -> value list * value list
+  ; values_equal : value -> value -> bool
+  }
+
+let vars_of_clause = Query.vars_of_clause
+let vars_of_branch = Query.vars_of_branch
+
+let parse_find_form context ?default_pull_db ?pull_db_for_source form =
+  let default_pull_db = Option.value default_pull_db ~default:(context.empty_db ()) in
+  let pull_db_for_source = Option.value pull_db_for_source ~default:(fun _ -> context.empty_db ()) in
+  match form with
+  | QueryFormSymbol symbol -> Find_var (query_symbol_name symbol)
+  | form ->
+    (match query_form_sequence form with
+     | Some [ QueryFormSymbol "pull"; QueryFormSymbol var; QueryFormSymbol pattern_var ]
+       when is_query_input_symbol pattern_var && pattern_var <> "*" ->
+       Find_pull_var (query_symbol_name var, query_input_name pattern_var)
+     | Some [ QueryFormSymbol "pull"; QueryFormSymbol var; pattern ] ->
+       Find_pull (query_symbol_name var, context.parse_pull_pattern default_pull_db pattern)
+     | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; QueryFormSymbol pattern_var ]
+       when is_query_source_symbol source && is_query_input_symbol pattern_var && pattern_var <> "*" ->
+       Find_pull_source_var (query_source_name source, query_symbol_name var, query_input_name pattern_var)
+     | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; pattern ]
+       when is_query_source_symbol source ->
+       let source_name = query_source_name source in
+       Find_pull_source
+         (source_name, query_symbol_name var, context.parse_pull_pattern (pull_db_for_source source_name) pattern)
+     | Some [ QueryFormSymbol aggregate; QueryFormSymbol var ] ->
+       (match aggregate_of_symbol aggregate with
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
+        | None -> invalid_arg "find elements must be variable symbols")
+     | Some (QueryFormSymbol "aggregate" :: QueryFormSymbol aggregate_var :: args)
+       when String.length aggregate_var > 0 && aggregate_var.[0] = '?' ->
+       (match args with
+        | [] -> invalid_arg "aggregate custom aggregate requires at least one argument"
+        | args -> Find_aggregate (CustomVar (query_symbol_name aggregate_var), parse_find_args args))
+     | Some [ QueryFormSymbol aggregate; QueryFormInt amount; QueryFormSymbol var ] ->
+       (match amount_aggregate_of_symbol aggregate amount with
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
+        | None -> invalid_arg "find elements must be variable symbols")
+     | Some [ QueryFormSymbol aggregate; QueryFormSymbol amount_var; QueryFormSymbol var ]
+       when String.length amount_var > 0 && amount_var.[0] = '?' ->
+       (match dynamic_amount_aggregate_of_symbol aggregate (query_symbol_name amount_var) with
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
+        | None -> invalid_arg "find elements must be variable symbols")
+     | Some [ QueryFormSymbol aggregate; _; QueryFormSymbol _ ] ->
+       (match amount_aggregate_of_symbol aggregate 0 with
+        | Some _ -> invalid_arg (aggregate ^ " aggregate amount must be an integer literal")
+        | None -> invalid_arg "find elements must be variable symbols")
+     | Some (QueryFormSymbol aggregate_name :: args) ->
+       (match aggregate_of_symbol aggregate_name with
+        | Some aggregate ->
+          (match args with
+           | [] -> invalid_arg (aggregate_name ^ " aggregate requires at least one argument")
+           | args -> Find_aggregate (aggregate, parse_find_args args))
+        | None -> invalid_arg "find elements must be variable symbols")
+     | Some _ | None -> invalid_arg "find elements must be variable symbols")
+
+let parse_find_relation context ?default_pull_db ?pull_db_for_source = function
+  | Some (QueryFormVector forms | QueryFormList forms) ->
+    List.map (parse_find_form context ?default_pull_db ?pull_db_for_source) forms
+  | Some _ -> invalid_arg "query :find must be a vector"
+  | None -> invalid_arg "query requires :find"
+
+let is_find_form context ?default_pull_db ?pull_db_for_source form =
+  match parse_find_form context ?default_pull_db ?pull_db_for_source form with
+  | _ -> true
+  | exception Invalid_argument _ -> false
+
+let parse_find_return context ?default_pull_db ?pull_db_for_source = function
+  | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "..." ]
+                           | QueryFormList [ form; QueryFormSymbol "..." ]) ])
+  | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "..." ]
+                         | QueryFormList [ form; QueryFormSymbol "..." ]) ]) ->
+    Return_collection, [ parse_find_form context ?default_pull_db ?pull_db_for_source form ]
+  | Some (QueryFormVector [ form; QueryFormSymbol "." ])
+  | Some (QueryFormList [ form; QueryFormSymbol "." ]) ->
+    Return_scalar, [ parse_find_form context ?default_pull_db ?pull_db_for_source form ]
+  | Some (QueryFormVector [ ((QueryFormVector _ | QueryFormList _) as form) ])
+  | Some (QueryFormList [ ((QueryFormVector _ | QueryFormList _) as form) ])
+    when not (is_find_form context ?default_pull_db ?pull_db_for_source form) ->
+    (match form with
+     | QueryFormVector forms
+     | QueryFormList forms ->
+       Return_tuple, List.map (parse_find_form context ?default_pull_db ?pull_db_for_source) forms
+     | _ -> assert false)
+  | form -> Return_relation, parse_find_relation context ?default_pull_db ?pull_db_for_source form
+
+let parse_find context form = parse_find_return context (Some form)
+
+
+
+let unary_string_predicate_of_symbol context = function
+  | "clojure.string/blank?" -> Some context.string_is_blank
+  | _ -> None
+
+
+let binary_string_predicate_of_symbol context = function
+  | "clojure.string/includes?" -> Some context.string_includes
+  | "clojure.string/starts-with?" -> Some context.string_starts_with
+  | "clojure.string/ends-with?" -> Some context.string_ends_with
+  | _ -> None
+
+
+let query_results_as_values context results =
+  let ( let* ) = Option.bind in
+  let rec collect acc = function
+    | [] -> Some (List.rev acc)
+    | result :: rest ->
+      let* value = context.value_of_query_result result in
+      collect (value :: acc) rest
+  in
+  collect [] results
+
+let one_arg_message symbol = "complement " ^ symbol ^ " requires one argument"
+
+let two_arg_message symbol = "complement " ^ symbol ^ " requires two arguments"
+
+let parse_complement_predicate_clause context symbol args =
+  let terms = List.map parse_pattern_term args in
+  let clause predicate = Predicate ("complement " ^ symbol, terms, fun results -> not (predicate results)) in
+  let unary_result_predicate predicate =
+    match args with
+    | [ _ ] -> clause (function [ result ] -> predicate result | _ -> false)
+    | _ -> invalid_arg (one_arg_message symbol)
+  in
+  let unary_value_predicate predicate =
+    unary_result_predicate (function Result_value value -> predicate value | _ -> false)
+  in
+  let binary_string_predicate predicate =
+    match args with
+    | [ _; _ ] ->
+      clause (function
+        | [ Result_value (String left); Result_value (String right) ] -> predicate left right
+        | _ -> false)
+    | _ -> invalid_arg (two_arg_message symbol)
+  in
+  match
+    value_predicate_of_symbol symbol,
+    numeric_predicate_of_symbol symbol,
+    boolean_predicate_of_symbol symbol,
+    unary_string_predicate_of_symbol context symbol,
+    binary_string_predicate_of_symbol context symbol,
+    comparison_predicate_of_symbol symbol,
+    equality_predicate_of_symbol symbol
+  with
+  | Some predicate, _, _, _, _, _, _ ->
+    unary_value_predicate (context.matches_value_predicate predicate)
+  | _, Some predicate, _, _, _, _, _ ->
+    unary_value_predicate (context.matches_numeric_predicate predicate)
+  | _, _, Some predicate, _, _, _, _ ->
+    unary_result_predicate (context.matches_boolean_predicate predicate)
+  | _, _, _, Some predicate, _, _, _ ->
+    unary_value_predicate (function String value -> predicate value | _ -> false)
+  | _, _, _, _, Some predicate, _, _ ->
+    binary_string_predicate predicate
+  | _, _, _, _, _, Some predicate, _ ->
+    (match args with
+     | [] -> invalid_arg ("comparison predicate requires at least one argument: " ^ symbol)
+     | _ :: _ ->
+       clause (fun results ->
+         match query_results_as_values context results with
+         | Some values -> context.comparison_chain_matches predicate values
+         | None -> false))
+  | _, _, _, _, _, _, Some predicate ->
+    clause (fun results ->
+      match query_results_as_values context results with
+      | None -> false
+      | Some values ->
+        let equal = context.all_values_equal values in
+        (match predicate with
+         | EqualValues -> equal
+         | NotEqualValues -> not equal))
+  | None, None, None, None, None, None, None ->
+    (match symbol, args with
+     | ("empty?" | "not-empty" | "not-empty?"), [ _ ] ->
+       unary_value_predicate
+         (fun value ->
+            match symbol with
+            | "empty?" -> context.value_has_count 0 value
+            | _ -> context.value_is_not_empty value)
+     | "contains?", [ _; _ ] ->
+       clause (function
+         | [ Result_value collection; key_result ] ->
+           (match context.value_of_query_result key_result with
+            | Some key -> context.value_contains collection key
+            | None -> false)
+         | _ -> false)
+     | "-differ?", _ ->
+       clause (fun results ->
+         match query_results_as_values context results with
+         | None -> false
+         | Some values ->
+           let left, right = context.split_at (List.length values / 2) values in
+           not (List.length left = List.length right && List.for_all2 context.values_equal left right))
+     | "identical?", [ _; _ ] ->
+       clause (fun results ->
+         match query_results_as_values context results with
+         | Some [ left; right ] -> context.values_equal left right
+         | _ -> false)
+     | "identical?", _ -> invalid_arg (two_arg_message symbol)
+     | ("empty?" | "not-empty" | "not-empty?"), _ -> invalid_arg (one_arg_message symbol)
+     | "contains?", _ -> invalid_arg (two_arg_message symbol)
+     | _ -> invalid_arg ("unsupported complement predicate: " ^ symbol))
+
+
+
+
+
+let parse_join_vars clause_name = function
+  | QueryFormVector vars ->
+    (match List.map parse_output_var vars with
+     | [] -> invalid_arg "Join variables should not be empty"
+     | vars -> vars)
+  | _ -> invalid_arg (clause_name ^ " join variables must be a vector")
+
+let parse_rule_var = function
+  | QueryFormSymbol "_" -> invalid_arg "rule variables must not be placeholders"
+  | QueryFormSymbol symbol ->
+    if String.length symbol > 1 && symbol.[0] = '?' then
+      query_symbol_name symbol
+    else
+      invalid_arg ("Cannot parse var, expected symbol starting with ?, got: " ^ symbol)
+  | _ -> invalid_arg "expected rule variable"
+
+let ensure_distinct_rule_vars clause_name required free =
+  let vars = required @ free in
+  (if List.length vars <> List.length (List.sort_uniq compare vars) then
+    let message =
+      match clause_name with
+      | "rule" -> "Rule variables should be distinct"
+      | _ -> clause_name ^ " rule variables must be distinct"
+    in
+    invalid_arg message);
+  required, free
+
+let parse_rule_vars clause_name = function
+  | QueryFormVector ((QueryFormVector required | QueryFormList required) :: free_forms)
+  | QueryFormList ((QueryFormVector required | QueryFormList required) :: free_forms) ->
+    let required = List.map parse_rule_var required in
+    let free = List.map parse_rule_var free_forms in
+    (match required, free with
+     | [], [] -> invalid_arg "Cannot parse rule-vars"
+     | required, free -> ensure_distinct_rule_vars clause_name required free)
+  | QueryFormVector free_forms | QueryFormList free_forms ->
+    let free = List.map parse_rule_var free_forms in
+    (match free with
+     | [] -> invalid_arg "Cannot parse rule-vars"
+     | free -> ensure_distinct_rule_vars clause_name [] free)
+  | _ -> invalid_arg "Cannot parse rule-vars"
+
+let or_join_clause required_vars vars branches =
+  match required_vars with
+  | [] -> OrJoin (vars, branches)
+  | required_vars -> OrJoinRequired (required_vars, vars, branches)
+
+let source_or_join_clause source required_vars vars branches =
+  match required_vars with
+  | [] -> SourceOrJoin (source, vars, branches)
+  | required_vars -> SourceOrJoinRequired (source, required_vars, vars, branches)
+
+let ensure_inferred_join_vars vars =
+  if vars = [] then invalid_arg "Join variables should not be empty"
+
+let rec parse_pattern_clause context = function
+  | QueryFormVector [ QueryFormList (QueryFormSymbol "missing?" :: args) ] ->
+    parse_missing_clause args
+  | (QueryFormVector (QueryFormSymbol "not" :: clause_forms)
+    | QueryFormList (QueryFormSymbol "not" :: clause_forms)) ->
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "Cannot parse 'not' clause"
+     | clauses ->
+       ensure_inferred_join_vars (clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare);
+       Not clauses)
+  | (QueryFormVector (QueryFormSymbol "not-join" :: join_vars :: clause_forms)
+    | QueryFormList (QueryFormSymbol "not-join" :: join_vars :: clause_forms)) ->
+    let vars = parse_join_vars "not-join" join_vars in
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "Cannot parse 'not-join' clause"
+     | clauses -> NotJoin (vars, clauses))
+  | (QueryFormVector (QueryFormSymbol "not-join" :: _)
+    | QueryFormList (QueryFormSymbol "not-join" :: _)) ->
+    invalid_arg "Cannot parse 'not-join' clause"
+  | (QueryFormVector (QueryFormSymbol "or" :: branch_forms)
+    | QueryFormList (QueryFormSymbol "or" :: branch_forms)) ->
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "Cannot parse 'or' clause"
+     | branches ->
+       ensure_inferred_join_vars (branches |> List.concat_map vars_of_branch |> List.sort_uniq compare);
+       Or branches)
+  | (QueryFormVector (QueryFormSymbol "or-join" :: join_vars :: branch_forms)
+    | QueryFormList (QueryFormSymbol "or-join" :: join_vars :: branch_forms)) ->
+    let required_vars, vars = parse_rule_vars "or-join" join_vars in
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "Cannot parse 'or-join' clause"
+     | branches -> or_join_clause required_vars vars branches)
+  | (QueryFormVector (QueryFormSymbol "or-join" :: _)
+    | QueryFormList (QueryFormSymbol "or-join" :: _)) ->
+    invalid_arg "Cannot parse 'or-join' clause"
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "not" :: clause_forms)
+        | QueryFormList (QueryFormSymbol "not" :: clause_forms))
+      ]
+    when is_query_source_symbol source_symbol ->
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "source-qualified not requires at least one clause"
+     | clauses -> SourceNot (query_source_name source_symbol, clauses))
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "not-join" :: join_vars :: clause_forms)
+        | QueryFormList (QueryFormSymbol "not-join" :: join_vars :: clause_forms))
+      ]
+    when is_query_source_symbol source_symbol ->
+    let vars = parse_join_vars "source-qualified not-join" join_vars in
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "source-qualified not-join requires at least one clause"
+     | clauses -> SourceNotJoin (query_source_name source_symbol, vars, clauses))
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "not-join" :: _)
+        | QueryFormList (QueryFormSymbol "not-join" :: _))
+      ]
+    when is_query_source_symbol source_symbol ->
+    invalid_arg "source-qualified not-join requires join variables and clauses"
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "or" :: branch_forms)
+        | QueryFormList (QueryFormSymbol "or" :: branch_forms))
+      ]
+    when is_query_source_symbol source_symbol ->
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "source-qualified or requires at least one branch"
+     | branches -> SourceOr (query_source_name source_symbol, branches))
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "or-join" :: join_vars :: branch_forms)
+        | QueryFormList (QueryFormSymbol "or-join" :: join_vars :: branch_forms))
+      ]
+    when is_query_source_symbol source_symbol ->
+    let required_vars, vars = parse_rule_vars "source-qualified or-join" join_vars in
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "source-qualified or-join requires at least one branch"
+     | branches -> source_or_join_clause (query_source_name source_symbol) required_vars vars branches)
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; (QueryFormVector (QueryFormSymbol "or-join" :: _)
+        | QueryFormList (QueryFormSymbol "or-join" :: _))
+      ]
+    when is_query_source_symbol source_symbol ->
+    invalid_arg "source-qualified or-join requires join variables and branches"
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not" :: clause_forms)
+    when is_query_source_symbol source_symbol ->
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "source-qualified not requires at least one clause"
+     | clauses -> SourceNot (query_source_name source_symbol, clauses))
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not-join" :: join_vars :: clause_forms)
+    when is_query_source_symbol source_symbol ->
+    let vars = parse_join_vars "source-qualified not-join" join_vars in
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "source-qualified not-join requires at least one clause"
+     | clauses -> SourceNotJoin (query_source_name source_symbol, vars, clauses))
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not-join" :: _)
+    when is_query_source_symbol source_symbol ->
+    invalid_arg "source-qualified not-join requires join variables and clauses"
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "or" :: branch_forms)
+    when is_query_source_symbol source_symbol ->
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "source-qualified or requires at least one branch"
+     | branches -> SourceOr (query_source_name source_symbol, branches))
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "or-join" :: join_vars :: branch_forms)
+    when is_query_source_symbol source_symbol ->
+    let required_vars, vars = parse_rule_vars "source-qualified or-join" join_vars in
+    (match List.map (parse_or_branch context) branch_forms with
+     | [] -> invalid_arg "source-qualified or-join requires at least one branch"
+     | branches -> source_or_join_clause (query_source_name source_symbol) required_vars vars branches)
+  | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "or-join" :: _)
+    when is_query_source_symbol source_symbol ->
+    invalid_arg "source-qualified or-join requires join variables and branches"
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; ((QueryFormVector _ | QueryFormList _) as call)
+      ]
+    when is_query_source_symbol source_symbol ->
+    let source_name = query_source_name source_symbol in
+    (match parse_pattern_clause context (QueryFormVector [ call ]) with
+     | Rule (rule_name, args) -> SourceRule (source_name, rule_name, args)
+     | clause -> SourceClause (source_name, clause))
+  | QueryFormVector
+      [ QueryFormSymbol source_symbol
+      ; ((QueryFormVector _ | QueryFormList _) as call)
+      ; output
+      ]
+    when is_query_source_symbol source_symbol ->
+    let source_name = query_source_name source_symbol in
+    (match parse_pattern_clause context (QueryFormVector [ call; output ]) with
+     | Rule (rule_name, args) -> SourceRule (source_name, rule_name, args)
+     | clause -> SourceClause (source_name, clause))
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ]
+    when String.length symbol > 1 && symbol.[0] = '?' ->
+    DynamicPredicate (query_callable_name symbol, List.map parse_pattern_term args)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ; output
+      ]
+    when String.length symbol > 1 && symbol.[0] = '?' ->
+    (match parse_collection_output_var output with
+     | Some output_var ->
+       DynamicFunctionCollection (query_callable_name symbol, List.map parse_pattern_term args, output_var)
+     | None ->
+       (match parse_relation_output_vars output with
+        | Some output_vars ->
+          DynamicFunctionRelation (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
+        | None ->
+          DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, parse_output_vars output)))
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "empty?"; term ]
+        | QueryFormVector [ QueryFormSymbol "empty?"; term ])
+      ] ->
+    EmptyValue (parse_pattern_term term)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol ("not-empty" | "not-empty?"); term ]
+        | QueryFormVector [ QueryFormSymbol ("not-empty" | "not-empty?"); term ])
+      ] ->
+    NotEmptyValue (parse_pattern_term term)
+  | QueryFormVector
+      [ (QueryFormList
+           (QueryFormSymbol (("empty?" | "not-empty" | "not-empty?") as symbol) :: _)
+        | QueryFormVector
+            (QueryFormSymbol (("empty?" | "not-empty" | "not-empty?") as symbol) :: _))
+      ] ->
+    invalid_arg ("predicate requires one argument: " ^ symbol)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "contains?"; collection; key ]
+        | QueryFormVector [ QueryFormSymbol "contains?"; collection; key ])
+      ] ->
+    ContainsValue (parse_pattern_term collection, parse_pattern_term key)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "get-else" :: args)
+        | QueryFormVector (QueryFormSymbol "get-else" :: args))
+      ; QueryFormSymbol output
+      ] ->
+    parse_get_else_clause args output
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "get-some" :: args)
+        | QueryFormVector (QueryFormSymbol "get-some" :: args))
+      ; output
+      ] ->
+    parse_get_some_clause args output
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "get" :: args)
+        | QueryFormVector (QueryFormSymbol "get" :: args))
+      ; QueryFormSymbol output
+      ] ->
+    parse_get_clause args output
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "count"; term ]
+        | QueryFormVector [ QueryFormSymbol "count"; term ])
+      ; QueryFormSymbol output
+      ] ->
+    CountValue (parse_pattern_term term, query_symbol_name output)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "not"; term ]
+        | QueryFormVector [ QueryFormSymbol "not"; term ])
+      ; QueryFormSymbol output
+      ] ->
+    BooleanNotValue (parse_pattern_term term, query_symbol_name output)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "not"; term ]
+        | QueryFormVector [ QueryFormSymbol "not"; term ])
+      ] ->
+    BooleanNotPredicate (parse_pattern_term term)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "not" :: _)
+        | QueryFormVector (QueryFormSymbol "not" :: _))
+      ] ->
+    invalid_arg "not predicate requires one argument"
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "and" :: terms)
+        | QueryFormVector (QueryFormSymbol "and" :: terms))
+      ] ->
+    BooleanAndPredicate (List.map parse_pattern_term terms)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "or" :: terms)
+        | QueryFormVector (QueryFormSymbol "or" :: terms))
+      ] ->
+    BooleanOrPredicate (List.map parse_pattern_term terms)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "-differ?" :: args)
+        | QueryFormVector (QueryFormSymbol "-differ?" :: args))
+      ] ->
+    DifferPredicate (List.map parse_pattern_term args)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "identical?"; left; right ]
+        | QueryFormVector [ QueryFormSymbol "identical?"; left; right ])
+      ] ->
+    IdenticalPredicate (parse_pattern_term left, parse_pattern_term right)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "identical?" :: _)
+        | QueryFormVector (QueryFormSymbol "identical?" :: _))
+      ] ->
+    invalid_arg "identical? requires two arguments"
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "untuple"; tuple ]
+        | QueryFormVector [ QueryFormSymbol "untuple"; tuple ])
+      ; output
+      ] ->
+    UntupleFunction (parse_pattern_term tuple, parse_output_vars output)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "untuple" :: _)
+        | QueryFormVector (QueryFormSymbol "untuple" :: _))
+      ; _
+      ] ->
+    invalid_arg "untuple requires one argument"
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol "ground" :: args)
+        | QueryFormVector (QueryFormSymbol "ground" :: args))
+      ; output
+      ] ->
+    parse_ground_function args output
+  | QueryFormVector
+      [ (QueryFormList
+           ((QueryFormList [ QueryFormSymbol "complement"; QueryFormSymbol symbol ]
+            | QueryFormVector [ QueryFormSymbol "complement"; QueryFormSymbol symbol ])
+            :: args)
+        | QueryFormVector
+            ((QueryFormList [ QueryFormSymbol "complement"; QueryFormSymbol symbol ]
+             | QueryFormVector [ QueryFormSymbol "complement"; QueryFormSymbol symbol ])
+             :: args))
+      ] ->
+    parse_complement_predicate_clause context symbol args
+  | QueryFormVector
+      [ (QueryFormList
+           ((QueryFormList (QueryFormSymbol "complement" :: _)
+            | QueryFormVector (QueryFormSymbol "complement" :: _))
+            :: _)
+        | QueryFormVector
+            ((QueryFormList (QueryFormSymbol "complement" :: _)
+             | QueryFormVector (QueryFormSymbol "complement" :: _))
+             :: _))
+      ] ->
+    invalid_arg "complement requires one predicate symbol"
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "re-find"; pattern; value ]
+        | QueryFormVector [ QueryFormSymbol "re-find"; pattern; value ])
+      ] ->
+    ReFindPredicate (parse_pattern_term pattern, parse_pattern_term value)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "re-matches"; pattern; value ]
+        | QueryFormVector [ QueryFormSymbol "re-matches"; pattern; value ])
+      ] ->
+    ReMatchesPredicate (parse_pattern_term pattern, parse_pattern_term value)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ] ->
+    (match
+       value_predicate_of_symbol symbol,
+       numeric_predicate_of_symbol symbol,
+       boolean_predicate_of_symbol symbol,
+       unary_string_predicate_clause_of_symbol symbol,
+       binary_string_predicate_clause_of_symbol symbol,
+       comparison_predicate_of_symbol symbol,
+       equality_predicate_of_symbol symbol,
+       args
+     with
+     | Some predicate, _, _, _, _, _, _, [ term ] ->
+       ValuePredicate (predicate, parse_pattern_term term)
+     | _, Some predicate, _, _, _, _, _, [ term ] ->
+       NumericPredicate (predicate, parse_pattern_term term)
+     | _, _, Some predicate, _, _, _, _, [ term ] ->
+       BooleanPredicate (predicate, parse_pattern_term term)
+     | _, _, _, Some clause, _, _, _, [ term ] ->
+       clause (parse_pattern_term term)
+     | _, _, _, _, Some clause, _, _, [ left; right ] ->
+       clause (parse_pattern_term left) (parse_pattern_term right)
+     | _, _, _, _, _, Some predicate, _, [ left; right ] ->
+       ComparisonPredicate (predicate, parse_pattern_term left, parse_pattern_term right)
+     | _, _, _, _, _, Some predicate, _, _ :: _ ->
+       ComparisonPredicateN (predicate, List.map parse_pattern_term args)
+     | _, _, _, _, _, Some _, _, [] ->
+       invalid_arg ("comparison predicate requires at least one argument: " ^ symbol)
+     | _, _, _, _, _, _, Some predicate, _ ->
+       EqualityPredicate (predicate, List.map parse_pattern_term args)
+     | Some _, _, _, _, _, _, _, _
+     | _, Some _, _, _, _, _, _, _
+     | _, _, Some _, _, _, _, _, _
+     | _, _, _, Some _, _, _, _, _
+     | _, _, _, _, Some _, _, _, _ ->
+       invalid_arg ("predicate requires one argument: " ^ symbol)
+     | None, None, None, None, None, None, None, _ ->
+       DynamicPredicate (query_callable_name symbol, List.map parse_pattern_term args))
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ; QueryFormSymbol output
+      ] ->
+    (match arithmetic_op_of_symbol symbol with
+     | Some op -> ArithmeticValue (op, List.map parse_pattern_term args, query_symbol_name output)
+     | None -> parse_string_transform_function symbol args output)
+  | QueryFormVector
+      [ (QueryFormList (QueryFormSymbol symbol :: args)
+        | QueryFormVector (QueryFormSymbol symbol :: args))
+      ; (QueryFormVector _ | QueryFormList _ as output)
+      ] ->
+    parse_flat_value_function symbol args (parse_output_vars output)
+  | (QueryFormVector (QueryFormSymbol rule_name :: args)
+    | QueryFormList (QueryFormSymbol rule_name :: args))
+    when is_plain_rule_symbol rule_name ->
+    let rule_name, args = parse_rule_expr rule_name args in
+    Rule (rule_name, args)
+  | QueryFormList (QueryFormSymbol source_symbol :: terms) when is_query_source_symbol source_symbol ->
+    parse_source_pattern_clause (query_source_name source_symbol) terms
+  | QueryFormVector (QueryFormSymbol source_symbol :: terms) when is_query_source_symbol source_symbol ->
+    parse_source_pattern_clause (query_source_name source_symbol) terms
+  | QueryFormVector terms -> parse_data_pattern_clause terms
+  | _ -> invalid_arg "where clauses must be vectors"
+
+and parse_or_branch context = function
+  | (QueryFormVector (QueryFormSymbol "and" :: clause_forms)
+    | QueryFormList (QueryFormSymbol "and" :: clause_forms)) ->
+    (match List.map (parse_pattern_clause context) clause_forms with
+     | [] -> invalid_arg "or branch requires at least one clause"
+     | clauses -> clauses)
+  | form -> [ parse_pattern_clause context form ]
+
+let parse_rule_head = function
+  | QueryFormVector (QueryFormSymbol rule_name :: params)
+  | QueryFormList (QueryFormSymbol rule_name :: params) ->
+    let required_vars, free_vars = parse_rule_vars "rule" (QueryFormVector params) in
+    let params = required_vars @ free_vars in
+    rule_name, params
+  | _ -> invalid_arg "rule head must be a vector or list"
+
+let parse_rule context = function
+  | (QueryFormVector (head :: body_forms) | QueryFormList (head :: body_forms)) ->
+    let rule_name, rule_params = parse_rule_head head in
+    (match List.map (parse_pattern_clause context) body_forms with
+     | [] -> invalid_arg "Rule branch should have clauses"
+     | rule_body -> { rule_name; rule_params; rule_body })
+  | _ -> invalid_arg "rules must be vectors or lists"
+
+let validate_rule_arities rules =
+  List.iter
+    (fun rule ->
+      rules
+      |> List.iter (fun other ->
+        if rule.rule_name = other.rule_name
+           && List.length rule.rule_params <> List.length other.rule_params
+        then
+          invalid_arg "Arity mismatch"))
+    rules;
+  rules
+
+let is_rule_head = function
+  | QueryFormVector (QueryFormSymbol _ :: _)
+  | QueryFormList (QueryFormSymbol _ :: _) -> true
+  | _ -> false
+
+let is_rule_form = function
+  | QueryFormVector (head :: _)
+  | QueryFormList (head :: _) -> is_rule_head head
+  | _ -> false
+
+let unwrap_extra_rules_nesting = function
+  | [ (QueryFormVector inner | QueryFormList inner) ] when List.for_all is_rule_form inner -> inner
+  | rules -> rules
+
+let parse_rules context = function
+  | Some (QueryFormVector rules | QueryFormList rules) ->
+    unwrap_extra_rules_nesting rules |> List.map (parse_rule context) |> validate_rule_arities
+  | Some _ -> invalid_arg "query :rules must be a vector or list"
+  | None -> []
+
+
+let has_rule_clause = Query.has_rule_clause
+let rule_names = Query.rule_names
+let resolve_dynamic_rule_clause = Query.resolve_dynamic_rule_clause
+let resolve_dynamic_rule = Query.resolve_dynamic_rule
+let infer_default_inputs = Query.infer_default_inputs
+let validate_query = Query.validate_query
+
+let parse_where context = function
+  | Some (QueryFormVector clauses | QueryFormList clauses) -> List.map (parse_pattern_clause context) clauses
+  | Some _ -> invalid_arg "query :where must be a vector or list"
+  | None -> []
+
+let parse_query_return_with_pull_context context ?default_pull_db ?pull_db_for_source form =
+  let entries = query_form_map form in
+  let return, find =
+    parse_find_return context ?default_pull_db ?pull_db_for_source (query_form_section "find" entries)
+  in
+  let in_form = query_form_section "in" entries in
+  ensure_distinct_input_rules_var in_form;
+  let rules = parse_rules context (query_form_section "rules" entries) in
+  let rule_names = rule_names rules in
+  let rules = List.map (resolve_dynamic_rule rule_names) rules in
+  let where =
+    parse_where context (query_form_section "where" entries)
+    |> List.map (resolve_dynamic_rule_clause rule_names)
+  in
+  let inputs = parse_inputs in_form |> infer_default_inputs in_form find where in
+  let query =
+    { find
+    ; inputs
+    ; with_vars = parse_with_section (query_form_section "with" entries)
+    ; rules
+    ; where
+    }
+    |> validate_query
+  in
+  if query.rules = []
+     && List.exists has_rule_clause query.where
+     && not (input_declares_rules_var in_form)
+  then invalid_arg "Missing rules var '%' in :in";
+  return, query
+
+let parse_query_return context form =
+  parse_query_return_with_pull_context context form
+
+
+let validate_query_return_map = Query.validate_query_return_map
+
+let parse_query_return_map_with_pull_context context ?default_pull_db ?pull_db_for_source form =
+  let entries = query_form_map form in
+  let return, query =
+    parse_query_return_with_pull_context context ?default_pull_db ?pull_db_for_source form
+  in
+  let return_map = parse_return_map_section entries in
+  return, validate_query_return_map return return_map query, query
+
+let parse_query_return_map context form =
+  parse_query_return_map_with_pull_context context form
+
+let parse_query context form =
+  snd (parse_query_return context form)
+
+let parse_query_with_pull_context context ?default_pull_db ?pull_db_for_source form =
+  snd (parse_query_return_with_pull_context context ?default_pull_db ?pull_db_for_source form)
+
+let parse_query_string context input =
+  parse_query context (read_edn input)
+
+let parse_query_string_with_pull_context context ?default_pull_db ?pull_db_for_source input =
+  parse_query_with_pull_context context ?default_pull_db ?pull_db_for_source (read_edn input)
+
+let parse_query_return_string context input =
+  parse_query_return context (read_edn input)
+
+let parse_query_return_string_with_pull_context context ?default_pull_db ?pull_db_for_source input =
+  parse_query_return_with_pull_context context ?default_pull_db ?pull_db_for_source (read_edn input)
+
+let parse_query_return_map_string context input =
+  parse_query_return_map context (read_edn input)
+
+let parse_query_return_map_string_with_pull_context context ?default_pull_db ?pull_db_for_source input =
+  parse_query_return_map_with_pull_context context ?default_pull_db ?pull_db_for_source (read_edn input)
