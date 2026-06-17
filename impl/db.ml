@@ -6,9 +6,154 @@ let datom ?(tx = tx0) ?(added = true) ~e ~a ~v () = { e; a; v; tx; added }
 
 let is_datom (_ : datom) = true
 
+type core_context =
+  { next_db_uid : unit -> int
+  }
+
+let max_entity_id = 0x7fffffff
+
+let validate_entity_id entity_id =
+  if entity_id < 0 then
+    invalid_arg ("entity id must not be negative: " ^ string_of_int entity_id);
+  if entity_id > max_entity_id then
+    invalid_arg ("highest supported entity id exceeded: " ^ string_of_int entity_id);
+  entity_id
+
+let refresh_identity context db =
+  { db with db_uid = context.next_db_uid () }
+
+let rec max_eid_in_value max_eid = function
+  | Ref entity_id -> max max_eid (validate_entity_id entity_id)
+  | List values | Vector values ->
+    List.fold_left max_eid_in_value max_eid values
+  | Map entries ->
+    List.fold_left
+      (fun max_eid (key, value) ->
+        max_eid_in_value (max_eid_in_value max_eid key) value)
+      max_eid
+      entries
+  | Set values ->
+    List.fold_left max_eid_in_value max_eid values
+  | Tuple values ->
+    List.fold_left
+      (fun max_eid -> function
+        | None -> max_eid
+        | Some value -> max_eid_in_value max_eid value)
+      max_eid
+      values
+  | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
+
 let value_equal = Util.value_equal
 
 let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
+
+let normalize_datom_for_schema schema d =
+  let d = Util.normalize_datom_value d in
+  if Schema.schema_attr_is_ref schema d.a then
+    match d.v with
+    | Int entity_id -> { d with v = Ref (validate_entity_id entity_id) }
+    | _ -> d
+  else
+    d
+
+let datom_has_ref_value = function
+  | { v = Ref _; _ } -> true
+  | _ -> false
+
+let build_index index datoms =
+  datoms |> List.sort (Util.compare_datom index)
+
+let build_avet_index schema datoms =
+  datoms
+  |> List.filter (fun d -> Schema.schema_attr_is_avet_accessible schema d.a)
+  |> build_index Avet
+
+let build_vaet_index datoms =
+  datoms
+  |> List.filter datom_has_ref_value
+  |> build_index Vaet
+
+let refresh_indexes db =
+  { db with
+    eavt_index = build_index Eavt db.datoms
+  ; aevt_index = build_index Aevt db.datoms
+  ; avet_index = build_avet_index db.schema db.datoms
+  ; vaet_index = build_vaet_index db.datoms
+  }
+
+let with_datoms db datoms =
+  refresh_indexes { db with datoms }
+
+let empty_db context ?(schema = []) ?storage () =
+  let schema = Schema.validate_schema schema in
+  refresh_indexes
+    { db_uid = context.next_db_uid ()
+    ; schema
+    ; datoms = []
+    ; eavt_index = []
+    ; aevt_index = []
+    ; avet_index = []
+    ; vaet_index = []
+    ; history_datoms = []
+    ; historical = false
+    ; max_eid = 0
+    ; max_tx = tx0
+    ; filter_pred = None
+    ; storage_ref = storage
+    ; tx_fns = []
+    }
+
+let empty context db = empty_db context ~schema:db.schema ?storage:db.storage_ref ()
+
+let history_datoms_for_schema schema tx_data =
+  List.filter (fun d -> not (Schema.schema_has_no_history schema d.a)) tx_data
+
+let init_db context ?(schema = []) ?storage datoms =
+  let schema = Schema.validate_schema schema in
+  let datoms = List.map (normalize_datom_for_schema schema) datoms in
+  let history_datoms = history_datoms_for_schema schema datoms in
+  let max_eid =
+    List.fold_left (fun max_eid d -> max_eid_in_value (max max_eid (validate_entity_id d.e)) d.v) 0 datoms
+  in
+  let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
+  refresh_indexes
+    { db_uid = context.next_db_uid ()
+    ; schema
+    ; datoms
+    ; eavt_index = []
+    ; aevt_index = []
+    ; avet_index = []
+    ; vaet_index = []
+    ; history_datoms
+    ; historical = false
+    ; max_eid
+    ; max_tx
+    ; filter_pred = None
+    ; storage_ref = storage
+    ; tx_fns = []
+    }
+
+let history context db = with_datoms (refresh_identity context { db with historical = true }) db.history_datoms
+
+let is_history db = db.historical
+
+let visible_active_datoms db =
+  match db.filter_pred with
+  | None -> db.datoms
+  | Some pred -> List.filter pred db.datoms
+
+let is_filtered db = Option.is_some db.filter_pred
+
+let unfiltered context db = refresh_identity context { db with filter_pred = None }
+
+let filter context db pred =
+  let unfiltered_db = unfiltered context db in
+  let filter_pred =
+    match db.filter_pred with
+    | None -> fun datom -> pred unfiltered_db datom
+    | Some existing -> fun datom -> existing datom && pred unfiltered_db datom
+  in
+  refresh_identity context { db with filter_pred = Some filter_pred }
 
 type index_context =
   { is_avet_accessible : db -> attr -> bool
@@ -40,7 +185,7 @@ let hash db =
 
 let hash_cache_size () = Hashtbl.length hash_cache
 
-let visible_datoms db index =
+let visible_index_datoms db index =
   let datoms =
     match index with
     | Eavt -> db.eavt_index
@@ -74,7 +219,7 @@ let resolved_value_option_for_optional_attr context db attr =
 let datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
-  visible_datoms db index
+  visible_index_datoms db index
   |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value v d.v && matches tx d.tx)
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
@@ -162,8 +307,8 @@ let index_range context db attr ?start ?stop () =
     && Option.fold ~none:true ~some:(fun stop -> context.compare_value d.v stop <= 0) stop)
 
 let diff left right =
-  let left_datoms = visible_datoms left Eavt in
-  let right_datoms = visible_datoms right Eavt in
+  let left_datoms = visible_index_datoms left Eavt in
+  let right_datoms = visible_index_datoms right Eavt in
   ( List.filter (fun d -> not (List.exists (same_fact d) right_datoms)) left_datoms
   , List.filter (fun d -> not (List.exists (same_fact d) left_datoms)) right_datoms
   , List.filter (fun d -> List.exists (same_fact d) right_datoms) left_datoms

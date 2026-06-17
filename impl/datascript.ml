@@ -14,8 +14,11 @@ let next_db_uid =
     incr counter;
     !counter
 
-let refresh_db_identity db =
-  { db with db_uid = next_db_uid () }
+let db_core_context : Db_impl.core_context =
+  { next_db_uid
+  }
+
+let refresh_db_identity db = Db_impl.refresh_identity db_core_context db
 
 module Entity = Entity
 module Lru = Lru
@@ -26,14 +29,7 @@ module Storage = Storage
 module Util = Util
 module Upsert = Upsert
 
-let max_entity_id = 0x7fffffff
-
-let validate_entity_id entity_id =
-  if entity_id < 0 then
-    invalid_arg ("entity id must not be negative: " ^ string_of_int entity_id);
-  if entity_id > max_entity_id then
-    invalid_arg ("highest supported entity id exceeded: " ^ string_of_int entity_id);
-  entity_id
+let validate_entity_id = Db_impl.validate_entity_id
 
 let datom = Db_impl.datom
 
@@ -43,147 +39,41 @@ let validate_schema = Schema.validate_schema
 
 let is_db (_ : db) = true
 
-let rec max_eid_in_value max_eid = function
-  | Ref entity_id -> max max_eid (validate_entity_id entity_id)
-  | List values | Vector values ->
-    List.fold_left max_eid_in_value max_eid values
-  | Map entries ->
-    List.fold_left
-      (fun max_eid (key, value) ->
-        max_eid_in_value (max_eid_in_value max_eid key) value)
-      max_eid
-      entries
-  | Set values ->
-    List.fold_left max_eid_in_value max_eid values
-  | Tuple values ->
-    List.fold_left
-      (fun max_eid -> function
-        | None -> max_eid
-        | Some value -> max_eid_in_value max_eid value)
-      max_eid
-      values
-  | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
+let max_eid_in_value = Db_impl.max_eid_in_value
 
 let split_keyword = Util.split_keyword
 let compare_value = Util.compare_value
 let first_nonzero = Util.first_nonzero
-let compare_datom = Util.compare_datom
 let normalize_value = Util.normalize_value
-let normalize_datom_value = Util.normalize_datom_value
 
-let schema_attr_is_ref = Schema.schema_attr_is_ref
+let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 
-let normalize_datom_for_schema schema d =
-  let d = normalize_datom_value d in
-  if schema_attr_is_ref schema d.a then
-    match d.v with
-    | Int entity_id -> { d with v = Ref (validate_entity_id entity_id) }
-    | _ -> d
-  else
-    d
+let refresh_db_indexes = Db_impl.refresh_indexes
 
-let schema_attr_is_avet_accessible = Schema.schema_attr_is_avet_accessible
-
-let datom_has_ref_value = function
-  | { v = Ref _; _ } -> true
-  | _ -> false
-
-let build_index index datoms =
-  datoms |> List.sort (compare_datom index)
-
-let build_avet_index schema datoms =
-  datoms
-  |> List.filter (fun d -> schema_attr_is_avet_accessible schema d.a)
-  |> build_index Avet
-
-let build_vaet_index datoms =
-  datoms
-  |> List.filter datom_has_ref_value
-  |> build_index Vaet
-
-let refresh_db_indexes db =
-  { db with
-    eavt_index = build_index Eavt db.datoms
-  ; aevt_index = build_index Aevt db.datoms
-  ; avet_index = build_avet_index db.schema db.datoms
-  ; vaet_index = build_vaet_index db.datoms
-  }
-
-let with_db_datoms db datoms =
-  refresh_db_indexes { db with datoms }
+let with_db_datoms = Db_impl.with_datoms
 
 let empty_db ?(schema = []) ?storage () =
-  let schema = validate_schema schema in
-  refresh_db_indexes
-    { db_uid = next_db_uid ()
-    ; schema
-    ; datoms = []
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; history_datoms = []
-    ; historical = false
-    ; max_eid = 0
-    ; max_tx = tx0
-    ; filter_pred = None
-    ; storage_ref = storage
-    ; tx_fns = []
-    }
+  Db_impl.empty_db db_core_context ~schema ?storage ()
 
-let empty db = empty_db ~schema:db.schema ?storage:db.storage_ref ()
+let empty db = Db_impl.empty db_core_context db
 
-let schema_has_no_history = Schema.schema_has_no_history
-
-let history_datoms_for_schema schema tx_data =
-  List.filter (fun d -> not (schema_has_no_history schema d.a)) tx_data
+let history_datoms_for_schema = Db_impl.history_datoms_for_schema
 
 let init_db ?(schema = []) ?storage datoms =
-  let schema = validate_schema schema in
-  let datoms = List.map (normalize_datom_for_schema schema) datoms in
-  let history_datoms = history_datoms_for_schema schema datoms in
-  let max_eid =
-    List.fold_left (fun max_eid d -> max_eid_in_value (max max_eid (validate_entity_id d.e)) d.v) 0 datoms
-  in
-  let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
-  refresh_db_indexes
-    { db_uid = next_db_uid ()
-    ; schema
-    ; datoms
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; history_datoms
-    ; historical = false
-    ; max_eid
-    ; max_tx
-    ; filter_pred = None
-    ; storage_ref = storage
-    ; tx_fns = []
-    }
+  Db_impl.init_db db_core_context ~schema ?storage datoms
 
-let history db = with_db_datoms (refresh_db_identity { db with historical = true }) db.history_datoms
+let history db = Db_impl.history db_core_context db
 
-let is_history db = db.historical
+let is_history = Db_impl.is_history
 
-let visible_datoms db =
-  match db.filter_pred with
-  | None -> db.datoms
-  | Some pred -> List.filter pred db.datoms
+let visible_datoms = Db_impl.visible_active_datoms
 
-let is_filtered db = Option.is_some db.filter_pred
+let is_filtered = Db_impl.is_filtered
 
-let unfiltered_db db = refresh_db_identity { db with filter_pred = None }
+let unfiltered_db db = Db_impl.unfiltered db_core_context db
 
 let filter db pred =
-  let unfiltered = unfiltered_db db in
-  let filter_pred =
-    match db.filter_pred with
-    | None -> fun datom -> pred unfiltered datom
-    | Some existing -> fun datom -> existing datom && pred unfiltered datom
-  in
-  refresh_db_identity { db with filter_pred = Some filter_pred }
+  Db_impl.filter db_core_context db pred
 
 let serializable = Serialize.serializable
 

@@ -3,6 +3,29 @@ open Datascript_types
 val tx0 : tx
 val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
 val is_datom : datom -> bool
+
+type core_context =
+  { next_db_uid : unit -> int
+  }
+
+val max_entity_id : int
+val validate_entity_id : int -> entity_id
+val refresh_identity : core_context -> db -> db
+val max_eid_in_value : int -> value -> int
+val normalize_datom_for_schema : schema -> datom -> datom
+val refresh_indexes : db -> db
+val with_datoms : db -> datom list -> db
+val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
+val empty : core_context -> db -> db
+val history_datoms_for_schema : schema -> datom list -> datom list
+val init_db : core_context -> ?schema:schema -> ?storage:storage -> datom list -> db
+val history : core_context -> db -> db
+val is_history : db -> bool
+val visible_active_datoms : db -> datom list
+val is_filtered : db -> bool
+val unfiltered : core_context -> db -> db
+val filter : core_context -> db -> (db -> datom -> bool) -> db
+
 val value_equal : value -> value -> bool
 val same_fact : datom -> datom -> bool
 
