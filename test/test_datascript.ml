@@ -585,6 +585,17 @@ let test_indexes_compare_numbers_across_value_constructors () =
     [ 3, "score", Int 2; 1, "score", Int 100 ]
     (seek_datoms db Avet ~a:"score" ~v:(Float 1.6) ())
 
+let test_retract_int_does_not_remove_float_value () =
+  let db =
+    empty_db ()
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "num", One_value (Float 42.5) ] } ]
+    |> db_with [ Retract (Entity_id 1, "num", Some (Int 42)) ]
+  in
+  assert_equal_triples
+    "retracting int 42 must not remove float 42.5"
+    [ 1, "num", Float 42.5 ]
+    (datoms db Eavt ())
+
 let test_avet_exact_lookup_compares_entire_sequences () =
   let db =
     empty_db ~schema:[ "path", indexed ] ()
@@ -12690,6 +12701,38 @@ let test_q_with_rules () =
     ]
     (q db query)
 
+let test_q_rule_context_is_isolated_from_outer_context () =
+  let db =
+    init_db
+      [ datom ~e:5 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:1 ~a:"follow" ~v:(Ref 2) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:3 ~a:"follow" ~v:(Ref 4) ()
+      ; datom ~e:4 ~a:"follow" ~v:(Ref 6) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 4) ()
+      ]
+  in
+  let query =
+    { find = [ Find_var "x" ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules =
+        [ { rule_name = "rule"
+          ; rule_params = [ "e" ]
+          ; rule_body = [ Pattern (QWildcard, QVar "e", QWildcard) ]
+          }
+        ]
+    ; where =
+        [ Pattern (QVar "e", QWildcard, QWildcard)
+        ; Rule ("rule", [ QVar "x" ])
+        ]
+    }
+  in
+  assert_equal_query
+    "q rule context is isolated from outer bindings"
+    [ [ Result_attr "follow" ] ]
+    (q db query)
+
 let test_q_with_recursive_rules () =
   let db =
     empty_db ()
@@ -16612,6 +16655,7 @@ let () =
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
   test_indexes_compare_numbers_across_value_constructors ();
+  test_retract_int_does_not_remove_float_value ();
   test_avet_exact_lookup_compares_entire_sequences ();
   test_indexes_compare_mixed_value_types_like_datascript ();
   test_avet_excludes_unindexed_scalar_attrs ();
@@ -16876,6 +16920,7 @@ let () =
   test_q_rejects_unknown_rules ();
   test_q_rules_accept_false_arguments ();
   test_q_with_rules ();
+  test_q_rule_context_is_isolated_from_outer_context ();
   test_q_with_recursive_rules ();
   test_q_with_symmetric_recursive_rules ();
   test_q_with_mutually_recursive_rules ();
