@@ -50,9 +50,20 @@ let run_roundtrip db_path =
     let count = List.length (datoms restored Eavt ()) in
     Printf.printf "stored and restored %d datom(s)\n" count
 
+let inspect_graphs graphs_dir =
+  match Storage.graph_db_paths graphs_dir with
+  | [] -> Printf.printf "no Logseq db.sqlite files found in %s\n" graphs_dir
+  | db_paths ->
+    List.iter
+      (fun db_path ->
+        Storage.inspect ~read_only:true db_path |> print_summary db_path;
+        print_endline "")
+      db_paths
+
 let usage () =
   prerr_endline "Usage:";
   prerr_endline "  sqlite_storage_example inspect <db.sqlite>";
+  prerr_endline "  sqlite_storage_example inspect-graphs <graphs-dir>";
   prerr_endline "  sqlite_storage_example roundtrip <db.sqlite>";
   exit 2
 
@@ -60,5 +71,6 @@ let () =
   match Array.to_list Sys.argv with
   | [ _; "inspect"; db_path ] ->
     Storage.inspect ~read_only:true db_path |> print_summary db_path
+  | [ _; "inspect-graphs"; graphs_dir ] -> inspect_graphs graphs_dir
   | [ _; "roundtrip"; db_path ] -> run_roundtrip db_path
   | _ -> usage ()

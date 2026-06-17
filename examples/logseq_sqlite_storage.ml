@@ -273,6 +273,21 @@ let inspect ?(read_only = false) db_path =
     ; root_index_addresses
     }
 
+let graph_db_paths graphs_dir =
+  if not (Sys.file_exists graphs_dir) then
+    []
+  else
+    Sys.readdir graphs_dir
+    |> Array.to_list
+    |> List.filter_map (fun name ->
+      let graph_dir = Filename.concat graphs_dir name in
+      let db_path = Filename.concat graph_dir "db.sqlite" in
+      if Sys.file_exists graph_dir && Sys.is_directory graph_dir && Sys.file_exists db_path then
+        Some db_path
+      else
+        None)
+    |> List.sort String.compare
+
 let logseq_schema_default_attr =
   { cardinality = One
   ; unique = None
