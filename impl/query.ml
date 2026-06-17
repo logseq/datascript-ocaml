@@ -47,6 +47,7 @@ type result_resolution_context =
 
 type match_context =
   { result_resolution_context : result_resolution_context
+  ; source_db : db
   ; ident_entity_id : string -> entity_id option
   ; unresolved_lookup_ref_message : attr -> value -> string
   ; value_equal : value -> value -> bool
@@ -455,6 +456,39 @@ let match_reverse_pattern_clause context bindings e_term reverse_attr v_term dat
     let* bindings = match_query_term context (QAttr reverse_attr) (Result_attr reverse_attr) bindings in
     match_query_term context v_term (Result_entity datom.e) bindings
   | _ -> None
+
+let eval_query_term context bindings = function
+  | QVar name -> List.assoc_opt name bindings
+  | QEntity eid -> Some (Result_entity eid)
+  | QIdent ident -> Option.map (fun entity_id -> Result_entity entity_id) (context.ident_entity_id ident)
+  | QLookupRef (attr, value) ->
+    (match context.result_resolution_context.lookup_ref_entity_id attr value with
+     | Some entity_id -> Some (Result_entity entity_id)
+     | None -> invalid_arg (context.unresolved_lookup_ref_message attr value))
+  | QAttr attr -> Some (Result_attr attr)
+  | QValue value ->
+    Option.map (fun value -> Result_value value) (context.result_resolution_context.resolve_query_value value)
+  | QSource "$" -> Some (Result_db context.source_db)
+  | QSource source -> invalid_arg ("source term requires query source context: " ^ source)
+  | QWildcard -> None
+
+let collect_query_terms context bindings terms =
+  let rec collect acc = function
+    | [] -> Some (List.rev acc)
+    | term :: rest ->
+      (match eval_query_term context bindings term with
+       | Some value -> collect (value :: acc) rest
+       | None -> None)
+  in
+  collect [] terms
+
+let collect_query_terms_exn context bindings terms =
+  match collect_query_terms context bindings terms with
+  | Some values -> values
+  | None -> invalid_arg "insufficient bindings"
+
+let query_term_entity_id context bindings term =
+  Option.bind (eval_query_term context bindings term) (query_result_entity_id context.result_resolution_context)
 
 let query_callables_of_inputs inputs =
   inputs

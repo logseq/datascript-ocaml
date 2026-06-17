@@ -2227,6 +2227,7 @@ let query_result_context db : Query.result_resolution_context =
 
 let query_match_context db : Query.match_context =
   { result_resolution_context = query_result_context db
+  ; source_db = db
   ; ident_entity_id = (fun ident -> entid db ident_attr (Keyword ident))
   ; unresolved_lookup_ref_message
   ; value_equal
@@ -2276,39 +2277,19 @@ let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term da
   let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
   match_query_term db op_term (result_of_datom_op datom) bindings
 
-let eval_query_term db bindings = function
-  | QVar name -> List.assoc_opt name bindings
-  | QEntity eid -> Some (Result_entity eid)
-  | QIdent ident -> Option.map (fun entity_id -> Result_entity entity_id) (entid db ident_attr (Keyword ident))
-  | QLookupRef (attr, value) ->
-    (match entity_id_of_ref db (Lookup_ref (attr, value)) with
-     | Some entity_id -> Some (Result_entity entity_id)
-     | None -> invalid_arg (unresolved_lookup_ref_message attr value))
-  | QAttr attr -> Some (Result_attr attr)
-  | QValue value -> Option.map (fun value -> Result_value value) (resolve_query_value db value)
-  | QSource "$" -> Some (Result_db db)
-  | QSource source -> invalid_arg ("source term requires query source context: " ^ source)
-  | QWildcard -> None
+let eval_query_term db bindings term =
+  Query.eval_query_term (query_match_context db) bindings term
 
 let collect_query_terms db bindings terms =
-  let rec collect acc = function
-    | [] -> Some (List.rev acc)
-    | term :: rest ->
-      (match eval_query_term db bindings term with
-       | Some value -> collect (value :: acc) rest
-       | None -> None)
-  in
-  collect [] terms
+  Query.collect_query_terms (query_match_context db) bindings terms
 
 let collect_query_terms_exn db bindings terms =
-  match collect_query_terms db bindings terms with
-  | Some values -> values
-  | None -> invalid_arg "insufficient bindings"
+  Query.collect_query_terms_exn (query_match_context db) bindings terms
 
 let collect_find_vars = Query.collect_find_vars
 
 let query_term_entity_id db bindings term =
-  Option.bind (eval_query_term db bindings term) (query_result_entity_id db)
+  Query.query_term_entity_id (query_match_context db) bindings term
 
 let attr_value_for_query db entity_id attr =
   if is_reverse_ref attr then
@@ -5127,6 +5108,7 @@ module Query = struct
 
   type match_context = Query_impl.match_context =
     { result_resolution_context : result_resolution_context
+    ; source_db : db
     ; ident_entity_id : string -> entity_id option
     ; unresolved_lookup_ref_message : attr -> value -> string
     ; value_equal : value -> value -> bool
@@ -5182,6 +5164,10 @@ module Query = struct
   let match_pattern_clause = Query_impl.match_pattern_clause
   let match_pattern_tx_clause = Query_impl.match_pattern_tx_clause
   let match_reverse_pattern_clause = Query_impl.match_reverse_pattern_clause
+  let eval_query_term = Query_impl.eval_query_term
+  let collect_query_terms = Query_impl.collect_query_terms
+  let collect_query_terms_exn = Query_impl.collect_query_terms_exn
+  let query_term_entity_id = Query_impl.query_term_entity_id
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules

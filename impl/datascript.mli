@@ -490,6 +490,7 @@ module Query : sig
 
   type match_context =
     { result_resolution_context : result_resolution_context
+    ; source_db : db
     ; ident_entity_id : string -> entity_id option
     ; unresolved_lookup_ref_message : attr -> value -> string
     ; value_equal : value -> value -> bool
@@ -598,6 +599,14 @@ module Query : sig
     query_term ->
     datom ->
     (string * query_result) list option
+  val eval_query_term :
+    match_context -> (string * query_result) list -> query_term -> query_result option
+  val collect_query_terms :
+    match_context -> (string * query_result) list -> query_term list -> query_result list option
+  val collect_query_terms_exn :
+    match_context -> (string * query_result) list -> query_term list -> query_result list
+  val query_term_entity_id :
+    match_context -> (string * query_result) list -> query_term -> entity_id option
   val query_callables_of_inputs : query_input list -> query_callables
   val query_rules_of_inputs : query_input list -> query_rule list
   val matching_rules : query_rule list -> string -> int -> query_rule list

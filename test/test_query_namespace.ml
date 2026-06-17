@@ -244,6 +244,7 @@ let test_query_namespace__test_query_matching_helpers () =
   in
   let match_context =
     { Query.result_resolution_context
+    ; source_db = empty_db ()
     ; ident_entity_id = (function "known-ident" -> Some 42 | _ -> None)
     ; unresolved_lookup_ref_message = (fun attr _ -> "missing lookup ref: " ^ attr)
     ; value_equal = Util.value_equal
@@ -332,7 +333,63 @@ let test_query_namespace__test_query_matching_helpers () =
   assert_equal_query_option
     "match_reverse_pattern_clause matches reverse refs"
     (Some [ "parent", Result_entity 1 ])
-    (Query.match_reverse_pattern_clause match_context [] (QEntity 2) "_parent" (QVar "parent") reverse_datom)
+    (Query.match_reverse_pattern_clause match_context [] (QEntity 2) "_parent" (QVar "parent") reverse_datom);
+  assert_equal_query_option
+    "eval_query_term reads bound vars"
+    (Some (Result_value (String "kept")))
+    (Query.eval_query_term match_context base_binding (QVar "existing"));
+  assert_equal_query_option
+    "eval_query_term resolves entity terms"
+    (Some (Result_entity 42))
+    (Query.eval_query_term match_context [] (QEntity 42));
+  assert_equal_query_option
+    "eval_query_term resolves ident terms"
+    (Some (Result_entity 42))
+    (Query.eval_query_term match_context [] (QIdent "known-ident"));
+  assert_equal_query_option
+    "eval_query_term resolves lookup ref terms"
+    (Some (Result_entity 101))
+    (Query.eval_query_term match_context [] (QLookupRef ("name", String "Ivan")));
+  assert_raises_invalid_arg_message
+    "eval_query_term reports missing lookup refs"
+    "missing lookup ref: name"
+    (fun () -> ignore (Query.eval_query_term match_context [] (QLookupRef ("name", String "Missing"))));
+  assert_equal_query_option
+    "eval_query_term resolves literal values"
+    (Some (Result_value (Ref 42)))
+    (Query.eval_query_term match_context [] (QValue (Keyword "known-ident")));
+  assert_equal_query_option
+    "eval_query_term returns default source db"
+    (Some (Result_db match_context.source_db))
+    (Query.eval_query_term match_context [] (QSource "$"));
+  assert_raises_invalid_arg_message
+    "eval_query_term rejects named sources without source context"
+    "source term requires query source context: other"
+    (fun () -> ignore (Query.eval_query_term match_context [] (QSource "other")));
+  assert_equal_query_option
+    "eval_query_term drops wildcards"
+    None
+    (Query.eval_query_term match_context [] QWildcard);
+  assert_equal_query_option
+    "collect_query_terms evaluates all terms"
+    (Some [ Result_value (String "kept"); Result_entity 42 ])
+    (Query.collect_query_terms match_context base_binding [ QVar "existing"; QEntity 42 ]);
+  assert_equal_query_option
+    "collect_query_terms drops collections with wildcards"
+    None
+    (Query.collect_query_terms match_context base_binding [ QVar "existing"; QWildcard ]);
+  assert_equal_query
+    "collect_query_terms_exn returns evaluated terms"
+    [ Result_value (String "kept"); Result_entity 42 ]
+    (Query.collect_query_terms_exn match_context base_binding [ QVar "existing"; QEntity 42 ]);
+  assert_raises_invalid_arg_message
+    "collect_query_terms_exn rejects insufficient bindings"
+    "insufficient bindings"
+    (fun () -> ignore (Query.collect_query_terms_exn match_context base_binding [ QWildcard ]));
+  assert_equal_int_option
+    "query_term_entity_id returns entity ids for evaluated terms"
+    (Some 42)
+    (Query.query_term_entity_id match_context [] (QValue (Keyword "known-ident")))
 
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then
