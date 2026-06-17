@@ -3568,50 +3568,17 @@ let aggregate_values db sources group_bindings terms =
 
 let aggregate_input_values = Query.aggregate_input_values
 
-type query_callables =
-  { callable_predicates : (string * (query_result list -> bool)) list
-  ; callable_functions : (string * (query_result list -> query_result list option)) list
-  ; callable_aggregates : (string * (query_result list -> query_result)) list
-  ; callable_aliases : (string * string) list
-  }
+let empty_query_callables = Query.empty_query_callables
 
-let empty_query_callables =
-  { callable_predicates = []
-  ; callable_functions = []
-  ; callable_aggregates = []
-  ; callable_aliases = []
-  }
+let callable_predicate = Query.callable_predicate
 
-let rec resolve_callable_name callables name =
-  match List.assoc_opt name callables.callable_aliases with
-  | Some target when target <> name -> resolve_callable_name callables target
-  | Some _ | None -> name
+let callable_function = Query.callable_function
 
-let callable_predicate callables name =
-  List.assoc_opt (resolve_callable_name callables name) callables.callable_predicates
+let has_callable = Query.has_callable
 
-let callable_function callables name =
-  List.assoc_opt (resolve_callable_name callables name) callables.callable_functions
+let alias_callable = Query.alias_callable
 
-let callable_aggregate callables name =
-  List.assoc_opt (resolve_callable_name callables name) callables.callable_aggregates
-
-let has_callable callables name =
-  Option.is_some (callable_predicate callables name)
-  || Option.is_some (callable_function callables name)
-  || Option.is_some (callable_aggregate callables name)
-
-let alias_callable callables alias target =
-  let target = resolve_callable_name callables target in
-  { callables with callable_aliases = (alias, target) :: List.remove_assoc alias callables.callable_aliases }
-
-let resolve_callable_aggregate callables aggregate =
-  match aggregate with
-  | CustomVar var ->
-    (match callable_aggregate callables var with
-     | Some f -> Custom f
-     | None -> invalid_arg ("unknown aggregate input: " ^ var))
-  | aggregate -> aggregate
+let resolve_callable_aggregate = Query.resolve_callable_aggregate
 
 let group_by_key = Query.group_by_key
 
@@ -4020,24 +3987,9 @@ let query_input_of_arg decl arg =
 let bind_query_inputs ~consume_rules declarations args =
   Query.bind_query_inputs ~query_input_of_arg ~consume_rules declarations args
 
-let query_callables_of_inputs inputs =
-  inputs
-  |> List.fold_left
-       (fun callables -> function
-         | Input_predicate (var, predicate) ->
-           { callables with callable_predicates = (var, predicate) :: callables.callable_predicates }
-         | Input_function (var, f) ->
-           { callables with callable_functions = (var, f) :: callables.callable_functions }
-         | Input_aggregate (var, f) ->
-           { callables with callable_aggregates = (var, f) :: callables.callable_aggregates }
-         | _ -> callables)
-       empty_query_callables
+let query_callables_of_inputs = Query.query_callables_of_inputs
 
-let query_rules_of_inputs inputs =
-  inputs
-  |> List.concat_map (function
-    | Input_rules rules -> rules
-    | _ -> [])
+let query_rules_of_inputs = Query.query_rules_of_inputs
 
 let initial_query_context db query input_args =
   let inputs = bind_query_inputs ~consume_rules:(query.rules = []) query.inputs input_args in
@@ -7039,6 +6991,14 @@ let query_context : Query_impl.context =
   }
 
 module Query = struct
+  type query_callables = Query_impl.query_callables =
+    { callable_predicates : (string * (query_result list -> bool)) list
+    ; callable_functions : (string * (query_result list -> query_result list option)) list
+    ; callable_aggregates : (string * (query_result list -> query_result)) list
+    ; callable_aliases : (string * string) list
+    }
+
+  let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
   let q_string = Query_impl.q_string query_context
   let q_with = Query_impl.q_with query_context
@@ -7059,6 +7019,15 @@ module Query = struct
   let aggregate_callable_vars = Query_impl.aggregate_callable_vars
   let split_aggregate_terms = Query_impl.split_aggregate_terms
   let aggregate_input_values = Query_impl.aggregate_input_values
+  let resolve_callable_name = Query_impl.resolve_callable_name
+  let callable_predicate = Query_impl.callable_predicate
+  let callable_function = Query_impl.callable_function
+  let callable_aggregate = Query_impl.callable_aggregate
+  let has_callable = Query_impl.has_callable
+  let alias_callable = Query_impl.alias_callable
+  let resolve_callable_aggregate = Query_impl.resolve_callable_aggregate
+  let query_callables_of_inputs = Query_impl.query_callables_of_inputs
+  let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let query_input_var_label = Query_impl.query_input_var_label
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string

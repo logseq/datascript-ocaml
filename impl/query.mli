@@ -32,6 +32,15 @@ type context =
   ; compare_value : value -> value -> int
   }
 
+type query_callables =
+  { callable_predicates : (string * (query_result list -> bool)) list
+  ; callable_functions : (string * (query_result list -> query_result list option)) list
+  ; callable_aggregates : (string * (query_result list -> query_result)) list
+  ; callable_aliases : (string * string) list
+  }
+
+val empty_query_callables : query_callables
+
 val q : context -> ?inputs:query_arg list -> db -> query -> query_result list list
 val q_string : context -> ?inputs:query_arg list -> db -> string -> query_result list list
 val q_with :
@@ -75,6 +84,15 @@ val aggregate_param_vars : aggregate -> string list
 val aggregate_callable_vars : aggregate -> string list
 val split_aggregate_terms : query_term list -> query_term list * query_term
 val aggregate_input_values : aggregate -> query_result list -> query_result list -> query_result list
+val resolve_callable_name : query_callables -> string -> string
+val callable_predicate : query_callables -> string -> (query_result list -> bool) option
+val callable_function : query_callables -> string -> (query_result list -> query_result list option) option
+val callable_aggregate : query_callables -> string -> (query_result list -> query_result) option
+val has_callable : query_callables -> string -> bool
+val alias_callable : query_callables -> string -> string -> query_callables
+val resolve_callable_aggregate : query_callables -> aggregate -> aggregate
+val query_callables_of_inputs : query_input list -> query_callables
+val query_rules_of_inputs : query_input list -> query_rule list
 val query_input_var_label : string -> string
 val query_input_binding_string : input_binding -> string
 val query_input_decl_binding_string : query_input -> string

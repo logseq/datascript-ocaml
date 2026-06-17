@@ -11,6 +11,9 @@ let assert_equal_query_rows label expected actual =
 let assert_equal_inputs label expected actual =
   if expected <> actual then failf "%s: unexpected bound query inputs" label
 
+let assert_equal_rules label expected actual =
+  if expected <> actual then failf "%s: unexpected query rules" label
+
 let assert_equal_query_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional query result" label
 
@@ -267,10 +270,67 @@ let test_query_namespace__test_input_binding_helpers () =
          [ Input_scalar_decl "name" ]
          [ Arg_scalar (Result_value (String "Ivan")); Arg_scalar (Result_value (String "extra")) ]))
 
+let test_query_namespace__test_callable_helpers () =
+  let predicate = function
+    | [ Result_value (Int value) ] -> value > 10
+    | _ -> false
+  in
+  let query_function = function
+    | [ Result_value (Int value) ] -> Some [ Result_value (Int (value + 1)) ]
+    | _ -> None
+  in
+  let aggregate = function
+    | values -> Result_value (Int (List.length values))
+  in
+  let callables =
+    Query.empty_query_callables
+    |> fun callables -> { callables with Query.callable_predicates = [ "large?", predicate ] }
+    |> fun callables -> { callables with Query.callable_functions = [ "inc", query_function ] }
+    |> fun callables -> { callables with Query.callable_aggregates = [ "count-values", aggregate ] }
+    |> fun callables -> Query.alias_callable callables "bigger?" "large?"
+  in
+  (match Query.callable_predicate callables "bigger?" with
+   | Some f ->
+     if not (f [ Result_value (Int 11) ]) then failwith "callable_predicate should resolve aliases"
+   | None -> failwith "callable_predicate should find aliased predicates");
+  (match Query.callable_function callables "inc" with
+   | Some f ->
+     if f [ Result_value (Int 1) ] <> Some [ Result_value (Int 2) ] then
+       failwith "callable_function should return stored functions"
+   | None -> failwith "callable_function should find stored functions");
+  (match Query.resolve_callable_aggregate callables (CustomVar "count-values") with
+   | Custom f ->
+     if f [ Result_value (Int 1); Result_value (Int 2) ] <> Result_value (Int 2) then
+       failwith "resolve_callable_aggregate should return stored aggregate functions"
+   | _ -> failwith "resolve_callable_aggregate should resolve custom aggregate variables");
+  if not (Query.has_callable callables "bigger?") then failwith "has_callable should resolve aliases";
+  assert_raises_invalid_arg "resolve_callable_aggregate rejects unknown custom aggregates" (fun () ->
+    ignore (Query.resolve_callable_aggregate callables (CustomVar "missing")));
+  let rule = { rule_name = "parent"; rule_params = [ "e" ]; rule_body = [] } in
+  assert_equal_rules
+    "query_rules_of_inputs extracts supplied rules"
+    [ rule ]
+    (Query.query_rules_of_inputs [ Input_rules [ rule ]; Input_ignore ]);
+  let callables =
+    Query.query_callables_of_inputs
+      [ Input_predicate ("large?", predicate)
+      ; Input_function ("inc", query_function)
+      ; Input_aggregate ("count-values", aggregate)
+      ; Input_ignore
+      ]
+  in
+  if not (Query.has_callable callables "large?") then
+    failwith "query_callables_of_inputs should collect predicate inputs";
+  if not (Query.has_callable callables "inc") then
+    failwith "query_callables_of_inputs should collect function inputs";
+  if not (Query.has_callable callables "count-values") then
+    failwith "query_callables_of_inputs should collect aggregate inputs"
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
   test_query_namespace__test_input_label_helpers ();
   test_query_namespace__test_input_shape_helpers ();
-  test_query_namespace__test_input_binding_helpers ()
+  test_query_namespace__test_input_binding_helpers ();
+  test_query_namespace__test_callable_helpers ()
