@@ -102,8 +102,10 @@ type entity = Datascript_types.entity =
 
 type pulled_entity = Datascript_types.pulled_entity =
   { pulled_id : entity_id
-  ; pulled_attrs : (attr * pulled_value) list
+  ; pulled_attrs : (pull_key * pulled_value) list
   }
+
+and pull_key = Datascript_types.pull_key
 
 and pulled_value = Datascript_types.pulled_value =
   | Pulled_scalar of value
@@ -135,7 +137,7 @@ type pull_selector = Datascript_types.pull_selector =
   | Pull_reverse_ref_limit of attr * pull_selector list * int
   | Pull_reverse_ref_unlimited of attr * pull_selector list
   | Pull_reverse_ref_xform of attr * pull_selector list * (pulled_value -> pulled_value)
-  | Pull_as of pull_selector * attr
+  | Pull_as of pull_selector * pull_key
 
 type query_term = Datascript_types.query_term =
   | QVar of string
@@ -3287,8 +3289,18 @@ let touch ent =
   in
   touch_entity [ ent.id ] ent
 
+let pull_key_of_attr attr = Keyword attr
+
+let compare_pull_key left right =
+  match left, right with
+  | Keyword left, Keyword right -> compare left right
+  | String left, String right -> compare left right
+  | Keyword left, String right -> compare left right
+  | String left, Keyword right -> compare left right
+  | _ -> compare_value left right
+
 let pulled_id_stub entity_id =
-  Pulled_entity { pulled_id = entity_id; pulled_attrs = [ "db/id", Pulled_scalar (Int entity_id) ] }
+  Pulled_entity { pulled_id = entity_id; pulled_attrs = [ pull_key_of_attr "db/id", Pulled_scalar (Int entity_id) ] }
 
 let shallow_pulled_value = function
   | Ref entity_id -> pulled_id_stub entity_id
@@ -3316,6 +3328,35 @@ let limit_tx_value limit = function
   | One_entity _ | Many_entities _ -> invalid_arg "nested entity values are not stored"
 
 let default_limit_tx_value = limit_tx_value default_pull_limit
+
+let rec pull_selector_forward_attr = function
+  | Pull_attr attr
+  | Pull_attr_default (attr, _)
+  | Pull_attr_limit (attr, _)
+  | Pull_attr_unlimited attr
+  | Pull_attr_xform (attr, _)
+  | Pull_attr_default_xform (attr, _, _)
+  | Pull_ref (attr, _)
+  | Pull_ref_default (attr, _, _)
+  | Pull_ref_limit (attr, _, _)
+  | Pull_ref_unlimited (attr, _)
+  | Pull_ref_xform (attr, _, _) ->
+    if is_reverse_ref attr then None else Some attr
+  | Pull_as (selector, _) -> pull_selector_forward_attr selector
+  | Pull_id
+  | Pull_wildcard
+  | Pull_recursive_ref _
+  | Pull_reverse_ref _
+  | Pull_reverse_ref_default _
+  | Pull_reverse_ref_limit _
+  | Pull_reverse_ref_unlimited _
+  | Pull_reverse_ref_xform _ ->
+    None
+
+let wildcard_shadowed_attrs selectors =
+  selectors
+  |> List.filter_map pull_selector_forward_attr
+  |> List.sort_uniq String.compare
 
 let dedupe_pulled_attrs attrs =
   attrs
@@ -3348,41 +3389,47 @@ and pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited cont
       |> List.concat_map
            (pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity)
       |> dedupe_pulled_attrs
-      |> List.sort (fun (left, _) (right, _) -> compare left right)
+      |> List.sort (fun (left, _) (right, _) -> compare_pull_key left right)
     in
     (match attrs with
      | [] -> None
      | attrs -> Some { pulled_id = entity.id; pulled_attrs = attrs })
 
 and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity = function
-  | Pull_id -> [ "db/id", Pulled_scalar (Int entity.id) ]
+  | Pull_id -> [ pull_key_of_attr "db/id", Pulled_scalar (Int entity.id) ]
   | Pull_wildcard ->
     visit_pull visitor (PullVisitWildcard entity.id);
-    ("db/id", Pulled_scalar (Int entity.id))
+    let shadowed_attrs = wildcard_shadowed_attrs context_selector in
+    (pull_key_of_attr "db/id", Pulled_scalar (Int entity.id))
     :: (entity.attrs
-        |> List.filter (fun (attr, _) -> not (is_reverse_ref attr))
+        |> List.filter (fun (attr, _) ->
+          (not (is_reverse_ref attr)) && not (List.mem attr shadowed_attrs))
         |> List.map (fun (attr, value) ->
           visit_pull_attr visitor entity.id attr;
-          attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value)))
+          pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value)))
   | Pull_attr attr ->
     visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
+    |> Option.map (fun value ->
+      [ pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
     |> Option.value ~default:[]
   | Pull_attr_default (attr, default) ->
     visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
-    |> Option.value ~default:[ attr, Pulled_scalar default ]
+    |> Option.map (fun value ->
+      [ pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
+    |> Option.value ~default:[ pull_key_of_attr attr, Pulled_scalar default ]
   | Pull_attr_limit (attr, limit) ->
     visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (limit_tx_value limit value) ])
+    |> Option.map (fun value ->
+      [ pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (limit_tx_value limit value) ])
     |> Option.value ~default:[]
   | Pull_attr_unlimited attr ->
     visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr value ])
+    |> Option.map (fun value ->
+      [ pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr value ])
     |> Option.value ~default:[]
   | Pull_attr_xform (attr, f) ->
     visit_pull_attr visitor entity.id attr;
@@ -3394,11 +3441,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     in
     (match pulled with
      | Pulled_many [] -> []
-     | value -> [ attr, value ])
+     | value -> [ pull_key_of_attr attr, value ])
   | Pull_attr_default_xform (attr, default, f) ->
     visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
-     | None -> [ attr, Pulled_scalar default ]
+     | None -> [ pull_key_of_attr attr, Pulled_scalar default ]
      | Some value ->
        let pulled =
          pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value)
@@ -3406,7 +3453,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
        in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_ref (attr, selector) ->
     visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
@@ -3417,18 +3464,18 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
        in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_ref_default (attr, selector, default) ->
     visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
-     | None -> [ attr, Pulled_scalar default ]
+     | None -> [ pull_key_of_attr attr, Pulled_scalar default ]
      | Some value ->
        let pulled =
          pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector default_pull_limit value
        in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_ref_limit (attr, selector, limit) ->
     visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
@@ -3437,7 +3484,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
        let pulled = pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector limit value in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_ref_unlimited (attr, selector) ->
     visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
@@ -3446,7 +3493,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
        let pulled = pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded db visited selector value in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_ref_xform (attr, selector, f) ->
     visit_pull_attr visitor entity.id attr;
     let pulled =
@@ -3457,7 +3504,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     in
     (match pulled with
      | Pulled_many [] -> []
-     | value -> [ attr, value ])
+     | value -> [ pull_key_of_attr attr, value ])
   | Pull_recursive_ref (attr, selector, depth) ->
     visit_pull_attr visitor entity.id attr;
     (match if is_reverse_ref attr then Some (Many_values []) else entity_attr_raw entity attr with
@@ -3479,7 +3526,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
        in
        (match pulled with
         | Pulled_many [] -> []
-        | value -> [ attr, value ]))
+        | value -> [ pull_key_of_attr attr, value ]))
   | Pull_reverse_ref (attr, selector) ->
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
@@ -3492,11 +3539,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     (if is_component db attr then
        match pulled with
        | [] -> []
-       | value :: _ -> [ attr, value ]
+       | value :: _ -> [ pull_key_of_attr attr, value ]
      else
        match pulled with
        | [] -> []
-       | values -> [ attr, Pulled_many (take default_pull_limit values) ])
+       | values -> [ pull_key_of_attr attr, Pulled_many (take default_pull_limit values) ])
   | Pull_reverse_ref_default (attr, selector, default) ->
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
@@ -3508,12 +3555,12 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     in
     (if is_component db attr then
        match pulled with
-       | [] -> [ attr, Pulled_scalar default ]
-       | value :: _ -> [ attr, value ]
+       | [] -> [ pull_key_of_attr attr, Pulled_scalar default ]
+       | value :: _ -> [ pull_key_of_attr attr, value ]
      else
        match pulled with
-       | [] -> [ attr, Pulled_scalar default ]
-       | values -> [ attr, Pulled_many (take default_pull_limit values) ])
+       | [] -> [ pull_key_of_attr attr, Pulled_scalar default ]
+       | values -> [ pull_key_of_attr attr, Pulled_many (take default_pull_limit values) ])
   | Pull_reverse_ref_limit (attr, selector, limit) ->
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
@@ -3526,11 +3573,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     (if is_component db attr then
        match pulled with
        | [] -> []
-       | value :: _ -> [ attr, value ]
+       | value :: _ -> [ pull_key_of_attr attr, value ]
      else
        match pulled with
        | [] -> []
-       | values -> [ attr, Pulled_many (take limit values) ])
+       | values -> [ pull_key_of_attr attr, Pulled_many (take limit values) ])
   | Pull_reverse_ref_unlimited (attr, selector) ->
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
@@ -3543,11 +3590,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     (if is_component db attr then
        match pulled with
        | [] -> []
-       | value :: _ -> [ attr, value ]
+       | value :: _ -> [ pull_key_of_attr attr, value ]
      else
        match pulled with
        | [] -> []
-       | values -> [ attr, Pulled_many values ])
+       | values -> [ pull_key_of_attr attr, Pulled_many values ])
   | Pull_reverse_ref_xform (attr, selector, f) ->
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
@@ -3569,7 +3616,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_se
     in
     (match f pulled with
      | Pulled_many [] -> []
-     | value -> [ attr, value ])
+     | value -> [ pull_key_of_attr attr, value ])
   | Pull_as (selector, alias) ->
     pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity selector
     |> List.map (fun (_, value) -> alias, value)
@@ -4582,8 +4629,11 @@ let pull_scalar_xform f = function
      | None -> Pulled_many [])
   | _ -> Pulled_many []
 
+let pull_vector_xform value = Pulled_many [ value ]
+
 let pull_xform_of_form = function
   | QueryFormSymbol "identity" -> Fun.id
+  | QueryFormSymbol "vector" -> pull_vector_xform
   | QueryFormSymbol "name" -> pull_scalar_xform pull_name_value
   | QueryFormSymbol "namespace" -> pull_scalar_xform pull_namespace_value
   | QueryFormSymbol "str" -> pull_scalar_xform (fun value -> Some (String (pull_string_of_value value)))
@@ -4599,11 +4649,17 @@ let rec with_pull_xform selector f =
   | Pull_as (selector, alias) -> Pull_as (with_pull_xform selector f, alias)
   | _ -> invalid_arg "pull :xform applies only to attrs and refs"
 
+let pull_alias_key_of_form = function
+  | QueryFormKeyword alias -> Keyword alias
+  | QueryFormString alias -> String alias
+  | QueryFormInt alias -> Int alias
+  | QueryFormNil -> Nil
+  | _ -> invalid_arg "pull :as requires keyword, string, integer, or nil"
+
 let rec apply_pull_attr_options db selector = function
   | [] -> selector
-  | QueryFormKeyword "as" :: QueryFormKeyword alias :: rest
-  | QueryFormKeyword "as" :: QueryFormString alias :: rest ->
-    apply_pull_attr_options db (Pull_as (selector, alias)) rest
+  | QueryFormKeyword "as" :: alias :: rest ->
+    apply_pull_attr_options db (Pull_as (selector, pull_alias_key_of_form alias)) rest
   | QueryFormKeyword "default" :: default :: rest ->
     apply_pull_attr_options db (with_pull_default selector (query_value_of_form default)) rest
   | QueryFormKeyword "limit" :: limit :: rest ->
@@ -4690,7 +4746,7 @@ let with_pull_recursive_context selectors =
   List.map (apply_pull_recursive_context context) selectors
 
 let rec parse_pull_selector db = function
-  | QueryFormSymbol "*" | QueryFormString "*" -> Pull_wildcard
+  | QueryFormSymbol "*" | QueryFormString "*" | QueryFormKeyword "*" -> Pull_wildcard
   | QueryFormKeyword attr -> Pull_attr (validate_pull_attr_name db attr)
   | QueryFormString attr -> Pull_attr (validate_pull_string_attr_name db attr)
   | QueryFormVector _ | QueryFormList _ as attr_spec -> parse_pull_attr_spec db attr_spec
@@ -4716,11 +4772,11 @@ and parse_pull_map_spec db attr_spec pattern =
   | _ -> with_pull_ref_pattern db selector (parse_pull_pattern db pattern)
 
 and parse_pull_pattern db = function
-  | QueryFormVector selectors ->
+  | QueryFormVector selectors | QueryFormList selectors ->
     selectors
     |> List.concat_map (parse_pull_selectors db)
     |> with_pull_recursive_context
-  | _ -> invalid_arg "pull pattern must be a vector"
+  | _ -> invalid_arg "pull pattern must be sequential"
 
 let parse_pull_pattern_string db input =
   parse_pull_pattern db (read_edn input)

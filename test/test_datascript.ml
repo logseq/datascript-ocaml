@@ -20,6 +20,10 @@ let assert_equal_datoms label expected actual =
   if expected <> actual then
     failf "%s: unexpected datoms" label
 
+let kw name = Keyword name
+
+let str_key name = String name
+
 let rec debug_value = function
   | Nil -> "nil"
   | Int value -> string_of_int value
@@ -57,14 +61,14 @@ let rec debug_pulled_value = function
 and debug_pulled_entity entity =
   "{"
   ^ (entity.pulled_attrs
-     |> List.map (fun (attr, value) -> attr ^ " " ^ debug_pulled_value value)
+     |> List.map (fun (attr, value) -> debug_value attr ^ " " ^ debug_pulled_value value)
      |> String.concat ", ")
   ^ "}"
 
 let debug_pulled_attrs attrs =
   "{"
   ^ (attrs
-     |> List.map (fun (attr, value) -> attr ^ " " ^ debug_pulled_value value)
+     |> List.map (fun (attr, value) -> debug_value attr ^ " " ^ debug_pulled_value value)
      |> String.concat ", ")
   ^ "}"
 
@@ -296,7 +300,7 @@ let test_init_db_resolves_raw_ref_datoms_from_schema () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull should expand init_db raw numeric refs"
-       [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
+       [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
        entity
    | None -> failwith "expected pull to find init_db entity with raw ref");
   assert_equal_query
@@ -331,7 +335,7 @@ let test_raw_datom_counts_ref_values_in_max_eid () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull should expand Raw_datom raw numeric refs"
-      [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
+      [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
       entity
   | None -> failwith "expected pull to find Raw_datom entity with raw ref"
 
@@ -1051,7 +1055,7 @@ let test_tuple_lookup_refs_resolve_nested_lookup_refs () =
    | Some pulled ->
      assert_equal_pulled_attrs
        "pull accepts tuple lookup refs with nested lookup refs"
-       [ "name", Pulled_scalar (String "Petr") ]
+       [ kw "name", Pulled_scalar (String "Petr") ]
        pulled
    | None -> failwith "expected tuple lookup ref pull to resolve")
 
@@ -2334,7 +2338,7 @@ let test_serializable_round_trips_db_state () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull should expand from_serializable raw numeric refs"
-      [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
+      [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
       entity
   | None -> failwith "expected pull to find from_serializable entity with raw ref"
 
@@ -2858,7 +2862,7 @@ let test_entity_reverse_reference_attrs () =
        (entity_attr entity "_profile"));
   match pull db [ Pull_wildcard ] (Entity_id 2) with
   | Some entity ->
-    if List.exists (fun (attr, _) -> attr = "_child" || attr = "_profile") entity.pulled_attrs then
+    if List.exists (fun (attr, _) -> attr = kw "_child" || attr = kw "_profile") entity.pulled_attrs then
       failwith "Pull_wildcard should not include reverse entity attrs"
   | None -> failwith "expected pull result"
 
@@ -2914,7 +2918,7 @@ let test_entity_and_pull_accept_lookup_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull accepts lookup ref"
-       [ "age", Pulled_scalar (Int 31) ]
+       [ kw "age", Pulled_scalar (Int 31) ]
        entity
    | None -> failwith "expected lookup ref pull to resolve")
 
@@ -2982,7 +2986,7 @@ let test_lookup_refs_accept_unique_value_attrs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull accepts unique value lookup ref"
-       [ "age", Pulled_scalar (Int 31) ]
+       [ kw "age", Pulled_scalar (Int 31) ]
        entity
    | None -> failwith "expected unique value lookup ref pull to resolve")
 
@@ -3111,8 +3115,8 @@ let test_edn_reader_parses_query_and_pull_strings () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern_string parses nested EDN pull patterns"
-       [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
-       ; "name", Pulled_scalar (String "Ivan")
+       [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+       ; kw "name", Pulled_scalar (String "Ivan")
        ]
        entity
    | None -> failwith "expected EDN pull pattern to find entity")
@@ -3154,15 +3158,15 @@ let test_edn_string_top_level_apis () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull_string parses and executes EDN pull strings directly"
-       [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
-       ; "name", Pulled_scalar (String "Ivan")
+       [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+       ; kw "name", Pulled_scalar (String "Ivan")
        ]
        entity
    | None -> failwith "expected pull_string to find entity");
   let pulled =
     pull_many_string db "[:name]" [ Entity_id 2; Entity_id 99; Entity_id 1 ]
     |> List.map (function
-      | Some entity -> Some (entity.pulled_id, List.assoc_opt "name" entity.pulled_attrs)
+      | Some entity -> Some (entity.pulled_id, List.assoc_opt (kw "name") entity.pulled_attrs)
       | None -> None)
   in
   if
@@ -4024,7 +4028,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query parses pull find expressions"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] } ] ]
     (q db (parse_query query));
   let vector_query =
     QueryFormVector
@@ -4040,7 +4044,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query parses vector-form pull find expressions"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] } ] ]
     (q db (parse_query vector_query));
   let dynamic_pattern_query =
     QueryFormVector
@@ -4059,7 +4063,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query supports dynamic pull find patterns"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "age", Pulled_scalar (Int 31) ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int 31) ] } ] ]
     (q
        ~inputs:[ Arg_scalar (Result_value (List [ Keyword "age" ])) ]
        db
@@ -4081,7 +4085,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query supports plain-symbol dynamic pull pattern inputs"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "age", Pulled_scalar (Int 31) ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int 31) ] } ] ]
     (q
        ~inputs:[ Arg_scalar (Result_value (List [ Keyword "age" ])) ]
        db
@@ -4108,7 +4112,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query parses source-qualified pull find expressions"
-    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ "name", Pulled_scalar (String "Oleg") ] } ] ]
+    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] } ] ]
     (q_sources db [ "people", Db_source people ] (parse_query source_query));
   let default_source_pull_query =
     QueryFormVector
@@ -4126,7 +4130,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query pull find expressions use the overridden default source"
-    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ "name", Pulled_scalar (String "Oleg") ] } ] ]
+    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] } ] ]
     (q_sources (empty_db ()) [ "$", Db_source people ] (parse_query default_source_pull_query));
   let default_source_dynamic_pull_query =
     QueryFormVector
@@ -4145,7 +4149,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query dynamic pull find expressions use the overridden default source"
-    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ "name", Pulled_scalar (String "Oleg") ] } ] ]
+    [ [ Result_pull { pulled_id = 10; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] } ] ]
     (q_sources
        ~inputs:[ Arg_scalar (Result_value (List [ Keyword "name" ])) ]
        (empty_db ())
@@ -4186,14 +4190,14 @@ let test_parse_query_find_pull_expressions () =
       ; Result_value (Int 25)
       ; Result_pull
           { pulled_id = 2
-          ; pulled_attrs = [ "db/id", Pulled_scalar (Int 2); "name", Pulled_scalar (String "Ivan") ]
+          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Ivan") ]
           }
       ]
     ; [ Result_value (List [ Keyword "name"; String "Petr" ])
       ; Result_value (Int 44)
       ; Result_pull
           { pulled_id = 1
-          ; pulled_attrs = [ "db/id", Pulled_scalar (Int 1); "name", Pulled_scalar (String "Petr") ]
+          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1); kw "name", Pulled_scalar (String "Petr") ]
           }
       ]
     ]
@@ -11977,7 +11981,7 @@ let test_q_find_pull_expressions () =
   in
   assert_equal_query
     "q supports pull expressions in find"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] } ] ]
     (q db query)
 
 let test_q_return_shapes_with_pull_expressions () =
@@ -11990,7 +11994,7 @@ let test_q_return_shapes_with_pull_expressions () =
          ]
   in
   let pulled_ivan =
-    Result_pull { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] }
+    Result_pull { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] }
   in
   let scalar_query =
     { find = [ Find_pull ("e", [ Pull_attr "name" ]) ]
@@ -12008,9 +12012,9 @@ let test_q_return_shapes_with_pull_expressions () =
   if
     q_return db Return_collection collection_query
     <> Query_collection
-         [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
+         [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
          ; pulled_ivan
-         ; Result_pull { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Oleg") ] }
+         ; Result_pull { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] }
          ]
   then failwith "q_return collection should support pull expressions";
   let tuple_query =
@@ -12044,7 +12048,7 @@ let test_q_find_pull_uses_named_source () =
   assert_equal_query
     "q pull find expressions can read from a named source"
     [ [ Result_entity 1
-      ; Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
+      ; Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
       ]
     ]
     (q_sources db [ "people", Db_source source ] query)
@@ -13604,8 +13608,8 @@ let test_pull_selects_requested_attributes () =
     assert_equal_int "pulled entity id" 1 entity.pulled_id;
     assert_equal_pulled_attrs
       "pull selects requested attrs"
-      [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-      ; "name", Pulled_scalar (String "Ivan")
+      [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+      ; kw "name", Pulled_scalar (String "Ivan")
       ]
       entity
 
@@ -13638,9 +13642,9 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses attr and nested ref selectors"
-       [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-       ; "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
-       ; "name", Pulled_scalar (String "Ivan")
+       [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+       ; kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+       ; kw "name", Pulled_scalar (String "Ivan")
        ]
        entity);
   let wildcard_pattern = parse_pull_pattern db (QueryFormVector [ QueryFormSymbol "*" ]) in
@@ -13649,7 +13653,7 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses wildcard selector"
-       [ "db/id", Pulled_scalar (Int 2); "name", Pulled_scalar (String "Petr") ]
+       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
        entity);
   let string_wildcard_pattern = parse_pull_pattern db (QueryFormVector [ QueryFormString "*" ]) in
   (match pull db string_wildcard_pattern (Entity_id 2) with
@@ -13657,8 +13661,27 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses string wildcard selector"
-       [ "db/id", Pulled_scalar (Int 2); "name", Pulled_scalar (String "Petr") ]
+       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
+       entity);
+  let keyword_wildcard_pattern = parse_pull_pattern db (QueryFormVector [ QueryFormKeyword "*" ]) in
+  (match pull db keyword_wildcard_pattern (Entity_id 2) with
+   | None -> failwith "expected keyword wildcard parsed pull pattern to find entity"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "parse_pull_pattern parses keyword wildcard selector"
+       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
        entity)
+
+let test_parse_pull_pattern_accepts_top_level_lists () =
+  let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
+  let pattern = parse_pull_pattern db (QueryFormList [ QueryFormKeyword "name" ]) in
+  match pull db pattern (Entity_id 1) with
+  | None -> failwith "expected list-form pull pattern to find entity"
+  | Some entity ->
+    assert_equal_pulled_attrs
+      "parse_pull_pattern accepts list-form top-level patterns"
+      [ kw "name", Pulled_scalar (String "Ivan") ]
+      entity
 
 let test_parse_pull_pattern_aliases_attributes () =
   let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
@@ -13673,8 +13696,24 @@ let test_parse_pull_pattern_aliases_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses :as attr expressions"
-      [ "display/name", Pulled_scalar (String "Ivan") ]
+      [ kw "display/name", Pulled_scalar (String "Ivan") ]
       entity
+
+let test_parse_pull_pattern_accepts_upstream_alias_value_forms () =
+  let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
+  let assert_alias pattern expected_key =
+    match pull_string db pattern (Entity_id 1) with
+    | Some entity ->
+      assert_equal_pulled_attrs
+        ("parse_pull_pattern preserves alias key for " ^ pattern)
+        [ expected_key, Pulled_scalar (String "Ivan") ]
+        entity
+    | None -> failf "expected alias pattern %s to pull the entity" pattern
+  in
+  assert_alias "[(:name :as :display/name)]" (kw "display/name");
+  assert_alias "[(:name :as \"display-name\")]" (str_key "display-name");
+  assert_alias "[(:name :as 123)]" (Int 123);
+  assert_alias "[(:name :as nil)]" Nil
 
 let test_parse_pull_pattern_defaults_attributes () =
   let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
@@ -13689,7 +13728,7 @@ let test_parse_pull_pattern_defaults_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses :default attr expressions"
-      [ "missing", Pulled_scalar (String "fallback") ]
+      [ kw "missing", Pulled_scalar (String "fallback") ]
       entity
 
 let test_parse_pull_pattern_limits_attributes () =
@@ -13713,7 +13752,7 @@ let test_parse_pull_pattern_limits_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses :limit attr expressions"
-      [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ] ]
+      [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ] ]
       entity
 
 let test_parse_pull_pattern_legacy_limit_and_default () =
@@ -13744,7 +13783,7 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses legacy limit/default expressions"
-      [ "aka", Pulled_many [ Pulled_scalar (String "IV") ]; "missing", Pulled_scalar (String "fallback") ]
+      [ kw "aka", Pulled_many [ Pulled_scalar (String "IV") ]; kw "missing", Pulled_scalar (String "fallback") ]
       entity;
   let list_pattern =
     parse_pull_pattern
@@ -13763,9 +13802,9 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses list-form legacy limit/default expressions"
-       [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-       ; "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
-       ; "missing", Pulled_scalar (String "fallback")
+       [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+       ; kw "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
+       ; kw "missing", Pulled_scalar (String "fallback")
        ]
        entity);
   (match
@@ -13778,9 +13817,9 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull_string parses EDN list-form legacy limit/default expressions"
-      [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-      ; "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
-      ; "missing", Pulled_scalar (String "fallback")
+      [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+      ; kw "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
+      ; kw "missing", Pulled_scalar (String "fallback")
       ]
       entity);
   (match
@@ -13793,9 +13832,9 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull_string parses vector string legacy limit/default expressions"
-       [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-       ; "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] } ]
-       ; "missing", Pulled_scalar (String "fallback")
+       [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+       ; kw "friend", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
+       ; kw "missing", Pulled_scalar (String "fallback")
        ]
        entity)
 
@@ -13824,10 +13863,10 @@ let test_parse_pull_pattern_list_form_attr_options () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull_string parses list-form attr options"
-      [ "Name", Pulled_scalar (String "Ivan")
-      ; "alias", Pulled_many [ Pulled_scalar (String "IV") ]
-      ; "buddy", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
-      ; "missing", Pulled_scalar (String "fallback")
+      [ str_key "Name", Pulled_scalar (String "Ivan")
+      ; kw "alias", Pulled_many [ Pulled_scalar (String "IV") ]
+      ; kw "buddy", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+      ; kw "missing", Pulled_scalar (String "fallback")
       ]
       entity
 
@@ -13851,8 +13890,8 @@ let test_parse_pull_pattern_multi_entry_map_specs () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull_string parses multi-entry map specs"
-      [ "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
-      ; "spouse", Pulled_entity { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Anna") ] }
+      [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+      ; kw "spouse", Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Anna") ] }
       ]
       entity
 
@@ -13931,7 +13970,7 @@ let test_parse_pull_pattern_unlimited_limits () =
       (QueryFormVector [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormNil ] ])
   in
   (match pull db attr_option_pattern (Entity_id 1) with
-   | Some { pulled_attrs = [ "aka", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "aka", Pulled_many values ]; _ } ->
      assert_equal_int "parse_pull_pattern parses :limit nil attr options" 1001 (List.length values)
    | _ -> failwith "expected unlimited attr option pull");
   let legacy_pattern =
@@ -13940,7 +13979,7 @@ let test_parse_pull_pattern_unlimited_limits () =
       (QueryFormVector [ QueryFormVector [ QueryFormString "limit"; QueryFormKeyword "aka"; QueryFormNil ] ])
   in
   (match pull db legacy_pattern (Entity_id 1) with
-   | Some { pulled_attrs = [ "aka", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "aka", Pulled_many values ]; _ } ->
      assert_equal_int "parse_pull_pattern parses legacy nil limits" 1001 (List.length values)
    | _ -> failwith "expected legacy unlimited pull");
   let ref_pattern =
@@ -13954,19 +13993,20 @@ let test_parse_pull_pattern_unlimited_limits () =
          ])
   in
   match pull db ref_pattern (Entity_id 1) with
-  | Some { pulled_attrs = [ "child", Pulled_many values ]; _ } ->
+  | Some { pulled_attrs = [ Keyword "child", Pulled_many values ]; _ } ->
     assert_equal_int "parse_pull_pattern parses :limit nil ref map specs" 1001 (List.length values)
   | _ -> failwith "expected unlimited ref pull"
 
 let test_parse_pull_pattern_xforms_attributes () =
   let db =
-    empty_db ()
+    empty_db ~schema:[ "aka", many ] ()
     |> db_with
          [ Entity
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "kind", One_value (Keyword "user/name")
                  ; "age", One_value (Int 42)
+                 ; "aka", Many_values [ String "Ivan"; String "Vanya" ]
                  ]
              }
          ]
@@ -14012,10 +14052,27 @@ let test_parse_pull_pattern_xforms_attributes () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses built-in :xform attr expressions"
-       [ "age/text", Pulled_scalar (String "42")
-       ; "kind/name", Pulled_scalar (String "name")
-       ; "kind/ns", Pulled_scalar (String "user")
-       ; "missing/name", Pulled_scalar (Keyword "fallback/value")
+       [ kw "age/text", Pulled_scalar (String "42")
+       ; kw "kind/name", Pulled_scalar (String "name")
+       ; kw "kind/ns", Pulled_scalar (String "user")
+       ; kw "missing/name", Pulled_scalar (Keyword "fallback/value")
+       ]
+       entity);
+  let vector_pattern =
+    parse_pull_pattern
+      db
+      (QueryFormVector
+         [ QueryFormVector [ QueryFormKeyword "kind"; QueryFormKeyword "xform"; QueryFormSymbol "vector" ]
+         ; QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "xform"; QueryFormSymbol "vector" ]
+         ])
+  in
+  (match pull db vector_pattern (Entity_id 1) with
+   | None -> failwith "expected parsed vector xform pull to find entity"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "parse_pull_pattern resolves built-in vector xform"
+       [ kw "aka", Pulled_many [ Pulled_many [ Pulled_scalar (String "Ivan"); Pulled_scalar (String "Vanya") ] ]
+       ; kw "kind", Pulled_many [ Pulled_scalar (Keyword "user/name") ]
        ]
        entity);
   assert_raises_invalid_arg
@@ -14081,14 +14138,12 @@ let test_parse_pull_pattern_xforms_ref_map_specs () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses :xform ref map specs"
-      [ "profile/children",
-        Pulled_many
-          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] }
-          ; Pulled_entity { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Thomas") ] }
+      [ kw "profile/children", Pulled_many
+          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] }
+          ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Thomas") ] }
           ]
-      ; "profile/parents",
-        Pulled_many
-          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] } ]
+      ; kw "profile/parents", Pulled_many
+          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] } ]
       ]
       entity
 
@@ -14158,9 +14213,8 @@ let test_parse_pull_pattern_expands_reverse_refs () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses reverse ref map specs"
-      [ "father",
-        Pulled_many
-          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] } ]
+      [ kw "father", Pulled_many
+          [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] } ]
       ]
       entity
 
@@ -14191,25 +14245,23 @@ let test_parse_pull_pattern_recursive_refs () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern parses numeric recursive map specs"
-      [ "name", Pulled_scalar (String "Part A")
-      ; "part",
-        Pulled_many
+      [ kw "name", Pulled_scalar (String "Part A")
+      ; kw "part", Pulled_many
           [ Pulled_entity
               { pulled_id = 2
               ; pulled_attrs =
-                  [ "name", Pulled_scalar (String "Part A.A")
-                  ; "part",
-                    Pulled_many
+                  [ kw "name", Pulled_scalar (String "Part A.A")
+                  ; kw "part", Pulled_many
                       [ Pulled_entity
                           { pulled_id = 4
-                          ; pulled_attrs = [ "name", Pulled_scalar (String "Part A.A.A") ]
+                          ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Part A.A.A") ]
                           }
                       ]
                   ]
               }
           ; Pulled_entity
               { pulled_id = 3
-              ; pulled_attrs = [ "name", Pulled_scalar (String "Part A.B") ]
+              ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Part A.B") ]
               }
           ]
       ]
@@ -14241,18 +14293,16 @@ let test_parse_pull_pattern_recursive_refs_preserve_context () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern recursive specs preserve the surrounding selector context"
-      [ "label", Pulled_scalar (String "Part A")
-      ; "part",
-        Pulled_many
+      [ kw "label", Pulled_scalar (String "Part A")
+      ; kw "part", Pulled_many
           [ Pulled_entity
               { pulled_id = 2
               ; pulled_attrs =
-                  [ "label", Pulled_scalar (String "Part A.A")
-                  ; "part",
-                    Pulled_many
+                  [ kw "label", Pulled_scalar (String "Part A.A")
+                  ; kw "part", Pulled_many
                       [ Pulled_entity
                           { pulled_id = 3
-                          ; pulled_attrs = [ "label", Pulled_scalar (String "Part A.A.A") ]
+                          ; pulled_attrs = [ Keyword "label", Pulled_scalar (String "Part A.A.A") ]
                           }
                       ]
                   ]
@@ -14286,18 +14336,16 @@ let test_parse_pull_pattern_recursive_string_ellipsis () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parse_pull_pattern treats string ellipsis as recursive pull"
-      [ "name", Pulled_scalar (String "A")
-      ; "part",
-        Pulled_entity
+      [ kw "name", Pulled_scalar (String "A")
+      ; kw "part", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "name", Pulled_scalar (String "B")
-              ; "part",
-                Pulled_entity
+              [ kw "name", Pulled_scalar (String "B")
+              ; kw "part", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ "name", Pulled_scalar (String "A")
-                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "name", Pulled_scalar (String "A")
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                       ]
                   }
               ]
@@ -14325,8 +14373,8 @@ let test_pull_aliases_selected_attributes () =
   match
     pull
       db
-      [ Pull_as (Pull_attr "name", "display/name")
-      ; Pull_as (Pull_ref ("friend", [ Pull_attr "name" ]), "profile/friend")
+      [ Pull_as (Pull_attr "name", kw "display/name")
+      ; Pull_as (Pull_ref ("friend", [ Pull_attr "name" ]), kw "profile/friend")
       ]
       (Entity_id 1)
   with
@@ -14334,12 +14382,12 @@ let test_pull_aliases_selected_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull aliases scalar and nested ref attributes"
-      [ ( "display/name"
+      [ ( kw "display/name"
         , Pulled_scalar (String "Ivan") )
-      ; ( "profile/friend"
+      ; ( kw "profile/friend"
         , Pulled_entity
             { pulled_id = 2
-            ; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ]
+            ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ]
             } )
       ]
       entity
@@ -14358,9 +14406,9 @@ let test_pull_later_duplicate_keys_replace_earlier_values () =
      pull
        db
        [ Pull_attr "name"
-       ; Pull_as (Pull_attr "nickname", "name")
-       ; Pull_as (Pull_attr "name", "display")
-       ; Pull_as (Pull_attr "nickname", "display")
+       ; Pull_as (Pull_attr "nickname", kw "name")
+       ; Pull_as (Pull_attr "name", kw "display")
+       ; Pull_as (Pull_attr "nickname", kw "display")
        ]
        (Entity_id 1)
    with
@@ -14368,7 +14416,7 @@ let test_pull_later_duplicate_keys_replace_earlier_values () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull keeps the last value for duplicate output keys"
-       [ "display", Pulled_scalar (String "Vanya"); "name", Pulled_scalar (String "Vanya") ]
+       [ kw "display", Pulled_scalar (String "Vanya"); kw "name", Pulled_scalar (String "Vanya") ]
        entity);
   let parsed_pattern =
     parse_pull_pattern
@@ -14383,7 +14431,7 @@ let test_pull_later_duplicate_keys_replace_earlier_values () =
   | Some entity ->
     assert_equal_pulled_attrs
       "parsed pull keeps the last selector for duplicate aliases"
-      [ "label", Pulled_scalar (String "Vanya") ]
+      [ kw "label", Pulled_scalar (String "Vanya") ]
       entity
 
 let test_pull_transforms_selected_attributes () =
@@ -14421,9 +14469,9 @@ let test_pull_transforms_selected_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull applies xform to scalar and many attrs"
-      [ "aka", Pulled_many [ Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ] ]
-      ; "name", Pulled_many [ Pulled_scalar (String "Ivan") ]
-      ; "unknown", Pulled_scalar (String "missing")
+      [ kw "aka", Pulled_many [ Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ] ]
+      ; kw "name", Pulled_many [ Pulled_scalar (String "Ivan") ]
+      ; kw "unknown", Pulled_scalar (String "missing")
       ]
       entity;
   let wrap_nil = function
@@ -14443,9 +14491,9 @@ let test_pull_transforms_selected_attributes () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull xform receives nil for missing attrs and refs"
-      [ "child", Pulled_many [ Pulled_scalar Nil ]
-      ; "parent", Pulled_many [ Pulled_scalar Nil ]
-      ; "unknown", Pulled_many [ Pulled_scalar Nil ]
+      [ kw "child", Pulled_many [ Pulled_scalar Nil ]
+      ; kw "parent", Pulled_many [ Pulled_scalar Nil ]
+      ; kw "unknown", Pulled_many [ Pulled_scalar Nil ]
       ]
       entity
 
@@ -14472,8 +14520,8 @@ let test_pull_default_takes_precedence_over_xform () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull default takes precedence over xform for missing attrs"
-      [ "name", Pulled_many [ Pulled_scalar (String "Ivan") ]
-      ; "unknown", Pulled_scalar (String "fallback")
+      [ kw "name", Pulled_many [ Pulled_scalar (String "Ivan") ]
+      ; kw "unknown", Pulled_scalar (String "fallback")
       ]
       entity
 
@@ -14503,9 +14551,9 @@ let test_pull_attr_default_and_limit () =
   | Some entity ->
     assert_equal_pulled_attrs
       "pull supports defaults for missing attrs and limits many attrs"
-      [ "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
-      ; "missing", Pulled_scalar (String "n/a")
-      ; "name", Pulled_scalar (String "Ivan")
+      [ kw "aka", Pulled_many [ Pulled_scalar (String "IV"); Pulled_scalar (String "Terrible") ]
+      ; kw "missing", Pulled_scalar (String "n/a")
+      ; kw "name", Pulled_scalar (String "Ivan")
       ]
       entity
 
@@ -14525,14 +14573,14 @@ let test_pull_ref_default_expands_existing_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull ref default returns default when the ref attr is missing"
-       [ "child", Pulled_scalar (String "[child]") ]
+       [ kw "child", Pulled_scalar (String "[child]") ]
        entity
    | None -> failwith "expected default pull result");
   match pull db [ Pull_ref_default ("child", [ Pull_attr "name" ], String "[child]") ] (Entity_id 2) with
   | Some entity ->
     assert_equal_pulled_attrs
       "pull ref default expands existing ref attrs"
-      [ "child", Pulled_entity { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Thomas") ] } ]
+      [ kw "child", Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Thomas") ] } ]
       entity
   | None -> failwith "expected ref pull result"
 
@@ -14552,14 +14600,14 @@ let test_pull_reverse_ref_default_expands_existing_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull reverse ref default returns default when no incoming refs exist"
-       [ "child", Pulled_scalar (String "[parent]") ]
+       [ kw "child", Pulled_scalar (String "[parent]") ]
        entity
    | None -> failwith "expected reverse default pull result");
   match pull db [ Pull_reverse_ref_default ("child", [ Pull_attr "name" ], String "[parent]") ] (Entity_id 3) with
   | Some entity ->
     assert_equal_pulled_attrs
       "pull reverse ref default expands existing incoming refs"
-      [ "child", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] } ] ]
+      [ kw "child", Pulled_many [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] } ] ]
       entity
   | None -> failwith "expected reverse ref pull result"
 
@@ -14573,15 +14621,15 @@ let test_pull_applies_default_limit () =
          [ Entity { db_id = Some (Entity_id 1); attrs = [ "aka", Many_values many_akas ] } ]
   in
   (match pull db [ Pull_attr "aka" ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "aka", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "aka", Pulled_many values ]; _ } ->
      assert_equal_int "pull default limit" 1000 (List.length values)
    | _ -> failwith "expected default-limited many attr");
   (match pull db [ Pull_attr_limit ("aka", 1001) ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "aka", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "aka", Pulled_many values ]; _ } ->
      assert_equal_int "pull explicit limit can increase default" 1001 (List.length values)
    | _ -> failwith "expected explicit-limited many attr");
   (match pull db [ Pull_attr_unlimited "aka" ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "aka", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "aka", Pulled_many values ]; _ } ->
      assert_equal_int "pull explicit unlimited limit" 1001 (List.length values)
    | _ -> failwith "expected explicit-limited many attr");
   let child_refs = List.init 1001 (fun index -> Ref (index + 2)) in
@@ -14600,11 +14648,11 @@ let test_pull_applies_default_limit () =
           :: child_entities)
   in
   (match pull ref_db [ Pull_ref ("child", [ Pull_id ]) ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "child", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "child", Pulled_many values ]; _ } ->
      assert_equal_int "pull default limit applies to many ref expansion" 1000 (List.length values)
    | _ -> failwith "expected default-limited many ref attr");
   (match pull ref_db [ Pull_ref_limit ("child", [ Pull_id ], 1001) ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "child", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "child", Pulled_many values ]; _ } ->
      assert_equal_int "pull explicit limit can increase many ref expansion" 1001 (List.length values)
    | _ -> failwith "expected explicit-limited many ref attr");
   let reverse_db =
@@ -14618,11 +14666,11 @@ let test_pull_applies_default_limit () =
               }))
   in
   (match pull reverse_db [ Pull_reverse_ref ("parent", [ Pull_id ]) ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "parent", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "parent", Pulled_many values ]; _ } ->
      assert_equal_int "pull default limit applies to reverse ref expansion" 1000 (List.length values)
    | _ -> failwith "expected default-limited reverse ref attr");
   (match pull reverse_db [ Pull_reverse_ref_limit ("parent", [ Pull_id ], 1001) ] (Entity_id 1) with
-   | Some { pulled_attrs = [ "parent", Pulled_many values ]; _ } ->
+   | Some { pulled_attrs = [ Keyword "parent", Pulled_many values ]; _ } ->
      assert_equal_int "pull explicit limit can increase reverse ref expansion" 1001 (List.length values)
    | _ -> failwith "expected explicit-limited reverse ref attr")
 
@@ -14642,7 +14690,7 @@ let test_pull_drops_empty_results () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull should drop ref entities whose nested selector returns no attrs"
-       [ "name", Pulled_scalar (String "Petr") ]
+       [ kw "name", Pulled_scalar (String "Petr") ]
        entity)
 
 let test_pull_drops_empty_cardinality_one_ref_results () =
@@ -14658,7 +14706,7 @@ let test_pull_drops_empty_cardinality_one_ref_results () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull should drop cardinality-one ref when nested selector returns no attrs"
-       [ "name", Pulled_scalar (String "David") ]
+       [ kw "name", Pulled_scalar (String "David") ]
        entity)
 
 let test_pull_expands_forward_and_reverse_refs () =
@@ -14687,12 +14735,11 @@ let test_pull_expands_forward_and_reverse_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull expands forward refs"
-       [ "child",
-         Pulled_many
-           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] }
-           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Thomas") ] }
+       [ kw "child", Pulled_many
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] }
+           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Thomas") ] }
            ]
-       ; "name", Pulled_scalar (String "Petr")
+       ; kw "name", Pulled_scalar (String "Petr")
        ]
        entity);
   (match pull db [ Pull_attr "name"; Pull_reverse_ref ("father", [ Pull_attr "name" ]) ] (Entity_id 1) with
@@ -14700,15 +14747,14 @@ let test_pull_expands_forward_and_reverse_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull expands reverse refs"
-       [ "father",
-         Pulled_many
-           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "David") ] } ]
-       ; "name", Pulled_scalar (String "Petr")
+       [ kw "father", Pulled_many
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "David") ] } ]
+       ; kw "name", Pulled_scalar (String "Petr")
        ]
        entity);
   let ref_names = function
     | Pulled_entity { pulled_attrs; _ } ->
-      (match List.assoc_opt "name" pulled_attrs with
+      (match List.assoc_opt (kw "name") pulled_attrs with
        | Some (Pulled_scalar name) -> Pulled_scalar name
        | _ -> Pulled_many [])
     | Pulled_many values ->
@@ -14716,7 +14762,7 @@ let test_pull_expands_forward_and_reverse_refs () =
         (List.filter_map
            (function
              | Pulled_entity { pulled_attrs; _ } ->
-               (match List.assoc_opt "name" pulled_attrs with
+               (match List.assoc_opt (kw "name") pulled_attrs with
                 | Some (Pulled_scalar name) -> Some (Pulled_scalar name)
                 | _ -> None)
              | _ -> None)
@@ -14741,9 +14787,9 @@ let test_pull_expands_forward_and_reverse_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "pull xform transforms forward and reverse ref expansions"
-       [ "child", Pulled_many [ Pulled_scalar (String "David"); Pulled_scalar (String "Thomas") ]
-       ; "father", Pulled_many [ Pulled_scalar (String "David") ]
-       ; "unknown-child", Pulled_scalar (String "missing")
+       [ kw "child", Pulled_many [ Pulled_scalar (String "David"); Pulled_scalar (String "Thomas") ]
+       ; kw "father", Pulled_many [ Pulled_scalar (String "David") ]
+       ; kw "unknown-child", Pulled_scalar (String "missing")
        ]
        entity)
 
@@ -14759,7 +14805,7 @@ let test_pull_reverse_component_returns_single_entity () =
   | Some entity ->
     assert_equal_pulled_attrs
       "reverse component pull returns a single entity"
-      [ "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] } ]
+      [ kw "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] } ]
       entity
   | None -> failwith "expected pull result"
 
@@ -14776,18 +14822,18 @@ let test_pull_component_attr_expands_recursively () =
   | Some entity ->
     assert_equal_pulled_attrs
       "component attr pull expands recursively"
-      [ ( "profile"
+      [ ( kw "profile"
         , Pulled_entity
             { pulled_id = 2
             ; pulled_attrs =
-                [ "db/id", Pulled_scalar (Int 2)
-                ; "email", Pulled_scalar (String "ivan@example.com")
-                ; ( "profile"
+                [ kw "db/id", Pulled_scalar (Int 2)
+                ; kw "email", Pulled_scalar (String "ivan@example.com")
+                ; ( kw "profile"
                   , Pulled_entity
                       { pulled_id = 3
                       ; pulled_attrs =
-                          [ "db/id", Pulled_scalar (Int 3)
-                          ; "email", Pulled_scalar (String "nested@example.com")
+                          [ kw "db/id", Pulled_scalar (Int 3)
+                          ; kw "email", Pulled_scalar (String "nested@example.com")
                           ]
                       } )
                 ]
@@ -14814,13 +14860,13 @@ let test_pull_component_attr_returns_id_stub_for_cycles () =
   | Some entity ->
     assert_equal_pulled_attrs
       "component attr pull returns id-only stubs for cycles"
-      [ ( "profile"
+      [ ( kw "profile"
         , Pulled_entity
             { pulled_id = 2
             ; pulled_attrs =
-                [ "db/id", Pulled_scalar (Int 2)
-                ; "email", Pulled_scalar (String "ivan@example.com")
-                ; "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ "db/id", Pulled_scalar (Int 1) ] }
+                [ kw "db/id", Pulled_scalar (Int 2)
+                ; kw "email", Pulled_scalar (String "ivan@example.com")
+                ; kw "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1) ] }
                 ]
             } )
       ]
@@ -14851,7 +14897,7 @@ let test_pull_nested_component_can_expand_reverse_component_ref () =
           , [ Pull_attr "name"
             ; Pull_ref
                 ( "ref"
-                , [ Pull_attr "name"; Pull_as (Pull_reverse_ref ("ref", [ Pull_attr "name" ]), "_ref") ] )
+                , [ Pull_attr "name"; Pull_as (Pull_reverse_ref ("ref", [ Pull_attr "name" ]), kw "_ref") ] )
             ] )
       ]
       (Entity_id 1)
@@ -14859,20 +14905,20 @@ let test_pull_nested_component_can_expand_reverse_component_ref () =
   | Some entity ->
     assert_equal_pulled_attrs
       "nested component pull can expand reverse component refs"
-      [ "name", Pulled_scalar (String "1")
-      ; ( "ref"
+      [ kw "name", Pulled_scalar (String "1")
+      ; ( kw "ref"
         , Pulled_entity
             { pulled_id = 2
             ; pulled_attrs =
-                [ "name", Pulled_scalar (String "2")
-                ; ( "ref"
+                [ kw "name", Pulled_scalar (String "2")
+                ; ( kw "ref"
                   , Pulled_entity
                       { pulled_id = 3
                       ; pulled_attrs =
-                          [ ( "_ref"
+                          [ ( kw "_ref"
                             , Pulled_entity
-                                { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "2") ] } )
-                          ; "name", Pulled_scalar (String "3")
+                                { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "2") ] } )
+                          ; kw "name", Pulled_scalar (String "3")
                           ]
                       } )
                 ]
@@ -14902,21 +14948,34 @@ let test_pull_id_and_wildcard () =
    | Some entity ->
      assert_equal_pulled_attrs
        "Pull_id returns db/id"
-       [ "db/id", Pulled_scalar (Int 1) ]
+       [ kw "db/id", Pulled_scalar (Int 1) ]
        entity);
   (match pull db [ Pull_wildcard ] (Entity_id 1) with
    | None -> failwith "expected wildcard pull"
    | Some entity ->
      assert_equal_pulled_attrs
        "Pull_wildcard returns all current attrs and shallow refs"
-       [ "aka", Pulled_many [ Pulled_scalar (String "Devil"); Pulled_scalar (String "Tupen") ]
-       ; "child",
-         Pulled_many
-           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
-           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ "db/id", Pulled_scalar (Int 3) ] }
+       [ kw "aka", Pulled_many [ Pulled_scalar (String "Devil"); Pulled_scalar (String "Tupen") ]
+       ; kw "child", Pulled_many
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
            ]
-       ; "db/id", Pulled_scalar (Int 1)
-       ; "name", Pulled_scalar (String "Petr")
+       ; kw "db/id", Pulled_scalar (Int 1)
+       ; kw "name", Pulled_scalar (String "Petr")
+       ]
+       entity);
+  (match pull_string db "[[:aka :as :alias] [:name :as :first-name] *]" (Entity_id 1) with
+   | None -> failwith "expected parsed alias wildcard pull"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "Pull_wildcard does not re-emit attrs selected with aliases"
+       [ kw "alias", Pulled_many [ Pulled_scalar (String "Devil"); Pulled_scalar (String "Tupen") ]
+       ; kw "child", Pulled_many
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
+           ]
+       ; kw "db/id", Pulled_scalar (Int 1)
+       ; kw "first-name", Pulled_scalar (String "Petr")
        ]
        entity);
   match pull db [ Pull_attr "_child" ] (Entity_id 2) with
@@ -14924,9 +14983,8 @@ let test_pull_id_and_wildcard () =
   | Some entity ->
     assert_equal_pulled_attrs
       "Pull_attr returns db/id stubs for shallow reverse refs"
-      [ "_child",
-        Pulled_many
-          [ Pulled_entity { pulled_id = 1; pulled_attrs = [ "db/id", Pulled_scalar (Int 1) ] } ]
+      [ kw "_child", Pulled_many
+          [ Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1) ] } ]
       ]
       entity
 
@@ -14953,7 +15011,6 @@ let test_pull_reports_visitor_events () =
     <> [ PullVisitAttr (2, "name")
        ; PullVisitReverse ("child", 2)
        ; PullVisitWildcard 2
-       ; PullVisitAttr (2, "name")
        ]
   then
     failwith "pull should report attr, reverse, and wildcard visitor events";
@@ -15002,25 +15059,23 @@ let test_pull_recursive_ref_with_depth_limit () =
   | Some entity ->
     assert_equal_pulled_attrs
       "recursive pull respects depth limit"
-      [ "name", Pulled_scalar (String "Part A")
-      ; "part",
-        Pulled_many
+      [ kw "name", Pulled_scalar (String "Part A")
+      ; kw "part", Pulled_many
           [ Pulled_entity
               { pulled_id = 2
               ; pulled_attrs =
-                  [ "name", Pulled_scalar (String "Part A.A")
-                  ; "part",
-                    Pulled_many
+                  [ kw "name", Pulled_scalar (String "Part A.A")
+                  ; kw "part", Pulled_many
                       [ Pulled_entity
                           { pulled_id = 4
-                          ; pulled_attrs = [ "name", Pulled_scalar (String "Part A.A.A") ]
+                          ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Part A.A.A") ]
                           }
                       ]
                   ]
               }
           ; Pulled_entity
               { pulled_id = 3
-              ; pulled_attrs = [ "name", Pulled_scalar (String "Part A.B") ]
+              ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Part A.B") ]
               }
           ]
       ]
@@ -15045,18 +15100,16 @@ let test_pull_recursive_ref_avoids_cycles () =
   | Some entity ->
     assert_equal_pulled_attrs
       "recursive pull expands the seen root once before returning id stubs"
-      [ "name", Pulled_scalar (String "A")
-      ; "part",
-        Pulled_entity
+      [ kw "name", Pulled_scalar (String "A")
+      ; kw "part", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "name", Pulled_scalar (String "B")
-              ; "part",
-                Pulled_entity
+              [ kw "name", Pulled_scalar (String "B")
+              ; kw "part", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ "name", Pulled_scalar (String "A")
-                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "name", Pulled_scalar (String "A")
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                       ]
                   }
               ]
@@ -15092,15 +15145,13 @@ let test_pull_recursive_refs_share_pattern_context () =
   | Some entity ->
     assert_equal_pulled_attrs
       "recursive pull keeps sibling recursive branches in child entities"
-      [ "name", Pulled_scalar (String "Root")
-      ; "part",
-        Pulled_entity
+      [ kw "name", Pulled_scalar (String "Root")
+      ; kw "part", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "name", Pulled_scalar (String "Part")
-              ; "spec",
-                Pulled_entity
-                  { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Spec") ] }
+              [ kw "name", Pulled_scalar (String "Part")
+              ; kw "spec", Pulled_entity
+                  { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Spec") ] }
               ]
           }
       ]
@@ -15129,20 +15180,17 @@ let test_pull_recursive_ref_depth_preserves_sibling_context () =
   | Some entity ->
     assert_equal_pulled_attrs
       "exhausting one recursive attr depth should preserve sibling recursive attrs"
-      [ "db/id", Pulled_scalar (Int 1)
-      ; "friend",
-        Pulled_entity
+      [ kw "db/id", Pulled_scalar (Int 1)
+      ; kw "friend", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "db/id", Pulled_scalar (Int 2)
-              ; "enemy",
-                Pulled_entity
+              [ kw "db/id", Pulled_scalar (Int 2)
+              ; kw "enemy", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 3)
-                      ; "friend",
-                        Pulled_entity
-                          { pulled_id = 4; pulled_attrs = [ "db/id", Pulled_scalar (Int 4) ] }
+                      [ kw "db/id", Pulled_scalar (Int 3)
+                      ; kw "friend", Pulled_entity
+                          { pulled_id = 4; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 4) ] }
                       ]
                   }
               ]
@@ -15174,8 +15222,8 @@ let test_pull_dual_recursion_respects_independent_depths () =
    | Some entity ->
      assert_equal_pulled_attrs
        "unbounded recursion follows only the selected recursive attr"
-       [ "db/id", Pulled_scalar (Int 1)
-       ; "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+       [ kw "db/id", Pulled_scalar (Int 1)
+       ; kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
        ]
        entity);
   (match
@@ -15191,13 +15239,12 @@ let test_pull_dual_recursion_respects_independent_depths () =
    | Some entity ->
      assert_equal_pulled_attrs
        "dual recursion follows each attr at depth one"
-       [ "db/id", Pulled_scalar (Int 1)
-       ; "friend",
-         Pulled_entity
+       [ kw "db/id", Pulled_scalar (Int 1)
+       ; kw "friend", Pulled_entity
            { pulled_id = 2
            ; pulled_attrs =
-               [ "db/id", Pulled_scalar (Int 2)
-               ; "enemy", Pulled_entity { pulled_id = 3; pulled_attrs = [ "db/id", Pulled_scalar (Int 3) ] }
+               [ kw "db/id", Pulled_scalar (Int 2)
+               ; kw "enemy", Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
                ]
            }
        ]
@@ -15215,25 +15262,21 @@ let test_pull_dual_recursion_respects_independent_depths () =
   | Some entity ->
     assert_equal_pulled_attrs
       "dual recursion tracks attr depths independently"
-      [ "db/id", Pulled_scalar (Int 1)
-      ; "friend",
-        Pulled_entity
+      [ kw "db/id", Pulled_scalar (Int 1)
+      ; kw "friend", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "db/id", Pulled_scalar (Int 2)
-              ; "enemy",
-                Pulled_entity
+              [ kw "db/id", Pulled_scalar (Int 2)
+              ; kw "enemy", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 3)
-                      ; "friend",
-                        Pulled_entity
+                      [ kw "db/id", Pulled_scalar (Int 3)
+                      ; kw "friend", Pulled_entity
                           { pulled_id = 4
                           ; pulled_attrs =
-                              [ "db/id", Pulled_scalar (Int 4)
-                              ; "enemy",
-                                Pulled_entity
-                                  { pulled_id = 5; pulled_attrs = [ "db/id", Pulled_scalar (Int 5) ] }
+                              [ kw "db/id", Pulled_scalar (Int 4)
+                              ; kw "enemy", Pulled_entity
+                                  { pulled_id = 5; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 5) ] }
                               ]
                           }
                       ]
@@ -15267,67 +15310,59 @@ let test_pull_dual_recursion_tracks_cycles_per_branch () =
   | Some entity ->
     assert_equal_pulled_attrs
       "dual recursion tracks seen ids independently for sibling branches"
-      [ "db/id", Pulled_scalar (Int 1)
-      ; "part",
-        Pulled_entity
+      [ kw "db/id", Pulled_scalar (Int 1)
+      ; kw "part", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "db/id", Pulled_scalar (Int 2)
-              ; "part",
-                Pulled_entity
+              [ kw "db/id", Pulled_scalar (Int 2)
+              ; kw "part", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 3)
-                      ; "part",
-                        Pulled_entity
+                      [ kw "db/id", Pulled_scalar (Int 3)
+                      ; kw "part", Pulled_entity
                           { pulled_id = 1
                           ; pulled_attrs =
-                              [ "db/id", Pulled_scalar (Int 1)
-                              ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
-                              ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              [ kw "db/id", Pulled_scalar (Int 1)
+                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                               ]
                           }
                       ]
                   }
-              ; "spec",
-                Pulled_entity
+              ; kw "spec", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 1)
-                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
-                      ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "db/id", Pulled_scalar (Int 1)
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                       ]
                   }
               ]
           }
-      ; "spec",
-        Pulled_entity
+      ; kw "spec", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ "db/id", Pulled_scalar (Int 2)
-              ; "part",
-                Pulled_entity
+              [ kw "db/id", Pulled_scalar (Int 2)
+              ; kw "part", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 3)
-                      ; "part",
-                        Pulled_entity
+                      [ kw "db/id", Pulled_scalar (Int 3)
+                      ; kw "part", Pulled_entity
                           { pulled_id = 1
                           ; pulled_attrs =
-                              [ "db/id", Pulled_scalar (Int 1)
-                              ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
-                              ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              [ kw "db/id", Pulled_scalar (Int 1)
+                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                               ]
                           }
                       ]
                   }
-              ; "spec",
-                Pulled_entity
+              ; kw "spec", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ "db/id", Pulled_scalar (Int 1)
-                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
-                      ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "db/id", Pulled_scalar (Int 1)
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
                       ]
                   }
               ]
@@ -15356,11 +15391,11 @@ let test_pull_deep_recursion_reaches_leaf () =
   in
   let rec last_friend_name remaining = function
     | Pulled_entity entity when remaining = 0 ->
-      (match List.assoc_opt "name" entity.pulled_attrs with
+      (match List.assoc_opt (kw "name") entity.pulled_attrs with
        | Some (Pulled_scalar (String name)) -> Some name
        | _ -> None)
     | Pulled_entity entity ->
-      (match List.assoc_opt "friend" entity.pulled_attrs with
+      (match List.assoc_opt (kw "friend") entity.pulled_attrs with
        | Some next -> last_friend_name (remaining - 1) next
        | None -> None)
     | Pulled_scalar _ | Pulled_many _ -> None
@@ -15403,41 +15438,37 @@ let test_pull_recursive_reverse_ref () =
    | Some entity ->
      assert_equal_pulled_attrs
        "recursive pull follows reverse refs"
-       [ "_friend",
-         Pulled_many
+       [ kw "_friend", Pulled_many
            [ Pulled_entity
                { pulled_id = 7
                ; pulled_attrs =
-                   [ "_friend",
-                     Pulled_many
+                   [ kw "_friend", Pulled_many
                        [ Pulled_entity
                            { pulled_id = 6
                            ; pulled_attrs =
-                               [ "_friend",
-                                 Pulled_many
+                               [ kw "_friend", Pulled_many
                                    [ Pulled_entity
                                        { pulled_id = 5
                                        ; pulled_attrs =
-                                           [ "_friend",
-                                             Pulled_many
+                                           [ kw "_friend", Pulled_many
                                                [ Pulled_entity
                                                    { pulled_id = 4
-                                                   ; pulled_attrs = [ "db/id", Pulled_scalar (Int 4) ]
+                                                   ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 4) ]
                                                    }
                                                ]
-                                           ; "db/id", Pulled_scalar (Int 5)
+                                           ; kw "db/id", Pulled_scalar (Int 5)
                                            ]
                                        }
                                    ]
-                               ; "db/id", Pulled_scalar (Int 6)
+                               ; kw "db/id", Pulled_scalar (Int 6)
                                ]
                            }
                        ]
-                   ; "db/id", Pulled_scalar (Int 7)
+                   ; kw "db/id", Pulled_scalar (Int 7)
                    ]
                }
            ]
-       ; "db/id", Pulled_scalar (Int 8)
+       ; kw "db/id", Pulled_scalar (Int 8)
        ]
        entity);
   match pull db [ Pull_id; Pull_recursive_ref ("_friend", [ Pull_id ], Some 2) ] (Entity_id 8) with
@@ -15445,23 +15476,21 @@ let test_pull_recursive_reverse_ref () =
   | Some entity ->
     assert_equal_pulled_attrs
       "recursive pull limits reverse refs"
-      [ "_friend",
-        Pulled_many
+      [ kw "_friend", Pulled_many
           [ Pulled_entity
               { pulled_id = 7
               ; pulled_attrs =
-                  [ "_friend",
-                    Pulled_many
+                  [ kw "_friend", Pulled_many
                       [ Pulled_entity
                           { pulled_id = 6
-                          ; pulled_attrs = [ "db/id", Pulled_scalar (Int 6) ]
+                          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 6) ]
                           }
                       ]
-                  ; "db/id", Pulled_scalar (Int 7)
+                  ; kw "db/id", Pulled_scalar (Int 7)
                   ]
               }
           ]
-      ; "db/id", Pulled_scalar (Int 8)
+      ; kw "db/id", Pulled_scalar (Int 8)
       ]
       entity
 
@@ -15476,7 +15505,7 @@ let test_pull_many_preserves_missing_entities () =
   let names =
     pull_many db [ Pull_attr "name" ] [ Entity_id 2; Entity_id 99; Entity_id 1 ]
     |> List.map (function
-      | Some entity -> Some (entity.pulled_id, List.assoc_opt "name" entity.pulled_attrs)
+      | Some entity -> Some (entity.pulled_id, List.assoc_opt (kw "name") entity.pulled_attrs)
       | None -> None)
   in
   if
@@ -15508,7 +15537,7 @@ let test_filter_limits_read_apis () =
    | Some entity ->
      assert_equal_pulled_attrs
        "filtered pull reads visible attrs"
-       [ "name", Pulled_scalar (String "Ivan") ]
+       [ kw "name", Pulled_scalar (String "Ivan") ]
        entity
    | None -> failwith "filtered pull should find visible entity");
   let query =
@@ -16660,7 +16689,9 @@ let () =
   test_retract_attr_removes_component_values ();
   test_pull_selects_requested_attributes ();
   test_parse_pull_pattern_selects_attributes_and_refs ();
+  test_parse_pull_pattern_accepts_top_level_lists ();
   test_parse_pull_pattern_aliases_attributes ();
+  test_parse_pull_pattern_accepts_upstream_alias_value_forms ();
   test_parse_pull_pattern_defaults_attributes ();
   test_parse_pull_pattern_limits_attributes ();
   test_parse_pull_pattern_legacy_limit_and_default ();

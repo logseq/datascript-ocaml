@@ -100,8 +100,10 @@ type entity = Datascript_types.entity =
 
 type pulled_entity = Datascript_types.pulled_entity =
   { pulled_id : entity_id
-  ; pulled_attrs : (attr * pulled_value) list
+  ; pulled_attrs : (pull_key * pulled_value) list
   }
+
+and pull_key = Datascript_types.pull_key
 
 and pulled_value = Datascript_types.pulled_value =
   | Pulled_scalar of value
@@ -133,7 +135,7 @@ type pull_selector = Datascript_types.pull_selector =
   | Pull_reverse_ref_limit of attr * pull_selector list * int
   | Pull_reverse_ref_unlimited of attr * pull_selector list
   | Pull_reverse_ref_xform of attr * pull_selector list * (pulled_value -> pulled_value)
-  | Pull_as of pull_selector * attr
+  | Pull_as of pull_selector * pull_key
 
 type query_term = Datascript_types.query_term =
   | QVar of string
