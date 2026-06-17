@@ -58,11 +58,7 @@ let assert_equal_int label expected actual =
 
 let assert_equal_query label expected actual =
   if expected <> actual then
-    failf
-      "%s: expected %d row(s), got %d row(s)"
-      label
-      (List.length expected)
-      (List.length actual)
+    failf "%s: unexpected query result" label
 
 let many =
   { cardinality = Many
@@ -196,6 +192,113 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
         "SQLite storage persists retracts after restore"
         [ [ Result_value (String "Tupen") ] ]
         (q_string restored_again "[:find ?aka :where [1 :aka ?aka]]"))
+
+let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed filter/entity/rules test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let schema =
+        [ "name", unique_identity
+        ; "age", indexed
+        ; "aka", many
+        ; "tag", many
+        ; "password", indexed
+        ; "friend", ref_attr
+        ]
+      in
+      let conn = create_conn ~schema ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 1, "age", Int 25)
+           ; Add (Entity_id 1, "aka", String "Terrible")
+           ; Add (Entity_id 1, "aka", String "IV")
+           ; Add (Entity_id 1, "password", String "<PROTECTED>")
+           ; Add (Entity_id 1, "friend", Ref 2)
+           ; Add (Entity_id 2, "name", String "Petr")
+           ; Add (Entity_id 2, "age", Int 37)
+           ; Add (Entity_id 2, "password", String "<SECRET>")
+           ; Add (Entity_id 3, "name", String "Nikolai")
+           ; Add (Entity_id 3, "age", Int 7)
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for filter/entity/rules test"
+      in
+      let visible =
+        filter (conn_db restored) (fun _ datom -> datom.a <> "password" && datom.e <> 3)
+      in
+      assert_equal_query
+        "SQLite restored filtered db hides password attrs in queries"
+        []
+        (q_string visible "[:find ?password :where [_ :password ?password]]");
+      assert_equal_query
+        "SQLite restored filtered db hides filtered entities in joins"
+        [ [ Result_value (String "Ivan") ]; [ Result_value (String "Petr") ] ]
+        (q_string visible "[:find ?name :where [?e :name ?name]]");
+      (match entity visible (Lookup_ref ("name", String "Ivan")) with
+       | None -> failwith "SQLite restored filtered db should resolve visible lookup refs"
+       | Some entity ->
+         (match entity_attr entity "password" with
+          | None -> ()
+          | Some _ -> failwith "SQLite restored filtered entity should hide password attr");
+         (match entity_attr entity "friend" with
+          | Some (One_entity friend) when friend.db_id = Some (Entity_id 2) -> ()
+          | _ -> failwith "SQLite restored filtered entity should navigate visible refs"));
+      assert_equal_query
+        "SQLite restored db supports structured rule queries"
+        [ [ Result_value (String "Petr") ] ]
+        (q
+           (conn_db restored)
+           { find = [ Find_var "friend_name" ]
+           ; inputs = []
+           ; with_vars = []
+           ; rules =
+               [ { rule_name = "friend-name"
+                 ; rule_params = [ "e"; "friend_name" ]
+                 ; rule_body =
+                     [ Pattern (QVar "e", QAttr "friend", QVar "friend")
+                     ; Pattern (QVar "friend", QAttr "name", QVar "friend_name")
+                     ]
+                 }
+               ]
+           ; where =
+               [ Pattern (QVar "e", QAttr "name", QValue (String "Ivan"))
+               ; Rule ("friend-name", [ QVar "e"; QVar "friend_name" ])
+               ]
+           });
+      ignore
+        (transact_conn
+           restored
+           [ Add (Lookup_ref ("name", String "Ivan"), "tag", String "restored")
+           ; Add (Entity_id 4, "name", String "Nina")
+           ; Add (Entity_id 4, "age", Int 42)
+           ; Add (Lookup_ref ("name", String "Ivan"), "friend", Ref 4)
+           ]);
+      let restored_again =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn after repeated transacts"
+      in
+      assert_equal_query
+        "SQLite storage persists repeated lookup-ref transacts"
+        [ [ Result_value (String "restored") ] ]
+        (q_string
+           (conn_db restored_again)
+           "[:find ?tag :where [?e :name \"Ivan\"] [?e :tag ?tag]]");
+      assert_equal_query
+        "SQLite storage persists cardinality-one ref replacement"
+        [ [ Result_value (String "Nina") ] ]
+        (q_string
+           (conn_db restored_again)
+           "[:find ?friend-name
+             :where [?e :name \"Ivan\"]
+                    [?e :friend ?friend]
+                    [?friend :name ?friend-name]]"))
 
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
@@ -378,6 +481,7 @@ let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
+  test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

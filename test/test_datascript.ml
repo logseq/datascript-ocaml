@@ -16442,6 +16442,129 @@ let test_filter_predicates_read_unfiltered_db_like_upstream () =
     [ [ Result_value (String "Great") ]; [ Result_value (String "II") ] ]
     (q_string (filter db remove_ivan |> fun db -> filter db long_akas) aka_query)
 
+let test_filter_and_entity_upstream_edge_parity_batch () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "aka", many; "age", indexed; "password", indexed ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "age", One_value (Int 44)
+                 ; "aka", Many_values [ String "I"; String "Great" ]
+                 ; "password", One_value (String "<SECRET>")
+                 ; "huh?", One_value (Bool false)
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "age", One_value (Int 25)
+                 ; "aka", Many_values [ String "Terrible"; String "IV" ]
+                 ; "password", One_value (String "<PROTECTED>")
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 3)
+             ; attrs =
+                 [ "name", One_value (String "Nikolai")
+                 ; "age", One_value (Int 7)
+                 ; "aka", Many_values [ String "II" ]
+                 ; "password", One_value (String "<UNKNOWN>")
+                 ]
+             }
+         ]
+  in
+  let query attr = Printf.sprintf "[:find ?v :where [_ :%s ?v]]" attr in
+  let name_query = query "name" in
+  let aka_query = query "aka" in
+  let password_query = query "password" in
+  let names db = q_string db name_query in
+  let remove_pass _ datom = datom.a <> "password" in
+  let remove_ivan _ datom = datom.e <> 2 in
+  let age_of db entity_id =
+    match entity db (Entity_id entity_id) with
+    | Some entity ->
+      (match entity_attr entity "age" with
+       | Some (One_value (Int age)) -> Some age
+       | _ -> None)
+    | None -> None
+  in
+  let aka_count db entity_id =
+    match entity db (Entity_id entity_id) with
+    | Some entity ->
+      (match entity_attr entity "aka" with
+       | Some (Many_values values) -> List.length values
+       | Some (One_value _) -> 1
+       | _ -> 0)
+    | None -> 0
+  in
+  let has_age unfiltered_db datom = Option.is_some (age_of unfiltered_db datom.e) in
+  let adult unfiltered_db datom =
+    match age_of unfiltered_db datom.e with
+    | Some age -> age >= 18
+    | None -> false
+  in
+  let long_akas unfiltered_db datom =
+    datom.a <> "aka" || aka_count unfiltered_db datom.e <= 1 ||
+    match datom.v with
+    | String value -> String.length value >= 4
+    | _ -> false
+  in
+  assert_equal_query_set
+    "filter remove-pass hides password values from queries"
+    []
+    (q_string (filter db remove_pass) password_query);
+  assert_equal_triples
+    "filter remove-pass hides password values from AVET index reads"
+    []
+    (datoms (filter db remove_pass) Avet ~a:"password" ());
+  assert_equal_query_set
+    "filter remove-ivan hides one entity across query results"
+    [ [ Result_value (String "Petr") ]; [ Result_value (String "Nikolai") ] ]
+    (names (filter db remove_ivan));
+  assert_equal_triples
+    "filter remove-ivan hides one entity across direct EAVT reads"
+    []
+    (datoms (filter db remove_ivan) Eavt ~e:2 ());
+  assert_equal_query_set
+    "filter long-akas can inspect the unfiltered db"
+    [ [ Result_value (String "Great") ]
+    ; [ Result_value (String "Terrible") ]
+    ; [ Result_value (String "II") ]
+    ]
+    (q_string (filter db long_akas) aka_query);
+  assert_equal_query_set
+    "composed filters still pass the unfiltered db to later predicates"
+    [ [ Result_value (String "Great") ]; [ Result_value (String "II") ] ]
+    (q_string (filter db remove_ivan |> fun db -> filter db long_akas) aka_query);
+  assert_equal_query_set
+    "double filters support predicates that inspect entity attrs"
+    [ [ Result_value (String "Petr") ]; [ Result_value (String "Ivan") ] ]
+    (names (filter db has_age |> fun db -> filter db adult));
+  (match entity (filter db remove_pass) (Entity_id 1) with
+   | None -> failwith "filtered db should still expose visible entity attrs"
+   | Some entity ->
+     assert_equal_tx_value
+       "filtered entity hides removed attr"
+       None
+       (entity_attr entity "password");
+     assert_equal_tx_value
+       "filtered entity preserves false values"
+       (Some (One_value (Bool false)))
+       (entity_attr entity "huh?"));
+  (match entity db (Lookup_ref ("name", String "missing")) with
+   | None -> ()
+   | Some _ -> failwith "missing unique lookup-ref entity should return None");
+  (match pull db [ Pull_attr "huh?" ] (Entity_id 1) with
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "pull preserves false scalar values"
+       [ kw "huh?", Pulled_scalar (Bool false) ]
+       entity
+   | None -> failwith "expected pull to find entity with false value")
+
 let test_schema_and_with_schema () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
@@ -17556,6 +17679,7 @@ let () =
   test_filter_limits_read_apis ();
   test_filter_composes_and_rejects_writes ();
   test_filter_predicates_read_unfiltered_db_like_upstream ();
+  test_filter_and_entity_upstream_edge_parity_batch ();
   test_schema_and_with_schema ();
   test_schema_transactions_install_schema_attrs ();
   test_schema_accepts_db_type_alias ();
