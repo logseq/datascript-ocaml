@@ -5,6 +5,12 @@ let failf fmt = Printf.ksprintf failwith fmt
 let assert_equal_query label expected actual =
   if expected <> actual then failf "%s: unexpected query result" label
 
+let assert_equal_query_option label expected actual =
+  if expected <> actual then failf "%s: unexpected optional query result" label
+
+let assert_equal_grouped_bindings label expected actual =
+  if expected <> actual then failf "%s: unexpected grouped bindings" label
+
 let assert_equal_string_list label expected actual =
   if expected <> actual then failf "%s: expected a different string list" label
 
@@ -88,6 +94,44 @@ let test_query_namespace__test_aggregate_helpers () =
        [ Result_value (Int 9) ]
        [ Result_value (Int 1); Result_value (Int 2) ])
 
+let test_query_namespace__test_find_grouping_helpers () =
+  let binding =
+    [ "name", Result_value (String "Ivan")
+    ; "age", Result_value (Int 30)
+    ; "city", Result_value (String "Berlin")
+    ]
+  in
+  assert_equal_query_option
+    "collect_find_vars preserves requested order"
+    (Some [ Result_value (Int 30); Result_value (String "Ivan") ])
+    (Query.collect_find_vars binding [ "age"; "name" ]);
+  assert_equal_query_option
+    "collect_find_vars returns None when a requested var is missing"
+    None
+    (Query.collect_find_vars binding [ "age"; "missing" ]);
+  assert_equal_grouped_bindings
+    "group_by_key prepends later rows in the same group"
+    [ ( [ Result_value (String "Ivan") ]
+      , [ [ "age", Result_value (Int 31) ]; [ "age", Result_value (Int 30) ] ] )
+    ; ( [ Result_value (String "Oleg") ]
+      , [ [ "age", Result_value (Int 40) ] ] )
+    ]
+    (Query.group_by_key
+       [ [ Result_value (String "Ivan") ], [ "age", Result_value (Int 30) ]
+       ; [ Result_value (String "Oleg") ], [ "age", Result_value (Int 40) ]
+       ; [ Result_value (String "Ivan") ], [ "age", Result_value (Int 31) ]
+       ]);
+  assert_equal_string_list
+    "grouping_vars_of_find includes non-aggregate find vars"
+    [ "city"; "entity"; "pattern" ]
+    (Query.grouping_vars_of_find
+       [ Find_var "city"
+       ; Find_pull ("entity", [ Pull_id ])
+       ; Find_pull_var ("entity", "pattern")
+       ; Find_aggregate (Count, [ QVar "age" ])
+       ])
+
 let () =
   test_query_namespace__test_public_query_api ();
-  test_query_namespace__test_aggregate_helpers ()
+  test_query_namespace__test_aggregate_helpers ();
+  test_query_namespace__test_find_grouping_helpers ()

@@ -129,6 +129,34 @@ let has_aggregates find =
       | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> false)
     find
 
+let collect_find_vars bindings find =
+  let rec collect acc = function
+    | [] -> Some (List.rev acc)
+    | var :: rest ->
+      (match List.assoc_opt var bindings with
+       | Some value -> collect (value :: acc) rest
+       | None -> None)
+  in
+  collect [] find
+
+let group_by_key rows =
+  List.fold_left
+    (fun groups (key, binding) ->
+      match List.assoc_opt key groups with
+      | Some bindings -> (key, binding :: bindings) :: List.remove_assoc key groups
+      | None -> (key, [ binding ]) :: groups)
+    []
+    rows
+
+let grouping_vars_of_find find =
+  find
+  |> List.concat_map (function
+    | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) -> [ var ]
+    | Find_pull_var (var, pattern_var) | Find_pull_source_var (_, var, pattern_var) ->
+      [ var; pattern_var ]
+    | Find_aggregate _ -> [])
+  |> List.sort_uniq compare
+
 let aggregate_amount_value var binding =
   match List.assoc_opt var binding with
   | Some (Result_value (Int amount)) when amount >= 0 -> amount

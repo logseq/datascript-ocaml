@@ -2387,15 +2387,7 @@ let collect_query_terms_exn db bindings terms =
   | Some values -> values
   | None -> invalid_arg "insufficient bindings"
 
-let collect_find_vars bindings find =
-  let rec collect acc = function
-    | [] -> Some (List.rev acc)
-    | var :: rest ->
-      (match List.assoc_opt var bindings with
-       | Some value -> collect (value :: acc) rest
-       | None -> None)
-  in
-  collect [] find
+let collect_find_vars = Query.collect_find_vars
 
 let query_term_entity_id db bindings term =
   Option.bind (eval_query_term db bindings term) (query_result_entity_id db)
@@ -3621,23 +3613,9 @@ let resolve_callable_aggregate callables aggregate =
      | None -> invalid_arg ("unknown aggregate input: " ^ var))
   | aggregate -> aggregate
 
-let group_by_key rows =
-  List.fold_left
-    (fun groups (key, binding) ->
-      match List.assoc_opt key groups with
-      | Some bindings -> (key, binding :: bindings) :: List.remove_assoc key groups
-      | None -> (key, [ binding ]) :: groups)
-    []
-    rows
+let group_by_key = Query.group_by_key
 
-let grouping_vars_of_find find =
-  find
-  |> List.concat_map (function
-    | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) -> [ var ]
-    | Find_pull_var (var, pattern_var) | Find_pull_source_var (_, var, pattern_var) ->
-      [ var; pattern_var ]
-    | Find_aggregate _ -> [])
-  |> List.sort_uniq compare
+let grouping_vars_of_find = Query.grouping_vars_of_find
 
 let aggregate_rows ?(callables = empty_query_callables) db sources bindings find =
   let group_vars = grouping_vars_of_find find in
@@ -7203,6 +7181,9 @@ module Query = struct
   let q_return_map = Query_impl.q_return_map query_context
   let q_return_map_string = Query_impl.q_return_map_string query_context
   let has_aggregates = Query_impl.has_aggregates
+  let collect_find_vars = Query_impl.collect_find_vars
+  let group_by_key = Query_impl.group_by_key
+  let grouping_vars_of_find = Query_impl.grouping_vars_of_find
   let aggregate_amount_value = Query_impl.aggregate_amount_value
   let resolve_dynamic_aggregate = Query_impl.resolve_dynamic_aggregate
   let aggregate_param_vars = Query_impl.aggregate_param_vars

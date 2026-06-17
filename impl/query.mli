@@ -64,6 +64,11 @@ val q_return_map :
   query_output
 val q_return_map_string : context -> ?inputs:query_arg list -> db -> string -> query_output
 val has_aggregates : find_spec list -> bool
+val collect_find_vars : (string * query_result) list -> string list -> query_result list option
+val group_by_key :
+  (query_result list * (string * query_result) list) list ->
+  (query_result list * (string * query_result) list list) list
+val grouping_vars_of_find : find_spec list -> string list
 val aggregate_amount_value : string -> (string * query_result) list -> int
 val resolve_dynamic_aggregate : aggregate -> (string * query_result) list list -> aggregate
 val aggregate_param_vars : aggregate -> string list
