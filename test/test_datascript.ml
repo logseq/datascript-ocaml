@@ -2334,6 +2334,127 @@ let test_entity_maps_expand_many_reverse_nested_entity_values () =
     ]
     (datoms db Eavt ())
 
+let test_upstream_components_and_explode_parity_batch () =
+  let component_db =
+    empty_db ~schema:[ "profile", component ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs = [ "name", One_value (String "Ivan"); "profile", One_value (Ref 3) ]
+             }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "email", One_value (String "@3") ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "email", One_value (String "@4") ] }
+         ]
+  in
+  assert_equal_query
+    "components.cljc retractEntity removes component children"
+    []
+    (q_string
+       (db_with [ RetractEntity (Entity_id 1) ] component_db)
+       "[:find ?a ?v :where [3 ?a ?v]]");
+  assert_equal_query
+    "components.cljc retractAttribute removes component values"
+    []
+    (q_string
+       (db_with [ RetractAttr (Entity_id 1, "profile") ] component_db)
+       "[:find ?a ?v :where [3 ?a ?v]]");
+  assert_equal_query
+    "components.cljc reverse component navigation exposes owner"
+    [ [ Result_entity 1 ] ]
+    (q_string component_db "[:find ?owner :where [3 :_profile ?owner]]");
+  let component_many_db =
+    empty_db ~schema:[ "profile", component_many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "profile", Many_values [ Ref 3; Ref 4 ]
+                 ]
+             }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "email", One_value (String "@3") ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "email", One_value (String "@4") ] }
+         ]
+  in
+  assert_equal_query
+    "components.cljc multival retractEntity removes all component children"
+    []
+    (q_string
+       ~inputs:[ Arg_collection [ Result_entity 1; Result_entity 3; Result_entity 4 ] ]
+       (db_with [ RetractEntity (Entity_id 1) ] component_many_db)
+       "[:find ?a ?v
+         :in [?e ...]
+         :where [?e ?a ?v]]");
+  assert_equal_query
+    "components.cljc multival retractAttribute removes all component values"
+    []
+    (q_string
+       ~inputs:[ Arg_collection [ Result_entity 3; Result_entity 4 ] ]
+       (db_with [ RetractAttr (Entity_id 1, "profile") ] component_many_db)
+       "[:find ?a ?v
+         :in [?e ...]
+         :where [?e ?a ?v]]");
+  let exploded =
+    empty_db ~schema:[ "aka", many; "also", many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "age", One_value (Int 16)
+                 ; "aka", One_value (List [ String "Devil"; String "Tupen" ])
+                 ; "also", One_value (String "ok")
+                 ]
+             }
+         ]
+  in
+  assert_equal_query
+    "explode.cljc expands sequential cardinality-many entity values"
+    [ [ Result_value (String "Devil") ]; [ Result_value (String "Tupen") ] ]
+    (q_string exploded "[:find ?v :where [1 :aka ?v]]");
+  assert_equal_query
+    "explode.cljc preserves scalar values on cardinality-many attrs"
+    [ [ Result_value (String "ok") ] ]
+    (q_string exploded "[:find ?v :where [1 :also ?v]]");
+  let ref_many_db =
+    empty_db ~schema:[ "children", ref_many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "children", One_value (List [ Int (-2); Int (-3) ])
+                 ]
+             }
+         ; Entity { db_id = Some (Temp_id "-2"); attrs = [ "name", One_value (String "Petr") ] }
+         ; Entity { db_id = Some (Temp_id "-3"); attrs = [ "name", One_value (String "Evgeny") ] }
+         ]
+  in
+  assert_equal_query_set
+    "explode.cljc expands sequential ref-many tempids"
+    [ [ Result_value (String "Petr") ]; [ Result_value (String "Evgeny") ] ]
+    (q_string
+       ref_many_db
+       "[:find ?n
+         :where [_ :children ?e]
+                [?e :name ?n]]");
+  let reverse_ref_db =
+    empty_db ~schema:[ "children", ref_many ] ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "_children", One_value (Ref 1) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Evgeny"); "_children", One_value (Ref 1) ] }
+         ]
+  in
+  assert_equal_query_set
+    "explode.cljc expands reverse ref attrs into forward refs"
+    [ [ Result_value (String "Petr") ]; [ Result_value (String "Evgeny") ] ]
+    (q_string
+       reverse_ref_db
+       "[:find ?n
+         :where [_ :children ?e]
+                [?e :name ?n]]")
+
 let test_serializable_round_trips_db_state () =
   let db =
     empty_db
@@ -17103,6 +17224,7 @@ let () =
   test_entity_map_with_only_nested_ref_allocates_nested_first ();
   test_entity_maps_expand_reverse_nested_entity_values ();
   test_entity_maps_expand_many_reverse_nested_entity_values ();
+  test_upstream_components_and_explode_parity_batch ();
   test_serializable_round_trips_db_state ();
   test_db_from_reader_string_parses_datascript_db_literals ();
   test_storage_round_trips_db_state ();
