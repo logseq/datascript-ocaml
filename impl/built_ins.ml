@@ -84,6 +84,92 @@ let all_values_equal = function
   | [] | [ _ ] -> true
   | first :: rest -> List.for_all (fun value -> compare_value first value = 0) rest
 
+let numeric_value = function
+  | Int value -> Some (`Int value)
+  | Float value -> Some (`Float value)
+  | _ -> None
+
+let numeric_result prefer_float value =
+  if prefer_float then
+    Float value
+  else
+    Int (int_of_float value)
+
+let arithmetic_values values =
+  let rec collect acc has_float = function
+    | [] -> Some (List.rev acc, has_float)
+    | value :: rest ->
+      (match numeric_value value with
+       | None -> None
+       | Some (`Int value) -> collect (float_of_int value :: acc) has_float rest
+       | Some (`Float value) -> collect (value :: acc) true rest)
+  in
+  collect [] false values
+
+let integer_pair = function
+  | [ Int left; Int right ] -> Some (left, right)
+  | _ -> None
+
+let clojure_mod left right =
+  let remainder = left mod right in
+  if remainder = 0 || (remainder > 0) = (right > 0) then
+    remainder
+  else
+    remainder + right
+
+let eval_arithmetic op values =
+  match op, values, arithmetic_values values with
+  | QuotientNumbers, _, _ ->
+    let left, right =
+      match integer_pair values with
+      | Some pair -> pair
+      | None -> invalid_arg "integer arithmetic expects two integer values"
+    in
+    Some (Int (left / right))
+  | RemainderNumbers, _, _ ->
+    let left, right =
+      match integer_pair values with
+      | Some pair -> pair
+      | None -> invalid_arg "integer arithmetic expects two integer values"
+    in
+    Some (Int (left mod right))
+  | ModuloNumbers, _, _ ->
+    let left, right =
+      match integer_pair values with
+      | Some pair -> pair
+      | None -> invalid_arg "integer arithmetic expects two integer values"
+    in
+    Some (Int (clojure_mod left right))
+  | _, _, None -> invalid_arg "arithmetic expects numeric values"
+  | IncrementNumber, _, Some ([ value ], has_float) -> Some (numeric_result has_float (value +. 1.0))
+  | DecrementNumber, _, Some ([ value ], has_float) -> Some (numeric_result has_float (value -. 1.0))
+  | (IncrementNumber | DecrementNumber), _, _ -> invalid_arg "unary arithmetic expects one value"
+  | AddNumbers, _, Some (values, has_float) ->
+    Some (numeric_result has_float (List.fold_left ( +. ) 0.0 values))
+  | SubtractNumbers, _, Some ([], _) -> invalid_arg "subtraction expects at least one value"
+  | SubtractNumbers, _, Some ([ value ], has_float) -> Some (numeric_result has_float (~-. value))
+  | SubtractNumbers, _, Some (first :: rest, has_float) ->
+    Some (numeric_result has_float (List.fold_left ( -. ) first rest))
+  | MultiplyNumbers, _, Some (values, has_float) ->
+    Some (numeric_result has_float (List.fold_left ( *. ) 1.0 values))
+  | DivideNumbers, _, Some ([], _) -> invalid_arg "division expects at least one value"
+  | DivideNumbers, _, Some ([ value ], _) -> Some (Float (1.0 /. value))
+  | DivideNumbers, _, Some (first :: rest, has_float) ->
+    let result = List.fold_left ( /. ) first rest in
+    let integral = Float.is_integer result in
+    Some (numeric_result (has_float || not integral) result)
+
+let normalized_comparison comparison =
+  if comparison < 0 then -1 else if comparison > 0 then 1 else 0
+
+let extremum_value op first rest =
+  let better =
+    match op with
+    | MinimumValue -> fun current candidate -> compare_value candidate current < 0
+    | MaximumValue -> fun current candidate -> compare_value candidate current > 0
+  in
+  List.fold_left (fun current candidate -> if better current candidate then candidate else current) first rest
+
 let value_is_truthy = function
   | Nil | Bool false -> false
   | _ -> true

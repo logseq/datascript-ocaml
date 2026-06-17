@@ -29,6 +29,11 @@
  (libraries datascript))
 
 (test
+ (name test_built_ins)
+ (modules test_built_ins)
+ (libraries datascript))
+
+(test
  (name test_issues)
  (modules test_issues)
  (libraries datascript))
