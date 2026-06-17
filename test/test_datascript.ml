@@ -11632,6 +11632,97 @@ let test_q_with_dynamic_callable_inputs () =
 
 let test_q_nested_relation_map_inputs () =
   assert_equal_query
+    "q_string supports queries with only scalar inputs and no db source"
+    [ [ Result_value (Int 10); Result_value (Int 20) ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_value (Int 10)); Arg_scalar (Result_value (Int 20)) ]
+       (empty_db ())
+       "[:find ?a ?b :in ?a ?b]");
+  assert_equal_query
+    "q_string binds plain map inputs as relation rows"
+    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map [ Keyword "a", Int 1; Keyword "b", Int 2; Keyword "c", Int 3 ]))
+         ]
+       (empty_db ())
+       "[:find ?k ?v
+         :in [[?k ?v] ...]
+         :where [(> ?v 1)]]");
+  let minmax = function
+    | [ Result_value (List values) ] ->
+      (match values with
+       | [] -> None
+       | first :: rest ->
+         let min_value, max_value =
+           List.fold_left
+             (fun (min_value, max_value) -> function
+                | Int value -> min min_value value, max max_value value
+                | _ -> min_value, max_value)
+             (match first with
+              | Int value -> value, value
+              | _ -> 0, 0)
+             rest
+         in
+         Some [ Result_value (Int min_value); Result_value (Int max_value) ])
+    | _ -> None
+  in
+  assert_equal_query
+    "q_string binds map relation rows through dynamic tuple outputs"
+    [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 4) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int 5); Result_value (Int 7) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", List [ Int 1; Int 2; Int 4 ]
+                   ; Keyword "b", List [ Int 5; Int 7 ]
+                   ]))
+         ; Arg_function minmax
+         ]
+       (empty_db ())
+       "[:find ?k ?min ?max
+         :in [[?k ?v] ...] ?minmax
+         :where [(?minmax ?v) [?min ?max]]
+                [(> ?max ?min)]]");
+  let range_values = function
+    | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+      let rec collect value acc =
+        if value >= max_value then List.rev acc
+        else collect (value + 1) (Int value :: acc)
+      in
+      Some [ Result_value (List (collect min_value [])) ]
+    | _ -> None
+  in
+  assert_equal_query
+    "q_string binds nested map relation rows through dynamic collection outputs"
+    [ [ Result_value (Keyword "a"); Result_value (Int 2) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int 4) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int 6) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", List [ Int 1; Int 7 ]
+                   ; Keyword "b", List [ Int 2; Int 4 ]
+                   ]))
+         ; Arg_function range_values
+         ]
+       (empty_db ())
+       "[:find ?k ?x
+         :in [[?k [?min ?max]] ...] ?range
+         :where [(?range ?min ?max) [?x ...]]
+                [(even? ?x)]]");
+  assert_equal_query
     "q_string binds map inputs as nested relation rows"
     [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
     ; [ Result_value (Keyword "c"); Result_value (Int 3) ]

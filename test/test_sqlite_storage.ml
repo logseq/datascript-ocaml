@@ -1242,6 +1242,148 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
                       [$scores ?row :score ?score]
                       [(>= ?score 20)]]")))
 
+let test_sqlite_storage_backed_query_input_maps_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed query input map test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn =
+        create_conn
+          ~schema:[ "name", unique_identity; "age", indexed; "score", indexed ]
+          ~storage
+          ()
+      in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 1, "age", Int 25)
+           ; Add (Entity_id 1, "score", Int 4)
+           ; Add (Entity_id 2, "name", String "Petr")
+           ; Add (Entity_id 2, "age", Int 44)
+           ; Add (Entity_id 2, "score", Int 7)
+           ; Add (Entity_id 3, "name", String "Oleg")
+           ; Add (Entity_id 3, "age", Int 11)
+           ; Add (Entity_id 3, "score", Int 2)
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore conn for query input map test"
+      in
+      ignore (transact_conn restored [ Add (Lookup_ref ("name", String "Oleg"), "age", Int 18) ]);
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore db after query input map transact"
+      in
+      assert_equal_query
+        "SQLite restored db joins plain map relation inputs after transact"
+        [ [ Result_value (String "Ivan"); Result_value (Int 25) ]
+        ; [ Result_value (String "Oleg"); Result_value (Int 18) ]
+        ; [ Result_value (String "Petr"); Result_value (Int 44) ]
+        ]
+        (q_string
+           ~inputs:
+             [ Arg_scalar
+                 (Result_value
+                    (Map
+                       [ String "Ivan", Int 18
+                       ; String "Oleg", Int 18
+                       ; String "Petr", Int 18
+                       ]))
+             ]
+           db
+           "[:find ?name ?age
+             :in $ [[?name ?min-age] ...]
+             :where [?e :name ?name]
+                    [?e :age ?age]
+                    [(>= ?age ?min-age)]]");
+      let minmax = function
+        | [ Result_value (List values) ] ->
+          (match values with
+           | [] -> None
+           | first :: rest ->
+             let min_value, max_value =
+               List.fold_left
+                 (fun (min_value, max_value) -> function
+                    | Int value -> min min_value value, max max_value value
+                    | _ -> min_value, max_value)
+                 (match first with
+                  | Int value -> value, value
+                  | _ -> 0, 0)
+                 rest
+             in
+             Some [ Result_value (Int min_value); Result_value (Int max_value) ])
+        | _ -> None
+      in
+      assert_equal_query
+        "SQLite restored db joins map relation rows through dynamic tuple outputs"
+        [ [ Result_value (String "Ivan"); Result_value (Int 1); Result_value (Int 4) ]
+        ; [ Result_value (String "Petr"); Result_value (Int 5); Result_value (Int 7) ]
+        ]
+        (q_string
+           ~inputs:
+             [ Arg_scalar
+                 (Result_value
+                    (Map
+                       [ String "Ivan", List [ Int 1; Int 4 ]
+                       ; String "Petr", List [ Int 5; Int 7 ]
+                       ; String "Oleg", List [ Int 2; Int 2 ]
+                       ]))
+             ; Arg_function minmax
+             ]
+           db
+           "[:find ?name ?min ?max
+             :in $ [[?name ?scores] ...] ?minmax
+             :where [?e :name ?name]
+                    [?e :score ?score]
+                    [(?minmax ?scores) [?min ?max]]
+                    [(= ?score ?max)]
+                    [(> ?max ?min)]]");
+      let range_values = function
+        | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+          let rec collect value acc =
+            if value >= max_value then List.rev acc
+            else collect (value + 1) (Int value :: acc)
+          in
+          Some [ Result_value (List (collect min_value [])) ]
+        | _ -> None
+      in
+      assert_equal_query
+        "SQLite restored db joins nested map relation rows through dynamic collection outputs"
+        [ [ Result_value (String "Ivan"); Result_value (Int 2) ]
+        ; [ Result_value (String "Ivan"); Result_value (Int 4) ]
+        ; [ Result_value (String "Petr"); Result_value (Int 6) ]
+        ]
+        (q_string
+           ~inputs:
+             [ Arg_scalar
+                 (Result_value
+                    (Map
+                       [ String "Ivan", List [ Int 1; Int 5 ]
+                       ; String "Petr", List [ Int 6; Int 8 ]
+                       ; String "Oleg", List [ Int 3; Int 4 ]
+                       ]))
+             ; Arg_function range_values
+             ]
+           db
+           "[:find ?name ?candidate
+             :in $ [[?name [?min ?max]] ...] ?range
+             :where [?e :name ?name]
+                    [?e :age ?age]
+                    [(?range ?min ?max) [?candidate ...]]
+                    [(even? ?candidate)]
+                    [(< ?candidate ?age)]]");
+      assert_equal_query
+        "SQLite restored db accepts input-only queries with no db source"
+        [ [ Result_value (Int 10); Result_value (Int 20) ] ]
+        (q_string
+           ~inputs:[ Arg_scalar (Result_value (Int 10)); Arg_scalar (Result_value (Int 20)) ]
+           db
+           "[:find ?a ?b :in ?a ?b]"))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -1433,6 +1575,7 @@ let () =
   test_sqlite_storage_backed_reset_schema_and_compaction_parity ();
   test_sqlite_storage_backed_aggregates_and_upserts_after_restore ();
   test_sqlite_storage_backed_parsed_transact_and_query_pull_parity ();
+  test_sqlite_storage_backed_query_input_maps_after_restore ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();
