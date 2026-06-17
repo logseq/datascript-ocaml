@@ -246,6 +246,39 @@ let test_parser__input_binding_helpers () =
     []
     (Parser.parse_with_section None)
 
+let test_parser__return_map_helpers () =
+  assert_equal
+    "parse_return_map_labels parses vector labels"
+    [ "name"; "age" ]
+    (Parser.parse_return_map_labels "keys" (vec [ sym "name"; sym "age" ]));
+  assert_invalid "parse_return_map_labels rejects empty labels" (fun () ->
+    ignore (Parser.parse_return_map_labels "keys" (vec [])));
+  assert_invalid "parse_return_map_labels rejects non-symbol labels" (fun () ->
+    ignore (Parser.parse_return_map_labels "keys" (vec [ QueryFormKeyword "name" ])));
+  let entries =
+    Parser.query_form_map
+      (vec
+         [ QueryFormKeyword "find"
+         ; sym "?name"
+         ; QueryFormKeyword "keys"
+         ; sym "name"
+         ])
+  in
+  assert_equal
+    "parse_return_map_section parses :keys"
+    (Some (Return_keys [ "name" ]))
+    (Parser.parse_return_map_section entries);
+  assert_equal
+    "parse_return_map_section returns none without return map labels"
+    None
+    (Parser.parse_return_map_section [ QueryFormKeyword "find", vec [ sym "?name" ] ]);
+  assert_invalid "parse_return_map_section rejects multiple return map sections" (fun () ->
+    ignore
+      (Parser.parse_return_map_section
+         [ QueryFormKeyword "keys", vec [ sym "name" ]
+         ; QueryFormKeyword "strs", vec [ sym "name" ]
+         ]))
+
 let () =
   test_parser__bindings ();
   test_parser__in ();
@@ -254,4 +287,5 @@ let () =
   test_parser__query_symbol_helpers ();
   test_parser__aggregate_and_find_arg_helpers ();
   test_parser__output_var_helpers ();
-  test_parser__input_binding_helpers ()
+  test_parser__input_binding_helpers ();
+  test_parser__return_map_helpers ()

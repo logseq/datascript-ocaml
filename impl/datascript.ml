@@ -5666,32 +5666,7 @@ let parse_query_return_with_pull_context ?default_pull_db ?pull_db_for_source fo
 let parse_query_return form =
   parse_query_return_with_pull_context form
 
-let parse_return_map_labels section_name = function
-  | QueryFormVector labels | QueryFormList labels ->
-    (match labels with
-     | [] -> invalid_arg (":" ^ section_name ^ " requires at least one label")
-     | labels ->
-       List.map
-         (function
-           | QueryFormSymbol label -> label
-           | _ -> invalid_arg (":" ^ section_name ^ " labels must be symbols"))
-         labels)
-  | _ -> invalid_arg (":" ^ section_name ^ " must be a vector or list")
-
-let parse_return_map_section entries =
-  let sections =
-    [ "keys", (fun labels -> Return_keys labels)
-    ; "syms", (fun labels -> Return_syms labels)
-    ; "strs", (fun labels -> Return_strs labels)
-    ]
-    |> List.filter_map (fun (section_name, make_return_map) ->
-      query_form_section section_name entries
-      |> Option.map (fun section -> make_return_map (parse_return_map_labels section_name section)))
-  in
-  match sections with
-  | [] -> None
-  | [ section ] -> Some section
-  | _ -> invalid_arg "Only one of :keys/:syms/:strs must be present"
+let parse_return_map_section = Parser_impl.parse_return_map_section
 
 let validate_query_return_map = Query.validate_query_return_map
 
@@ -5772,6 +5747,8 @@ module Parser = struct
   let ensure_distinct_input_rules_var = Parser_impl.ensure_distinct_input_rules_var
   let parse_with_var = Parser_impl.parse_with_var
   let parse_with_section = Parser_impl.parse_with_section
+  let parse_return_map_labels = Parser_impl.parse_return_map_labels
+  let parse_return_map_section = Parser_impl.parse_return_map_section
   let parse_binding = parse_binding
   let parse_in = parse_in
   let parse_with = parse_with

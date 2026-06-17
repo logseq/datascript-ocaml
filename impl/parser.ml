@@ -626,3 +626,30 @@ let parse_with_section = function
   | None -> []
 
 let parse_with form = parse_with_section (Some form)
+
+let parse_return_map_labels section_name = function
+  | QueryFormVector labels | QueryFormList labels ->
+    (match labels with
+     | [] -> invalid_arg (":" ^ section_name ^ " requires at least one label")
+     | labels ->
+       List.map
+         (function
+           | QueryFormSymbol label -> label
+           | _ -> invalid_arg (":" ^ section_name ^ " labels must be symbols"))
+         labels)
+  | _ -> invalid_arg (":" ^ section_name ^ " must be a vector or list")
+
+let parse_return_map_section entries =
+  let sections =
+    [ "keys", (fun labels -> Return_keys labels)
+    ; "syms", (fun labels -> Return_syms labels)
+    ; "strs", (fun labels -> Return_strs labels)
+    ]
+    |> List.filter_map (fun (section_name, make_return_map) ->
+      query_form_section section_name entries
+      |> Option.map (fun section -> make_return_map (parse_return_map_labels section_name section)))
+  in
+  match sections with
+  | [] -> None
+  | [ section ] -> Some section
+  | _ -> invalid_arg "Only one of :keys/:syms/:strs must be present"

@@ -41,3 +41,5 @@ val ensure_distinct_input_rules_var : query_form option -> unit
 val parse_with_var : query_form -> string
 val parse_with_section : query_form option -> string list
 val parse_with : query_form -> string list
+val parse_return_map_labels : string -> query_form -> string list
+val parse_return_map_section : (query_form * query_form) list -> query_return_map option
