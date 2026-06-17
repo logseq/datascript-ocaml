@@ -758,6 +758,126 @@ let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
         [ [ Result_value (String "beta") ] ]
         (q_string db "[:find ?secret :where [?e :name \"Petr\"] [?e :secret ?secret]]"))
 
+let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage-backed transact.cljc batch: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let conn =
+        create_conn
+          ~schema:
+            [ "name", unique_identity
+            ; "age", indexed
+            ; "aka", many
+            ; "friend", ref_attr
+            ; "created-at", ref_attr
+            ; "tx/source", indexed
+            ; "label", many
+            ]
+          ~storage
+          ()
+      in
+      ignore
+        (transact_conn
+           conn
+           [ Entity
+               { db_id = Some (Entity_id 1)
+               ; attrs =
+                   [ "name", One_value (String "Ivan")
+                   ; "age", One_value (Int 15)
+                   ; "aka", Many_values [ String "Devil"; String "Tupen" ]
+                   ; "friend", One_value (Ref 2)
+                   ; "created-at", One_value TxRef
+                   ]
+               }
+           ; Entity
+               { db_id = Some (Entity_id 2)
+               ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ]
+               }
+           ; Add (CurrentTx, "tx/source", String "initial")
+           ; Call (fun _ -> [ Entity { db_id = None; attrs = [ "name", One_value (String "Generated") ] } ])
+           ]);
+      ignore
+        (transact_conn
+           conn
+           [ CompareAndSet (Entity_id 1, "age", Some (Int 15), Int 16)
+           ; CompareAndSet (Entity_id 1, "label", None, String "fresh")
+           ; Retract (Entity_id 1, "aka", Some (String "Devil"))
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore transact.cljc batch connection"
+      in
+      assert_equal_query
+        "SQLite restored db keeps cardinality-one replacement and CAS results"
+        [ [ Result_value (String "Ivan"); Result_value (Int 16); Result_value (String "fresh") ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?name ?age ?label
+             :where [1 :name ?name]
+                    [1 :age ?age]
+                    [1 :label ?label]]");
+      assert_equal_query
+        "SQLite restored db keeps cardinality-many retraction results"
+        [ [ Result_value (String "Tupen") ] ]
+        (q_string (conn_db restored) "[:find ?aka :where [1 :aka ?aka]]");
+      assert_equal_query
+        "SQLite restored db can query current tx facts from transacted refs"
+        [ [ Result_value (String "initial") ] ]
+        (q_string
+           (conn_db restored)
+           "[:find ?source
+             :where [1 :created-at ?tx]
+                    [?tx :tx/source ?source]]");
+      assert_equal_query
+        "SQLite restored db persists transaction function entity output"
+        [ [ Result_entity 3 ] ]
+        (q_string (conn_db restored) "[:find ?e :where [?e :name \"Generated\"]]");
+      let second_report =
+        transact_conn
+          restored
+          [ RetractAttr (Entity_id 1, "aka")
+          ; RetractEntity (Entity_id 2)
+          ; Entity
+              { db_id = Some (Temp_id "oleg")
+              ; attrs =
+                  [ "name", One_value (String "Oleg")
+                  ; "created-at", One_value TxRef
+                  ]
+              }
+          ; Add (CurrentTx, "tx/source", String "second")
+          ]
+      in
+      let oleg_id =
+        match resolve_tempid second_report.tempids "oleg" with
+        | Some entity_id -> entity_id
+        | None -> failwith "SQLite storage-backed transact should expose tempids after restore"
+      in
+      let db =
+        match restore storage with
+        | Some db -> db
+        | None -> failwith "SQLite storage should restore transact.cljc batch db"
+      in
+      assert_equal_query
+        "SQLite second restore persists retractAttribute and retractEntity effects"
+        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity oleg_id ] ]
+        (q_string db "[:find ?e :where [?e :name]]");
+      assert_equal_triples
+        "SQLite second restore removes incoming refs to retracted entities"
+        []
+        (datoms db Eavt ~e:1 ~a:"friend" ());
+      assert_equal_query
+        "SQLite second restore queries tempid entity current-tx facts"
+        [ [ Result_value (String "second") ] ]
+        (q_string
+           db
+           "[:find ?source
+             :where [?e :name \"Oleg\"]
+                    [?e :created-at ?tx]
+                    [?tx :tx/source ?source]]"))
+
 let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed pull/source/relation query test: sqlite3 is not available"
@@ -1571,6 +1691,7 @@ let () =
   test_sqlite_storage_backed_lookup_ref_transacts_after_restore ();
   test_sqlite_storage_backed_not_or_queries_after_restore ();
   test_sqlite_storage_backed_transact_history_and_current_tx_parity ();
+  test_sqlite_storage_backed_transact_cljc_batch_after_restore ();
   test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ();
   test_sqlite_storage_backed_reset_schema_and_compaction_parity ();
   test_sqlite_storage_backed_aggregates_and_upserts_after_restore ();

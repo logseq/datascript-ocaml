@@ -350,7 +350,7 @@ let test_raw_datom_counts_tx_in_max_tx () =
     [ datom ~tx:(tx0 + 6) ~e:2 ~a:"name" ~v:(String "Petr") () ]
     report.tx_data
 
-let test_raw_datoms_keep_transaction_numbers_and_retract () =
+let test_transact__test_with_datoms () =
   let db =
     empty_db ()
     |> db_with
@@ -585,7 +585,7 @@ let test_indexes_compare_numbers_across_value_constructors () =
     [ 3, "score", Int 2; 1, "score", Int 100 ]
     (seek_datoms db Avet ~a:"score" ~v:(Float 1.6) ())
 
-let test_retract_int_does_not_remove_float_value () =
+let test_transact__test_compare_numbers_js_issue_404 () =
   let db =
     empty_db ()
     |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "num", One_value (Float 42.5) ] } ]
@@ -971,7 +971,7 @@ let test_entity_map_db_id_attr_is_not_stored () =
     [ 1, "name", String "Ivan" ]
     (datoms db Eavt ())
 
-let test_db_with_replaces_cardinality_one_and_retracts () =
+let test_transact__test_with () =
   let schema = [ "aka", many ] in
   let db =
     empty_db ~schema ()
@@ -989,7 +989,7 @@ let test_db_with_replaces_cardinality_one_and_retracts () =
     [ 1, "aka", String "Tupen" ]
     (datoms db Eavt ())
 
-let test_retract_missing_lookup_refs_are_noops () =
+let test_transact__test_retract_fns_not_found () =
   let db =
     empty_db ~schema:[ "name", unique_identity; "aka", many ] ()
     |> db_with [ Add (Entity_id 1, "name", String "Ivan"); Add (Entity_id 1, "aka", String "Vanya") ]
@@ -1275,7 +1275,7 @@ let test_tuple_types_validate_direct_tuple_values () =
            [ Add (Entity_id 2, "name+score", Tuple [ Some (String "Petr"); Some (String "high") ]) ]
            db))
 
-let test_db_with_compare_and_set () =
+let test_transact__test_db_fn_cas () =
   let db =
     empty_db ()
     |> db_with [ Add (Entity_id 1, "age", Int 31) ]
@@ -1312,7 +1312,7 @@ let test_db_with_compare_and_set_on_many_attr () =
     ":db.fn/cas failed on datom [1 :label (\"x\" \"y\" \"z\")], expected \"missing\""
     (fun () -> ignore (db_with [ CompareAndSet (Entity_id 1, "label", Some (String "missing"), String "new") ] db))
 
-let test_retract_without_value_removes_false_values () =
+let test_transact__test_retract_without_value_issue_339 () =
   let db =
     empty_db ~schema:[ "aka", many; "friend", ref_attr ] ()
     |> db_with
@@ -1355,7 +1355,7 @@ let test_retract_without_value_removes_false_values () =
     [ 2, "employed", Bool true ]
     (datoms unchanged Eavt ~e:2 ~a:"employed" ())
 
-let test_collection_values_can_be_stored_and_indexed () =
+let test_transact__test_uncomparable_issue_356 () =
   let map1 = Map [ Keyword "map", Int 1 ] in
   let map2 = Map [ Keyword "map", Int 2 ] in
   let map3 = Map [ Keyword "map", Int 3 ] in
@@ -1546,7 +1546,7 @@ let test_entid_normalizes_unordered_values () =
     2
     (Option.get (entid db "tags" ordered_set))
 
-let test_unique_identity_mixed_values_keep_transitive_ordering () =
+let test_transact__test_transitive_type_compare_issue_386 () =
   let uid_values =
     [ String "2LB4tlJGy"
     ; String "2ON453J0Z"
@@ -1688,7 +1688,7 @@ let test_tempid_generates_unique_entity_refs () =
     ]
     (datoms db Eavt ())
 
-let test_db_with_transaction_function_call () =
+let test_transact__test_db_fn () =
   let report =
     transact
       (empty_db ())
@@ -1717,7 +1717,7 @@ let test_db_with_transaction_function_call () =
     [ "db/current-tx", tx0 + 1; "generated", 2 ]
     report.tempids
 
-let test_transaction_function_can_return_entity_without_id () =
+let test_transact__test_db_fn_returning_entity_without_db_id_issue_474 () =
   let report =
     transact
       (empty_db ())
@@ -1735,7 +1735,7 @@ let test_transaction_function_can_return_entity_without_id () =
     [ 1, "foo", String "bar" ]
     (datoms report.db_after Eavt ())
 
-let test_db_ident_transaction_function_call () =
+let test_transact__test_db_ident_fn () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
@@ -1785,7 +1785,7 @@ let test_db_ident_transaction_function_call () =
     ]
     (datoms db Eavt ())
 
-let test_transaction_rejects_entity_ids_above_supported_range () =
+let test_transact__test_large_ids_issue_292 () =
   let too_large = 285_873_023_227_265 in
   assert_raises_invalid_arg
     "Add rejects negative explicit entity ids"
@@ -1825,7 +1825,7 @@ let test_db_with_allocates_tempids () =
     [ 1, "name", String "Ivan"; 2, "name", String "Petr" ]
     (datoms db Eavt ())
 
-let test_db_with_resolves_explicit_tempids_and_lookup_refs () =
+let test_transact__test_resolve_eid () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
@@ -1856,7 +1856,7 @@ let test_db_with_resolves_explicit_tempids_and_lookup_refs () =
     ]
     (datoms db Eavt ())
 
-let test_entity_map_allocates_owner_before_ref_tempids () =
+let test_transact__test_resolve_eid_refs () =
   let report =
     transact
       (empty_db ~schema:[ "friend", ref_many ] ())
@@ -2024,7 +2024,7 @@ let test_resolve_tempid_reads_tx_report_tempids () =
   if resolve_tempid report.tempids "missing" <> None then
     failwith "resolve_tempid should return None for unknown tempids"
 
-let test_current_tx_resolves_in_transactions () =
+let test_transact__test_resolve_current_tx () =
   let report =
     transact
       (empty_db ())
@@ -14911,7 +14911,7 @@ let test_add_tempid_upserts_by_unique_identity () =
     [ "db/current-tx", tx0 + 2; "ivan", 1 ]
     report.tempids
 
-let test_entity_map_tempid_upsert_remaps_later_refs () =
+let test_transact__test_tempid_ref_issue_295 () =
   let db =
     empty_db ~schema:[ "name", unique_identity; "ref", ref_attr ] ()
     |> db_with [ Entity { db_id = None; attrs = [ "name", One_value (String "Alice") ] } ]
@@ -15101,7 +15101,7 @@ let test_db_with_string_unique_value_matches_upstream_validation () =
   ignore (db_with_string "[[:db/add 3 :name \"Igor\"]]" db);
   ignore (db_with_string "[[:db/add 3 :nick \"Ivan\"]]" db)
 
-let test_connection_transact_updates_current_db () =
+let test_transact__test_transact_bang () =
   let conn = create_conn ~schema:[ "aka", many ] () in
   let report =
     transact_conn
@@ -15426,7 +15426,7 @@ let test_storage_backed_conn_from_db_and_datoms_store_initial_root () =
       [ 3, "name", String "Oleg"; 4, "name", String "Dima" ]
       (datoms restored Eavt ())
 
-let test_retract_entity_removes_entity_and_incoming_refs () =
+let test_transact__test_retract_fns () =
   let db =
     empty_db ()
     |> db_with
@@ -15446,7 +15446,7 @@ let test_retract_entity_removes_entity_and_incoming_refs () =
     [ 1, "name", String "Ivan" ]
     (datoms db Eavt ())
 
-let test_retract_entity_tx_data_is_eavt_ordered () =
+let test_transact__test_transient_issue_294 () =
   let db =
     empty_db ()
     |> db_with
@@ -18521,14 +18521,14 @@ let () =
   test_init_db_resolves_raw_ref_datoms_from_schema ();
   test_raw_datom_counts_ref_values_in_max_eid ();
   test_raw_datom_counts_tx_in_max_tx ();
-  test_raw_datoms_keep_transaction_numbers_and_retract ();
+  test_transact__test_with_datoms ();
   test_db_diff_returns_left_right_and_common_datoms ();
   test_find_datom_returns_first_index_match ();
   test_vaet_index_returns_ref_datoms_by_value ();
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
   test_indexes_compare_numbers_across_value_constructors ();
-  test_retract_int_does_not_remove_float_value ();
+  test_transact__test_compare_numbers_js_issue_404 ();
   test_avet_exact_lookup_compares_entire_sequences ();
   test_indexes_compare_mixed_value_types_like_datascript ();
   test_avet_excludes_unindexed_scalar_attrs ();
@@ -18541,8 +18541,8 @@ let () =
   test_with_tx_returns_transaction_report ();
   test_entity_map_expands_collection_values_for_many_attrs ();
   test_entity_map_db_id_attr_is_not_stored ();
-  test_db_with_replaces_cardinality_one_and_retracts ();
-  test_retract_missing_lookup_refs_are_noops ();
+  test_transact__test_with ();
+  test_transact__test_retract_fns_not_found ();
   test_tuple_attrs_track_source_attrs ();
   test_tuple_attrs_reject_direct_writes ();
   test_tuple_attrs_ignore_direct_writes_that_match_sources ();
@@ -18553,10 +18553,10 @@ let () =
   test_tuple_attrs_are_indexed_by_default ();
   test_tuple_attrs_support_avet_range_bounds ();
   test_tuple_types_validate_direct_tuple_values ();
-  test_db_with_compare_and_set ();
+  test_transact__test_db_fn_cas ();
   test_db_with_compare_and_set_on_many_attr ();
-  test_retract_without_value_removes_false_values ();
-  test_collection_values_can_be_stored_and_indexed ();
+  test_transact__test_retract_without_value_issue_339 ();
+  test_transact__test_uncomparable_issue_356 ();
   test_nil_values_are_query_only ();
   test_list_values_can_be_indexed_exactly ();
   test_list_values_use_datascript_length_first_ordering ();
@@ -18565,25 +18565,25 @@ let () =
   test_set_values_are_order_insensitive ();
   test_init_db_normalizes_set_values ();
   test_entid_normalizes_unordered_values ();
-  test_unique_identity_mixed_values_keep_transitive_ordering ();
+  test_transact__test_transitive_type_compare_issue_386 ();
   test_tempids_are_rejected_in_non_add_ops ();
   test_value_only_tempids_are_rejected ();
   test_empty_entity_tempids_are_not_entity_usage ();
   test_tempid_generates_unique_entity_refs ();
-  test_db_with_transaction_function_call ();
-  test_transaction_function_can_return_entity_without_id ();
-  test_db_ident_transaction_function_call ();
-  test_transaction_rejects_entity_ids_above_supported_range ();
+  test_transact__test_db_fn ();
+  test_transact__test_db_fn_returning_entity_without_db_id_issue_474 ();
+  test_transact__test_db_ident_fn ();
+  test_transact__test_large_ids_issue_292 ();
   test_db_with_allocates_tempids ();
-  test_db_with_resolves_explicit_tempids_and_lookup_refs ();
-  test_entity_map_allocates_owner_before_ref_tempids ();
+  test_transact__test_resolve_eid ();
+  test_transact__test_resolve_eid_refs ();
   test_db_ident_is_builtin_and_resolves_refs ();
   test_upstream_ident_parity_batch ();
   test_entid_ref_resolves_entity_refs ();
   test_db_ident_rejects_duplicate_idents_by_default ();
   test_transact_report_exposes_tempids ();
   test_resolve_tempid_reads_tx_report_tempids ();
-  test_current_tx_resolves_in_transactions ();
+  test_transact__test_resolve_current_tx ();
   test_current_tx_string_aliases_resolve_in_transactions ();
   test_current_tx_string_aliases_can_be_value_only ();
   test_current_tx_colon_string_alias_resolves_in_transactions ();
@@ -18847,7 +18847,7 @@ let () =
   test_unique_many_identity_upserts_from_any_value ();
   test_add_tempid_upserts_by_unique_tuple_sources ();
   test_add_tempid_upserts_by_unique_identity ();
-  test_entity_map_tempid_upsert_remaps_later_refs ();
+  test_transact__test_tempid_ref_issue_295 ();
   test_ref_attrs_do_not_upsert_tempids ();
   test_tempid_retry_preserves_explicit_entity_ids ();
   test_add_tempids_retry_unique_identity_upserts ();
@@ -18856,7 +18856,7 @@ let () =
   test_current_tx_unique_identity_upsert_conflicts ();
   test_unique_value_rejects_duplicate_values ();
   test_db_with_string_unique_value_matches_upstream_validation ();
-  test_connection_transact_updates_current_db ();
+  test_transact__test_transact_bang ();
   test_connection_listeners_receive_transaction_reports ();
   test_connection_listen_matches_upstream_report_semantics ();
   test_connection_auto_listener_keys ();
@@ -18866,8 +18866,8 @@ let () =
   test_storage_backed_connections_compact_overflowing_tail ();
   test_storage_backed_connections_honor_skip_store_metadata ();
   test_storage_backed_conn_from_db_and_datoms_store_initial_root ();
-  test_retract_entity_removes_entity_and_incoming_refs ();
-  test_retract_entity_tx_data_is_eavt_ordered ();
+  test_transact__test_retract_fns ();
+  test_transact__test_transient_issue_294 ();
   test_retract_attr_removes_all_attribute_values ();
   test_retract_entity_recursively_removes_components ();
   test_retract_attr_removes_component_values ();
