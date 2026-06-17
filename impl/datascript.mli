@@ -423,6 +423,11 @@ module Query : sig
   val resolve_callable_aggregate : query_callables -> aggregate -> aggregate
   val query_callables_of_inputs : query_input list -> query_callables
   val query_rules_of_inputs : query_input list -> query_rule list
+  val matching_rules : query_rule list -> string -> int -> query_rule list
+  val matching_rules_exn : query_rule list -> string -> int -> query_rule list
+  val project_binding : string list -> (string * query_result) list -> (string * query_result) list
+  val rule_invocation_callables :
+    query_callables -> (string * query_result) list -> query_rule -> query_term list -> query_callables
   val query_input_var_label : string -> string
   val query_input_binding_string : input_binding -> string
   val query_input_decl_binding_string : query_input -> string

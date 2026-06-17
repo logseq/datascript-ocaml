@@ -314,6 +314,28 @@ let query_rules_of_inputs inputs =
     | Input_rules rules -> rules
     | _ -> [])
 
+let matching_rules rules name arity =
+  List.filter (fun rule -> rule.rule_name = name && List.length rule.rule_params = arity) rules
+
+let matching_rules_exn rules name arity =
+  match matching_rules rules name arity with
+  | [] -> invalid_arg ("unknown rule: " ^ name)
+  | rules -> rules
+
+let project_binding vars binding =
+  List.filter (fun (var, _) -> List.mem var vars) binding
+
+let rule_invocation_callables callables outer_binding rule terms =
+  List.fold_left2
+    (fun callables param term ->
+      match term with
+      | QVar var when List.assoc_opt var outer_binding = None && has_callable callables var ->
+        alias_callable callables param var
+      | _ -> callables)
+    callables
+    rule.rule_params
+    terms
+
 let query_input_var_label var =
   if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
 

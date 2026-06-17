@@ -326,6 +326,57 @@ let test_query_namespace__test_callable_helpers () =
   if not (Query.has_callable callables "count-values") then
     failwith "query_callables_of_inputs should collect aggregate inputs"
 
+let test_query_namespace__test_rule_helpers () =
+  let parent_1 = { rule_name = "parent"; rule_params = [ "e" ]; rule_body = [] } in
+  let parent_2 = { rule_name = "parent"; rule_params = [ "e"; "child" ]; rule_body = [] } in
+  let ancestor = { rule_name = "ancestor"; rule_params = [ "e"; "child" ]; rule_body = [] } in
+  assert_equal_rules
+    "matching_rules filters by name and arity"
+    [ parent_2 ]
+    (Query.matching_rules [ parent_1; parent_2; ancestor ] "parent" 2);
+  assert_equal_rules
+    "matching_rules_exn returns matching rules"
+    [ ancestor ]
+    (Query.matching_rules_exn [ parent_1; parent_2; ancestor ] "ancestor" 2);
+  assert_raises_invalid_arg "matching_rules_exn rejects missing rules" (fun () ->
+    ignore (Query.matching_rules_exn [ parent_1 ] "missing" 1));
+  assert_equal_grouped_bindings
+    "project_binding keeps only requested vars"
+    [ [ "name", Result_value (String "Ivan"); "age", Result_value (Int 30) ] ]
+    [ Query.project_binding
+        [ "name"; "age" ]
+        [ "name", Result_value (String "Ivan")
+        ; "city", Result_value (String "Berlin")
+        ; "age", Result_value (Int 30)
+        ]
+    ];
+  let predicate = function
+    | [ Result_value (Int value) ] -> value > 10
+    | _ -> false
+  in
+  let callables =
+    Query.empty_query_callables
+    |> fun callables -> { callables with Query.callable_predicates = [ "large?", predicate ] }
+  in
+  let aliased =
+    Query.rule_invocation_callables
+      callables
+      []
+      { rule_name = "large-rule"; rule_params = [ "p" ]; rule_body = [] }
+      [ QVar "large?" ]
+  in
+  if not (Query.has_callable aliased "p") then
+    failwith "rule_invocation_callables should alias unbound callable args to rule params";
+  let unchanged =
+    Query.rule_invocation_callables
+      callables
+      [ "large?", Result_value (Bool true) ]
+      { rule_name = "large-rule"; rule_params = [ "p" ]; rule_body = [] }
+      [ QVar "large?" ]
+  in
+  if Query.has_callable unchanged "p" then
+    failwith "rule_invocation_callables should not alias already-bound vars"
+
 let () =
   test_query_namespace__test_public_query_api ();
   test_query_namespace__test_aggregate_helpers ();
@@ -333,4 +384,5 @@ let () =
   test_query_namespace__test_input_label_helpers ();
   test_query_namespace__test_input_shape_helpers ();
   test_query_namespace__test_input_binding_helpers ();
-  test_query_namespace__test_callable_helpers ()
+  test_query_namespace__test_callable_helpers ();
+  test_query_namespace__test_rule_helpers ()

@@ -3574,10 +3574,6 @@ let callable_predicate = Query.callable_predicate
 
 let callable_function = Query.callable_function
 
-let has_callable = Query.has_callable
-
-let alias_callable = Query.alias_callable
-
 let resolve_callable_aggregate = Query.resolve_callable_aggregate
 
 let group_by_key = Query.group_by_key
@@ -3711,16 +3707,7 @@ let propagate_rule_binding db outer_binding rule_binding rule terms =
     rule.rule_params
     terms
 
-let rule_invocation_callables callables outer_binding rule terms =
-  List.fold_left2
-    (fun callables param term ->
-      match term with
-      | QVar var when List.assoc_opt var outer_binding = None && has_callable callables var ->
-        alias_callable callables param var
-      | _ -> callables)
-    callables
-    rule.rule_params
-    terms
+let rule_invocation_callables = Query.rule_invocation_callables
 
 let bind_relation_row db bindings vars row =
   if List.length vars <> List.length row then
@@ -3997,16 +3984,9 @@ let initial_query_context db query input_args =
   , List.fold_left (apply_query_input db) [ [] ] inputs
   , query_rules_of_inputs inputs )
 
-let matching_rules rules name arity =
-  List.filter (fun rule -> rule.rule_name = name && List.length rule.rule_params = arity) rules
+let matching_rules_exn = Query.matching_rules_exn
 
-let matching_rules_exn rules name arity =
-  match matching_rules rules name arity with
-  | [] -> invalid_arg ("unknown rule: " ^ name)
-  | rules -> rules
-
-let project_binding vars binding =
-  List.filter (fun (var, _) -> List.mem var vars) binding
+let project_binding = Query.project_binding
 
 let merge_projected_binding db vars outer_binding inner_binding =
   vars
@@ -7028,6 +7008,10 @@ module Query = struct
   let resolve_callable_aggregate = Query_impl.resolve_callable_aggregate
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
+  let matching_rules = Query_impl.matching_rules
+  let matching_rules_exn = Query_impl.matching_rules_exn
+  let project_binding = Query_impl.project_binding
+  let rule_invocation_callables = Query_impl.rule_invocation_callables
   let query_input_var_label = Query_impl.query_input_var_label
   let query_input_binding_string = Query_impl.query_input_binding_string
   let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
