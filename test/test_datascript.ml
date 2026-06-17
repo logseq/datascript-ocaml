@@ -12733,6 +12733,102 @@ let test_q_rule_context_is_isolated_from_outer_context () =
     [ [ Result_attr "follow" ] ]
     (q db query)
 
+let test_q_regular_clauses_join_with_rules () =
+  let db =
+    init_db
+      [ datom ~e:5 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:1 ~a:"follow" ~v:(Ref 2) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:3 ~a:"follow" ~v:(Ref 4) ()
+      ; datom ~e:4 ~a:"follow" ~v:(Ref 6) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 4) ()
+      ]
+  in
+  let even_entity = function
+    | [ Result_entity entity_id ] -> entity_id mod 2 = 0
+    | _ -> false
+  in
+  let query =
+    { find = [ Find_var "y"; Find_var "x" ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules =
+        [ { rule_name = "rule"
+          ; rule_params = [ "a"; "b" ]
+          ; rule_body = [ Pattern (QVar "a", QAttr "follow", QVar "b") ]
+          }
+        ]
+    ; where =
+        [ Pattern (QWildcard, QWildcard, QVar "x")
+        ; Rule ("rule", [ QVar "x"; QVar "y" ])
+        ; Predicate ("even?", [ QVar "x" ], even_entity)
+        ]
+    }
+  in
+  assert_equal_query_set
+    "q joins regular clauses with rule invocations"
+    [ [ Result_entity 3; Result_entity 2 ]
+    ; [ Result_entity 6; Result_entity 4 ]
+    ; [ Result_entity 4; Result_entity 2 ]
+    ]
+    (q db query)
+
+let test_q_rule_branches_match_upstream () =
+  let db =
+    init_db
+      [ datom ~e:5 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:1 ~a:"follow" ~v:(Ref 2) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 3) ()
+      ; datom ~e:3 ~a:"follow" ~v:(Ref 4) ()
+      ; datom ~e:4 ~a:"follow" ~v:(Ref 6) ()
+      ; datom ~e:2 ~a:"follow" ~v:(Ref 4) ()
+      ]
+  in
+  let query =
+    { find = [ Find_var "to_entity" ]
+    ; inputs = [ Input_scalar_decl "from_entity" ]
+    ; with_vars = []
+    ; rules =
+        [ { rule_name = "follow"
+          ; rule_params = [ "from"; "to_entity" ]
+          ; rule_body = [ Pattern (QVar "from", QAttr "follow", QVar "to_entity") ]
+          }
+        ; { rule_name = "follow"
+          ; rule_params = [ "from"; "to_entity" ]
+          ; rule_body =
+              [ Pattern (QVar "from", QAttr "follow", QVar "via")
+              ; Pattern (QVar "via", QAttr "follow", QVar "to_entity")
+              ]
+          }
+        ]
+    ; where = [ Rule ("follow", [ QVar "from_entity"; QVar "to_entity" ]) ]
+    }
+  in
+  assert_equal_query_set
+    "q rule branches union direct and branch-local results"
+    [ [ Result_entity 2 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+    (q ~inputs:[ Arg_scalar (Result_entity 1) ] db query)
+
+let test_q_can_call_same_dynamic_predicate_rule_twice () =
+  let db =
+    empty_db ()
+    |> db_with [ Add (Entity_id 1, "attr", String "a") ]
+  in
+  let always_true _ = true in
+  assert_equal_query
+    "q can call the same dynamic predicate rule twice"
+    []
+    (q_string
+       ~inputs:[ Arg_predicate always_true ]
+       db
+       "{:find [?p]
+         :in [$ % ?fn]
+         :where [(rule ?p ?fn \"a\")
+                 (rule ?p ?fn \"b\")]
+         :rules [[(rule ?p ?fn ?x)
+                  [?p :attr ?x]
+                  [(?fn ?x)]]]}")
+
 let test_q_with_recursive_rules () =
   let db =
     empty_db ()
@@ -16921,6 +17017,9 @@ let () =
   test_q_rules_accept_false_arguments ();
   test_q_with_rules ();
   test_q_rule_context_is_isolated_from_outer_context ();
+  test_q_regular_clauses_join_with_rules ();
+  test_q_rule_branches_match_upstream ();
+  test_q_can_call_same_dynamic_predicate_rule_twice ();
   test_q_with_recursive_rules ();
   test_q_with_symmetric_recursive_rules ();
   test_q_with_mutually_recursive_rules ();
