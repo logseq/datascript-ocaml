@@ -1,4 +1,4 @@
-- 参考 ~/gh-repos/datascript/ 的实现，用ocaml5，把datascript在当前repo下重写
+- 参考 ~/Codes/projects/datascript/ 的实现，用ocaml5，把datascript在当前repo下重写
 - 采用自上而下的软件构建方式：先做顶层类型设计，再做中层类型设计，最后自上而下实现
 - 类型定义和代码实现隔离，分别在放在type和impl dir
-- 使用dune+ocaml5.4.1
+- 使用dune+ocaml5.2.1

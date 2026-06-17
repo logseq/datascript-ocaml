@@ -13,6 +13,9 @@ let assert_equal_string label expected actual =
   if expected <> actual then
     failf "%s: expected %s, got %s" label expected actual
 
+let assert_equal_value label expected actual =
+  if expected <> actual then failf "%s: unexpected value" label
+
 let assert_equal_datoms label expected actual =
   if expected <> actual then
     failf "%s: unexpected datoms" label
@@ -46,6 +49,25 @@ let rec debug_value = function
   | TxRef -> "#datascript/tx"
   | Ref_to _ -> "Ref_to"
 
+let rec debug_pulled_value = function
+  | Pulled_scalar value -> debug_value value
+  | Pulled_many values -> "[" ^ (values |> List.map debug_pulled_value |> String.concat " ") ^ "]"
+  | Pulled_entity entity -> debug_pulled_entity entity
+
+and debug_pulled_entity entity =
+  "{"
+  ^ (entity.pulled_attrs
+     |> List.map (fun (attr, value) -> attr ^ " " ^ debug_pulled_value value)
+     |> String.concat ", ")
+  ^ "}"
+
+let debug_pulled_attrs attrs =
+  "{"
+  ^ (attrs
+     |> List.map (fun (attr, value) -> attr ^ " " ^ debug_pulled_value value)
+     |> String.concat ", ")
+  ^ "}"
+
 let assert_equal_triples label expected actual =
   let triples = List.map (fun d -> d.e, d.a, d.v) actual in
   if expected <> triples then
@@ -60,10 +82,23 @@ let assert_equal_tx_value label expected actual =
   if expected <> actual then failf "%s: unexpected value" label
 
 let assert_equal_pulled_attrs label expected entity =
-  if expected <> entity.pulled_attrs then failf "%s: unexpected pulled attrs" label
+  if expected <> entity.pulled_attrs then
+    failf
+      "%s: expected %s, got %s"
+      label
+      (debug_pulled_attrs expected)
+      (debug_pulled_attrs entity.pulled_attrs)
 
 let assert_equal_query label expected actual =
   if expected <> actual then failf "%s: unexpected query result" label
+
+let assert_equal_query_set label expected actual =
+  let normalize rows = List.sort_uniq compare rows in
+  if normalize expected <> normalize actual then failf "%s: unexpected query result" label
+
+let assert_float_nan label = function
+  | Float value when classify_float value = FP_nan -> ()
+  | value -> failf "%s: expected NaN, got %s" label (debug_value value)
 
 let assert_equal_tx_flags label expected actual =
   let values = List.map (fun d -> d.e, d.a, d.v, d.added) actual in
@@ -167,6 +202,44 @@ let test_squuid_embeds_time_and_generates_unique_values () =
   assert_equal_int "squuid has UUID string length" 36 (String.length first_uuid);
   if first_uuid.[8] <> '-' || first_uuid.[13] <> '-' || first_uuid.[18] <> '-' || first_uuid.[23] <> '-' then
     failwith "squuid should use canonical UUID separators"
+
+let test_lru_matches_upstream_eviction_order () =
+  let l0 = Lru.create 2 in
+  let l1 = Lru.assoc "a" 1 l0 in
+  let l2 = Lru.assoc "b" 2 l1 in
+  let l3 = Lru.assoc "c" 3 l2 in
+  let l4 = Lru.assoc "b" 4 l3 in
+  let l5 = Lru.assoc "d" 5 l4 in
+  if Lru.find "a" l0 <> None then failwith "empty LRU should not contain a";
+  if Lru.find "a" l1 <> Some 1 then failwith "LRU should store inserted values";
+  if Lru.find "a" l2 <> Some 1 then failwith "LRU should keep values under limit";
+  if Lru.find "b" l2 <> Some 2 then failwith "LRU should keep the second inserted value";
+  if Lru.find "a" l3 <> None then failwith "LRU should evict the oldest value on overflow";
+  if Lru.find "b" l3 <> Some 2 then failwith "LRU should retain newer values";
+  if Lru.find "c" l3 <> Some 3 then failwith "LRU should retain the newest value";
+  if Lru.find "b" l4 <> Some 2 then failwith "LRU reassoc should update recency without replacing value";
+  if Lru.find "c" l4 <> Some 3 then failwith "LRU reassoc should not evict under limit";
+  if Lru.find "b" l5 <> Some 2 then failwith "LRU reassoc should keep b newer than c";
+  if Lru.find "c" l5 <> None then failwith "LRU should evict the oldest value after reassoc";
+  if Lru.find "d" l5 <> Some 5 then failwith "LRU should store the newest inserted value"
+
+let test_lru_cache_computes_misses_only () =
+  let cache = Lru.cache 2 in
+  let a_calls = ref 0 in
+  let b_calls = ref 0 in
+  let c_calls = ref 0 in
+  let compute counter value () =
+    incr counter;
+    value
+  in
+  if Lru.cache_get cache "a" (compute a_calls 1) <> 1 then failwith "cache should compute first miss";
+  if Lru.cache_get cache "b" (compute b_calls 2) <> 2 then failwith "cache should compute second miss";
+  if Lru.cache_get cache "a" (compute a_calls 11) <> 1 then failwith "cache should reuse cached values";
+  if Lru.cache_get cache "c" (compute c_calls 3) <> 3 then failwith "cache should compute new miss";
+  if Lru.cache_get cache "b" (compute b_calls 2) <> 2 then failwith "cache should recompute evicted values";
+  assert_equal_int "a computed once" 1 !a_calls;
+  assert_equal_int "b computed twice" 2 !b_calls;
+  assert_equal_int "c computed once" 1 !c_calls
 
 let test_init_db_and_indexes () =
   let ivan = datom ~e:1 ~a:"name" ~v:(String "Ivan") () in
@@ -327,6 +400,25 @@ let test_db_diff_returns_left_right_and_common_datoms () =
   assert_equal_triples
     "db diff returns datoms present in both dbs"
     [ 1, "a", Int 1 ]
+    both;
+  let typed_left =
+    empty_db () |> db_with [ Add (Entity_id 1, "attr", Keyword "aa") ]
+  in
+  let typed_right =
+    empty_db () |> db_with [ Add (Entity_id 1, "attr", String "aa") ]
+  in
+  let only_left, only_right, both = diff typed_left typed_right in
+  assert_equal_triples
+    "db diff keeps keyword values distinct from string values"
+    [ 1, "attr", Keyword "aa" ]
+    only_left;
+  assert_equal_triples
+    "db diff keeps string values distinct from keyword values"
+    [ 1, "attr", String "aa" ]
+    only_right;
+  assert_equal_triples
+    "db diff has no common datoms for same attr with different value types"
+    []
     both
 
 let test_find_datom_returns_first_index_match () =
@@ -484,6 +576,31 @@ let test_indexes_compare_numbers_across_value_constructors () =
     "seek_datoms compares mixed numeric lower bounds numerically"
     [ 3, "score", Int 2; 1, "score", Int 100 ]
     (seek_datoms db Avet ~a:"score" ~v:(Float 1.6) ())
+
+let test_avet_exact_lookup_compares_entire_sequences () =
+  let db =
+    empty_db ~schema:[ "path", indexed ] ()
+    |> db_with
+         [ Add (Entity_id 1, "path", List [ Int 1; Int 2 ])
+         ; Add (Entity_id 2, "path", List [ Int 1; Int 2; Int 3 ])
+         ]
+  in
+  let entity_ids value =
+    datoms db Avet ~a:"path" ~v:value ()
+    |> List.map (fun datom -> datom.e)
+  in
+  if entity_ids (List [ Int 1 ]) <> [] then
+    failwith "AVET exact lookup should not match shorter sequence prefixes";
+  if entity_ids (List [ Int 1; Int 1 ]) <> [] then
+    failwith "AVET exact lookup should not match different second sequence item";
+  if entity_ids (List [ Int 1; Int 2 ]) <> [ 1 ] then
+    failwith "AVET exact lookup should match the exact shorter sequence";
+  if entity_ids (List [ Int 1; Int 2; Int 2 ]) <> [] then
+    failwith "AVET exact lookup should not match a sequence between indexed values";
+  if entity_ids (List [ Int 1; Int 2; Int 3 ]) <> [ 2 ] then
+    failwith "AVET exact lookup should match the exact longer sequence";
+  if entity_ids (List [ Int 1; Int 2; Int 3; Int 4 ]) <> [] then
+    failwith "AVET exact lookup should not match longer sequence extensions"
 
 let test_indexes_compare_mixed_value_types_like_datascript () =
   let db =
@@ -1043,8 +1160,9 @@ let test_db_with_compare_and_set () =
     "CompareAndSet updates when expected value matches"
     [ 1, "age", Int 32 ]
     (datoms db Eavt ());
-  assert_raises_invalid_arg
-    "CompareAndSet fails when expected value does not match"
+  assert_raises_invalid_arg_message
+    "CompareAndSet reports mismatched cardinality-one values like upstream"
+    ":db.fn/cas failed on datom [1 :age 32], expected 31"
     (fun () -> ignore (db_with [ CompareAndSet (Entity_id 1, "age", Some (Int 31), Int 33) ] db));
   let db =
     db_with [ CompareAndSet (Entity_id 1, "nickname", None, String "p") ] db
@@ -1064,8 +1182,9 @@ let test_db_with_compare_and_set_on_many_attr () =
     "CompareAndSet on many attrs succeeds when expected value is present"
     [ 1, "label", String "x"; 1, "label", String "y"; 1, "label", String "z" ]
     (datoms db Eavt ());
-  assert_raises_invalid_arg
-    "CompareAndSet on many attrs fails when expected value is absent"
+  assert_raises_invalid_arg_message
+    "CompareAndSet reports mismatched cardinality-many values like upstream"
+    ":db.fn/cas failed on datom [1 :label (\"x\" \"y\" \"z\")], expected \"missing\""
     (fun () -> ignore (db_with [ CompareAndSet (Entity_id 1, "label", Some (String "missing"), String "new") ] db))
 
 let test_retract_without_value_removes_false_values () =
@@ -1318,8 +1437,9 @@ let test_tempids_are_rejected_in_non_add_ops () =
     (fun () -> ignore (db_with [ CompareAndSet (Temp_id "x", "name", None, String "Petr") ] db))
 
 let test_value_only_tempids_are_rejected () =
-  assert_raises_invalid_arg
-    "tempids used only as ref values are rejected"
+  assert_raises_invalid_arg_message
+    "tempids used only as ref values are rejected like upstream"
+    "Tempids used only as value in transaction: (missing)"
     (fun () ->
       ignore
         (empty_db ~schema:[ "friend", ref_attr ] ()
@@ -1446,6 +1566,56 @@ let test_transaction_function_can_return_entity_without_id () =
     "transaction functions can return entity maps without db/id"
     [ 1, "foo", String "bar" ]
     (datoms report.db_after Eavt ())
+
+let test_db_ident_transaction_function_call () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "db/ident", One_value (Keyword "Petr")
+                 ; "name", One_value (String "Petr")
+                 ; "age", One_value (Int 31)
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs = [ "db/ident", One_value (Keyword "inc-age") ]
+             }
+         ; InstallTxFn
+             ( Ident "inc-age"
+             , fun db args ->
+                 match args with
+                 | [ String name ] ->
+                   (match entid db "name" (String name) with
+                    | Some entity_id ->
+                      [ Add (Entity_id entity_id, "age", Int 32)
+                      ; Add (Entity_id entity_id, "had-birthday", Bool true)
+                      ]
+                    | None -> invalid_arg ("No entity with name: " ^ name))
+                 | _ -> invalid_arg "inc-age expects one name" )
+         ]
+  in
+  assert_raises_invalid_arg
+    "CallIdent rejects missing transaction function idents"
+    (fun () -> ignore (db_with [ CallIdent (Ident "unknown-fn", []) ] db));
+  assert_raises_invalid_arg
+    "CallIdent rejects idents without installed transaction functions"
+    (fun () -> ignore (db_with [ CallIdent (Ident "Petr", []) ] db));
+  assert_raises_invalid_arg
+    "CallIdent propagates transaction function errors"
+    (fun () -> ignore (db_with [ CallIdent (Ident "inc-age", [ String "Bob" ]) ] db));
+  let db = db_with [ CallIdent (Ident "inc-age", [ String "Petr" ]) ] db in
+  assert_equal_triples
+    "CallIdent invokes db/fn metadata by ident"
+    [ 1, "age", Int 32
+    ; 1, "db/ident", Keyword "Petr"
+    ; 1, "had-birthday", Bool true
+    ; 1, "name", String "Petr"
+    ; 2, "db/ident", Keyword "inc-age"
+    ]
+    (datoms db Eavt ())
 
 let test_transaction_rejects_entity_ids_above_supported_range () =
   let too_large = 285_873_023_227_265 in
@@ -2066,6 +2236,33 @@ let test_entity_maps_expand_reverse_nested_entity_values () =
     [ 1, "name", String "Ivan"
     ; 2, "friend", Ref 1
     ; 2, "name", String "Petr"
+    ]
+    (datoms db Eavt ())
+
+let test_entity_maps_expand_many_reverse_nested_entity_values () =
+  let db =
+    empty_db ~schema:[ "profile", ref_many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "email", One_value (String "ivan@example.com")
+                 ; ( "_profile"
+                   , Many_entities
+                       [ { db_id = None; attrs = [ "name", One_value (String "Ivan") ] }
+                       ; { db_id = None; attrs = [ "name", One_value (String "Petr") ] }
+                       ] )
+                 ]
+             }
+         ]
+  in
+  assert_equal_triples
+    "entity map many reverse nested entities are linked back to the owning entity"
+    [ 1, "email", String "ivan@example.com"
+    ; 2, "name", String "Ivan"
+    ; 2, "profile", Ref 1
+    ; 3, "name", String "Petr"
+    ; 3, "profile", Ref 1
     ]
     (datoms db Eavt ())
 
@@ -2717,8 +2914,9 @@ let test_lookup_refs_reject_non_unique_attrs () =
     |> db_with
          [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
   in
-  assert_raises_invalid_arg
-    "entity lookup refs require unique attrs"
+  assert_raises_invalid_arg_message
+    "entity lookup refs require unique attrs like upstream"
+    "Lookup ref attribute should be marked as :db/unique: [:name \"Ivan\"]"
     (fun () -> ignore (entity db (Lookup_ref ("name", String "Ivan"))));
   assert_raises_invalid_arg
     "query lookup refs require unique attrs"
@@ -2938,8 +3136,8 @@ let test_edn_string_top_level_apis () =
   if
     q_return_map_string db "[:find ?name ?age :keys name age :where [?e :name ?name] [?e :age ?age]]"
     <> Query_relation_maps
-         [ [ "age", Result_value (Int 31); "name", Result_value (String "Ivan") ]
-         ; [ "age", Result_value (Int 19); "name", Result_value (String "Petr") ]
+         [ [ Keyword "age", Result_value (Int 31); Keyword "name", Result_value (String "Ivan") ]
+         ; [ Keyword "age", Result_value (Int 19); Keyword "name", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map_string should parse return map labels and execute query";
   (match pull_string db "[:name {:friend [:name]}]" (Entity_id 1) with
@@ -2974,6 +3172,73 @@ let test_q_string_matches_plain_symbol_constants () =
     q_return_string db "[:find [?e ...] :where [?e :s b]]"
     <> Query_collection [ Result_entity 2 ]
   then failwith "q_return_string should match plain symbol constants"
+
+let test_db_with_string_matches_upstream_validation_messages () =
+  let db = empty_db ~schema:[ "profile", ref_attr; "id", unique_identity ] () in
+  assert_raises_invalid_arg_message
+    "db_with_string rejects invalid db/id values like upstream"
+    "Expected number, string or lookup ref for :db/id"
+    (fun () -> ignore (db_with_string "[{:db/id #\"\" :name \"Ivan\"}]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil attrs in db/add like upstream"
+    "Bad entity attribute"
+    (fun () -> ignore (db_with_string "[[:db/add -1 nil \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects non-keyword attrs in db/add like upstream"
+    "Bad entity attribute"
+    (fun () -> ignore (db_with_string "[[:db/add -1 17 \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects non-keyword attrs in entity maps like upstream"
+    "Bad entity attribute"
+    (fun () -> ignore (db_with_string "[{:db/id -1 17 \"Ivan\"}]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil values in db/add like upstream"
+    "Cannot store nil as a value"
+    (fun () -> ignore (db_with_string "[[:db/add -1 :name nil]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil values in entity maps like upstream"
+    "Cannot store nil as a value"
+    (fun () -> ignore (db_with_string "[{:db/id -1 :name nil}]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil unique values like upstream"
+    "Cannot store nil as a value"
+    (fun () -> ignore (db_with_string "[[:db/add -1 :id nil]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil unique values after tempid reuse like upstream"
+    "Cannot store nil as a value"
+    (fun () -> ignore (db_with_string "[{:db/id -1 :id \"A\"} {:db/id -1 :id nil}]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects nil entity ids like upstream"
+    "Expected number or lookup ref for entity id"
+    (fun () -> ignore (db_with_string "[[:db/add nil :name \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects map entity ids like upstream"
+    "Expected number or lookup ref for entity id"
+    (fun () -> ignore (db_with_string "[[:db/add {} :name \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects malformed ref entity ids like upstream"
+    "Expected number or lookup ref for entity id"
+    (fun () -> ignore (db_with_string "[[:db/add -1 :profile #\"regexp\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects malformed ref entity map values like upstream"
+    "Expected number or lookup ref for entity id"
+    (fun () -> ignore (db_with_string "[{:db/id -1 :profile #\"regexp\"}]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects tempids in retracts like upstream"
+    "Tempids are allowed in :db/add only"
+    (fun () -> ignore (db_with_string "[[:db/retract -1 :name \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects unknown operations like upstream"
+    "Unknown operation"
+    (fun () -> ignore (db_with_string "[[\"aaa\" :name \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects malformed operation vectors like upstream"
+    "Bad entity type at"
+    (fun () -> ignore (db_with_string "[:db/add \"aaa\" :name \"Ivan\"]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects malformed transaction data like upstream"
+    "Bad transaction data"
+    (fun () -> ignore (db_with_string "{:profile \"aaa\"}" db))
 
 let test_edn_reader_parses_transaction_and_schema_strings () =
   let db =
@@ -3121,6 +3386,24 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     "db_with_string resolves lookup refs in entity map reverse ref attrs"
     [ 1, "friend", Ref 2; 1, "name", String "Ivan"; 2, "name", String "Petr" ]
     (datoms reverse_lookup_ref_entity_map_db Eavt ());
+  assert_raises_invalid_arg_message
+    "db_with_string reports unresolved entity-map lookup refs like upstream"
+    "Nothing found for entity id [:name \"Oleg\"]"
+    (fun () ->
+      ignore
+        (empty_db ~schema:[ "name", unique_identity ] ()
+         |> db_with_string
+              "[{:db/id 1 :name \"Ivan\"}
+                {:db/id [:name \"Oleg\"] :age 10}]"));
+  assert_raises_invalid_arg_message
+    "db_with_string reports unresolved db/add lookup refs like upstream"
+    "Nothing found for entity id [:name \"Oleg\"]"
+    (fun () ->
+      ignore
+        (empty_db ~schema:[ "name", unique_identity ] ()
+         |> db_with_string
+              "[{:db/id 1 :name \"Ivan\"}
+                [:db/add [:name \"Oleg\"] :age 10]]"));
   let set_nested_entity_db =
     empty_db ~schema:[ "profile", ref_many ] ()
     |> db_with_string
@@ -3208,10 +3491,10 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     ]
     (datoms retracted Eavt ());
   let cas_db =
-    db_with_string "[:db/cas 2 :name \"Petr\" \"Pyotr\"]" retracted
+    db_with_string "[[:db/cas 2 :name \"Petr\" \"Pyotr\"]]" retracted
   in
   assert_equal_triples
-    "db_with_string accepts single db/cas operation vectors"
+    "db_with_string transacts db/cas operation vectors"
     [ 1, "aka", String "Vanya"
     ; 1, "name", String "Ivan"
     ; 2, "friend", Ref 1
@@ -3220,7 +3503,7 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     (datoms cas_db Eavt ());
   assert_raises_invalid_arg
     "db_with_string db/cas fails when the expected value does not match"
-    (fun () -> ignore (db_with_string "[:db/cas 2 :name \"Petr\" \"Pavel\"]" cas_db));
+    (fun () -> ignore (db_with_string "[[:db/cas 2 :name \"Petr\" \"Pavel\"]]" cas_db));
   let retract_attr_db =
     db_with_string "[[:db.fn/retractAttribute 1 :aka]]" cas_db
   in
@@ -3297,6 +3580,23 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     ]
     (datoms collection_value_db Eavt ~e:1 ~a:"aka" ()
      @ datoms collection_value_db Eavt ~e:1 ~a:"friend" ())
+
+let test_nan_values_round_trip_and_match_index_values () =
+  let nan = Float Float.nan in
+  let db =
+    empty_db ~schema:[ "nan", indexed ] ()
+    |> db_with [ Add (Entity_id 1, "nan", nan) ]
+  in
+  (match Option.bind (entity db (Entity_id 1)) (fun entity -> entity_attr entity "nan") with
+   | Some (One_value value) -> assert_float_nan "entity should expose stored NaN" value
+   | _ -> failwith "entity should expose stored NaN");
+  (match datoms db Avet ~a:"nan" ~v:nan () with
+   | [ { v; _ } ] -> assert_float_nan "AVET value lookup should find NaN" v
+   | _ -> failwith "AVET value lookup should find NaN");
+  let restored = db |> serializable |> from_serializable in
+  (match Option.bind (entity restored (Entity_id 1)) (fun entity -> entity_attr entity "nan") with
+   | Some (One_value value) -> assert_float_nan "from_serializable should preserve NaN" value
+   | _ -> failwith "from_serializable should preserve NaN")
 
 let test_edn_reader_parses_common_literals () =
   (match read_edn "\"left\\bright\\fform\\u0020feed\\u0041\"" with
@@ -5459,7 +5759,7 @@ let test_parse_query_aggregate_find_expressions () =
          (parse_query
             (QueryFormVector
                [ QueryFormKeyword "find"
-               ; QueryFormList [ QueryFormSymbol "sum"; QueryFormSymbol "?heads"; QueryFormInt 1 ]
+               ; QueryFormList [ QueryFormSymbol "sum" ]
                ; QueryFormKeyword "where"
                ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "heads"; QueryFormSymbol "?heads" ]
                ])))
@@ -6836,6 +7136,185 @@ let test_parse_query_in_bindings () =
             db
             (parse_query scalar_query)))
 
+let test_parse_query_input_helper_parsers () =
+  assert_equal_value
+    "parse_binding parses scalar variables"
+    (Bind_scalar "x")
+    (parse_binding (QueryFormSymbol "?x"));
+  assert_equal_value
+    "parse_binding parses ignored bindings"
+    Bind_ignore
+    (parse_binding (QueryFormSymbol "_"));
+  assert_equal_value
+    "parse_binding parses collection bindings"
+    (Bind_collection (Bind_scalar "x"))
+    (parse_binding (QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "..." ]));
+  assert_equal_value
+    "parse_binding parses single-value tuple bindings"
+    (Bind_tuple [ Bind_scalar "x" ])
+    (parse_binding (QueryFormVector [ QueryFormSymbol "?x" ]));
+  assert_equal_value
+    "parse_binding parses multi-value tuple bindings"
+    (Bind_tuple [ Bind_scalar "x"; Bind_scalar "y" ])
+    (parse_binding (QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "?y" ]));
+  assert_equal_value
+    "parse_binding parses ignored tuple elements"
+    (Bind_tuple [ Bind_ignore; Bind_scalar "y" ])
+    (parse_binding (QueryFormVector [ QueryFormSymbol "_"; QueryFormSymbol "?y" ]));
+  assert_equal_value
+    "parse_binding parses nested collection tuple bindings"
+    (Bind_collection (Bind_tuple [ Bind_ignore; Bind_collection (Bind_scalar "x") ]))
+    (parse_binding
+       (QueryFormVector
+          [ QueryFormVector
+              [ QueryFormSymbol "_"
+              ; QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "..." ]
+              ]
+          ; QueryFormSymbol "..."
+          ]));
+  assert_equal_value
+    "parse_binding parses relation-style tuple bindings"
+    (Bind_tuple [ Bind_tuple [ Bind_scalar "a"; Bind_scalar "b"; Bind_scalar "c" ] ])
+    (parse_binding
+       (QueryFormVector
+          [ QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "?b"; QueryFormSymbol "?c" ] ]));
+  assert_raises_invalid_arg
+    "parse_binding rejects invalid binding forms"
+    (fun () -> ignore (parse_binding (QueryFormKeyword "db/id")));
+  assert_equal_value
+    "parse_in parses scalar, source, ignore, collection, and relation declarations"
+    [ Input_scalar_decl "x"
+    ; Input_source_decl "$"
+    ; Input_source_decl "users"
+    ; Input_ignore_decl
+    ; Input_collection_decl "name"
+    ; Input_relation_decl [ "a"; "b"; "c" ]
+    ]
+    (parse_in
+       (QueryFormVector
+          [ QueryFormSymbol "?x"
+          ; QueryFormSymbol "$"
+          ; QueryFormSymbol "$users"
+          ; QueryFormSymbol "_"
+          ; QueryFormVector [ QueryFormSymbol "?name"; QueryFormSymbol "..." ]
+          ; QueryFormVector
+              [ QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "?b"; QueryFormSymbol "?c" ]
+              ; QueryFormSymbol "..."
+              ]
+          ]));
+  assert_equal_value
+    "parse_in parses nested relation declarations"
+    [ Input_source_decl "$"
+    ; Input_nested_relation_decl [ Bind_ignore; Bind_collection (Bind_scalar "x") ]
+    ]
+    (parse_in
+       (QueryFormVector
+          [ QueryFormSymbol "$"
+          ; QueryFormVector
+              [ QueryFormVector
+                  [ QueryFormSymbol "_"
+                  ; QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "..." ]
+                  ]
+              ; QueryFormSymbol "..."
+              ]
+          ]));
+  assert_equal_value
+    "parse_in parses rules vars"
+    [ Input_rules_decl; Input_scalar_decl "x" ]
+    (parse_in (QueryFormVector [ QueryFormSymbol "%"; QueryFormSymbol "?x" ]));
+  assert_raises_invalid_arg
+    "parse_in rejects non-sequential forms"
+    (fun () -> ignore (parse_in (QueryFormKeyword "bad")));
+  assert_equal_value
+    "parse_with parses variable declarations"
+    [ "x"; "y" ]
+    (parse_with (QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "?y" ]));
+  assert_raises_invalid_arg
+    "parse_with rejects ignored bindings"
+    (fun () -> ignore (parse_with (QueryFormVector [ QueryFormSymbol "?x"; QueryFormSymbol "_" ])))
+
+let test_parse_query_find_helper_parser () =
+  assert_equal_value
+    "parse_find parses relation find specs"
+    (Return_relation, [ Find_var "a"; Find_var "b" ])
+    (parse_find (QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "?b" ]));
+  assert_equal_value
+    "parse_find parses collection find specs"
+    (Return_collection, [ Find_var "a" ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "..." ] ]));
+  assert_equal_value
+    "parse_find parses scalar find specs"
+    (Return_scalar, [ Find_var "a" ])
+    (parse_find (QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "." ]));
+  assert_equal_value
+    "parse_find parses tuple find specs"
+    (Return_tuple, [ Find_var "a"; Find_var "b" ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormVector [ QueryFormSymbol "?a"; QueryFormSymbol "?b" ] ]));
+  assert_equal_value
+    "parse_find parses relation aggregate find specs"
+    (Return_relation, [ Find_var "a"; Find_aggregate (Count, [ QVar "b" ]) ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormSymbol "?a"
+          ; QueryFormList [ QueryFormSymbol "count"; QueryFormSymbol "?b" ]
+          ]));
+  assert_equal_value
+    "parse_find parses collection aggregate find specs"
+    (Return_collection, [ Find_aggregate (Count, [ QVar "a" ]) ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormVector
+              [ QueryFormList [ QueryFormSymbol "count"; QueryFormSymbol "?a" ]
+              ; QueryFormSymbol "..."
+              ]
+          ]));
+  assert_equal_value
+    "parse_find parses scalar custom aggregate find specs"
+    (Return_scalar, [ Find_aggregate (CustomVar "f", [ QVar "a" ]) ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormList [ QueryFormSymbol "aggregate"; QueryFormSymbol "?f"; QueryFormSymbol "?a" ]
+          ; QueryFormSymbol "."
+          ]));
+  assert_equal_value
+    "parse_find parses tuple custom aggregate find specs"
+    (Return_tuple, [ Find_aggregate (CustomVar "f", [ QVar "a" ]); Find_var "b" ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormVector
+              [ QueryFormList [ QueryFormSymbol "aggregate"; QueryFormSymbol "?f"; QueryFormSymbol "?a" ]
+              ; QueryFormSymbol "?b"
+              ]
+          ]));
+  assert_equal_value
+    "parse_find parses parameterized aggregate find specs"
+    (Return_scalar, [ Find_aggregate (MaxN 3, [ QVar "a" ]) ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3; QueryFormSymbol "?a" ]
+          ; QueryFormSymbol "."
+          ]));
+  assert_equal_value
+    "parse_find preserves structured aggregate arguments"
+    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int 1); QSource "x" ]) ])
+    (parse_find
+       (QueryFormVector
+          [ QueryFormList
+              [ QueryFormSymbol "count"
+              ; QueryFormSymbol "?b"
+              ; QueryFormInt 1
+              ; QueryFormSymbol "$x"
+              ]
+          ; QueryFormSymbol "."
+          ]));
+  assert_raises_invalid_arg
+    "parse_find rejects invalid forms"
+    (fun () -> ignore (parse_find (QueryFormKeyword "find")))
+
 let test_parse_query_or_join_required_vars () =
   let db =
     empty_db ()
@@ -6930,6 +7409,73 @@ let test_parse_query_or_join_required_vars () =
                    ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "name"; QueryFormString "Ivan" ]
                    ]
                ])))
+
+let test_parse_query_where_clause_validation_messages () =
+  let query_with_where_clause clause =
+    QueryFormVector
+      [ QueryFormKeyword "find"; QueryFormSymbol "?e"; QueryFormKeyword "where"; clause ]
+  in
+  assert_raises_invalid_arg_message
+    "parse_query reports empty not-join vars like upstream"
+    "Join variables should not be empty"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector
+                  [ QueryFormSymbol "not-join"
+                  ; QueryFormVector []
+                  ; QueryFormVector [ QueryFormSymbol "?e" ]
+                  ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports not with no free vars like upstream"
+    "Join variables should not be empty"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector [ QueryFormSymbol "not"; QueryFormVector [ QueryFormSymbol "_" ] ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports malformed not-join like upstream"
+    "Cannot parse 'not-join' clause"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector [ QueryFormSymbol "not-join"; QueryFormVector [ QueryFormSymbol "?e" ] ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports empty not like upstream"
+    "Cannot parse 'not' clause"
+    (fun () -> ignore (parse_query (query_with_where_clause (QueryFormVector [ QueryFormSymbol "not" ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports empty or rule vars like upstream"
+    "Join variables should not be empty"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector [ QueryFormSymbol "or"; QueryFormVector [ QueryFormSymbol "_" ] ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports malformed or-join rule vars like upstream"
+    "Cannot parse rule-vars"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector
+                  [ QueryFormSymbol "or-join"; QueryFormVector []; QueryFormVector [ QueryFormSymbol "?e" ] ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports malformed or-join like upstream"
+    "Cannot parse 'or-join' clause"
+    (fun () ->
+       ignore
+         (parse_query
+            (query_with_where_clause
+               (QueryFormVector [ QueryFormSymbol "or-join"; QueryFormVector [ QueryFormSymbol "?e" ] ]))));
+  assert_raises_invalid_arg_message
+    "parse_query reports empty or like upstream"
+    "Cannot parse 'or' clause"
+    (fun () -> ignore (parse_query (query_with_where_clause (QueryFormVector [ QueryFormSymbol "or" ]))))
 
 let test_parse_query_validates_structure () =
   assert_raises_invalid_arg
@@ -7113,7 +7659,7 @@ let test_parse_query_validates_structure () =
                ])));
   assert_raises_invalid_arg_message
     "parse_query rejects undeclared named sources inside dynamic predicate args"
-    "where uses unknown source variables"
+    "Where uses unknown source vars: [$missing]"
     (fun () ->
        ignore
          (parse_query_string
@@ -7123,7 +7669,7 @@ let test_parse_query_validates_structure () =
                      [(?pred $missing ?x)]]"));
   assert_raises_invalid_arg_message
     "parse_query rejects undeclared default source inside dynamic predicate args"
-    "where uses unknown source variables"
+    "Where uses unknown source vars: [$]"
     (fun () ->
        ignore
          (parse_query_string
@@ -7229,6 +7775,132 @@ let test_parse_query_with_vars () =
                ; QueryFormKeyword "where"
                ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "heads"; QueryFormSymbol "?heads" ]
                ])))
+
+let test_parse_query_matches_upstream_validation_messages () =
+  assert_raises_invalid_arg_message
+    "parse_query reports unknown find vars like upstream"
+    "Query for unknown vars: [?e]"
+    (fun () -> ignore (parse_query_string "[:find ?e :where [?x]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports unknown with vars like upstream"
+    "Query for unknown vars: [?f]"
+    (fun () -> ignore (parse_query_string "[:find ?e :with ?f :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports multiple unknown vars like upstream"
+    "Query for unknown vars: [?t]"
+    (fun () -> ignore (parse_query_string "[:find ?e ?x ?t :in ?x :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports find/with overlap like upstream"
+    ":find and :with should not use same variables: [?e]"
+    (fun () -> ignore (parse_query_string "[:find ?x ?e :with ?y ?e :where [?x ?e ?y]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports duplicate default source vars like upstream"
+    "Vars used in :in should be distinct"
+    (fun () -> ignore (parse_query_string "[:find ?e :in $ $ ?x :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports duplicate scalar input vars like upstream"
+    "Vars used in :in should be distinct"
+    (fun () -> ignore (parse_query_string "[:find ?e :in ?x $ ?x :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports duplicate rules vars like upstream"
+    "Vars used in :in should be distinct"
+    (fun () -> ignore (parse_query_string "[:find ?e :in $ % ?x % :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports duplicate with vars like upstream"
+    "Vars used in :with should be distinct"
+    (fun () -> ignore (parse_query_string "[:find ?n :with ?e ?f ?e :where [?e ?f ?n]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports unknown where source vars like upstream"
+    "Where uses unknown source vars: [$1]"
+    (fun () -> ignore (parse_query_string "[:find ?x :where [$1 ?x]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports unknown declared source vars like upstream"
+    "Where uses unknown source vars: [$2]"
+    (fun () -> ignore (parse_query_string "[:find ?x :in $1 :where [$2 ?x]]"));
+  assert_raises_invalid_arg_message
+    "parse_query reports missing rules var like upstream"
+    "Missing rules var '%' in :in"
+    (fun () -> ignore (parse_query_string "[:find ?e :where (rule ?e)]"))
+
+let test_parse_query_with_and_rules_match_upstream_messages () =
+  assert_raises_invalid_arg_message
+    "parse_query rejects :with placeholders like upstream parser"
+    "Cannot parse :with clause"
+    (fun () -> ignore (parse_query_string "[:find ?e :with ?e _ :where [?e]]"));
+  assert_raises_invalid_arg_message
+    "parse_query rejects rules without body clauses like upstream parser-rules"
+    "Rule branch should have clauses"
+    (fun () ->
+       ignore
+         (parse_query_string
+            "[:find ?e :in % :where (rule ?e)
+             :rules [[(rule ?x)]]]"));
+  assert_raises_invalid_arg_message
+    "parse_query rejects rules with arity mismatch like upstream parser-rules"
+    "Arity mismatch"
+    (fun () ->
+       ignore
+         (parse_query_string
+            "[:find ?e :in % :where (rule ?e)
+             :rules [[(rule ?x) [_]]
+                     [(rule ?x ?y) [_]]]"))
+
+let test_q_input_arity_matches_upstream_validation_messages () =
+  let db = empty_db () in
+  assert_raises_invalid_arg_message
+    "q reports too few supplied input args like upstream query-v3"
+    "Wrong number of arguments for bindings [$ ?a], 2 required, 1 provided"
+    (fun () ->
+       ignore
+         (q_string db "[:find ?a :in $ ?a]" ~inputs:[]));
+  assert_raises_invalid_arg_message
+    "q reports too many supplied input args for explicit source input like upstream query-v3"
+    "Wrong number of arguments for bindings [$], 1 required, 2 provided"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?a :in $ :where [?a]]"
+            ~inputs:[ Arg_scalar (Result_value (Int 1)) ]));
+  assert_raises_invalid_arg_message
+    "q reports too many supplied input args for inferred default source like upstream query-v3"
+    "Wrong number of arguments for bindings [$], 1 required, 2 provided"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?a :where [?a]]"
+            ~inputs:[ Arg_scalar (Result_value (Int 1)) ]))
+
+let test_q_input_binding_matches_upstream_validation_messages () =
+  let db = empty_db () in
+  assert_raises_invalid_arg_message
+    "q reports scalar supplied to tuple binding like upstream"
+    "Cannot bind value :a to tuple [?a ?b]"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?a ?b :in [?a ?b]]"
+            ~inputs:[ Arg_scalar (Result_value (Keyword "a")) ]));
+  assert_raises_invalid_arg_message
+    "q reports scalar supplied to collection binding like upstream"
+    "Cannot bind value :a to collection [?a ...]"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?a :in [?a ...]]"
+            ~inputs:[ Arg_scalar (Result_value (Keyword "a")) ]));
+  assert_raises_invalid_arg_message
+    "q reports short tuple input like upstream"
+    "Not enough elements in a collection [:a] to bind tuple [?a ?b]"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?a ?b :in [?a ?b]]"
+            ~inputs:[ Arg_scalar (Result_value (List [ Keyword "a" ])) ]))
 
 let test_parse_query_map_sections_accept_list_sequences () =
   let db =
@@ -7393,6 +8065,26 @@ let test_q_joins_clauses () =
     [ [ Result_value (String "Petr") ] ]
     (q db query)
 
+let test_q_short_data_patterns_match_upstream () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ]
+             }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 37) ] }
+         ]
+  in
+  assert_equal_query
+    "q treats one-term data patterns as entity wildcards"
+    [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
+    (q_string db "[:find ?e :where [?e]]");
+  assert_equal_query
+    "q treats two-term data patterns as value wildcards"
+    [ [ Result_entity 1 ] ]
+    (q_string db "[:find ?e :where [?e :name]]")
+
 let test_q_reverse_ref_patterns () =
   let db =
     empty_db ~schema:[ "parent", ref_attr; "person/parent", ref_attr ] ()
@@ -7474,6 +8166,34 @@ let test_q_predicates_filter_bound_values () =
     "q predicates filter bound values"
     [ [ Result_value (String "Ivan") ] ]
     (q db query)
+
+let test_q_predicates_without_free_variables_filter_all_rows () =
+  let query predicate =
+    { find = [ Find_var "x" ]
+    ; inputs =
+        [ Input_collection
+            ( "x"
+            , [ Result_value (Keyword "a")
+              ; Result_value (Keyword "b")
+              ; Result_value (Keyword "c")
+              ] )
+        ]
+    ; with_vars = []
+    ; rules = []
+    ; where = [ Predicate ("constant?", [], (fun _ -> predicate)) ]
+    }
+  in
+  assert_equal_query
+    "q predicates without free variables keep all rows when true"
+    [ [ Result_value (Keyword "a") ]
+    ; [ Result_value (Keyword "b") ]
+    ; [ Result_value (Keyword "c") ]
+    ]
+    (q (empty_db ()) (query true));
+  assert_equal_query
+    "q predicates without free variables drop all rows when false"
+    []
+    (q (empty_db ()) (query false))
 
 let test_q_functions_bind_derived_values () =
   let db =
@@ -9235,6 +9955,37 @@ let test_q_not_rejects_clauses_without_outer_bindings () =
                ]
            }))
 
+let test_q_not_insufficient_bindings_match_upstream_messages () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 20) ] }
+         ]
+  in
+  assert_raises_invalid_arg_message
+    "q not reports fully unbound clause vars like upstream"
+    "Insufficient bindings: none of #{?e} is bound in (not [?e :name \"Ivan\"])"
+    (fun () ->
+       ignore (q_string db "[:find ?e :where (not [?e :name \"Ivan\"]) [?e :name]]"));
+  assert_raises_invalid_arg_message
+    "q nested not reports unbound nested vars like upstream"
+    "Insufficient bindings: none of #{?a} is bound in (not [1 :age ?a])"
+    (fun () ->
+       ignore
+         (q_string
+            db
+            "[:find ?e :where
+              [?e :name]
+              (not-join [?e]
+                (not [1 :age ?a])
+                [?e :age ?a])]"));
+  assert_raises_invalid_arg_message
+    "q not reports unbound vars independent of outer vars like upstream"
+    "Insufficient bindings: none of #{?a} is bound in (not [?a :name \"Ivan\"])"
+    (fun () ->
+       ignore (q_string db "[:find ?e :where [?e :name] (not [?a :name \"Ivan\"])]"))
+
 let test_q_not_join_projects_join_variables () =
   let db =
     empty_db ()
@@ -9290,6 +10041,82 @@ let test_q_not_join_rejects_unbound_join_vars () =
                ; Pattern (QVar "e", QAttr "name", QWildcard)
                ]
            }))
+
+let test_q_not_matches_upstream_edge_cases () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 20) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 10) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 20) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 20) ] }
+         ]
+  in
+  assert_equal_query
+    "q not handles const minus empty nested result"
+    [ [ Result_entity 3 ] ]
+    (q_string db "[:find ?e :where [?e :name \"Oleg\"] [?e :age 10] (not [?e :age 20])]");
+  assert_equal_query
+    "q not handles const minus matching const"
+    []
+    (q_string db "[:find ?e :where [?e :name \"Oleg\"] [?e :age 10] (not [?e :age 10])]");
+  assert_equal_query
+    "q not handles relation minus const"
+    [ [ Result_entity 4 ] ]
+    (q_string db "[:find ?e :where [?e :name \"Oleg\"] (not [?e :age 10])]");
+  assert_equal_query_set
+    "q not handles two relations minus two relations"
+    [ [ Result_entity 2; Result_entity 1 ]
+    ; [ Result_entity 6; Result_entity 5 ]
+    ; [ Result_entity 1; Result_entity 1 ]
+    ; [ Result_entity 2; Result_entity 2 ]
+    ; [ Result_entity 5; Result_entity 5 ]
+    ; [ Result_entity 6; Result_entity 6 ]
+    ; [ Result_entity 2; Result_entity 5 ]
+    ; [ Result_entity 1; Result_entity 5 ]
+    ; [ Result_entity 2; Result_entity 6 ]
+    ; [ Result_entity 6; Result_entity 1 ]
+    ; [ Result_entity 5; Result_entity 1 ]
+    ; [ Result_entity 6; Result_entity 2 ]
+    ]
+    (q_string
+       db
+       "[:find ?e ?e2
+         :where [?e :name \"Ivan\"]
+                [?e2 :name \"Ivan\"]
+                (not [?e :age 10]
+                     [?e2 :age 20])]");
+  assert_equal_query_set
+    "q not handles two relations minus relation plus const"
+    [ [ Result_entity 2; Result_entity 3 ]
+    ; [ Result_entity 1; Result_entity 3 ]
+    ; [ Result_entity 2; Result_entity 4 ]
+    ; [ Result_entity 6; Result_entity 3 ]
+    ; [ Result_entity 5; Result_entity 3 ]
+    ; [ Result_entity 6; Result_entity 4 ]
+    ]
+    (q_string
+       db
+       "[:find ?e ?e2
+         :where [?e :name \"Ivan\"]
+                [?e2 :name \"Oleg\"]
+                (not [?e :age 10]
+                     [?e2 :age 20])]");
+  assert_equal_query_set
+    "q not handles two relations minus two constants"
+    [ [ Result_entity 4; Result_entity 3 ]
+    ; [ Result_entity 3; Result_entity 3 ]
+    ; [ Result_entity 4; Result_entity 4 ]
+    ]
+    (q_string
+       db
+       "[:find ?e ?e2
+         :where [?e :name \"Oleg\"]
+                [?e2 :name \"Oleg\"]
+                (not [?e :age 10]
+                     [?e2 :age 20])]")
 
 let test_q_or_unions_branch_results () =
   let db =
@@ -9940,6 +10767,27 @@ let test_q_with_dynamic_callable_inputs () =
          :in ?rows ?as-relation
          :where [(?as-relation ?rows) [[?x _ ?z] ...]]]")
 
+let test_q_nested_relation_map_inputs () =
+  assert_equal_query
+    "q_string binds map inputs as nested relation rows"
+    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    ]
+    (q_string
+       ~inputs:
+         [ Arg_scalar
+             (Result_value
+                (Map
+                   [ Keyword "a", List [ Int 1 ]
+                   ; Keyword "b", List [ Int 2 ]
+                   ; Keyword "c", List [ Int 3 ]
+                   ]))
+         ]
+       (empty_db ())
+       "[:find ?k ?v
+         :in [[?k [?v]] ...]
+         :where [(> ?v 1)]]")
+
 let test_q_with_dynamic_callable_inputs_in_rules () =
   let follow_db =
     empty_db ~schema:[ "follow", many ] ()
@@ -10183,7 +11031,15 @@ let test_parse_query_return_shapes () =
   let return, query = parse_query_return aggregate_collection_form in
   if return <> Return_collection then failwith "parse_query_return should detect aggregate find collection";
   if q_return db return query <> Query_collection [ Result_value (Int 2) ] then
-    failwith "parse_query_return aggregate collection should produce collection output"
+    failwith "parse_query_return aggregate collection should produce collection output";
+  if
+    q_return_string db "[:find [(count ?name)] :where [_ :name ?name]]"
+    <> Query_tuple (Some [ Result_value (Int 2) ])
+  then failwith "q_return_string aggregate tuple find spec should produce tuple output";
+  if
+    q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
+    <> Query_scalar (Some (Result_value (Int 2)))
+  then failwith "q_return_string aggregate scalar find spec should produce scalar output"
 
 let test_q_return_map_shapes () =
   let db =
@@ -10204,14 +11060,22 @@ let test_q_return_map_shapes () =
   if
     q_return_map db Return_relation (Return_keys [ "n"; "a" ]) query
     <> Query_relation_maps
-         [ [ "a", Result_value (Int 31); "n", Result_value (String "Ivan") ]
-         ; [ "a", Result_value (Int 37); "n", Result_value (String "Petr") ]
+         [ [ Keyword "a", Result_value (Int 31); Keyword "n", Result_value (String "Ivan") ]
+         ; [ Keyword "a", Result_value (Int 37); Keyword "n", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map relation should map rows by labels";
   if
     q_return_map db Return_tuple (Return_strs [ "name"; "age" ]) query
-    <> Query_tuple_map (Some [ "age", Result_value (Int 31); "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ String "age", Result_value (Int 31); String "name", Result_value (String "Ivan") ])
   then failwith "q_return_map tuple should map the first row by labels";
+  if
+    q_return_map db Return_tuple (Return_syms [ "name"; "age" ]) query
+    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int 31); Symbol "name", Result_value (String "Ivan") ])
+  then failwith "q_return_map :syms should preserve symbol labels";
+  if
+    q_return_map_string db "[:find [?name ?age] :syms name age :where [1 :name ?name] [1 :age ?age]]"
+    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int 31); Symbol "name", Result_value (String "Ivan") ])
+  then failwith "q_return_map_string :syms should parse symbol labels";
   assert_raises_invalid_arg
     "q_return_map rejects mismatched label count"
     (fun () -> ignore (q_return_map db Return_relation (Return_keys [ "name" ]) query));
@@ -10247,8 +11111,8 @@ let test_parse_query_return_map_shapes () =
   if
     q_return_map db return (Option.get return_map) query
     <> Query_relation_maps
-         [ [ "a", Result_value (Int 31); "n", Result_value (String "Ivan") ]
-         ; [ "a", Result_value (Int 37); "n", Result_value (String "Petr") ]
+         [ [ Keyword "a", Result_value (Int 31); Keyword "n", Result_value (String "Ivan") ]
+         ; [ Keyword "a", Result_value (Int 37); Keyword "n", Result_value (String "Petr") ]
          ]
   then failwith "parsed :keys query should produce relation maps";
   let tuple_form =
@@ -10269,7 +11133,7 @@ let test_parse_query_return_map_shapes () =
     failwith "parse_query_return_map should parse :strs labels";
   if
     q_return_map db return (Option.get return_map) query
-    <> Query_tuple_map (Some [ "age", Result_value (Int 31); "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ String "age", Result_value (Int 31); String "name", Result_value (String "Ivan") ])
   then failwith "parsed :strs tuple query should produce a tuple map";
   assert_raises_invalid_arg
     "parse_query_return_map rejects multiple return map clauses"
@@ -10613,6 +11477,85 @@ let test_q_sources_default_source () =
              ] )
        ]
        (parse_query unqualified_three_column_relation_query));
+  let long_tuple_relation_query =
+    QueryFormVector
+      [ QueryFormKeyword "find"
+      ; QueryFormSymbol "?e"
+      ; QueryFormSymbol "?a"
+      ; QueryFormSymbol "?v"
+      ; QueryFormSymbol "?t"
+      ; QueryFormKeyword "in"
+      ; QueryFormSymbol "$"
+      ; QueryFormKeyword "where"
+      ; QueryFormVector
+          [ QueryFormSymbol "?e"
+          ; QueryFormSymbol "?a"
+          ; QueryFormSymbol "?v"
+          ; QueryFormSymbol "?t"
+          ; QueryFormKeyword "db/retract"
+          ]
+      ]
+  in
+  assert_equal_query
+    "parse_query matches long relation tuples with constant trailing terms"
+    [ [ Result_value (Int 1)
+      ; Result_attr "age"
+      ; Result_value (Int 39)
+      ; Result_value (Int 999)
+      ]
+    ]
+    (q_sources
+       (empty_db ())
+       [ ( "$"
+         , Relation_source
+             [ [ Result_value (Int 1)
+               ; Result_attr "name"
+               ; Result_value (String "Ivan")
+               ; Result_value (Int 945)
+               ; Result_value (Keyword "db/add")
+               ]
+             ; [ Result_value (Int 1)
+               ; Result_attr "age"
+               ; Result_value (Int 39)
+               ; Result_value (Int 999)
+               ; Result_value (Keyword "db/retract")
+               ]
+             ] )
+       ]
+       (parse_query long_tuple_relation_query));
+  let long_tuple_prefix_query =
+    QueryFormVector
+      [ QueryFormKeyword "find"
+      ; QueryFormSymbol "?e"
+      ; QueryFormSymbol "?v"
+      ; QueryFormKeyword "in"
+      ; QueryFormSymbol "$"
+      ; QueryFormKeyword "where"
+      ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "name"; QueryFormSymbol "?v" ]
+      ]
+  in
+  assert_equal_query
+    "parse_query matches shorter patterns against long relation tuple prefixes"
+    [ [ Result_value (Int 1); Result_value (String "Ivan") ] ]
+    (q_sources
+       (empty_db ())
+       [ ( "$"
+         , Relation_source
+             [ [ Result_value (Int 1)
+               ; Result_attr "name"
+               ; Result_value (String "Ivan")
+               ; Result_value (Int 945)
+               ; Result_value (Keyword "db/add")
+               ]
+             ; [ Result_value (Int 1)
+               ; Result_attr "age"
+               ; Result_value (Int 39)
+               ; Result_value (Int 999)
+               ; Result_value (Keyword "db/retract")
+               ]
+             ] )
+       ]
+       (parse_query long_tuple_prefix_query));
   let override_db =
     empty_db ()
     |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
@@ -10956,6 +11899,50 @@ let test_q_find_pull_expressions () =
     [ [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] } ] ]
     (q db query)
 
+let test_q_return_shapes_with_pull_expressions () =
+  let db =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 11) ] }
+         ]
+  in
+  let pulled_ivan =
+    Result_pull { pulled_id = 2; pulled_attrs = [ "name", Pulled_scalar (String "Ivan") ] }
+  in
+  let scalar_query =
+    { find = [ Find_pull ("e", [ Pull_attr "name" ]) ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int 25)) ]
+    }
+  in
+  if q_return db Return_scalar scalar_query <> Query_scalar (Some pulled_ivan) then
+    failwith "q_return scalar should support pull expressions";
+  let collection_query =
+    { scalar_query with where = [ Pattern (QVar "e", QAttr "age", QVar "age") ] }
+  in
+  if
+    q_return db Return_collection collection_query
+    <> Query_collection
+         [ Result_pull { pulled_id = 1; pulled_attrs = [ "name", Pulled_scalar (String "Petr") ] }
+         ; pulled_ivan
+         ; Result_pull { pulled_id = 3; pulled_attrs = [ "name", Pulled_scalar (String "Oleg") ] }
+         ]
+  then failwith "q_return collection should support pull expressions";
+  let tuple_query =
+    { find = [ Find_var "e"; Find_pull ("e", [ Pull_attr "name" ]) ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int 25)) ]
+    }
+  in
+  if q_return db Return_tuple tuple_query <> Query_tuple (Some [ Result_entity 2; pulled_ivan ]) then
+    failwith "q_return tuple should support pull expressions"
+
 let test_q_find_pull_uses_named_source () =
   let db =
     empty_db ()
@@ -10993,10 +11980,10 @@ let test_q_with_aggregates () =
   let query =
     { find =
         [ Find_var "color"
-        ; Find_aggregate (Sum, "heads")
-        ; Find_aggregate (Min, "heads")
-        ; Find_aggregate (Max, "heads")
-        ; Find_aggregate (Count, "heads")
+        ; Find_aggregate (Sum, [ QVar "heads" ])
+        ; Find_aggregate (Min, [ QVar "heads" ])
+        ; Find_aggregate (Max, [ QVar "heads" ])
+        ; Find_aggregate (Count, [ QVar "heads" ])
         ]
     ; inputs = []
     ; with_vars = []
@@ -11024,7 +12011,7 @@ let test_q_with_interleaved_aggregates () =
          ]
   in
   let query =
-    { find = [ Find_aggregate (Count, "heads"); Find_var "color"; Find_aggregate (Sum, "heads") ]
+    { find = [ Find_aggregate (Count, [ QVar "heads" ]); Find_var "color"; Find_aggregate (Sum, [ QVar "heads" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11051,7 +12038,7 @@ let test_q_aggregates_relation_inputs_with_with_vars () =
   in
   let relation_input = Input_relation ([ "monster"; "heads" ], monsters) in
   let sum_query =
-    { find = [ Find_aggregate (Sum, "heads") ]
+    { find = [ Find_aggregate (Sum, [ QVar "heads" ]) ]
     ; inputs = [ relation_input ]
     ; with_vars = []
     ; rules = []
@@ -11064,11 +12051,11 @@ let test_q_aggregates_relation_inputs_with_with_vars () =
     (q_with (empty_db ()) [] sum_query);
   let multi_aggregate_query =
     { find =
-        [ Find_aggregate (Sum, "heads")
-        ; Find_aggregate (Min, "heads")
-        ; Find_aggregate (Max, "heads")
-        ; Find_aggregate (Count, "heads")
-        ; Find_aggregate (CountDistinct, "heads")
+        [ Find_aggregate (Sum, [ QVar "heads" ])
+        ; Find_aggregate (Min, [ QVar "heads" ])
+        ; Find_aggregate (Max, [ QVar "heads" ])
+        ; Find_aggregate (Count, [ QVar "heads" ])
+        ; Find_aggregate (CountDistinct, [ QVar "heads" ])
         ]
     ; inputs = [ relation_input ]
     ; with_vars = []
@@ -11126,7 +12113,7 @@ let test_q_count_distinct_aggregate () =
          ]
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (Count, "heads"); Find_aggregate (CountDistinct, "heads") ]
+    { find = [ Find_var "color"; Find_aggregate (Count, [ QVar "heads" ]); Find_aggregate (CountDistinct, [ QVar "heads" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11151,7 +12138,7 @@ let test_q_distinct_aggregate () =
          ]
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (Distinct, "heads") ]
+    { find = [ Find_var "color"; Find_aggregate (Distinct, [ QVar "heads" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11168,7 +12155,7 @@ let test_q_distinct_aggregate () =
 
 let test_q_min_max_use_keyword_comparator () =
   let min_max_query =
-    { find = [ Find_aggregate (Min, "x"); Find_aggregate (Max, "x") ]
+    { find = [ Find_aggregate (Min, [ QVar "x" ]); Find_aggregate (Max, [ QVar "x" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11180,7 +12167,7 @@ let test_q_min_max_use_keyword_comparator () =
     [ [ Result_value (Keyword "a/b"); Result_value (Keyword "a-/b") ] ]
     (q (empty_db ()) min_max_query);
   let min_max_n_query =
-    { find = [ Find_aggregate (MinN 2, "x"); Find_aggregate (MaxN 2, "x") ]
+    { find = [ Find_aggregate (MinN 2, [ QVar "x" ]); Find_aggregate (MaxN 2, [ QVar "x" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11205,7 +12192,7 @@ let test_q_with_vars_preserve_aggregate_duplicates () =
          ]
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (Count, "heads") ]
+    { find = [ Find_var "color"; Find_aggregate (Count, [ QVar "heads" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11234,7 +12221,7 @@ let test_q_avg_aggregate () =
          ]
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (Avg, "heads") ]
+    { find = [ Find_var "color"; Find_aggregate (Avg, [ QVar "heads" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11258,7 +12245,7 @@ let test_q_sum_aggregate_accepts_float_values () =
          ]
   in
   let query =
-    { find = [ Find_aggregate (Sum, "amount") ]
+    { find = [ Find_aggregate (Sum, [ QVar "amount" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11283,9 +12270,9 @@ let test_q_statistical_aggregates () =
   in
   let query =
     { find =
-        [ Find_aggregate (Median, "sample")
-        ; Find_aggregate (Variance, "sample")
-        ; Find_aggregate (Stddev, "sample")
+        [ Find_aggregate (Median, [ QVar "sample" ])
+        ; Find_aggregate (Variance, [ QVar "sample" ])
+        ; Find_aggregate (Stddev, [ QVar "sample" ])
         ]
     ; inputs = []
     ; with_vars = []
@@ -11315,7 +12302,7 @@ let test_q_min_n_and_max_n_aggregates () =
          ]
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (MaxN 3, "amount"); Find_aggregate (MinN 3, "amount") ]
+    { find = [ Find_var "color"; Find_aggregate (MaxN 3, [ QVar "amount" ]); Find_aggregate (MinN 3, [ QVar "amount" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11343,9 +12330,9 @@ let test_q_rand_and_sample_aggregates () =
   let member value = List.mem value values in
   let query =
     { find =
-        [ Find_aggregate (Rand, "x")
-        ; Find_aggregate (RandN 5, "x")
-        ; Find_aggregate (Sample 2, "x")
+        [ Find_aggregate (Rand, [ QVar "x" ])
+        ; Find_aggregate (RandN 5, [ QVar "x" ])
+        ; Find_aggregate (Sample 2, [ QVar "x" ])
         ]
     ; inputs = []
     ; with_vars = []
@@ -11389,7 +12376,7 @@ let test_q_custom_aggregates () =
     |> fun values -> Result_value (Tuple values)
   in
   let query =
-    { find = [ Find_var "color"; Find_aggregate (Custom reverse_tuple, "amount") ]
+    { find = [ Find_var "color"; Find_aggregate (Custom reverse_tuple, [ QVar "amount" ]) ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
@@ -11425,7 +12412,39 @@ let test_q_custom_aggregates () =
         :in $ ?agg
         :where [?e :amount ?amount]]"
     <> Query_scalar (Some (Result_value (Tuple [ Some (Int 5); Some (Int 3); Some (Int 2); Some (Int 1) ])))
-  then failwith "q_return_string should parse scalar custom aggregate inputs"
+  then failwith "q_return_string should parse scalar custom aggregate inputs";
+  let scaled_sum = function
+    | Result_value (Int factor) :: values ->
+      values
+      |> List.fold_left
+           (fun total -> function
+             | Result_value (Int value) -> total + value
+             | _ -> invalid_arg "expected integer aggregate values")
+           0
+      |> fun total -> Result_value (Int (factor * total))
+    | _ -> invalid_arg "expected integer aggregate factor"
+  in
+  assert_equal_query
+    "q_string passes extra custom aggregate arguments before grouped values"
+    [ [ Result_value (String "blue"); Result_value (Int 50) ]
+    ; [ Result_value (String "red"); Result_value (Int 60) ]
+    ]
+    (q_string
+       ~inputs:[ Arg_aggregate scaled_sum ]
+       db
+       "[:find ?color (aggregate ?agg 10 ?amount)
+         :in $ ?agg
+         :where [?e :color ?color]
+                [?e :amount ?amount]]");
+  if
+    q_return_string
+      ~inputs:[ Arg_aggregate scaled_sum; Arg_scalar (Result_value (Int 2)) ]
+      db
+      "[:find (aggregate ?agg ?factor ?amount) .
+        :in $ ?agg ?factor
+        :where [?e :amount ?amount]]"
+    <> Query_scalar (Some (Result_value (Int 22)))
+  then failwith "q_return_string should pass variable aggregate arguments"
 
 let test_q_rejects_unknown_rules () =
   assert_raises_invalid_arg
@@ -11741,14 +12760,17 @@ let test_unique_identity_rejects_conflicting_explicit_entity_ids () =
   let ivan_name = [ "name", One_value (String "Ivan"); "age", One_value (Int 35) ] in
   ignore (upsert_with_id (Entity_id 1) ivan_name);
   ignore (upsert_with_id (Lookup_ref ("name", String "Ivan")) ivan_name);
-  assert_raises_invalid_arg
-    "explicit entity id cannot conflict with a unique identity upsert target"
+  assert_raises_invalid_arg_message
+    "explicit entity id conflict reports the resolving unique attr"
+    "Conflicting upsert: [:name \"Ivan\"] resolves to 1, but entity already has :db/id 2"
     (fun () -> ignore (upsert_with_id (Entity_id 2) ivan_name));
-  assert_raises_invalid_arg
-    "new explicit entity id cannot steal an existing unique identity value"
+  assert_raises_invalid_arg_message
+    "new explicit entity id conflict reports the resolving unique attr"
+    "Conflicting upsert: [:name \"Ivan\"] resolves to 1, but entity already has :db/id 5"
     (fun () -> ignore (upsert_with_id (Entity_id 5) ivan_name));
-  assert_raises_invalid_arg
-    "explicit entity id rejects identity attrs that resolve to different entities"
+  assert_raises_invalid_arg_message
+    "conflicting unique attrs report both resolving lookup refs"
+    "Conflicting upserts: [:name \"Ivan\"] resolves to 1, but [:email \"petr@example.com\"] resolves to 2"
     (fun () ->
       ignore
         (upsert_with_id
@@ -12043,6 +13065,44 @@ let test_add_tempid_unique_identity_conflicting_upserts () =
            ]
            db))
 
+let test_add_tempid_unique_identity_reports_redefinition_conflicts () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity ] ()
+    |> db_with
+         [ Add (Temp_id "-1", "name", String "Ivan")
+         ; Add (Temp_id "-2", "name", String "Oleg")
+         ]
+  in
+  assert_raises_invalid_arg_message
+    "one tempid cannot be redefined to two upsert targets"
+    "Conflicting upsert: -1 resolves both to 1 and 2"
+    (fun () ->
+      ignore
+        (db_with
+           [ Add (Temp_id "-1", "name", String "Ivan")
+           ; Add (Temp_id "-1", "age", Int 35)
+           ; Add (Temp_id "-1", "name", String "Oleg")
+           ; Add (Temp_id "-1", "age", Int 36)
+           ]
+           db))
+
+let test_current_tx_unique_identity_upsert_conflicts () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity ] ()
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] } ]
+  in
+  assert_raises_invalid_arg
+    "current tx cannot upsert into an existing unique identity entity"
+    (fun () ->
+      ignore
+        (transact
+           db
+           [ Entity
+               { db_id = Some CurrentTx
+               ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 35) ]
+               }
+           ]))
+
 let test_unique_value_rejects_duplicate_values () =
   let db =
     empty_db ~schema:[ "name", unique_value ] ()
@@ -12059,6 +13119,24 @@ let test_unique_value_rejects_duplicate_values () =
            [ Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Petr") ] } ]
            db));
   ignore (db_with [ Add (Entity_id 3, "name", String "Igor") ] db)
+
+let test_db_with_string_unique_value_matches_upstream_validation () =
+  let db =
+    empty_db ~schema:[ "name", unique_value ] ()
+    |> db_with_string
+         "[[:db/add 1 :name \"Ivan\"]
+           [:db/add 2 :name \"Petr\"]]"
+  in
+  assert_raises_invalid_arg_message
+    "db_with_string rejects duplicate unique values in db/add vectors"
+    "unique constraint"
+    (fun () -> ignore (db_with_string "[[:db/add 3 :name \"Ivan\"]]" db));
+  assert_raises_invalid_arg_message
+    "db_with_string rejects duplicate unique values in entity maps"
+    "unique constraint"
+    (fun () -> ignore (db_with_string "[{:db/add 3 :name \"Petr\"}]" db));
+  ignore (db_with_string "[[:db/add 3 :name \"Igor\"]]" db);
+  ignore (db_with_string "[[:db/add 3 :nick \"Ivan\"]]" db)
 
 let test_connection_transact_updates_current_db () =
   let conn = create_conn ~schema:[ "aka", many ] () in
@@ -12102,6 +13180,76 @@ let test_connection_listeners_receive_transaction_reports () =
   ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Petr") ]);
   if !seen <> [ [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") () ] ] then
     failwith "unlisten should stop report delivery"
+
+let test_connection_listen_matches_upstream_report_semantics () =
+  let conn = create_conn () in
+  let reports = ref [] in
+  ignore
+    (transact_conn_string
+       conn
+       "[[:db/add -1 :name \"Alex\"]
+         [:db/add -2 :name \"Boris\"]]");
+  ignore (listen conn "test" (fun report -> reports := !reports @ [ report ]));
+  ignore
+    (transact_conn_string
+       ~tx_meta:[ "some-metadata", Int 1 ]
+       conn
+       "[[:db/add -1 :name \"Dima\"]
+         [:db/add -1 :age 19]
+         [:db/add -2 :name \"Evgeny\"]]");
+  ignore
+    (transact_conn_string
+       conn
+       "[[:db/add -1 :name \"Fedor\"]
+         [:db/add 1 :name \"Alex2\"]
+         [:db/retract 2 :name \"Not Boris\"]
+         [:db/retract 4 :name \"Evgeny\"]]");
+  unlisten conn "test";
+  ignore (transact_conn_string conn "[[:db/add -1 :name \"George\"]]");
+  (match !reports with
+   | [ first; second ] ->
+     assert_equal_tx_flags
+       "listen reports first observed tx-data like upstream"
+       [ 3, "name", String "Dima", true
+       ; 3, "age", Int 19, true
+       ; 4, "name", String "Evgeny", true
+       ]
+       first.tx_data;
+     if first.tx_meta <> [ "some-metadata", Int 1 ] then
+       failwith "listen should preserve tx metadata for the first observed report";
+     assert_equal_tx_flags
+       "listen reports replacements and skips no-op retracts like upstream"
+       [ 5, "name", String "Fedor", true
+       ; 1, "name", String "Alex", false
+       ; 1, "name", String "Alex2", true
+       ; 4, "name", String "Evgeny", false
+       ]
+       second.tx_data;
+     if second.tx_meta <> [] then failwith "listen should use empty metadata when none is supplied"
+   | reports -> failf "expected two listener reports, got %d" (List.length reports))
+
+let test_connection_auto_listener_keys () =
+  let conn = create_conn () in
+  let seen = ref [] in
+  if listen conn "listener-1" (fun report -> seen := ("manual", report.tx_data) :: !seen) <> "listener-1" then
+    failwith "listen should preserve explicit listener keys";
+  let first_key = listen_auto conn (fun report -> seen := ("first", report.tx_data) :: !seen) in
+  let second_key = listen_auto conn (fun report -> seen := ("second", report.tx_data) :: !seen) in
+  if first_key = "listener-1" then failwith "listen_auto should not collide with explicit listener keys";
+  if first_key = second_key then failwith "listen_auto should generate unique listener keys";
+  ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
+  if List.length !seen <> 3 then failwith "listen_auto should register listener callbacks";
+  unlisten conn first_key;
+  ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Petr") ]);
+  if List.length !seen <> 5 then failwith "unlisten should remove auto-keyed listeners";
+  let bang_key = listen_bang_auto conn (fun report -> seen := ("bang", report.tx_data) :: !seen) in
+  if bang_key = "listener-1" || bang_key = first_key || bang_key = second_key then
+    failwith "listen_bang_auto should generate a fresh listener key";
+  ignore (transact_bang conn [ Add (Entity_id 3, "name", String "Oleg") ]);
+  if List.length !seen <> 8 then failwith "listen_bang_auto should register listener callbacks";
+  unlisten_bang conn bang_key;
+  ignore (transact_bang conn [ Add (Entity_id 4, "name", String "Dima") ]);
+  if List.length !seen <> 10 then failwith "unlisten_bang should remove auto-keyed listeners"
 
 let test_bang_connection_api_aliases () =
   let conn = create_conn () in
@@ -12986,6 +14134,52 @@ let test_parse_pull_pattern_recursive_refs () =
       ]
       entity
 
+let test_parse_pull_pattern_recursive_refs_preserve_context () =
+  let db =
+    empty_db ~schema:[ "part", ref_many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs = [ "label", One_value (String "Part A"); "part", Many_values [ Ref 2 ] ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs = [ "label", One_value (String "Part A.A"); "part", Many_values [ Ref 3 ] ]
+             }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "label", One_value (String "Part A.A.A") ] }
+         ]
+  in
+  let pattern =
+    parse_pull_pattern
+      db
+      (QueryFormVector
+         [ QueryFormKeyword "label"; QueryFormMap [ QueryFormKeyword "part", QueryFormInt 2 ] ])
+  in
+  match pull db pattern (Entity_id 1) with
+  | None -> failwith "expected parsed recursive pull pattern to find entity"
+  | Some entity ->
+    assert_equal_pulled_attrs
+      "parse_pull_pattern recursive specs preserve the surrounding selector context"
+      [ "label", Pulled_scalar (String "Part A")
+      ; "part",
+        Pulled_many
+          [ Pulled_entity
+              { pulled_id = 2
+              ; pulled_attrs =
+                  [ "label", Pulled_scalar (String "Part A.A")
+                  ; "part",
+                    Pulled_many
+                      [ Pulled_entity
+                          { pulled_id = 3
+                          ; pulled_attrs = [ "label", Pulled_scalar (String "Part A.A.A") ]
+                          }
+                      ]
+                  ]
+              }
+          ]
+      ]
+      entity
+
 let test_parse_pull_pattern_recursive_string_ellipsis () =
   let db =
     empty_db ~schema:[ "part", ref_attr ] ()
@@ -13017,7 +14211,14 @@ let test_parse_pull_pattern_recursive_string_ellipsis () =
           { pulled_id = 2
           ; pulled_attrs =
               [ "name", Pulled_scalar (String "B")
-              ; "part", Pulled_entity { pulled_id = 1; pulled_attrs = [ "db/id", Pulled_scalar (Int 1) ] }
+              ; "part",
+                Pulled_entity
+                  { pulled_id = 1
+                  ; pulled_attrs =
+                      [ "name", Pulled_scalar (String "A")
+                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ]
+                  }
               ]
           }
       ]
@@ -13648,6 +14849,57 @@ let test_pull_id_and_wildcard () =
       ]
       entity
 
+let test_pull_reports_visitor_events () =
+  let db =
+    empty_db ~schema:[ "child", ref_many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "child", Many_values [ Ref 2; Ref 3 ]
+                 ]
+             }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "David") ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Thomas") ] }
+         ]
+  in
+  let trace = ref [] in
+  let visitor event = trace := event :: !trace in
+  ignore (pull ~visitor db [ Pull_attr "name"; Pull_attr "_child"; Pull_wildcard ] (Entity_id 2));
+  if
+    List.rev !trace
+    <> [ PullVisitAttr (2, "name")
+       ; PullVisitReverse ("child", 2)
+       ; PullVisitWildcard 2
+       ; PullVisitAttr (2, "name")
+       ]
+  then
+    failwith "pull should report attr, reverse, and wildcard visitor events";
+  trace := [];
+  ignore (pull ~visitor db [ Pull_wildcard; Pull_attr "missing" ] (Entity_id 1));
+  if
+    List.rev !trace
+    <> [ PullVisitWildcard 1
+       ; PullVisitAttr (1, "child")
+       ; PullVisitAttr (1, "name")
+       ; PullVisitAttr (1, "missing")
+       ]
+  then
+    failwith "pull wildcard should report expanded attr visitor events";
+  trace := [];
+  ignore (pull ~visitor db [ Pull_ref ("child", [ Pull_attr "name" ]) ] (Entity_id 1));
+  if List.rev !trace <> [ PullVisitAttr (1, "child"); PullVisitAttr (2, "name"); PullVisitAttr (3, "name") ] then
+    failwith "pull visitor should report nested ref traversal events";
+  trace := [];
+  ignore (pull_string ~visitor db "[:name {:child [:name]}]" (Entity_id 1));
+  if List.rev !trace <> [ PullVisitAttr (1, "name"); PullVisitAttr (1, "child"); PullVisitAttr (2, "name"); PullVisitAttr (3, "name") ] then
+    failwith "pull_string should forward visitor events";
+  trace := [];
+  ignore (pull_many_string ~visitor db "[:name]" [ Entity_id 2; Entity_id 3 ]);
+  if List.rev !trace <> [ PullVisitAttr (2, "name"); PullVisitAttr (3, "name") ] then
+    failwith "pull_many_string should forward visitor events"
+
 let test_pull_recursive_ref_with_depth_limit () =
   let db =
     empty_db ~schema:[ "part", many ] ()
@@ -13711,14 +14963,21 @@ let test_pull_recursive_ref_avoids_cycles () =
   | None -> failwith "expected recursive pull"
   | Some entity ->
     assert_equal_pulled_attrs
-      "recursive pull returns id-only stubs for seen entities"
+      "recursive pull expands the seen root once before returning id stubs"
       [ "name", Pulled_scalar (String "A")
       ; "part",
         Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
               [ "name", Pulled_scalar (String "B")
-              ; "part", Pulled_entity { pulled_id = 1; pulled_attrs = [ "db/id", Pulled_scalar (Int 1) ] }
+              ; "part",
+                Pulled_entity
+                  { pulled_id = 1
+                  ; pulled_attrs =
+                      [ "name", Pulled_scalar (String "A")
+                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ]
+                  }
               ]
           }
       ]
@@ -13809,6 +15068,231 @@ let test_pull_recursive_ref_depth_preserves_sibling_context () =
           }
       ]
       entity
+
+let test_pull_dual_recursion_respects_independent_depths () =
+  let db =
+    empty_db ~schema:[ "friend", ref_attr; "enemy", ref_attr ] ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "friend", One_value (Ref 2) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "enemy", One_value (Ref 3) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "friend", One_value (Ref 4) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "enemy", One_value (Ref 5) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "friend", One_value (Ref 6) ] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "enemy", One_value (Ref 7) ] }
+         ]
+  in
+  (match
+     pull
+       db
+       [ Pull_id
+       ; Pull_recursive_ref ("friend", [ Pull_id ], None)
+       ]
+       (Entity_id 1)
+   with
+   | None -> failwith "expected recursive pull"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "unbounded recursion follows only the selected recursive attr"
+       [ "db/id", Pulled_scalar (Int 1)
+       ; "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+       ]
+       entity);
+  (match
+     pull
+       db
+       [ Pull_id
+       ; Pull_recursive_ref ("friend", [ Pull_id ], Some 1)
+       ; Pull_recursive_ref ("enemy", [ Pull_id ], Some 1)
+       ]
+       (Entity_id 1)
+   with
+   | None -> failwith "expected recursive pull"
+   | Some entity ->
+     assert_equal_pulled_attrs
+       "dual recursion follows each attr at depth one"
+       [ "db/id", Pulled_scalar (Int 1)
+       ; "friend",
+         Pulled_entity
+           { pulled_id = 2
+           ; pulled_attrs =
+               [ "db/id", Pulled_scalar (Int 2)
+               ; "enemy", Pulled_entity { pulled_id = 3; pulled_attrs = [ "db/id", Pulled_scalar (Int 3) ] }
+               ]
+           }
+       ]
+       entity);
+  match
+    pull
+      db
+      [ Pull_id
+      ; Pull_recursive_ref ("friend", [ Pull_id ], Some 2)
+      ; Pull_recursive_ref ("enemy", [ Pull_id ], Some 2)
+      ]
+      (Entity_id 1)
+  with
+  | None -> failwith "expected recursive pull"
+  | Some entity ->
+    assert_equal_pulled_attrs
+      "dual recursion tracks attr depths independently"
+      [ "db/id", Pulled_scalar (Int 1)
+      ; "friend",
+        Pulled_entity
+          { pulled_id = 2
+          ; pulled_attrs =
+              [ "db/id", Pulled_scalar (Int 2)
+              ; "enemy",
+                Pulled_entity
+                  { pulled_id = 3
+                  ; pulled_attrs =
+                      [ "db/id", Pulled_scalar (Int 3)
+                      ; "friend",
+                        Pulled_entity
+                          { pulled_id = 4
+                          ; pulled_attrs =
+                              [ "db/id", Pulled_scalar (Int 4)
+                              ; "enemy",
+                                Pulled_entity
+                                  { pulled_id = 5; pulled_attrs = [ "db/id", Pulled_scalar (Int 5) ] }
+                              ]
+                          }
+                      ]
+                  }
+              ]
+          }
+      ]
+      entity
+
+let test_pull_dual_recursion_tracks_cycles_per_branch () =
+  let db =
+    empty_db ~schema:[ "part", ref_attr; "spec", ref_attr ] ()
+    |> db_with
+         [ Add (Entity_id 1, "part", Ref 2)
+         ; Add (Entity_id 2, "part", Ref 3)
+         ; Add (Entity_id 3, "part", Ref 1)
+         ; Add (Entity_id 1, "spec", Ref 2)
+         ; Add (Entity_id 2, "spec", Ref 1)
+         ]
+  in
+  match
+    pull
+      db
+      [ Pull_id
+      ; Pull_recursive_ref ("part", [ Pull_id ], None)
+      ; Pull_recursive_ref ("spec", [ Pull_id ], None)
+      ]
+      (Entity_id 1)
+  with
+  | None -> failwith "expected recursive pull"
+  | Some entity ->
+    assert_equal_pulled_attrs
+      "dual recursion tracks seen ids independently for sibling branches"
+      [ "db/id", Pulled_scalar (Int 1)
+      ; "part",
+        Pulled_entity
+          { pulled_id = 2
+          ; pulled_attrs =
+              [ "db/id", Pulled_scalar (Int 2)
+              ; "part",
+                Pulled_entity
+                  { pulled_id = 3
+                  ; pulled_attrs =
+                      [ "db/id", Pulled_scalar (Int 3)
+                      ; "part",
+                        Pulled_entity
+                          { pulled_id = 1
+                          ; pulled_attrs =
+                              [ "db/id", Pulled_scalar (Int 1)
+                              ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              ]
+                          }
+                      ]
+                  }
+              ; "spec",
+                Pulled_entity
+                  { pulled_id = 1
+                  ; pulled_attrs =
+                      [ "db/id", Pulled_scalar (Int 1)
+                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ]
+                  }
+              ]
+          }
+      ; "spec",
+        Pulled_entity
+          { pulled_id = 2
+          ; pulled_attrs =
+              [ "db/id", Pulled_scalar (Int 2)
+              ; "part",
+                Pulled_entity
+                  { pulled_id = 3
+                  ; pulled_attrs =
+                      [ "db/id", Pulled_scalar (Int 3)
+                      ; "part",
+                        Pulled_entity
+                          { pulled_id = 1
+                          ; pulled_attrs =
+                              [ "db/id", Pulled_scalar (Int 1)
+                              ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                              ]
+                          }
+                      ]
+                  }
+              ; "spec",
+                Pulled_entity
+                  { pulled_id = 1
+                  ; pulled_attrs =
+                      [ "db/id", Pulled_scalar (Int 1)
+                      ; "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ; "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ "db/id", Pulled_scalar (Int 2) ] }
+                      ]
+                  }
+              ]
+          }
+      ]
+      entity
+
+let test_pull_deep_recursion_reaches_leaf () =
+  let start = 100 in
+  let depth = 3000 in
+  let rec build value acc =
+    if value >= depth then
+      acc
+    else
+      build
+        (value + 1)
+        (Add (Entity_id value, "name", String ("Person-" ^ string_of_int value))
+         :: Add (Entity_id (value - 1), "friend", Ref value)
+         :: acc)
+  in
+  let db =
+    empty_db ~schema:[ "friend", ref_attr ] ()
+    |> db_with
+         (Add (Entity_id start, "name", String ("Person-" ^ string_of_int start))
+          :: build (start + 1) [])
+  in
+  let rec last_friend_name remaining = function
+    | Pulled_entity entity when remaining = 0 ->
+      (match List.assoc_opt "name" entity.pulled_attrs with
+       | Some (Pulled_scalar (String name)) -> Some name
+       | _ -> None)
+    | Pulled_entity entity ->
+      (match List.assoc_opt "friend" entity.pulled_attrs with
+       | Some next -> last_friend_name (remaining - 1) next
+       | None -> None)
+    | Pulled_scalar _ | Pulled_many _ -> None
+  in
+  match pull db [ Pull_attr "name"; Pull_recursive_ref ("friend", [ Pull_attr "name" ], None) ] (Entity_id start) with
+  | None -> failwith "expected deep recursive pull"
+  | Some entity ->
+    let edge_count = depth - start - 1 in
+    let expected = "Person-" ^ string_of_int (depth - 1) in
+    (match last_friend_name edge_count (Pulled_entity entity) with
+     | Some actual when actual = expected -> ()
+     | Some actual -> failf "deep recursive pull expected %s, got %s" expected actual
+     | None -> failwith "deep recursive pull should reach the final leaf")
 
 let test_pull_recursive_reverse_ref () =
   let db =
@@ -14722,6 +16206,8 @@ let () =
   test_datom_defaults ();
   test_empty_db ();
   test_squuid_embeds_time_and_generates_unique_values ();
+  test_lru_matches_upstream_eviction_order ();
+  test_lru_cache_computes_misses_only ();
   test_init_db_and_indexes ();
   test_init_db_counts_ref_values_in_max_eid ();
   test_init_db_resolves_raw_ref_datoms_from_schema ();
@@ -14734,6 +16220,7 @@ let () =
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
   test_indexes_compare_numbers_across_value_constructors ();
+  test_avet_exact_lookup_compares_entire_sequences ();
   test_indexes_compare_mixed_value_types_like_datascript ();
   test_avet_excludes_unindexed_scalar_attrs ();
   test_seek_datoms_scans_forward_from_index_tuple ();
@@ -14774,6 +16261,7 @@ let () =
   test_tempid_generates_unique_entity_refs ();
   test_db_with_transaction_function_call ();
   test_transaction_function_can_return_entity_without_id ();
+  test_db_ident_transaction_function_call ();
   test_transaction_rejects_entity_ids_above_supported_range ();
   test_db_with_allocates_tempids ();
   test_db_with_resolves_explicit_tempids_and_lookup_refs ();
@@ -14800,6 +16288,7 @@ let () =
   test_entity_maps_expand_nested_entity_values ();
   test_entity_map_with_only_nested_ref_allocates_nested_first ();
   test_entity_maps_expand_reverse_nested_entity_values ();
+  test_entity_maps_expand_many_reverse_nested_entity_values ();
   test_serializable_round_trips_db_state ();
   test_db_from_reader_string_parses_datascript_db_literals ();
   test_storage_round_trips_db_state ();
@@ -14832,7 +16321,9 @@ let () =
   test_parse_query_finds_values ();
   test_edn_reader_parses_query_and_pull_strings ();
   test_edn_string_top_level_apis ();
+  test_nan_values_round_trip_and_match_index_values ();
   test_q_string_matches_plain_symbol_constants ();
+  test_db_with_string_matches_upstream_validation_messages ();
   test_edn_reader_parses_transaction_and_schema_strings ();
   test_edn_reader_parses_common_literals ();
   test_edn_reader_ignores_discard_and_metadata ();
@@ -14862,16 +16353,25 @@ let () =
   test_parse_query_rules ();
   test_parse_query_source_qualified_composite_clauses ();
   test_parse_query_in_bindings ();
+  test_parse_query_input_helper_parsers ();
+  test_parse_query_find_helper_parser ();
   test_parse_query_or_join_required_vars ();
+  test_parse_query_where_clause_validation_messages ();
   test_parse_query_validates_structure ();
   test_parse_query_with_vars ();
+  test_parse_query_matches_upstream_validation_messages ();
+  test_parse_query_with_and_rules_match_upstream_messages ();
+  test_q_input_arity_matches_upstream_validation_messages ();
+  test_q_input_binding_matches_upstream_validation_messages ();
   test_parse_query_map_sections_accept_list_sequences ();
   test_parse_query_concatenates_repeated_sections ();
   test_q_binds_transaction_id_in_patterns ();
   test_q_binds_transaction_operation_in_history_patterns ();
   test_q_joins_clauses ();
+  test_q_short_data_patterns_match_upstream ();
   test_q_reverse_ref_patterns ();
   test_q_predicates_filter_bound_values ();
+  test_q_predicates_without_free_variables_filter_all_rows ();
   test_q_functions_bind_derived_values ();
   test_q_functions_filter_on_none ();
   test_q_function_binding_conflicts_filter_rows ();
@@ -14920,8 +16420,10 @@ let () =
   test_q_builtin_ground_bindings ();
   test_q_not_filters_matching_bindings ();
   test_q_not_rejects_clauses_without_outer_bindings ();
+  test_q_not_insufficient_bindings_match_upstream_messages ();
   test_q_not_join_projects_join_variables ();
   test_q_not_join_rejects_unbound_join_vars ();
+  test_q_not_matches_upstream_edge_cases ();
   test_q_or_unions_branch_results ();
   test_q_or_rejects_branches_with_different_free_vars ();
   test_q_or_allows_branch_vars_bound_by_outer_clauses ();
@@ -14939,6 +16441,7 @@ let () =
   test_q_with_collection_inputs ();
   test_q_with_tuple_inputs ();
   test_q_with_dynamic_callable_inputs ();
+  test_q_nested_relation_map_inputs ();
   test_q_with_dynamic_callable_inputs_in_rules ();
   test_q_input_placeholders_ignore_values ();
   test_q_return_shapes ();
@@ -14958,6 +16461,7 @@ let () =
   test_q_resolves_idents_in_patterns ();
   test_parse_query_resolves_idents_in_patterns ();
   test_q_find_pull_expressions ();
+  test_q_return_shapes_with_pull_expressions ();
   test_q_find_pull_uses_named_source ();
   test_q_with_aggregates ();
   test_q_with_interleaved_aggregates ();
@@ -14992,9 +16496,14 @@ let () =
   test_tempid_retry_preserves_explicit_entity_ids ();
   test_add_tempids_retry_unique_identity_upserts ();
   test_add_tempid_unique_identity_conflicting_upserts ();
+  test_add_tempid_unique_identity_reports_redefinition_conflicts ();
+  test_current_tx_unique_identity_upsert_conflicts ();
   test_unique_value_rejects_duplicate_values ();
+  test_db_with_string_unique_value_matches_upstream_validation ();
   test_connection_transact_updates_current_db ();
   test_connection_listeners_receive_transaction_reports ();
+  test_connection_listen_matches_upstream_report_semantics ();
+  test_connection_auto_listener_keys ();
   test_bang_connection_api_aliases ();
   test_connection_reports_strip_skip_store_metadata ();
   test_storage_backed_connections_restore_and_continue ();
@@ -15022,6 +16531,7 @@ let () =
   test_parse_pull_pattern_validates_reverse_attrs ();
   test_parse_pull_pattern_expands_reverse_refs ();
   test_parse_pull_pattern_recursive_refs ();
+  test_parse_pull_pattern_recursive_refs_preserve_context ();
   test_parse_pull_pattern_recursive_string_ellipsis ();
   test_pull_aliases_selected_attributes ();
   test_pull_later_duplicate_keys_replace_earlier_values ();
@@ -15039,10 +16549,14 @@ let () =
   test_pull_component_attr_returns_id_stub_for_cycles ();
   test_pull_nested_component_can_expand_reverse_component_ref ();
   test_pull_id_and_wildcard ();
+  test_pull_reports_visitor_events ();
   test_pull_recursive_ref_with_depth_limit ();
   test_pull_recursive_ref_avoids_cycles ();
   test_pull_recursive_refs_share_pattern_context ();
   test_pull_recursive_ref_depth_preserves_sibling_context ();
+  test_pull_dual_recursion_respects_independent_depths ();
+  test_pull_dual_recursion_tracks_cycles_per_branch ();
+  test_pull_deep_recursion_reaches_leaf ();
   test_pull_recursive_reverse_ref ();
   test_pull_many_preserves_missing_entities ();
   test_filter_limits_read_apis ();

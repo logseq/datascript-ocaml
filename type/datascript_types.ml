@@ -109,6 +109,8 @@ type tx_op =
   | CompareAndSet of entity_ref * attr * value option * value
   | Entity of tx_entity
   | Raw_datom of datom
+  | InstallTxFn of entity_ref * (db -> value list -> tx_op list)
+  | CallIdent of entity_ref * value list
 
   | Call of (db -> tx_op list)
 
@@ -125,6 +127,7 @@ and db =
   ; max_tx : tx
   ; filter_pred : (datom -> bool) option
   ; storage_ref : storage option
+  ; tx_fns : (entity_id * (db -> value list -> tx_op list)) list
   }
 
 type entity =
@@ -142,6 +145,11 @@ and pulled_value =
   | Pulled_scalar of value
   | Pulled_many of pulled_value list
   | Pulled_entity of pulled_entity
+
+type pull_visit =
+  | PullVisitAttr of entity_id * attr
+  | PullVisitWildcard of entity_id
+  | PullVisitReverse of attr * entity_id
 
 type pull_selector =
   | Pull_id
@@ -377,6 +385,7 @@ type query_input =
   | Input_collection_decl of string
   | Input_collection_ignore_decl
   | Input_ignore_decl
+  | Input_rules_decl
   | Input_nested_collection_decl of input_binding
   | Input_tuple_decl of string list
   | Input_relation_decl of string list
@@ -423,7 +432,7 @@ type find_spec =
   | Find_pull_var of string * string
   | Find_pull_source of string * string * pull_selector list
   | Find_pull_source_var of string * string * string
-  | Find_aggregate of aggregate * string
+  | Find_aggregate of aggregate * query_term list
 
 type query =
   { find : find_spec list
@@ -463,8 +472,8 @@ type query_output =
   | Query_collection of query_result list
   | Query_tuple of query_result list option
   | Query_scalar of query_result option
-  | Query_relation_maps of (string * query_result) list list
-  | Query_tuple_map of (string * query_result) list option
+  | Query_relation_maps of (value * query_result) list list
+  | Query_tuple_map of (value * query_result) list option
 
 type index =
   | Eavt

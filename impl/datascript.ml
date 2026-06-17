@@ -90,6 +90,8 @@ type tx_op = Datascript_types.tx_op =
   | CompareAndSet of entity_ref * attr * value option * value
   | Entity of tx_entity
   | Raw_datom of datom
+  | InstallTxFn of entity_ref * (db -> value list -> tx_op list)
+  | CallIdent of entity_ref * value list
   | Call of (db -> tx_op list)
 
 type entity = Datascript_types.entity =
@@ -107,6 +109,11 @@ and pulled_value = Datascript_types.pulled_value =
   | Pulled_scalar of value
   | Pulled_many of pulled_value list
   | Pulled_entity of pulled_entity
+
+type pull_visit = Datascript_types.pull_visit =
+  | PullVisitAttr of entity_id * attr
+  | PullVisitWildcard of entity_id
+  | PullVisitReverse of attr * entity_id
 
 type pull_selector = Datascript_types.pull_selector =
   | Pull_id
@@ -342,6 +349,7 @@ type query_input = Datascript_types.query_input =
   | Input_collection_decl of string
   | Input_collection_ignore_decl
   | Input_ignore_decl
+  | Input_rules_decl
   | Input_nested_collection_decl of input_binding
   | Input_tuple_decl of string list
   | Input_relation_decl of string list
@@ -388,7 +396,7 @@ type find_spec = Datascript_types.find_spec =
   | Find_pull_var of string * string
   | Find_pull_source of string * string * pull_selector list
   | Find_pull_source_var of string * string * string
-  | Find_aggregate of aggregate * string
+  | Find_aggregate of aggregate * query_term list
 
 type query = Datascript_types.query =
   { find : find_spec list
@@ -428,8 +436,8 @@ type query_output = Datascript_types.query_output =
   | Query_collection of query_result list
   | Query_tuple of query_result list option
   | Query_scalar of query_result option
-  | Query_relation_maps of (string * query_result) list list
-  | Query_tuple_map of (string * query_result) list option
+  | Query_relation_maps of (value * query_result) list list
+  | Query_tuple_map of (value * query_result) list option
 
 type index = Datascript_types.index =
   | Eavt
@@ -472,6 +480,7 @@ type tx_report = Datascript_types.tx_report =
 type conn =
   { mutable db : db
   ; mutable listeners : (string * (tx_report -> unit)) list
+  ; mutable next_listener_id : int
   ; storage : storage option
   ; mutable storage_tail : datom list list
   }
@@ -490,6 +499,8 @@ let tx_meta_without_store_control tx_meta =
     tx_meta
 
 let tx0 = 0x20000000
+
+module Lru = Lru
 
 let max_entity_id = 0x7fffffff
 
@@ -767,6 +778,7 @@ let empty_db ?(schema = []) ?storage () =
     ; max_tx = tx0
     ; filter_pred = None
     ; storage_ref = storage
+    ; tx_fns = []
     }
 
 let schema_has_no_history schema attr =
@@ -798,6 +810,7 @@ let init_db ?(schema = []) ?storage datoms =
     ; max_tx
     ; filter_pred = None
     ; storage_ref = storage
+    ; tx_fns = []
     }
 
 let history db = with_db_datoms { db with historical = true } db.history_datoms
@@ -848,6 +861,7 @@ let from_serializable snapshot =
     ; max_tx = snapshot.serializable_max_tx
     ; filter_pred = None
     ; storage_ref = None
+    ; tx_fns = []
     }
 
 let storage_root_address = "datascript/root"
@@ -1021,7 +1035,7 @@ let make_conn ?storage ?(storage_tail = []) db =
     | None -> db
     | Some _ -> { db with storage_ref = storage }
   in
-  { db; listeners = []; storage; storage_tail }
+  { db; listeners = []; next_listener_id = 0; storage; storage_tail }
 
 let create_conn ?schema ?storage () =
   let db = empty_db ?schema ?storage () in
@@ -1054,6 +1068,16 @@ let listen conn key callback =
   key
 
 let listen_bang = listen
+
+let listen_auto conn callback =
+  let rec next_key () =
+    conn.next_listener_id <- conn.next_listener_id + 1;
+    let key = "listener-" ^ string_of_int conn.next_listener_id in
+    if List.mem_assoc key conn.listeners then next_key () else key
+  in
+  listen conn (next_key ()) callback
+
+let listen_bang_auto = listen_auto
 
 let unlisten conn key =
   conn.listeners <- List.remove_assoc key conn.listeners
@@ -1163,17 +1187,58 @@ let reverse_ref attr =
   else
     join_namespaced_attr namespace ("_" ^ name)
 
-let same_fact left right = left.e = right.e && left.a = right.a && left.v = right.v
+let rec list_equal_by equal left right =
+  match left, right with
+  | [], [] -> true
+  | left :: left_rest, right :: right_rest ->
+    equal left right && list_equal_by equal left_rest right_rest
+  | [], _ :: _ | _ :: _, [] -> false
+
+let rec entity_ref_equal left right =
+  match left, right with
+  | Entity_id left, Entity_id right -> left = right
+  | Temp_id left, Temp_id right -> left = right
+  | CurrentTx, CurrentTx -> true
+  | Ident left, Ident right -> left = right
+  | Lookup_ref (left_attr, left_value), Lookup_ref (right_attr, right_value) ->
+    left_attr = right_attr && value_equal left_value right_value
+  | _ -> false
+
+and value_equal left right =
+  match left, right with
+  | Float left, Float right ->
+    (classify_float left = FP_nan && classify_float right = FP_nan) || left = right
+  | List left, List right -> list_equal_by value_equal left right
+  | Set left, Set right -> list_equal_by value_equal left right
+  | Map left, Map right ->
+    list_equal_by
+      (fun (left_key, left_value) (right_key, right_value) ->
+         value_equal left_key right_key && value_equal left_value right_value)
+      left
+      right
+  | Tuple left, Tuple right ->
+    list_equal_by
+      (fun left right ->
+         match left, right with
+         | None, None -> true
+         | Some left, Some right -> value_equal left right
+         | None, Some _ | Some _, None -> false)
+      left
+      right
+  | Ref_to left, Ref_to right -> entity_ref_equal left right
+  | _ -> left = right
+
+let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
 
 let without_entity_attr e a datoms =
   List.filter (fun d -> d.e <> e || d.a <> a) datoms
 
 let without_fact e a value datoms =
-  List.filter (fun d -> d.e <> e || d.a <> a || d.v <> value) datoms
+  List.filter (fun d -> d.e <> e || d.a <> a || not (value_equal d.v value)) datoms
 
 let has_unique_conflict db datoms d =
   is_unique db d.a
-  && List.exists (fun existing -> existing.e <> d.e && existing.a = d.a && existing.v = d.v) datoms
+  && List.exists (fun existing -> existing.e <> d.e && existing.a = d.a && value_equal existing.v d.v) datoms
 
 let entity_attr_datoms datoms e a =
   List.filter (fun d -> d.e = e && d.a = a) datoms
@@ -1196,7 +1261,7 @@ let sorted_retractions tx datoms =
   |> List.map (retraction_datom tx)
 
 let validate_datom_value db d =
-  if d.v = Nil then invalid_arg ("nil attribute value is not allowed: " ^ d.a);
+  if d.v = Nil then invalid_arg "Cannot store nil as a value";
   let value_matches_type value value_type =
     match value_type, value with
     | RefType, Ref _ -> true
@@ -1225,7 +1290,7 @@ let validate_datom_value db d =
   | Some { value_type = Some RefType; _ } ->
     (match d.v with
      | Ref _ -> ()
-     | _ -> invalid_arg ("ref attribute requires ref value: " ^ d.a))
+     | _ -> invalid_arg "Expected number or lookup ref for entity id")
   | Some { value_type = Some TupleType; tuple_types; _ } ->
     (match d.v with
      | Tuple values ->
@@ -1255,13 +1320,19 @@ let validate_datom_value db d =
      | _ -> invalid_arg ("instant attribute requires instant value: " ^ d.a))
   | _ -> ()
 
+let value_option_equal left right =
+  match left, right with
+  | None, None -> true
+  | Some left, Some right -> value_equal left right
+  | None, Some _ | Some _, None -> false
+
 let tuple_direct_write_matches_sources db datoms d =
   match tuple_attrs db d.a, d.v with
   | Some source_attrs, Tuple values ->
     List.length source_attrs = List.length values
     && List.for_all Option.is_some values
     && List.for_all2
-         (fun source_attr value -> current_attr_value datoms d.e source_attr = value)
+         (fun source_attr value -> value_option_equal (current_attr_value datoms d.e source_attr) value)
          source_attrs
          values
   | _ -> false
@@ -1294,7 +1365,7 @@ let retract_active_datom_with_report tx datoms e a value =
   let value = Option.map normalize_value value in
   let removed =
     match value with
-    | Some value -> List.filter (fun d -> d.e = e && d.a = a && d.v = value) datoms
+    | Some value -> List.filter (fun d -> d.e = e && d.a = a && value_equal d.v value) datoms
     | None -> entity_attr_datoms datoms e a
   in
   retract_active_datom datoms e a value, sorted_retractions tx removed
@@ -1354,9 +1425,13 @@ let compare_and_set_matches db datoms e a expected =
   match cardinality db a, expected with
   | Many, Some expected ->
     entity_attr_datoms datoms e a
-    |> List.exists (fun d -> d.v = expected)
+    |> List.exists (fun d -> value_equal d.v expected)
   | Many, None -> entity_attr_datoms datoms e a = []
-  | One, expected -> current_attr_value datoms e a = expected
+  | One, Some expected ->
+    (match current_attr_value datoms e a with
+     | Some actual -> value_equal actual expected
+     | None -> false)
+  | One, None -> current_attr_value datoms e a = None
 
 let tuple_value datoms e source_attrs =
   Tuple (List.map (current_attr_value datoms e) source_attrs)
@@ -1425,26 +1500,154 @@ and entid_in_datoms db datoms attr value =
   let value = coerce_tuple_lookup_value db datoms attr value in
   if is_unique db attr then
     datoms
-    |> List.find_opt (fun d -> d.a = attr && d.v = value)
+    |> List.find_opt (fun d -> d.a = attr && value_equal d.v value)
     |> Option.map (fun d -> d.e)
   else
     None
 
 let entid db attr value = entid_in_datoms db (visible_datoms db) attr value
 
+let rec edn_string_of_value = function
+  | Nil -> "nil"
+  | Bool value -> if value then "true" else "false"
+  | Int value -> string_of_int value
+  | Float value -> string_of_float value
+  | String value -> "\"" ^ String.escaped value ^ "\""
+  | Keyword value -> ":" ^ value
+  | Symbol value -> value
+  | Uuid value -> "#uuid \"" ^ value ^ "\""
+  | Instant millis -> string_of_int millis
+  | Regex value -> "#\"" ^ String.escaped value ^ "\""
+  | Ref entity_id -> string_of_int entity_id
+  | TxRef -> ":db/current-tx"
+  | Ref_to entity_ref -> edn_string_of_entity_ref entity_ref
+  | List values -> "[" ^ String.concat " " (List.map edn_string_of_value values) ^ "]"
+  | Set values -> "#{" ^ String.concat " " (List.map edn_string_of_value values) ^ "}"
+  | Tuple values ->
+    "[" ^ String.concat " " (List.map (function None -> "nil" | Some value -> edn_string_of_value value) values) ^ "]"
+  | Map entries ->
+    "{"
+    ^ String.concat
+        " "
+        (List.map
+           (fun (key, value) -> edn_string_of_value key ^ " " ^ edn_string_of_value value)
+           entries)
+    ^ "}"
+
+and edn_string_of_entity_ref = function
+  | Entity_id entity_id -> string_of_int entity_id
+  | Temp_id tempid -> tempid
+  | CurrentTx -> ":db/current-tx"
+  | Ident ident -> ":" ^ ident
+  | Lookup_ref (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+
+let unresolved_lookup_ref_message attr value =
+  "Nothing found for entity id [:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+
+let non_unique_lookup_ref_message attr value =
+  "Lookup ref attribute should be marked as :db/unique: [:"
+  ^ attr
+  ^ " "
+  ^ edn_string_of_value value
+  ^ "]"
+
+let cas_current_value_string db datoms e a =
+  match cardinality db a with
+  | Many ->
+    let values =
+      entity_attr_datoms datoms e a
+      |> List.map (fun d -> d.v)
+      |> List.sort compare_value
+      |> List.map edn_string_of_value
+    in
+    "(" ^ String.concat " " values ^ ")"
+  | One ->
+    current_attr_value datoms e a
+    |> Option.map edn_string_of_value
+    |> Option.value ~default:"nil"
+
+let cas_expected_value_string = function
+  | None -> "nil"
+  | Some value -> edn_string_of_value value
+
+let compare_and_set_failure_message db datoms e a expected =
+  ":db.fn/cas failed on datom ["
+  ^ string_of_int e
+  ^ " :"
+  ^ a
+  ^ " "
+  ^ cas_current_value_string db datoms e a
+  ^ "], expected "
+  ^ cas_expected_value_string expected
+
 let lookup_ref_entity_id_in_datoms ?(strict_missing = false) db datoms attr value =
   if not (is_unique db attr) then
-    invalid_arg ("lookup ref attribute is not unique: " ^ attr);
+    invalid_arg (non_unique_lookup_ref_message attr value);
   match entid_in_datoms db datoms attr value with
   | Some entity_id -> Some entity_id
   | None ->
     if strict_missing then
-      invalid_arg "lookup ref did not resolve"
+      invalid_arg (unresolved_lookup_ref_message attr value)
     else
       None
 
 let lookup_ref_entity_id ?(strict_missing = false) db attr value =
   lookup_ref_entity_id_in_datoms ~strict_missing db (visible_datoms db) attr value
+
+let upsert_lookup_ref_string attr value =
+  "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+
+let conflicting_upserts_message (left_attr, left_value, left_e) (right_attr, right_value, right_e) =
+  "Conflicting upserts: "
+  ^ upsert_lookup_ref_string left_attr left_value
+  ^ " resolves to "
+  ^ string_of_int left_e
+  ^ ", but "
+  ^ upsert_lookup_ref_string right_attr right_value
+  ^ " resolves to "
+  ^ string_of_int right_e
+
+let explicit_upsert_conflict_message attr value target_e entity_id =
+  "Conflicting upsert: "
+  ^ upsert_lookup_ref_string attr value
+  ^ " resolves to "
+  ^ string_of_int target_e
+  ^ ", but entity already has :db/id "
+  ^ string_of_int entity_id
+
+let unique_identity_resolutions db datoms attrs =
+  attrs
+  |> List.concat_map (function
+    | attr, One_value value when is_unique_identity db attr ->
+      (match entid_in_datoms db datoms attr value with
+       | Some entity_id -> [ attr, value, entity_id ]
+       | None -> [])
+    | attr, Many_values values when is_unique_identity db attr ->
+      values
+      |> List.filter_map (fun value ->
+        match entid_in_datoms db datoms attr value with
+        | Some entity_id -> Some (attr, value, entity_id)
+        | None -> None)
+    | _ -> [])
+
+let conflicting_unique_identity_resolution = function
+  | [] | [ _ ] -> None
+  | first :: rest ->
+    rest
+    |> List.find_opt (fun (_, _, entity_id) ->
+      let _, _, first_entity_id = first in
+      entity_id <> first_entity_id)
+    |> Option.map (fun conflict -> first, conflict)
+
+let validate_explicit_upsert_target db datoms entity_id attrs =
+  let resolutions = unique_identity_resolutions db datoms attrs in
+  match conflicting_unique_identity_resolution resolutions with
+  | Some (left, right) -> invalid_arg (conflicting_upserts_message left right)
+  | None ->
+    resolutions
+    |> List.iter (fun (attr, value, target_e) ->
+      if target_e <> entity_id then
+        invalid_arg (explicit_upsert_conflict_message attr value target_e entity_id))
 
 let entity_unique_identity db datoms attrs =
   let attr_value attr =
@@ -1453,30 +1656,14 @@ let entity_unique_identity db datoms attrs =
     | Some (Many_values (value :: _)) -> Some value
     | _ -> None
   in
-  let add_target targets = function
-    | None -> targets
-    | Some target when List.mem target targets -> targets
-    | Some target -> target :: targets
-  in
-  let single_target = function
-    | [] -> None
-    | [ target ] -> Some target
-    | _ -> invalid_arg "conflicting upserts"
-  in
+  let direct_resolutions = unique_identity_resolutions db datoms attrs in
   let direct_identity =
-    attrs
-    |> List.fold_left
-         (fun targets -> function
-           | attr, One_value value when is_unique_identity db attr ->
-             add_target targets (entid_in_datoms db datoms attr value)
-           | attr, Many_values values when is_unique_identity db attr ->
-             List.fold_left
-               (fun targets value -> add_target targets (entid_in_datoms db datoms attr value))
-               targets
-               values
-           | _ -> targets)
-         []
-    |> single_target
+    match conflicting_unique_identity_resolution direct_resolutions with
+    | Some (left, right) -> invalid_arg (conflicting_upserts_message left right)
+    | None ->
+      (match direct_resolutions with
+       | [] -> None
+       | (_, _, target_e) :: _ -> Some target_e)
   in
   match direct_identity with
   | Some _ as identity -> identity
@@ -1622,6 +1809,7 @@ let resolve_value_for_attr db attr datoms tx max_eid tempids value =
   | Some _, Some entity_ref ->
     let entity_id, max_eid, tempids = resolve_entity_ref db datoms tx max_eid tempids entity_ref in
     Ref entity_id, max_eid, tempids
+  | Some _, None -> invalid_arg "Expected number or lookup ref for entity id"
   | _ ->
     resolve_value db datoms tx max_eid tempids value
 
@@ -1636,11 +1824,11 @@ let ref_lookup_collection_value = function
   | _ -> false
 
 let resolve_existing_entity_ref db datoms tx max_eid tempids = function
-  | Temp_id _ -> invalid_arg "tempids are allowed in add operations only"
+  | Temp_id _ -> invalid_arg "Tempids are allowed in :db/add only"
   | entity_ref -> resolve_entity_ref db datoms tx max_eid tempids entity_ref
 
 let resolve_optional_existing_entity_ref db datoms tx max_eid tempids = function
-  | Temp_id _ -> invalid_arg "tempids are allowed in add operations only"
+  | Temp_id _ -> invalid_arg "Tempids are allowed in :db/add only"
   | Lookup_ref (attr, value) ->
     let value, max_eid, tempids = resolve_value db datoms tx max_eid tempids value in
     (match lookup_ref_entity_id_in_datoms db datoms attr value with
@@ -1991,10 +2179,11 @@ let apply_tx tx_ops db =
   if is_filtered db then invalid_arg "filtered db is read-only";
   let tx = db.max_tx + 1 in
   let current_schema = ref db.schema in
+  let current_tx_fns = ref db.tx_fns in
   let removed_schema_attrs = ref [] in
   let removed_schema_fields = ref [] in
   let ignored_schema_entities = ref [] in
-  let current_db () = { db with schema = !current_schema } in
+  let current_db () = { db with schema = !current_schema; tx_fns = !current_tx_fns } in
   let refresh_schema datoms =
     current_schema
     := schema_from_transaction_datoms
@@ -2063,6 +2252,10 @@ let apply_tx tx_ops db =
       max_explicit_value max_eid new_value
     | Entity entity -> max_explicit_tx_entity max_eid entity
     | Raw_datom d -> max_eid_in_value (max max_eid (validate_entity_id d.e)) d.v
+    | InstallTxFn (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
+    | CallIdent (entity_ref, args) ->
+      let max_eid = max_explicit_entity_ref max_eid entity_ref in
+      List.fold_left max_explicit_value max_eid args
     | Call _ -> max_eid
   in
   let initial_max_eid = List.fold_left max_explicit_tx_op db.max_eid tx_ops in
@@ -2072,10 +2265,21 @@ let apply_tx tx_ops db =
     | _ -> entity_tempids
   in
   let validate_tempid_usage tempids entity_tempids =
-    tempids
-    |> List.iter (fun (tempid, _) ->
-      if tempid <> "db/current-tx" && not (is_current_tx_alias tempid) && not (List.mem tempid entity_tempids) then
-        invalid_arg ("tempid used only as value: " ^ tempid))
+    let value_only =
+      tempids
+      |> List.filter_map (fun (tempid, _) ->
+        if tempid <> "db/current-tx" && not (is_current_tx_alias tempid) && not (List.mem tempid entity_tempids) then
+          Some tempid
+        else
+          None)
+    in
+    match value_only with
+    | [] -> ()
+    | tempids ->
+      invalid_arg
+        ("Tempids used only as value in transaction: ("
+         ^ String.concat " " tempids
+         ^ ")")
   in
   let rec tx_value_has_assertions attr = function
     | One_value (List []) | One_value (Set []) when attr_expands_collection db attr -> false
@@ -2113,10 +2317,16 @@ let apply_tx tx_ops db =
     let datoms, datom_tx_data = add_entity_attr_value db tx datoms e attr value in
     datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data
   in
-  let merge_tempid_entity old_e target_e datoms tempids tx_data =
+  let merge_tempid_entity tempid old_e target_e datoms tempids tx_data =
     let db = current_db () in
     if old_e <= db.max_eid then
-      invalid_arg "conflicting upsert";
+      invalid_arg
+        ("Conflicting upsert: "
+         ^ tempid
+         ^ " resolves both to "
+         ^ string_of_int old_e
+         ^ " and "
+         ^ string_of_int target_e);
     let old_datoms, kept_datoms = List.partition (fun d -> d.e = old_e) datoms in
     let dedupe_facts datoms =
       datoms
@@ -2177,7 +2387,7 @@ let apply_tx tx_ops db =
     if is_unique_identity db attr then
       match entid_in_datoms db datoms attr value, List.assoc_opt tempid tempids with
       | Some target_e, Some old_e when old_e <> target_e ->
-        let datoms, tempids, tx_data = merge_tempid_entity old_e target_e datoms tempids tx_data in
+        let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
         target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | Some target_e, _ ->
         target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
@@ -2188,7 +2398,7 @@ let apply_tx tx_ops db =
       let e, max_eid, tempids = resolve_entity_ref db datoms tx max_eid tempids (Temp_id tempid) in
       match tuple_identity_target_for_add datoms e attr value with
       | Some target_e ->
-        let datoms, tempids, tx_data = merge_tempid_entity e target_e datoms tempids tx_data in
+        let datoms, tempids, tx_data = merge_tempid_entity tempid e target_e datoms tempids tx_data in
         target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | None -> e, datoms, max_eid, tempids, tx_data
   in
@@ -2213,7 +2423,25 @@ let apply_tx tx_ops db =
     | Entity entity -> tx_entity_has_schema_fields entity
     | Retract _ | RetractEntity _ | RetractAttr _ -> true
     | CompareAndSet (_, attr, _, _) -> attr = "db/ident" || List.mem attr schema_fields
-    | Call _ -> false
+    | InstallTxFn _ | CallIdent _ | Call _ -> false
+  in
+  let resolve_transaction_function_ref datoms max_eid tempids entity_ref =
+    match entity_ref with
+    | Ident ident ->
+      (match entid_in_datoms (current_db ()) datoms ident_attr (Keyword ident) with
+       | Some e -> e, max max_eid e, tempids
+       | None -> invalid_arg ("Cannot find entity for transaction fn: " ^ ident))
+    | _ ->
+      resolve_entity_ref (current_db ()) datoms tx max_eid tempids entity_ref
+  in
+  let resolve_call_args datoms max_eid tempids args =
+    args
+    |> List.fold_left
+         (fun (args, max_eid, tempids) arg ->
+           let arg, max_eid, tempids = resolve_value (current_db ()) datoms tx max_eid tempids arg in
+           arg :: args, max_eid, tempids)
+         ([], max_eid, tempids)
+    |> fun (args, max_eid, tempids) -> List.rev args, max_eid, tempids
   in
   let rec apply_op (datoms, max_eid, tempids, entity_tempids, tx_data) tx_op =
     let db = current_db () in
@@ -2269,7 +2497,7 @@ let apply_tx tx_ops db =
       let expected, max_eid, tempids = resolve_optional_value_for_attr db a datoms tx max_eid tempids expected in
       let new_value, max_eid, tempids = resolve_value_for_attr db a datoms tx max_eid tempids new_value in
       if not (compare_and_set_matches db datoms e a expected) then
-        invalid_arg "compare-and-set failed";
+        invalid_arg (compare_and_set_failure_message db datoms e a expected);
       let d = datom ~tx ~e ~a ~v:new_value () in
       let datoms, datom_tx_data = add_user_datom_with_report db tx datoms d in
       datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data
@@ -2289,6 +2517,18 @@ let apply_tx tx_ops db =
     | Call f ->
       let db_for_call = with_db_datoms { db with max_eid } datoms in
       apply_ops (datoms, max_eid, tempids, entity_tempids, tx_data) (f db_for_call)
+    | InstallTxFn (entity_ref, f) ->
+      let e, max_eid, tempids = resolve_transaction_function_ref datoms max_eid tempids entity_ref in
+      current_tx_fns := (e, f) :: List.remove_assoc e !current_tx_fns;
+      datoms, max_eid, tempids, mark_entity_tempid entity_tempids entity_ref, tx_data
+    | CallIdent (entity_ref, args) ->
+      let e, max_eid, tempids = resolve_transaction_function_ref datoms max_eid tempids entity_ref in
+      let args, max_eid, tempids = resolve_call_args datoms max_eid tempids args in
+      (match List.assoc_opt e !current_tx_fns with
+       | Some f ->
+         let db_for_call = with_db_datoms { db with max_eid } datoms in
+         apply_ops (datoms, max_eid, tempids, entity_tempids, tx_data) (f db_for_call args)
+       | None -> invalid_arg "Entity expected to have transaction function metadata")
     | Entity entity when not (tx_entity_has_assertions entity) ->
       datoms, max_eid, tempids, entity_tempids, tx_data
     | Entity entity ->
@@ -2313,7 +2553,7 @@ let apply_tx tx_ops db =
              let datoms, tempids, tx_data, attrs =
                match List.assoc_opt tempid tempids with
                | Some old_e when old_e <> target_e ->
-                 let datoms, tempids, tx_data = merge_tempid_entity old_e target_e datoms tempids tx_data in
+                 let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
                  let attrs =
                    List.map
                      (fun (attr, tx_value) -> attr, remap_resolved_tx_value old_e target_e tx_value)
@@ -2329,6 +2569,7 @@ let apply_tx tx_ops db =
         | Some entity_ref ->
           let e, max_eid, tempids = resolve_entity_ref db datoms tx max_eid tempids entity_ref in
           let attrs, max_eid, tempids = resolve_entity_attrs db datoms tx max_eid tempids entity.attrs in
+          validate_explicit_upsert_target db datoms e attrs;
           e, attrs, datoms, max_eid, tempids, tx_data
         | None ->
           let e = allocate_entity_id max_eid in
@@ -2532,6 +2773,7 @@ let apply_tx tx_ops db =
       ; history_datoms = db.history_datoms @ history_tx_data
       ; max_eid
       ; max_tx = !max_tx_seen
+      ; tx_fns = !current_tx_fns
       }
   , tempids
   , tx_data
@@ -2609,6 +2851,9 @@ let tempid ?part ?value () =
 let resolve_tempid ?db:_ tempids tempid = List.assoc_opt tempid tempids
 
 let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual = expected) maybe
+
+let matches_value maybe expected =
+  Option.fold ~none:true ~some:(fun actual -> value_equal actual expected) maybe
 
 let is_avet_accessible db attr =
   is_ref_attr db attr
@@ -2699,7 +2944,7 @@ let datoms db index ?e ?a ?v ?tx () =
   validate_index_access db index a;
   let v = resolve_index_value_option_for_optional_attr db a v in
   indexed_visible_datoms db index
-  |> List.filter (fun d -> matches e d.e && matches a d.a && matches v d.v && matches tx d.tx)
+  |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value v d.v && matches tx d.tx)
 
 let datoms_ref db index ?e ?a ?v ?tx () =
   let e = resolve_index_entity_ref_option db e in
@@ -3076,16 +3321,29 @@ let dedupe_pulled_attrs attrs =
        []
   |> List.rev
 
-let rec pull_entity_by_id db selector entity_id =
-  pull_entity_by_id_visited db [] selector selector entity_id
+let visit_pull visitor event =
+  match visitor with
+  | None -> ()
+  | Some visitor -> visitor event
 
-and pull_entity_by_id_visited db visited context_selector selector entity_id =
+let visit_pull_attr visitor entity_id attr =
+  if attr <> "db/id" then
+    if is_reverse_ref attr then
+      visit_pull visitor (PullVisitReverse (reverse_ref attr, entity_id))
+    else
+      visit_pull visitor (PullVisitAttr (entity_id, attr))
+
+let rec pull_entity_by_id ?visitor db selector entity_id =
+  pull_entity_by_id_visited ?visitor ~root_id:entity_id ~root_reexpanded:false db [] selector selector entity_id
+
+and pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited context_selector selector entity_id =
   match entity db (Entity_id entity_id) with
   | None -> None
   | Some entity ->
     let attrs =
       selector
-      |> List.concat_map (pull_selector_attrs db visited context_selector entity)
+      |> List.concat_map
+           (pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity)
       |> dedupe_pulled_attrs
       |> List.sort (fun (left, _) (right, _) -> compare left right)
     in
@@ -3093,33 +3351,41 @@ and pull_entity_by_id_visited db visited context_selector selector entity_id =
      | [] -> None
      | attrs -> Some { pulled_id = entity.id; pulled_attrs = attrs })
 
-and pull_selector_attrs db visited context_selector entity = function
+and pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity = function
   | Pull_id -> [ "db/id", Pulled_scalar (Int entity.id) ]
   | Pull_wildcard ->
+    visit_pull visitor (PullVisitWildcard entity.id);
     ("db/id", Pulled_scalar (Int entity.id))
     :: (entity.attrs
         |> List.filter (fun (attr, _) -> not (is_reverse_ref attr))
-        |> List.map (fun (attr, value) -> attr, pulled_attr_value db visited entity attr (default_limit_tx_value value)))
+        |> List.map (fun (attr, value) ->
+          visit_pull_attr visitor entity.id attr;
+          attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value)))
   | Pull_attr attr ->
+    visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value db visited entity attr (default_limit_tx_value value) ])
+    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
     |> Option.value ~default:[]
   | Pull_attr_default (attr, default) ->
+    visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value db visited entity attr (default_limit_tx_value value) ])
+    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value) ])
     |> Option.value ~default:[ attr, Pulled_scalar default ]
   | Pull_attr_limit (attr, limit) ->
+    visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value db visited entity attr (limit_tx_value limit value) ])
+    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (limit_tx_value limit value) ])
     |> Option.value ~default:[]
   | Pull_attr_unlimited attr ->
+    visit_pull_attr visitor entity.id attr;
     entity_attr_raw entity attr
-    |> Option.map (fun value -> [ attr, pulled_attr_value db visited entity attr value ])
+    |> Option.map (fun value -> [ attr, pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr value ])
     |> Option.value ~default:[]
   | Pull_attr_xform (attr, f) ->
+    visit_pull_attr visitor entity.id attr;
     let pulled =
       entity_attr_raw entity attr
-      |> Option.map (fun value -> pulled_attr_value db visited entity attr (default_limit_tx_value value))
+      |> Option.map (fun value -> pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value))
       |> Option.value ~default:(Pulled_scalar Nil)
       |> f
     in
@@ -3127,49 +3393,62 @@ and pull_selector_attrs db visited context_selector entity = function
      | Pulled_many [] -> []
      | value -> [ attr, value ])
   | Pull_attr_default_xform (attr, default, f) ->
+    visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
      | None -> [ attr, Pulled_scalar default ]
      | Some value ->
-       let pulled = pulled_attr_value db visited entity attr (default_limit_tx_value value) |> f in
+       let pulled =
+         pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr (default_limit_tx_value value)
+         |> f
+       in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_ref (attr, selector) ->
+    visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_ref_value db visited selector default_pull_limit value in
+       let pulled =
+         pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector default_pull_limit value
+       in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_ref_default (attr, selector, default) ->
+    visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
      | None -> [ attr, Pulled_scalar default ]
      | Some value ->
-       let pulled = pull_ref_value db visited selector default_pull_limit value in
+       let pulled =
+         pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector default_pull_limit value
+       in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_ref_limit (attr, selector, limit) ->
+    visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_ref_value db visited selector limit value in
+       let pulled = pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector limit value in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_ref_unlimited (attr, selector) ->
+    visit_pull_attr visitor entity.id attr;
     (match entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_ref_value_unlimited db visited selector value in
+       let pulled = pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded db visited selector value in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_ref_xform (attr, selector, f) ->
+    visit_pull_attr visitor entity.id attr;
     let pulled =
       entity_attr_raw entity attr
-      |> Option.map (pull_ref_value db visited selector default_pull_limit)
+      |> Option.map (pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector default_pull_limit)
       |> Option.value ~default:(Pulled_scalar Nil)
       |> f
     in
@@ -3177,17 +3456,34 @@ and pull_selector_attrs db visited context_selector entity = function
      | Pulled_many [] -> []
      | value -> [ attr, value ])
   | Pull_recursive_ref (attr, selector, depth) ->
+    visit_pull_attr visitor entity.id attr;
     (match if is_reverse_ref attr then Some (Many_values []) else entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_recursive_ref_value db visited context_selector attr selector depth entity.id value in
+       let pulled =
+         pull_recursive_ref_value
+           ?visitor
+           ~root_id
+           ~root_reexpanded
+           db
+           visited
+           context_selector
+           attr
+           selector
+           depth
+           entity.id
+           value
+       in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ attr, value ]))
   | Pull_reverse_ref (attr, selector) ->
+    visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       datoms db Avet ~a:attr ~v:(Ref entity.id) ()
-      |> List.filter_map (fun d -> pull_entity_by_id_visited db visited selector selector d.e)
+      |> List.filter_map
+           (fun d ->
+             pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector d.e)
       |> List.map (fun entity -> Pulled_entity entity)
     in
     (if is_component db attr then
@@ -3199,9 +3495,12 @@ and pull_selector_attrs db visited context_selector entity = function
        | [] -> []
        | values -> [ attr, Pulled_many (take default_pull_limit values) ])
   | Pull_reverse_ref_default (attr, selector, default) ->
+    visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       datoms db Avet ~a:attr ~v:(Ref entity.id) ()
-      |> List.filter_map (fun d -> pull_entity_by_id_visited db visited selector selector d.e)
+      |> List.filter_map
+           (fun d ->
+             pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector d.e)
       |> List.map (fun entity -> Pulled_entity entity)
     in
     (if is_component db attr then
@@ -3213,9 +3512,12 @@ and pull_selector_attrs db visited context_selector entity = function
        | [] -> [ attr, Pulled_scalar default ]
        | values -> [ attr, Pulled_many (take default_pull_limit values) ])
   | Pull_reverse_ref_limit (attr, selector, limit) ->
+    visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       datoms db Avet ~a:attr ~v:(Ref entity.id) ()
-      |> List.filter_map (fun d -> pull_entity_by_id_visited db visited selector selector d.e)
+      |> List.filter_map
+           (fun d ->
+             pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector d.e)
       |> List.map (fun entity -> Pulled_entity entity)
     in
     (if is_component db attr then
@@ -3227,9 +3529,12 @@ and pull_selector_attrs db visited context_selector entity = function
        | [] -> []
        | values -> [ attr, Pulled_many (take limit values) ])
   | Pull_reverse_ref_unlimited (attr, selector) ->
+    visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       datoms db Avet ~a:attr ~v:(Ref entity.id) ()
-      |> List.filter_map (fun d -> pull_entity_by_id_visited db visited selector selector d.e)
+      |> List.filter_map
+           (fun d ->
+             pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector d.e)
       |> List.map (fun entity -> Pulled_entity entity)
     in
     (if is_component db attr then
@@ -3241,9 +3546,12 @@ and pull_selector_attrs db visited context_selector entity = function
        | [] -> []
        | values -> [ attr, Pulled_many values ])
   | Pull_reverse_ref_xform (attr, selector, f) ->
+    visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       datoms db Avet ~a:attr ~v:(Ref entity.id) ()
-      |> List.filter_map (fun d -> pull_entity_by_id_visited db visited selector selector d.e)
+      |> List.filter_map
+           (fun d ->
+             pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector d.e)
       |> List.map (fun entity -> Pulled_entity entity)
     in
     let pulled =
@@ -3260,20 +3568,30 @@ and pull_selector_attrs db visited context_selector entity = function
      | Pulled_many [] -> []
      | value -> [ attr, value ])
   | Pull_as (selector, alias) ->
-    pull_selector_attrs db visited context_selector entity selector
+    pull_selector_attrs ?visitor ~root_id ~root_reexpanded db visited context_selector entity selector
     |> List.map (fun (_, value) -> alias, value)
 
-and pulled_attr_value db visited entity attr value =
+and pulled_attr_value ?visitor ~root_id ~root_reexpanded db visited entity attr value =
   if is_component db attr then
-    pull_component_value db visited entity.id value
+    pull_component_value ?visitor ~root_id ~root_reexpanded db visited entity.id value
   else
     scalar_or_many value
 
-and pull_component_value db visited current_id = function
+and pull_component_value ?visitor ~root_id ~root_reexpanded db visited current_id = function
   | One_value (Ref entity_id) ->
     if List.mem entity_id (current_id :: visited) then pulled_id_stub entity_id
     else
-      (match pull_entity_by_id_visited db (current_id :: visited) [ Pull_wildcard ] [ Pull_wildcard ] entity_id with
+      (match
+         pull_entity_by_id_visited
+           ?visitor
+           ~root_id
+           ~root_reexpanded
+           db
+           (current_id :: visited)
+           [ Pull_wildcard ]
+           [ Pull_wildcard ]
+           entity_id
+       with
        | Some entity -> Pulled_entity entity
        | None -> Pulled_scalar (Ref entity_id))
   | Many_values values ->
@@ -3283,22 +3601,30 @@ and pull_component_value db visited current_id = function
         if List.mem entity_id (current_id :: visited) then
           Some (pulled_id_stub entity_id)
         else
-          pull_entity_by_id_visited db (current_id :: visited) [ Pull_wildcard ] [ Pull_wildcard ] entity_id
+          pull_entity_by_id_visited
+            ?visitor
+            ~root_id
+            ~root_reexpanded
+            db
+            (current_id :: visited)
+            [ Pull_wildcard ]
+            [ Pull_wildcard ]
+            entity_id
           |> Option.map (fun entity -> Pulled_entity entity)
       | _ -> None)
     |> fun values -> Pulled_many values
   | value -> scalar_or_many value
 
-and pull_ref_value_with_limit db visited selector limit = function
+and pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded db visited selector limit = function
   | One_value (Ref entity_id) ->
-    (match pull_entity_by_id_visited db visited selector selector entity_id with
+    (match pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector entity_id with
      | Some entity -> Pulled_entity entity
      | None -> Pulled_many [])
   | Many_values values ->
     values
     |> List.filter_map (function
       | Ref entity_id ->
-        pull_entity_by_id_visited db visited selector selector entity_id
+        pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded db visited selector selector entity_id
         |> Option.map (fun entity -> Pulled_entity entity)
       | _ -> None)
     |> (fun values ->
@@ -3308,13 +3634,25 @@ and pull_ref_value_with_limit db visited selector limit = function
     |> fun values -> Pulled_many values
   | value -> scalar_or_many value
 
-and pull_ref_value db visited selector limit value =
-  pull_ref_value_with_limit db visited selector (Some limit) value
+and pull_ref_value ?visitor ~root_id ~root_reexpanded db visited selector limit value =
+  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded db visited selector (Some limit) value
 
-and pull_ref_value_unlimited db visited selector value =
-  pull_ref_value_with_limit db visited selector None value
+and pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded db visited selector value =
+  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded db visited selector None value
 
-and pull_recursive_ref_value db visited context_selector attr selector depth current_id value =
+and pull_recursive_ref_value
+  ?visitor
+  ~root_id
+  ~root_reexpanded
+  db
+  visited
+  context_selector
+  attr
+  selector
+  depth
+  current_id
+  value
+  =
   let seen = current_id :: visited in
   let next_recursive_depth = function
     | Some depth when depth <= 1 -> None
@@ -3347,10 +3685,32 @@ and pull_recursive_ref_value db visited context_selector attr selector depth cur
     | recursive_selectors -> selector @ recursive_selectors
   in
   let pull_child entity_id =
-    if List.mem entity_id seen then Some (pulled_id_stub entity_id)
+    if List.mem entity_id seen then
+      if entity_id = root_id && not root_reexpanded then
+        let selector = selector_for_depth () in
+        pull_entity_by_id_visited
+          ?visitor
+          ~root_id
+          ~root_reexpanded:true
+          db
+          (current_id :: visited)
+          selector
+          selector
+          entity_id
+        |> Option.map (fun entity -> Pulled_entity entity)
+      else
+        Some (pulled_id_stub entity_id)
     else
       let selector = selector_for_depth () in
-      pull_entity_by_id_visited db (current_id :: visited) selector selector entity_id
+      pull_entity_by_id_visited
+        ?visitor
+        ~root_id
+        ~root_reexpanded
+        db
+        (current_id :: visited)
+        selector
+        selector
+        entity_id
       |> Option.map (fun entity -> Pulled_entity entity)
   in
   let pull_reverse_children forward_attr =
@@ -3383,13 +3743,13 @@ and pull_recursive_ref_value db visited context_selector attr selector depth cur
       |> fun values -> Pulled_many values
     | value -> scalar_or_many value
 
-let pull db selector entity_ref =
+let pull ?visitor db selector entity_ref =
   match entity_id_of_ref db entity_ref with
   | None -> None
-  | Some entity_id -> pull_entity_by_id db selector entity_id
+  | Some entity_id -> pull_entity_by_id ?visitor db selector entity_id
 
-let pull_many db selector entity_refs =
-  List.map (pull db selector) entity_refs
+let pull_many ?visitor db selector entity_refs =
+  List.map (pull ?visitor db selector) entity_refs
 
 let parse_int_slice input start length =
   int_of_string (String.sub input start length)
@@ -3735,6 +4095,16 @@ let attr_of_edn_key = function
   | QueryFormKeyword attr | QueryFormString attr | QueryFormSymbol attr -> attr
   | _ -> invalid_arg "expected EDN keyword, string, or symbol attr"
 
+let tx_attr_of_edn_key key =
+  match attr_of_edn_key key with
+  | attr -> attr
+  | exception Invalid_argument _ -> invalid_arg "Bad entity attribute"
+
+let tx_op_name_of_edn_form form =
+  match attr_of_edn_key form with
+  | op -> op
+  | exception Invalid_argument _ -> invalid_arg "Unknown operation"
+
 let is_edn_attr_key = function
   | QueryFormKeyword _ | QueryFormString _ | QueryFormSymbol _ -> true
   | _ -> false
@@ -3754,6 +4124,16 @@ let rec entity_ref_of_edn_form = function
   | QueryFormVector [ attr; value ] | QueryFormList [ attr; value ] ->
     Lookup_ref (attr_of_edn_key attr, tx_scalar_value_of_edn_form value)
   | _ -> invalid_arg "expected EDN entity ref"
+
+and tx_db_id_ref_of_edn_form form =
+  match entity_ref_of_edn_form form with
+  | entity_ref -> entity_ref
+  | exception Invalid_argument _ -> invalid_arg "Expected number, string or lookup ref for :db/id"
+
+and tx_entity_ref_of_edn_form form =
+  match entity_ref_of_edn_form form with
+  | entity_ref -> entity_ref
+  | exception Invalid_argument _ -> invalid_arg "Expected number or lookup ref for entity id"
 
 and tx_scalar_value_of_edn_form = function
   | QueryFormVector [ QueryFormKeyword "db/id"; ref_form ]
@@ -3819,8 +4199,8 @@ and tx_entity_of_edn_map entries =
   let db_id, attrs =
     List.fold_left
       (fun (db_id, attrs) (key, value) ->
-        match attr_of_edn_key key with
-        | "db/id" -> Some (entity_ref_of_edn_form value), attrs
+        match tx_attr_of_edn_key key with
+        | "db/id" -> Some (tx_db_id_ref_of_edn_form value), attrs
         | attr -> db_id, List.rev_append (tx_attr_values_of_edn_form attr value) attrs)
       (None, [])
       entries
@@ -3842,7 +4222,7 @@ let raw_datom_of_edn_forms ?(added = true) entity_ref attr value tx =
        ~tx:(explicit_tx_of_edn_form tx)
        ~added
        ~e:(entity_id_of_explicit_datom_edn_form entity_ref)
-       ~a:(attr_of_edn_key attr)
+       ~a:(tx_attr_of_edn_key attr)
        ~v:(tx_scalar_value_of_edn_form value)
        ())
 
@@ -3864,68 +4244,51 @@ let tx_op_of_edn_form = function
   | QueryFormVector forms | QueryFormList forms ->
     (match forms with
      | op :: entity_ref :: attr :: value :: [] ->
-       (match attr_of_edn_key op with
+       (match tx_op_name_of_edn_form op with
         | "add" | "db/add" ->
-          Add (entity_ref_of_edn_form entity_ref, attr_of_edn_key attr, tx_scalar_value_of_edn_form value)
+          Add (tx_entity_ref_of_edn_form entity_ref, tx_attr_of_edn_key attr, tx_scalar_value_of_edn_form value)
         | "retract" | "db/retract" ->
-          Retract (entity_ref_of_edn_form entity_ref, attr_of_edn_key attr, Some (tx_scalar_value_of_edn_form value))
+          Retract (tx_entity_ref_of_edn_form entity_ref, tx_attr_of_edn_key attr, Some (tx_scalar_value_of_edn_form value))
         | "db/cas" | "db.fn/cas" ->
           invalid_arg "db/cas requires entity, attr, expected value, and new value"
-        | op -> invalid_arg ("unsupported EDN transaction operation: " ^ op))
+        | _ -> invalid_arg "Unknown operation")
      | op :: entity_ref :: attr :: expected :: value_or_tx :: [] ->
-       (match attr_of_edn_key op with
+       (match tx_op_name_of_edn_form op with
         | "add" | "db/add" -> raw_datom_of_edn_forms entity_ref attr expected value_or_tx
         | "retract" | "db/retract" -> raw_datom_of_edn_forms ~added:false entity_ref attr expected value_or_tx
         | "db/cas" | "db.fn/cas" ->
           CompareAndSet
-            ( entity_ref_of_edn_form entity_ref
-            , attr_of_edn_key attr
+            ( tx_entity_ref_of_edn_form entity_ref
+            , tx_attr_of_edn_key attr
             , (match expected with
                | QueryFormNil -> None
                | _ -> Some (tx_scalar_value_of_edn_form expected))
             , tx_scalar_value_of_edn_form value_or_tx
             )
-        | op -> invalid_arg ("unsupported EDN transaction operation: " ^ op))
+        | _ -> invalid_arg "Unknown operation")
      | [ op; entity_ref; attr ] ->
-       (match attr_of_edn_key op with
-        | "retract" | "db/retract" -> Retract (entity_ref_of_edn_form entity_ref, attr_of_edn_key attr, None)
+       (match tx_op_name_of_edn_form op with
+        | "retract" | "db/retract" -> Retract (tx_entity_ref_of_edn_form entity_ref, tx_attr_of_edn_key attr, None)
         | "db/retractAttribute" | "db.fn/retractAttribute" ->
-          RetractAttr (entity_ref_of_edn_form entity_ref, attr_of_edn_key attr)
-        | op -> invalid_arg ("unsupported EDN transaction operation: " ^ op))
+          RetractAttr (tx_entity_ref_of_edn_form entity_ref, tx_attr_of_edn_key attr)
+        | _ -> invalid_arg "Unknown operation")
      | [ op; entity_ref ] ->
-       (match attr_of_edn_key op with
+       (match tx_op_name_of_edn_form op with
         | "db/retractEntity" | "db.fn/retractEntity" ->
-          RetractEntity (entity_ref_of_edn_form entity_ref)
-        | op -> invalid_arg ("unsupported EDN transaction operation: " ^ op))
+          RetractEntity (tx_entity_ref_of_edn_form entity_ref)
+        | _ -> invalid_arg "Unknown operation")
      | [] -> invalid_arg "empty EDN transaction vector"
-     | op :: _ -> invalid_arg ("unsupported EDN transaction operation arity: " ^ attr_of_edn_key op))
-  | _ -> invalid_arg "EDN transaction entry must be a map or vector"
-
-let edn_form_is_tx_operation = function
-  | QueryFormVector (op :: _) | QueryFormList (op :: _) ->
-    (match attr_of_edn_key op with
-     | exception Invalid_argument _ -> false
-     | "add"
-     | "db/add"
-     | "retract"
-     | "db/retract"
-     | "db/cas"
-     | "db.fn/cas"
-     | "db/retractEntity"
-     | "db.fn/retractEntity"
-     | "db/retractAttribute"
-     | "db.fn/retractAttribute" -> true
-     | _ -> false)
-  | _ -> false
+     | _ :: _ -> invalid_arg "Unknown operation")
+  | _ -> invalid_arg "Bad entity type at"
 
 let tx_data_of_edn_form form =
   match form with
-  | QueryFormVector entries | QueryFormList entries when not (edn_form_is_tx_operation form) ->
+  | QueryFormVector entries | QueryFormList entries ->
     entries
     |> List.filter (function QueryFormNil -> false | _ -> true)
     |> List.map tx_op_of_edn_form
   | QueryFormNil -> []
-  | QueryFormMap _ -> invalid_arg "EDN transaction data must be a vector or operation"
+  | QueryFormMap _ -> invalid_arg "Bad transaction data"
   | _ -> [ tx_op_of_edn_form form ]
 
 let parse_tx_data_string input =
@@ -4302,9 +4665,26 @@ let rec with_pull_ref_pattern db selector pattern =
 
 let rec with_pull_recursive_ref db selector depth =
   match selector with
-  | Pull_attr attr -> Pull_recursive_ref (checked_pull_ref_attr db attr, [ Pull_attr "name" ], depth)
+  | Pull_attr attr -> Pull_recursive_ref (checked_pull_ref_attr db attr, [], depth)
   | Pull_as (selector, alias) -> Pull_as (with_pull_recursive_ref db selector depth, alias)
   | _ -> invalid_arg "recursive pull applies only to attr selectors"
+
+let rec pull_selector_is_recursive = function
+  | Pull_recursive_ref _ -> true
+  | Pull_as (selector, _) -> pull_selector_is_recursive selector
+  | _ -> false
+
+let rec apply_pull_recursive_context context = function
+  | Pull_recursive_ref (attr, [], depth) -> Pull_recursive_ref (attr, context, depth)
+  | Pull_as (selector, alias) -> Pull_as (apply_pull_recursive_context context selector, alias)
+  | selector -> selector
+
+let with_pull_recursive_context selectors =
+  let context =
+    selectors
+    |> List.filter (fun selector -> not (pull_selector_is_recursive selector))
+  in
+  List.map (apply_pull_recursive_context context) selectors
 
 let rec parse_pull_selector db = function
   | QueryFormSymbol "*" | QueryFormString "*" -> Pull_wildcard
@@ -4333,7 +4713,10 @@ and parse_pull_map_spec db attr_spec pattern =
   | _ -> with_pull_ref_pattern db selector (parse_pull_pattern db pattern)
 
 and parse_pull_pattern db = function
-  | QueryFormVector selectors -> selectors |> List.concat_map (parse_pull_selectors db)
+  | QueryFormVector selectors ->
+    selectors
+    |> List.concat_map (parse_pull_selectors db)
+    |> with_pull_recursive_context
   | _ -> invalid_arg "pull pattern must be a vector"
 
 let parse_pull_pattern_string db input =
@@ -4420,7 +4803,7 @@ let match_query_term db term value bindings =
   | QAttr attr when value = Result_attr attr -> Some bindings
   | QValue expected ->
     (match resolve_query_value db expected, value with
-     | Some expected, Result_value actual when actual = expected -> Some bindings
+     | Some expected, Result_value actual when value_equal actual expected -> Some bindings
      | Some (Ref expected), Result_entity actual when actual = expected -> Some bindings
      | Some (Keyword ident), _ ->
        (match entid db ident_attr (Keyword ident) with
@@ -5741,14 +6124,15 @@ let source_db default_db sources name =
   | Relation_source _ -> invalid_arg ("query source is not a database: " ^ name)
 
 let match_relation_row db bindings terms row =
-  if List.length terms <> List.length row then
-    invalid_arg "source relation row arity mismatch";
-  List.fold_left2
-    (fun binding term value ->
-      Option.bind binding (fun binding -> match_query_term db term value binding))
-    (Some bindings)
-    terms
-    row
+  let rec match_terms binding terms row =
+    match binding, terms, row with
+    | None, _, _ -> None
+    | Some binding, [], _ -> Some binding
+    | Some _, _ :: _, [] -> invalid_arg "source relation row arity mismatch"
+    | Some binding, term :: terms, value :: row ->
+      match_terms (match_query_term db term value binding) terms row
+  in
+  match_terms (Some bindings) terms row
 
 let match_source_pattern default_db sources source_name bindings terms =
   match source default_db sources source_name with
@@ -5769,11 +6153,26 @@ let match_source_pattern default_db sources source_name bindings terms =
     |> List.filter_map (fun row -> match_relation_row default_db bindings terms row)
 
 let match_relation_source_pattern default_db sources source_name bindings terms =
+  let attr_term_of_short_pattern = function
+    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
+    | term -> term
+  in
   match source default_db sources source_name with
   | Relation_source rows ->
     rows
     |> List.filter_map (fun row -> match_relation_row default_db bindings terms row)
-  | Db_source _ -> invalid_arg ("query source is not a relation: " ^ source_name)
+  | Db_source _ ->
+    (match terms with
+     | [ e_term ] ->
+       match_source_pattern default_db sources source_name bindings [ e_term; QWildcard; QWildcard ]
+     | [ e_term; a_term ] ->
+       match_source_pattern
+         default_db
+         sources
+         source_name
+         bindings
+         [ e_term; attr_term_of_short_pattern a_term; QWildcard ]
+     | _ -> invalid_arg ("query source is not a relation: " ^ source_name))
 
 let pull_pattern_of_result = function
   | Result_value value -> parse_pull_pattern (empty_db ()) (query_form_of_value value)
@@ -6050,6 +6449,68 @@ let aggregate_callable_vars = function
   | SampleVar _
   | Custom _ -> []
 
+let query_term_vars terms =
+  terms
+  |> List.filter_map (function
+    | QVar var -> Some var
+    | QEntity _ | QIdent _ | QLookupRef _ | QAttr _ | QValue _ | QSource _ | QWildcard -> None)
+
+let eval_query_term_with_sources db sources bindings = function
+  | QSource source -> Some (Result_db (source_db db sources source))
+  | term -> eval_query_term db bindings term
+
+let split_aggregate_terms terms =
+  match List.rev terms with
+  | [] -> invalid_arg "aggregate requires at least one argument"
+  | value_term :: reversed_extra_terms -> List.rev reversed_extra_terms, value_term
+
+let aggregate_extra_args db sources group_bindings terms =
+  let extra_terms, _ = split_aggregate_terms terms in
+  let binding =
+    match group_bindings with
+    | first :: _ -> first
+    | [] -> []
+  in
+  let rec collect acc = function
+    | [] -> List.rev acc
+    | term :: rest ->
+      (match eval_query_term_with_sources db sources binding term with
+       | Some value -> collect (value :: acc) rest
+       | None -> invalid_arg "insufficient aggregate argument bindings")
+  in
+  collect [] extra_terms
+
+let aggregate_values db sources group_bindings terms =
+  let _, value_term = split_aggregate_terms terms in
+  List.filter_map
+    (fun binding -> eval_query_term_with_sources db sources binding value_term)
+    group_bindings
+
+let aggregate_input_values aggregate extra_args values =
+  match aggregate with
+  | Custom _ -> extra_args @ values
+  | Count
+  | CountDistinct
+  | Distinct
+  | Sum
+  | Avg
+  | Median
+  | Variance
+  | Stddev
+  | Min
+  | Max
+  | MinN _
+  | MaxN _
+  | Rand
+  | RandN _
+  | Sample _
+  | MinNVar _
+  | MaxNVar _
+  | RandNVar _
+  | SampleVar _
+  | CustomVar _ ->
+    values
+
 type query_callables =
   { callable_predicates : (string * (query_result list -> bool)) list
   ; callable_functions : (string * (query_result list -> query_result list option)) list
@@ -6166,12 +6627,13 @@ let aggregate_rows ?(callables = empty_query_callables) db sources bindings find
             | Some entity -> build_row (Result_pull entity :: acc) rest
             | None -> None)
          | _ -> None)
-      | Find_aggregate (aggregate, var) :: rest ->
-        let values = List.filter_map (fun binding -> List.assoc_opt var binding) group_bindings in
+      | Find_aggregate (aggregate, terms) :: rest ->
+        let values = aggregate_values db sources group_bindings terms in
         let aggregate =
           resolve_dynamic_aggregate aggregate group_bindings
           |> resolve_callable_aggregate callables
         in
+        let values = aggregate_input_values aggregate (aggregate_extra_args db sources group_bindings terms) values in
         build_row (aggregate_result aggregate values :: acc) rest
     in
     build_row [] find)
@@ -6182,7 +6644,8 @@ let aggregate_rows_with ?(callables = empty_query_callables) db sources bindings
   let aggregate_vars =
     List.concat_map
       (function
-        | Find_aggregate (aggregate, var) -> var :: aggregate_param_vars aggregate
+        | Find_aggregate (aggregate, terms) ->
+          query_term_vars terms @ aggregate_param_vars aggregate
         | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> [])
       find
   in
@@ -6385,7 +6848,43 @@ let apply_query_input db bindings = function
   | Input_nested_tuple_decl _
   | Input_nested_relation_decl _ ->
     invalid_arg "query input declarations require supplied input arguments"
-  | Input_source_decl _ -> bindings
+  | Input_source_decl _
+  | Input_rules_decl ->
+    bindings
+
+let query_input_var_label var =
+  if String.length var > 0 && (var.[0] = '?' || var.[0] = '$') then var else "?" ^ var
+
+let rec query_input_binding_string = function
+  | Bind_scalar var -> query_input_var_label var
+  | Bind_ignore -> "_"
+  | Bind_collection binding -> "[" ^ query_input_binding_string binding ^ " ...]"
+  | Bind_tuple bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
+
+let query_input_decl_binding_string = function
+  | Input_collection_decl var -> "[" ^ query_input_var_label var ^ " ...]"
+  | Input_tuple_decl vars -> "[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]"
+  | Input_relation_decl vars -> "[[" ^ String.concat " " (List.map query_input_var_label vars) ^ "]]"
+  | Input_nested_collection_decl binding -> "[" ^ query_input_binding_string binding ^ " ...]"
+  | Input_nested_tuple_decl bindings -> "[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]"
+  | Input_nested_relation_decl bindings ->
+    "[[" ^ String.concat " " (List.map query_input_binding_string bindings) ^ "]]"
+  | Input_scalar_decl var -> query_input_var_label var
+  | Input_collection_ignore_decl -> "[_ ...]"
+  | Input_ignore_decl -> "_"
+  | Input_rules_decl -> "%"
+  | Input_source_decl source -> source
+  | _ -> "[...]"
+
+let query_result_input_string = function
+  | Result_value value -> edn_string_of_value value
+  | Result_entity entity_id -> string_of_int entity_id
+  | Result_attr attr -> ":" ^ attr
+  | Result_db _ -> "<db>"
+  | Result_pull _ -> "<pull>"
+
+let query_result_collection_string values =
+  "[" ^ String.concat " " (List.map query_result_input_string values) ^ "]"
 
 let query_input_of_arg decl arg =
   let values_of_collection_result = function
@@ -6405,6 +6904,34 @@ let query_input_of_arg decl arg =
     | Some row -> row
     | None -> invalid_arg "query input argument does not match :in binding"
   in
+  let cannot_bind_value_to kind value =
+    invalid_arg
+      ( "Cannot bind value "
+      ^ query_result_input_string value
+      ^ " to "
+      ^ kind
+      ^ " "
+      ^ query_input_decl_binding_string decl )
+  in
+  let row_for_tuple_binding vars value =
+    match values_of_collection_result value with
+    | None -> cannot_bind_value_to "tuple" value
+    | Some row ->
+      if List.length row < List.length vars then
+        invalid_arg
+          ( "Not enough elements in a collection "
+          ^ query_result_collection_string row
+          ^ " to bind tuple "
+          ^ query_input_decl_binding_string decl )
+      else if List.length row > List.length vars then
+        invalid_arg
+          ( "Too many elements in a collection "
+          ^ query_result_collection_string row
+          ^ " to bind tuple "
+          ^ query_input_decl_binding_string decl )
+      else
+        row
+  in
   let rows_of_map entries =
     entries
     |> List.map (fun (key, value) -> [ Result_value key; Result_value value ])
@@ -6417,7 +6944,7 @@ let query_input_of_arg decl arg =
   | Input_collection_decl var, Arg_scalar value ->
     (match values_of_collection_result value with
      | Some values -> Input_collection (var, values)
-     | None -> invalid_arg "query input argument does not match :in binding")
+     | None -> cannot_bind_value_to "collection" value)
   | Input_collection_ignore_decl, Arg_collection values -> Input_collection_ignore values
   | Input_collection_ignore_decl, Arg_scalar value ->
     (match values_of_collection_result value with
@@ -6430,7 +6957,7 @@ let query_input_of_arg decl arg =
      | Some values -> Input_nested_collection (binding, values)
      | None -> invalid_arg "query input argument does not match :in binding")
   | Input_tuple_decl vars, Arg_tuple row -> Input_tuple (vars, row)
-  | Input_tuple_decl vars, Arg_scalar value -> Input_tuple (vars, row_of_scalar_sequence value)
+  | Input_tuple_decl vars, Arg_scalar value -> Input_tuple (vars, row_for_tuple_binding vars value)
   | Input_relation_decl vars, Arg_relation rows -> Input_relation (vars, rows)
   | Input_relation_decl vars, Arg_collection rows ->
     Input_relation (vars, List.map row_of_collection_value rows)
@@ -6477,26 +7004,100 @@ let query_input_of_arg decl arg =
     | Input_aggregate _
     | Input_relation _
     | Input_ignore
-    | Input_source_decl _), _ ->
+    | Input_source_decl _
+    | Input_rules_decl), _ ->
     invalid_arg "bound query inputs do not consume supplied arguments"
 
+let query_input_binding_label = function
+  | Input_scalar_decl var
+  | Input_collection_decl var -> query_input_var_label var
+  | Input_collection_ignore_decl
+  | Input_ignore_decl -> "_"
+  | Input_rules_decl -> "%"
+  | Input_source_decl source -> source
+  | Input_nested_collection_decl _
+  | Input_tuple_decl _
+  | Input_relation_decl _
+  | Input_nested_tuple_decl _
+  | Input_nested_relation_decl _ -> "[...]"
+  | Input_scalar (var, _)
+  | Input_entity_ref (var, _)
+  | Input_collection (var, _)
+  | Input_predicate (var, _)
+  | Input_function (var, _)
+  | Input_aggregate (var, _) -> query_input_var_label var
+  | Input_collection_ignore _
+  | Input_ignore -> "_"
+  | Input_nested_collection _
+  | Input_tuple _
+  | Input_relation _
+  | Input_nested_tuple _
+  | Input_nested_relation _ -> "[...]"
+
+let query_input_consumes_argument = function
+  | Input_scalar_decl _
+  | Input_collection_decl _
+  | Input_collection_ignore_decl
+  | Input_ignore_decl
+  | Input_nested_collection_decl _
+  | Input_tuple_decl _
+  | Input_relation_decl _
+  | Input_nested_tuple_decl _
+  | Input_nested_relation_decl _ -> true
+  | Input_source_decl _
+  | Input_rules_decl
+  | Input_scalar _
+  | Input_entity_ref _
+  | Input_collection _
+  | Input_collection_ignore _
+  | Input_nested_collection _
+  | Input_tuple _
+  | Input_relation _
+  | Input_nested_tuple _
+  | Input_nested_relation _
+  | Input_predicate _
+  | Input_function _
+  | Input_aggregate _
+  | Input_ignore -> false
+
+let query_input_arity_error declarations provided =
+  let labels =
+    declarations
+    |> List.map query_input_binding_label
+    |> String.concat " "
+  in
+  let required =
+    declarations
+    |> List.filter query_input_consumes_argument
+    |> List.length
+    |> ( + ) 1
+  in
+  invalid_arg
+    (Printf.sprintf
+       "Wrong number of arguments for bindings [%s], %d required, %d provided"
+       labels
+       required
+       provided)
+
 let bind_query_inputs declarations args =
+  let provided = List.length args + 1 in
+  let arity_error () = query_input_arity_error declarations provided in
   let rec bind acc declarations args =
     match declarations with
     | [] ->
       (match args with
        | [] -> List.rev acc
-       | _ :: _ -> invalid_arg "too many query input arguments")
+       | _ :: _ -> arity_error ())
     | (Input_scalar _ | Input_entity_ref _ | Input_collection _ | Input_tuple _ | Input_relation _
       | Input_nested_collection _ | Input_nested_tuple _ | Input_nested_relation _ | Input_predicate _
       | Input_function _ | Input_aggregate _ | Input_ignore as input)
       :: rest ->
       bind (input :: acc) rest args
     | Input_collection_ignore _ as input :: rest -> bind (input :: acc) rest args
-    | Input_source_decl _ as input :: rest -> bind (input :: acc) rest args
+    | (Input_source_decl _ | Input_rules_decl) as input :: rest -> bind (input :: acc) rest args
     | decl :: rest ->
       (match args with
-       | [] -> invalid_arg "missing query input argument"
+       | [] -> arity_error ()
        | arg :: args -> bind (query_input_of_arg decl arg :: acc) rest args)
   in
   bind [] declarations args
@@ -6672,11 +7273,51 @@ and vars_of_clause = function
     |> List.sort_uniq compare
   | Rule (_, terms) | SourceRule (_, _, terms) -> vars_of_query_terms terms
 
+and query_term_string = function
+  | QVar var -> query_input_var_label var
+  | QEntity entity_id -> string_of_int entity_id
+  | QIdent ident -> ":" ^ ident
+  | QLookupRef (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+  | QAttr attr -> ":" ^ attr
+  | QValue value -> edn_string_of_value value
+  | QSource "$" -> "$"
+  | QSource source -> "$" ^ source
+  | QWildcard -> "_"
+
+and query_clause_string = function
+  | Pattern (e, a, v) ->
+    "[" ^ String.concat " " (List.map query_term_string [ e; a; v ]) ^ "]"
+  | PatternTx (e, a, v, tx) ->
+    "[" ^ String.concat " " (List.map query_term_string [ e; a; v; tx ]) ^ "]"
+  | PatternTxOp (e, a, v, tx, op) ->
+    "[" ^ String.concat " " (List.map query_term_string [ e; a; v; tx; op ]) ^ "]"
+  | SourcePattern (source, e, a, v) ->
+    "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string [ e; a; v ]) ^ "]"
+  | SourcePatternTx (source, e, a, v, tx) ->
+    "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string [ e; a; v; tx ]) ^ "]"
+  | SourcePatternTxOp (source, e, a, v, tx, op) ->
+    "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string [ e; a; v; tx; op ]) ^ "]"
+  | SourceRelationPattern (source, terms) ->
+    "[" ^ String.concat " " (("$" ^ source) :: List.map query_term_string terms) ^ "]"
+  | Not clauses | SourceNot (_, clauses) -> query_not_clause_string clauses
+  | clause -> "<" ^ string_of_int (List.length (vars_of_clause clause)) ^ "-var clause>"
+
+and query_not_clause_string clauses =
+  "(not " ^ String.concat " " (List.map query_clause_string clauses) ^ ")"
+
+and query_var_set_string vars =
+  "#{" ^ String.concat " " (List.map query_input_var_label vars) ^ "}"
+
 and ensure_not_has_outer_binding bindings clauses =
   let clause_vars = clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare in
   let bound_vars = List.map fst bindings in
   if clause_vars <> [] && not (List.exists (fun var -> List.mem var bound_vars) clause_vars) then
-    invalid_arg "insufficient bindings"
+    let unbound_vars = List.filter (fun var -> not (List.mem var bound_vars)) clause_vars in
+    invalid_arg
+      ( "Insufficient bindings: none of "
+      ^ query_var_set_string unbound_vars
+      ^ " is bound in "
+      ^ query_not_clause_string clauses )
 
 and vars_of_branch clauses =
   clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare
@@ -7233,6 +7874,13 @@ let dynamic_amount_aggregate_of_symbol symbol amount_var =
   | "sample" -> Some (SampleVar amount_var)
   | _ -> None
 
+let parse_find_arg = function
+  | QueryFormSymbol symbol when is_query_source_symbol symbol -> QSource (query_source_name symbol)
+  | QueryFormSymbol symbol -> QVar (query_symbol_name symbol)
+  | form -> QValue (query_value_of_form form)
+
+let parse_find_args forms = List.map parse_find_arg forms
+
 let parse_find_form = function
   | QueryFormSymbol symbol -> Find_var (query_symbol_name symbol)
   | form ->
@@ -7251,31 +7899,36 @@ let parse_find_form = function
          (query_source_name source, query_symbol_name var, parse_pull_pattern (empty_db ()) pattern)
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol var ] ->
        (match aggregate_of_symbol aggregate with
-        | Some aggregate -> Find_aggregate (aggregate, query_symbol_name var)
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
         | None -> invalid_arg "find elements must be variable symbols")
-     | Some [ QueryFormSymbol "aggregate"; QueryFormSymbol aggregate_var; QueryFormSymbol var ]
+     | Some (QueryFormSymbol "aggregate" :: QueryFormSymbol aggregate_var :: args)
        when String.length aggregate_var > 0 && aggregate_var.[0] = '?' ->
-       Find_aggregate (CustomVar (query_symbol_name aggregate_var), query_symbol_name var)
+       (match args with
+        | [] -> invalid_arg "aggregate custom aggregate requires at least one argument"
+        | args -> Find_aggregate (CustomVar (query_symbol_name aggregate_var), parse_find_args args))
      | Some [ QueryFormSymbol aggregate; QueryFormInt amount; QueryFormSymbol var ] ->
        (match amount_aggregate_of_symbol aggregate amount with
-        | Some aggregate -> Find_aggregate (aggregate, query_symbol_name var)
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
         | None -> invalid_arg "find elements must be variable symbols")
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol amount_var; QueryFormSymbol var ]
        when String.length amount_var > 0 && amount_var.[0] = '?' ->
        (match dynamic_amount_aggregate_of_symbol aggregate (query_symbol_name amount_var) with
-        | Some aggregate -> Find_aggregate (aggregate, query_symbol_name var)
+        | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
         | None -> invalid_arg "find elements must be variable symbols")
      | Some [ QueryFormSymbol aggregate; _; QueryFormSymbol _ ] ->
        (match amount_aggregate_of_symbol aggregate 0 with
         | Some _ -> invalid_arg (aggregate ^ " aggregate amount must be an integer literal")
         | None -> invalid_arg "find elements must be variable symbols")
-     | Some (QueryFormSymbol aggregate :: _) ->
-       (match aggregate_of_symbol aggregate with
-        | Some _ -> invalid_arg (aggregate ^ " aggregate requires one variable")
+     | Some (QueryFormSymbol aggregate_name :: args) ->
+       (match aggregate_of_symbol aggregate_name with
+        | Some aggregate ->
+          (match args with
+           | [] -> invalid_arg (aggregate_name ^ " aggregate requires at least one argument")
+           | args -> Find_aggregate (aggregate, parse_find_args args))
         | None -> invalid_arg "find elements must be variable symbols")
      | Some _ | None -> invalid_arg "find elements must be variable symbols")
 
-let parse_find = function
+let parse_find_relation = function
   | Some (QueryFormVector forms | QueryFormList forms) -> List.map parse_find_form forms
   | Some _ -> invalid_arg "query :find must be a vector"
   | None -> invalid_arg "query requires :find"
@@ -7301,7 +7954,9 @@ let parse_find_return = function
      | QueryFormVector forms
      | QueryFormList forms -> Return_tuple, List.map parse_find_form forms
      | _ -> assert false)
-  | form -> Return_relation, parse_find form
+  | form -> Return_relation, parse_find_relation form
+
+let parse_find form = parse_find_return (Some form)
 
 let parse_query_value_form = query_value_of_form
 
@@ -7839,7 +8494,7 @@ let parse_string_transform_function symbol args output =
 let parse_join_vars clause_name = function
   | QueryFormVector vars ->
     (match List.map parse_output_var vars with
-     | [] -> invalid_arg (clause_name ^ " requires at least one join variable")
+     | [] -> invalid_arg "Join variables should not be empty"
      | vars -> vars)
   | _ -> invalid_arg (clause_name ^ " join variables must be a vector")
 
@@ -7860,14 +8515,14 @@ let parse_rule_vars clause_name = function
     let required = List.map parse_rule_var required in
     let free = List.map parse_rule_var free_forms in
     (match required, free with
-     | [], [] -> invalid_arg (clause_name ^ " requires at least one rule variable")
+     | [], [] -> invalid_arg "Cannot parse rule-vars"
      | required, free -> ensure_distinct_rule_vars clause_name required free)
   | QueryFormVector free_forms | QueryFormList free_forms ->
     let free = List.map parse_rule_var free_forms in
     (match free with
-     | [] -> invalid_arg (clause_name ^ " requires at least one rule variable")
+     | [] -> invalid_arg "Cannot parse rule-vars"
      | free -> ensure_distinct_rule_vars clause_name [] free)
-  | _ -> invalid_arg (clause_name ^ " rule variables must be a vector or list")
+  | _ -> invalid_arg "Cannot parse rule-vars"
 
 let or_join_clause required_vars vars branches =
   match required_vars with
@@ -7879,37 +8534,44 @@ let source_or_join_clause source required_vars vars branches =
   | [] -> SourceOrJoin (source, vars, branches)
   | required_vars -> SourceOrJoinRequired (source, required_vars, vars, branches)
 
+let ensure_inferred_join_vars vars =
+  if vars = [] then invalid_arg "Join variables should not be empty"
+
 let rec parse_pattern_clause = function
   | QueryFormVector [ QueryFormList (QueryFormSymbol "missing?" :: args) ] ->
     parse_missing_clause args
   | (QueryFormVector (QueryFormSymbol "not" :: clause_forms)
     | QueryFormList (QueryFormSymbol "not" :: clause_forms)) ->
     (match List.map parse_pattern_clause clause_forms with
-     | [] -> invalid_arg "not requires at least one clause"
-     | clauses -> Not clauses)
+     | [] -> invalid_arg "Cannot parse 'not' clause"
+     | clauses ->
+       ensure_inferred_join_vars (clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare);
+       Not clauses)
   | (QueryFormVector (QueryFormSymbol "not-join" :: join_vars :: clause_forms)
     | QueryFormList (QueryFormSymbol "not-join" :: join_vars :: clause_forms)) ->
     let vars = parse_join_vars "not-join" join_vars in
     (match List.map parse_pattern_clause clause_forms with
-     | [] -> invalid_arg "not-join requires at least one clause"
+     | [] -> invalid_arg "Cannot parse 'not-join' clause"
      | clauses -> NotJoin (vars, clauses))
   | (QueryFormVector (QueryFormSymbol "not-join" :: _)
     | QueryFormList (QueryFormSymbol "not-join" :: _)) ->
-    invalid_arg "not-join requires join variables and clauses"
+    invalid_arg "Cannot parse 'not-join' clause"
   | (QueryFormVector (QueryFormSymbol "or" :: branch_forms)
     | QueryFormList (QueryFormSymbol "or" :: branch_forms)) ->
     (match List.map parse_or_branch branch_forms with
-     | [] -> invalid_arg "or requires at least one branch"
-     | branches -> Or branches)
+     | [] -> invalid_arg "Cannot parse 'or' clause"
+     | branches ->
+       ensure_inferred_join_vars (branches |> List.concat_map vars_of_branch |> List.sort_uniq compare);
+       Or branches)
   | (QueryFormVector (QueryFormSymbol "or-join" :: join_vars :: branch_forms)
     | QueryFormList (QueryFormSymbol "or-join" :: join_vars :: branch_forms)) ->
     let required_vars, vars = parse_rule_vars "or-join" join_vars in
     (match List.map parse_or_branch branch_forms with
-     | [] -> invalid_arg "or-join requires at least one branch"
+     | [] -> invalid_arg "Cannot parse 'or-join' clause"
      | branches -> or_join_clause required_vars vars branches)
   | (QueryFormVector (QueryFormSymbol "or-join" :: _)
     | QueryFormList (QueryFormSymbol "or-join" :: _)) ->
-    invalid_arg "or-join requires join variables and branches"
+    invalid_arg "Cannot parse 'or-join' clause"
   | QueryFormVector
       [ QueryFormSymbol source_symbol
       ; (QueryFormVector (QueryFormSymbol "not" :: clause_forms)
@@ -8238,7 +8900,7 @@ let parse_rule = function
   | (QueryFormVector (head :: body_forms) | QueryFormList (head :: body_forms)) ->
     let rule_name, rule_params = parse_rule_head head in
     (match List.map parse_pattern_clause body_forms with
-     | [] -> invalid_arg "rule requires at least one body clause"
+     | [] -> invalid_arg "Rule branch should have clauses"
      | rule_body -> { rule_name; rule_params; rule_body })
   | _ -> invalid_arg "rules must be vectors or lists"
 
@@ -8250,7 +8912,7 @@ let validate_rule_arities rules =
         if rule.rule_name = other.rule_name
            && List.length rule.rule_params <> List.length other.rule_params
         then
-          invalid_arg ("rule branches must have matching arity: " ^ rule.rule_name)))
+          invalid_arg "Arity mismatch"))
     rules;
   rules
 
@@ -8303,6 +8965,8 @@ and parse_nested_tuple_binding = function
   | QueryFormSymbol "_" -> Bind_ignore
   | form -> parse_nested_input_binding form
 
+let parse_binding = parse_nested_input_binding
+
 let nested_relation_binding = function
   | QueryFormVector forms | QueryFormList forms ->
     (match flat_input_vars forms with
@@ -8314,7 +8978,7 @@ let nested_relation_binding = function
   | _ -> None
 
 let parse_input_binding = function
-  | QueryFormSymbol "%" -> None
+  | QueryFormSymbol "%" -> Some Input_rules_decl
   | QueryFormSymbol "_" -> Some Input_ignore_decl
   | QueryFormSymbol symbol when is_query_source_symbol symbol ->
     Some (Input_source_decl (query_source_name symbol))
@@ -8359,6 +9023,8 @@ let parse_inputs = function
   | Some _ -> invalid_arg "query :in must be a vector or list"
   | None -> []
 
+let parse_in form = parse_inputs (Some form)
+
 let input_declares_rules_var = function
   | Some (QueryFormVector inputs) | Some (QueryFormList inputs) ->
     List.exists (function QueryFormSymbol "%" -> true | _ -> false) inputs
@@ -8374,18 +9040,26 @@ let ensure_distinct_input_rules_var = function
         0
         inputs
     in
-    if count > 1 then invalid_arg "vars used in :in should be distinct"
+    if count > 1 then invalid_arg "Vars used in :in should be distinct"
   | Some _ | None -> ()
 
-let parse_with = function
-  | Some (QueryFormVector vars | QueryFormList vars) -> List.map parse_rule_var vars
+let parse_with_var = function
+  | QueryFormSymbol "_" -> invalid_arg "Cannot parse :with clause"
+  | QueryFormSymbol symbol -> query_symbol_name symbol
+  | _ -> invalid_arg "Cannot parse :with clause"
+
+let parse_with_section = function
+  | Some (QueryFormVector vars | QueryFormList vars) -> List.map parse_with_var vars
   | Some _ -> invalid_arg "query :with must be a vector or list"
   | None -> []
+
+let parse_with form = parse_with_section (Some form)
 
 let vars_of_find_spec = function
   | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) ->
     [ var ]
-  | Find_aggregate (aggregate, var) -> var :: aggregate_param_vars aggregate @ aggregate_callable_vars aggregate
+  | Find_aggregate (aggregate, terms) ->
+    query_term_vars terms @ aggregate_param_vars aggregate @ aggregate_callable_vars aggregate
   | Find_pull_var (var, pattern_var) | Find_pull_source_var (_, var, pattern_var) ->
     [ var; pattern_var ]
 
@@ -8408,7 +9082,8 @@ let vars_of_input = function
   | Input_collection_ignore _
   | Input_ignore
   | Input_collection_ignore_decl
-  | Input_ignore_decl ->
+  | Input_ignore_decl
+  | Input_rules_decl ->
     []
   | Input_nested_collection (binding, _)
   | Input_nested_collection_decl binding ->
@@ -8444,6 +9119,7 @@ let source_of_input = function
   | Input_collection_decl _
   | Input_collection_ignore_decl
   | Input_ignore_decl
+  | Input_rules_decl
   | Input_nested_collection_decl _
   | Input_tuple_decl _
   | Input_relation_decl _
@@ -8701,7 +9377,8 @@ let rec has_rule_clause = function
 
 let sources_of_find_spec = function
   | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> named_source source
-  | Find_var _ | Find_pull _ | Find_pull_var _ | Find_aggregate _ -> []
+  | Find_aggregate (_, terms) -> sources_of_query_terms terms
+  | Find_var _ | Find_pull _ | Find_pull_var _ -> []
 
 let find_spec_uses_default_source = function
   | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> source = "$"
@@ -8837,27 +9514,36 @@ let infer_default_inputs in_form find where inputs =
 let ensure_distinct_input_vars inputs =
   let vars = List.concat_map vars_of_input inputs in
   if List.length vars <> List.length (List.sort_uniq compare vars) then
-    invalid_arg "vars used in :in should be distinct"
+    invalid_arg "Vars used in :in should be distinct"
 
 let ensure_distinct_input_sources inputs =
   let sources = List.filter_map source_of_input inputs in
   if List.length sources <> List.length (List.sort_uniq compare sources) then
-    invalid_arg "vars used in :in should be distinct"
+    invalid_arg "Vars used in :in should be distinct"
+
+let format_query_vars vars =
+  vars
+  |> List.map (fun var -> "?" ^ var)
+  |> String.concat " "
+  |> Printf.sprintf "[%s]"
+
+let format_source_vars sources =
+  sources
+  |> List.map (fun source -> if source = "$" then "$" else "$" ^ source)
+  |> String.concat " "
+  |> Printf.sprintf "[%s]"
 
 let validate_query query =
   ensure_distinct_input_vars query.inputs;
   ensure_distinct_input_sources query.inputs;
   if List.length query.with_vars <> List.length (List.sort_uniq compare query.with_vars) then
-    invalid_arg "vars used in :with should be distinct";
+    invalid_arg "Vars used in :with should be distinct";
   let declared_sources = List.filter_map source_of_input query.inputs |> List.sort_uniq compare in
   let used_sources =
     List.concat_map sources_of_find_spec query.find @ List.concat_map sources_of_clause query.where
     |> List.sort_uniq compare
   in
   let unknown_sources = List.filter (fun source -> not (List.mem source declared_sources)) used_sources in
-  (match unknown_sources with
-   | [] -> ()
-   | _ :: _ -> invalid_arg "where uses unknown source variables");
   let available_vars =
     List.concat_map vars_of_input query.inputs
     @ List.concat_map vars_of_clause query.where
@@ -8871,20 +9557,23 @@ let validate_query query =
   in
   (match unknown_find_vars with
    | [] -> query
-   | _ :: _ -> invalid_arg "query find references unknown variables")
+   | _ :: _ -> invalid_arg ("Query for unknown vars: " ^ format_query_vars unknown_find_vars))
   |> fun query ->
   let unknown_with_vars =
     query.with_vars |> List.filter (fun var -> not (List.mem var available_vars))
   in
   (match unknown_with_vars with
    | [] -> query
-   | _ :: _ -> invalid_arg "query with references unknown variables")
+   | _ :: _ -> invalid_arg ("Query for unknown vars: " ^ format_query_vars unknown_with_vars))
   |> fun query ->
   let find_vars = List.concat_map vars_of_find_spec query.find |> List.sort_uniq compare in
   let shared_vars = List.filter (fun var -> List.mem var find_vars) query.with_vars in
   match shared_vars with
-  | [] -> query
-  | _ :: _ -> invalid_arg ":find and :with should not use same variables"
+  | [] ->
+    (match unknown_sources with
+     | [] -> query
+     | _ :: _ -> invalid_arg ("Where uses unknown source vars: " ^ format_source_vars unknown_sources))
+  | _ :: _ -> invalid_arg (":find and :with should not use same variables: " ^ format_query_vars shared_vars)
 
 let parse_where = function
   | Some (QueryFormVector clauses | QueryFormList clauses) -> List.map parse_pattern_clause clauses
@@ -8901,7 +9590,7 @@ let parse_query_return form =
   let query =
     { find
     ; inputs
-    ; with_vars = parse_with (query_form_section "with" entries)
+    ; with_vars = parse_with_section (query_form_section "with" entries)
     ; rules = parse_rules (query_form_section "rules" entries)
     ; where
     }
@@ -8910,7 +9599,7 @@ let parse_query_return form =
   if query.rules = []
      && List.exists has_rule_clause query.where
      && not (input_declares_rules_var in_form)
-  then invalid_arg "missing rules var '%' in :in";
+  then invalid_arg "Missing rules var '%' in :in";
   return, query
 
 let parse_return_map_labels section_name = function
@@ -8980,11 +9669,11 @@ let parse_query_return_string input =
 let parse_query_return_map_string input =
   parse_query_return_map (read_edn input)
 
-let pull_string db input entity_ref =
-  pull db (parse_pull_pattern_string db input) entity_ref
+let pull_string ?visitor db input entity_ref =
+  pull ?visitor db (parse_pull_pattern_string db input) entity_ref
 
-let pull_many_string db input entity_refs =
-  pull_many db (parse_pull_pattern_string db input) entity_refs
+let pull_many_string ?visitor db input entity_refs =
+  pull_many ?visitor db (parse_pull_pattern_string db input) entity_refs
 
 let q_sources ?(inputs = []) db sources query =
   let callables, input_bindings = initial_query_context db query inputs in
@@ -9048,12 +9737,14 @@ let q_return_string ?inputs db input =
   q_return ?inputs db return query
 
 let labels_of_return_map = function
-  | Return_keys labels | Return_syms labels | Return_strs labels -> labels
+  | Return_keys labels -> List.map (fun label -> Keyword label) labels
+  | Return_syms labels -> List.map (fun label -> Symbol label) labels
+  | Return_strs labels -> List.map (fun label -> String label) labels
 
 let map_query_row labels row =
   if List.length labels <> List.length row then
     invalid_arg "return map labels must match find count";
-  List.combine labels row |> List.sort (fun (left, _) (right, _) -> compare left right)
+  List.combine labels row |> List.sort (fun (left, _) (right, _) -> compare_value left right)
 
 let q_return_map ?inputs db return return_map query =
   let labels = labels_of_return_map return_map in

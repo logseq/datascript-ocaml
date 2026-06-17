@@ -1,3 +1,21 @@
 (test
  (name test_datascript)
+ (modules test_datascript)
  (libraries datascript unix))
+
+(test
+ (name test_sqlite_storage)
+ (modules test_sqlite_storage)
+ (libraries datascript logseq_sqlite_storage unix))
+
+(executable
+ (name js_smoke)
+ (modes js)
+ (modules js_smoke)
+ (libraries datascript))
+
+(rule
+ (alias runtest)
+ (deps js_smoke.bc.js)
+ (action
+  (run node %{dep:js_smoke.bc.js})))

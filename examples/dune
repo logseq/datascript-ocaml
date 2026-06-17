@@ -1,0 +1,9 @@
+(library
+ (name logseq_sqlite_storage)
+ (modules logseq_sqlite_storage logseq_transit)
+ (libraries datascript unix yojson))
+
+(executable
+ (name sqlite_storage_example)
+ (modules sqlite_storage_example)
+ (libraries datascript logseq_sqlite_storage unix))

@@ -88,6 +88,8 @@ type tx_op = Datascript_types.tx_op =
   | CompareAndSet of entity_ref * attr * value option * value
   | Entity of tx_entity
   | Raw_datom of datom
+  | InstallTxFn of entity_ref * (db -> value list -> tx_op list)
+  | CallIdent of entity_ref * value list
   | Call of (db -> tx_op list)
 
 type entity = Datascript_types.entity =
@@ -105,6 +107,11 @@ and pulled_value = Datascript_types.pulled_value =
   | Pulled_scalar of value
   | Pulled_many of pulled_value list
   | Pulled_entity of pulled_entity
+
+type pull_visit = Datascript_types.pull_visit =
+  | PullVisitAttr of entity_id * attr
+  | PullVisitWildcard of entity_id
+  | PullVisitReverse of attr * entity_id
 
 type pull_selector = Datascript_types.pull_selector =
   | Pull_id
@@ -340,6 +347,7 @@ type query_input = Datascript_types.query_input =
   | Input_collection_decl of string
   | Input_collection_ignore_decl
   | Input_ignore_decl
+  | Input_rules_decl
   | Input_nested_collection_decl of input_binding
   | Input_tuple_decl of string list
   | Input_relation_decl of string list
@@ -386,7 +394,7 @@ type find_spec = Datascript_types.find_spec =
   | Find_pull_var of string * string
   | Find_pull_source of string * string * pull_selector list
   | Find_pull_source_var of string * string * string
-  | Find_aggregate of aggregate * string
+  | Find_aggregate of aggregate * query_term list
 
 type query = Datascript_types.query =
   { find : find_spec list
@@ -426,8 +434,8 @@ type query_output = Datascript_types.query_output =
   | Query_collection of query_result list
   | Query_tuple of query_result list option
   | Query_scalar of query_result option
-  | Query_relation_maps of (string * query_result) list list
-  | Query_tuple_map of (string * query_result) list option
+  | Query_relation_maps of (value * query_result) list list
+  | Query_tuple_map of (value * query_result) list option
 
 type index = Datascript_types.index =
   | Eavt
@@ -469,6 +477,17 @@ type tx_report = Datascript_types.tx_report =
 
 type conn
 
+module Lru : sig
+  type ('key, 'value) t
+  type ('key, 'value) cache
+
+  val create : int -> ('key, 'value) t
+  val assoc : 'key -> 'value -> ('key, 'value) t -> ('key, 'value) t
+  val find : 'key -> ('key, 'value) t -> 'value option
+  val cache : int -> ('key, 'value) cache
+  val cache_get : ('key, 'value) cache -> 'key -> (unit -> 'value) -> 'value
+end
+
 val tx0 : tx
 val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
 val is_datom : datom -> bool
@@ -506,6 +525,8 @@ val db : conn -> db
 val is_conn : conn -> bool
 val listen : conn -> string -> (tx_report -> unit) -> string
 val listen_bang : conn -> string -> (tx_report -> unit) -> string
+val listen_auto : conn -> (tx_report -> unit) -> string
+val listen_bang_auto : conn -> (tx_report -> unit) -> string
 val unlisten : conn -> string -> unit
 val unlisten_bang : conn -> string -> unit
 val reset_conn : ?tx_meta:tx_meta -> conn -> db -> db
@@ -540,12 +561,16 @@ val touch : entity -> entity
 val entid : db -> attr -> value -> entity_id option
 val entid_ref : db -> entity_ref -> entity_id option
 val read_edn : string -> query_form
+val parse_binding : query_form -> input_binding
+val parse_in : query_form -> query_input list
+val parse_with : query_form -> string list
+val parse_find : query_form -> query_return * find_spec list
 val parse_pull_pattern : db -> query_form -> pull_selector list
 val parse_pull_pattern_string : db -> string -> pull_selector list
-val pull : db -> pull_selector list -> entity_ref -> pulled_entity option
-val pull_string : db -> string -> entity_ref -> pulled_entity option
-val pull_many : db -> pull_selector list -> entity_ref list -> pulled_entity option list
-val pull_many_string : db -> string -> entity_ref list -> pulled_entity option list
+val pull : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref -> pulled_entity option
+val pull_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
+val pull_many : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref list -> pulled_entity option list
+val pull_many_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref list -> pulled_entity option list
 val parse_query : query_form -> query
 val parse_query_string : string -> query
 val parse_query_return : query_form -> query_return * query

@@ -5,8 +5,10 @@ maintainer: "rcmerci"
 authors: ["rcmerci"]
 license: "EPL-1.0"
 depends: [
-  "ocaml" {>= "5.4.1"}
+  "ocaml" {>= "5.2.1"}
   "dune" {>= "3.17"}
+  "js_of_ocaml-compiler" {with-test}
+  "yojson" {with-test}
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
