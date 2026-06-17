@@ -24,6 +24,11 @@
  (libraries datascript))
 
 (test
+ (name test_data_readers)
+ (modules test_data_readers)
+ (libraries datascript))
+
+(test
  (name test_issues)
  (modules test_issues)
  (libraries datascript))

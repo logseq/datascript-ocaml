@@ -21,6 +21,21 @@ module Built_ins : sig
   val range_values : int -> int -> int -> int list
 end
 
+module Data_readers : sig
+  val attr_of_edn_key : query_form -> attr
+  val tx_attr_of_edn_key : query_form -> attr
+  val tx_op_name_of_edn_form : query_form -> string
+  val is_edn_attr_key : query_form -> bool
+  val keyword_name_of_form : query_form -> string
+  val entity_ref_of_edn_form : query_form -> entity_ref
+  val tx_data_of_edn_form : query_form -> tx_op list
+  val parse_tx_data_string : string -> tx_op list
+  val schema_of_edn_form : query_form -> schema
+  val schema_of_edn_string : string -> schema
+  val db_from_reader_form : query_form -> db
+  val db_from_reader_string : string -> db
+end
+
 module Conn : sig
   type t
 
