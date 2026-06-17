@@ -2213,20 +2213,12 @@ let parse_pull_pattern db form =
 let parse_pull_pattern_string db input =
   Pull_parser_impl.parse_pattern_string pull_parser_context db input
 
-let result_of_datom_e d = Result_entity d.e
-
-let result_of_datom_a d = Result_attr d.a
-
-let result_of_datom_v d = Result_value d.v
-
-let result_of_datom_tx d = Result_entity d.tx
-
-let result_of_datom_op d =
-  Result_value (Keyword (if d.added then "db/add" else "db/retract"))
-
-let result_of_ref = function
-  | Result_value (Ref eid) -> Result_entity eid
-  | result -> result
+let result_of_datom_e = Query.result_of_datom_e
+let result_of_datom_a = Query.result_of_datom_a
+let result_of_datom_v = Query.result_of_datom_v
+let result_of_datom_tx = Query.result_of_datom_tx
+let result_of_datom_op = Query.result_of_datom_op
+let result_of_ref = Query.result_of_ref
 
 let resolve_query_value db value = resolve_ref_value ~preserve_vector:true db value
 
@@ -5232,6 +5224,12 @@ module Query = struct
   let has_callable = Query_impl.has_callable
   let alias_callable = Query_impl.alias_callable
   let resolve_callable_aggregate = Query_impl.resolve_callable_aggregate
+  let result_of_datom_e = Query_impl.result_of_datom_e
+  let result_of_datom_a = Query_impl.result_of_datom_a
+  let result_of_datom_v = Query_impl.result_of_datom_v
+  let result_of_datom_tx = Query_impl.result_of_datom_tx
+  let result_of_datom_op = Query_impl.result_of_datom_op
+  let result_of_ref = Query_impl.result_of_ref
   let query_callables_of_inputs = Query_impl.query_callables_of_inputs
   let query_rules_of_inputs = Query_impl.query_rules_of_inputs
   let matching_rules = Query_impl.matching_rules

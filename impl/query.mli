@@ -95,6 +95,12 @@ val callable_aggregate : query_callables -> string -> (query_result list -> quer
 val has_callable : query_callables -> string -> bool
 val alias_callable : query_callables -> string -> string -> query_callables
 val resolve_callable_aggregate : query_callables -> aggregate -> aggregate
+val result_of_datom_e : datom -> query_result
+val result_of_datom_a : datom -> query_result
+val result_of_datom_v : datom -> query_result
+val result_of_datom_tx : datom -> query_result
+val result_of_datom_op : datom -> query_result
+val result_of_ref : query_result -> query_result
 val query_callables_of_inputs : query_input list -> query_callables
 val query_rules_of_inputs : query_input list -> query_rule list
 val matching_rules : query_rule list -> string -> int -> query_rule list

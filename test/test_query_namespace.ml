@@ -70,6 +70,42 @@ let test_query_namespace__test_public_query_api () =
   then
     failwith "Query.q_return_map_string should expose return-map query API"
 
+let test_query_namespace__test_query_result_helpers () =
+  let add_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:7 ~added:true () in
+  let retract_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:8 ~added:false () in
+  assert_equal_query_option
+    "result_of_datom_e returns entity results"
+    (Result_entity 1)
+    (Query.result_of_datom_e add_datom);
+  assert_equal_query_option
+    "result_of_datom_a returns attr results"
+    (Result_attr "name")
+    (Query.result_of_datom_a add_datom);
+  assert_equal_query_option
+    "result_of_datom_v returns value results"
+    (Result_value (String "Ivan"))
+    (Query.result_of_datom_v add_datom);
+  assert_equal_query_option
+    "result_of_datom_tx returns tx entity results"
+    (Result_entity 7)
+    (Query.result_of_datom_tx add_datom);
+  assert_equal_query_option
+    "result_of_datom_op returns add op keywords"
+    (Result_value (Keyword "db/add"))
+    (Query.result_of_datom_op add_datom);
+  assert_equal_query_option
+    "result_of_datom_op returns retract op keywords"
+    (Result_value (Keyword "db/retract"))
+    (Query.result_of_datom_op retract_datom);
+  assert_equal_query_option
+    "result_of_ref turns ref values into entity results"
+    (Result_entity 42)
+    (Query.result_of_ref (Result_value (Ref 42)));
+  assert_equal_query_option
+    "result_of_ref leaves non-ref results unchanged"
+    (Result_value (String "Ivan"))
+    (Query.result_of_ref (Result_value (String "Ivan")))
+
 let test_query_namespace__test_aggregate_helpers () =
   if not (Query.has_aggregates [ Find_aggregate (Sum, [ QVar "amount" ]) ]) then
     failwith "Query.has_aggregates should detect aggregate find specs";
@@ -940,6 +976,7 @@ let test_query_namespace__test_binding_validation_helpers () =
 
 let () =
   test_query_namespace__test_public_query_api ();
+  test_query_namespace__test_query_result_helpers ();
   test_query_namespace__test_aggregate_helpers ();
   test_query_namespace__test_find_grouping_helpers ();
   test_query_namespace__test_input_label_helpers ();

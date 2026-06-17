@@ -317,6 +317,21 @@ let resolve_callable_aggregate callables aggregate =
      | None -> invalid_arg ("unknown aggregate input: " ^ var))
   | aggregate -> aggregate
 
+let result_of_datom_e d = Result_entity d.e
+
+let result_of_datom_a d = Result_attr d.a
+
+let result_of_datom_v d = Result_value d.v
+
+let result_of_datom_tx d = Result_entity d.tx
+
+let result_of_datom_op d =
+  Result_value (Keyword (if d.added then "db/add" else "db/retract"))
+
+let result_of_ref = function
+  | Result_value (Ref eid) -> Result_entity eid
+  | result -> result
+
 let query_callables_of_inputs inputs =
   inputs
   |> List.fold_left
