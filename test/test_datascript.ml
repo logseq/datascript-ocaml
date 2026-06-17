@@ -12086,6 +12086,63 @@ let test_q_with_aggregates () =
     ]
     (q db query)
 
+let test_q_aggregates_with_pull_expressions () =
+  let db =
+    empty_db ~schema:[ "value", many ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Petr")
+                 ; "value", Many_values [ Int 10; Int 20; Int 30; Int 40 ]
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 2)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "value", Many_values [ Int 14; Int 16 ]
+                 ]
+             }
+         ; Entity
+             { db_id = Some (Entity_id 3)
+             ; attrs = [ "name", One_value (String "Oleg"); "value", One_value (Int 1) ]
+             }
+         ]
+  in
+  let query =
+    { find =
+        [ Find_var "e"
+        ; Find_pull ("e", [ Pull_attr "name" ])
+        ; Find_aggregate (Min, [ QVar "v" ])
+        ; Find_aggregate (Max, [ QVar "v" ])
+        ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where = [ Pattern (QVar "e", QAttr "value", QVar "v") ]
+    }
+  in
+  assert_equal_query
+    "q aggregates can be combined with pull expressions"
+    [ [ Result_entity 1
+      ; Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
+      ; Result_value (Int 10)
+      ; Result_value (Int 40)
+      ]
+    ; [ Result_entity 2
+      ; Result_pull { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] }
+      ; Result_value (Int 14)
+      ; Result_value (Int 16)
+      ]
+    ; [ Result_entity 3
+      ; Result_pull { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] }
+      ; Result_value (Int 1)
+      ; Result_value (Int 1)
+      ]
+    ]
+    (q db query)
+
 let test_q_with_interleaved_aggregates () =
   let db =
     empty_db ()
@@ -16775,6 +16832,7 @@ let () =
   test_q_return_shapes_with_pull_expressions ();
   test_q_find_pull_uses_named_source ();
   test_q_with_aggregates ();
+  test_q_aggregates_with_pull_expressions ();
   test_q_with_interleaved_aggregates ();
   test_q_aggregates_relation_inputs_with_with_vars ();
   test_q_with_preserves_non_aggregate_duplicates ();
