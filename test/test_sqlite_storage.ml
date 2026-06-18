@@ -190,6 +190,23 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
         if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
 
+let test_sqlite_storage_store_ignores_delete_addresses () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite storage delete-address test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      storage.storage_store [ "2", Storage_tail [] ] [];
+      storage.storage_store [ "3", Storage_tail [] ] [ "2" ];
+      (match storage.storage_restore "2" with
+       | Some (Storage_tail []) -> ()
+       | Some _ -> failwith "SQLite storage should keep the original payload"
+       | None -> failwith "SQLite storage store should ignore delete_addresses");
+      assert_equal
+        "storage addresses after ignored delete addresses"
+        "2,3"
+        (String.concat "," (storage_addresses storage)))
+
 let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed query/transact test: sqlite3 is not available"
@@ -1819,6 +1836,7 @@ let test_all_existing_logseq_graph_datoms_support_query_and_transact () =
 let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
+  test_sqlite_storage_store_ignores_delete_addresses ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();

@@ -663,10 +663,8 @@ let upsert_sql (address, payload) =
 
 let storage db_path =
   create_kvs_table db_path;
-  let store entries delete_addresses =
-    let sql =
-      delete_sql delete_addresses ^ String.concat "" (List.map upsert_sql entries)
-    in
+  let store entries _delete_addresses =
+    let sql = String.concat "" (List.map upsert_sql entries) in
     if sql <> "" then ignore (run_sql db_path sql)
   in
   let restore address =
