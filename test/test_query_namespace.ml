@@ -410,7 +410,7 @@ let test_query_namespace__test_source_matching_helpers () =
   let name_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:7 ~added:true () in
   let source_context =
     { Query.match_context
-    ; pattern_datoms = (fun _ _ -> [ name_datom ])
+    ; pattern_datoms = (fun _ _ _ _ _ -> List.to_seq [ name_datom ])
     ; match_data_pattern =
         (fun _ bindings e_term a_term v_term datom ->
            Query.match_pattern_clause match_context bindings e_term a_term v_term datom)

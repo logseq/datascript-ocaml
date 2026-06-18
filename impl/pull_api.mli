@@ -4,7 +4,9 @@ type context =
   { compare_value : value -> value -> int
   ; entity : db -> entity_ref -> entity option
   ; entity_attr_raw : entity -> attr -> tx_value option
+  ; datoms_by_entity : db -> entity_id -> datom list
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
+  ; cardinality : db -> attr -> cardinality
   ; is_component : db -> attr -> bool
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr

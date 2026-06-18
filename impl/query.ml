@@ -56,7 +56,7 @@ type match_context =
 
 type source_context =
   { match_context : match_context
-  ; pattern_datoms : db -> query_term -> datom list
+  ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
   ; match_data_pattern :
       db ->
       (string * query_result) list ->
@@ -561,21 +561,44 @@ let match_relation_row context bindings terms row =
   in
   match_terms (Some bindings) terms row
 
+let bound_pattern_term bindings = function
+  | QVar name as term ->
+    (match List.assoc_opt name bindings with
+     | Some (Result_entity entity_id) -> QEntity entity_id
+     | Some (Result_value value) -> QValue value
+     | Some (Result_attr attr) -> QAttr attr
+     | Some (Result_db _ | Result_pull _) | None -> term)
+  | term -> term
+
 let match_query_source_pattern context _default_db source bindings terms =
   match source with
   | Db_source source_db ->
     (match terms with
      | [ e_term; a_term; v_term ] ->
-       context.pattern_datoms source_db a_term
-       |> List.filter_map (fun datom -> context.match_data_pattern source_db bindings e_term a_term v_term datom)
+       let index_e_term = bound_pattern_term bindings e_term in
+       let index_a_term = bound_pattern_term bindings a_term in
+       let index_v_term = bound_pattern_term bindings v_term in
+       context.pattern_datoms source_db index_e_term index_a_term index_v_term None
+       |> Seq.filter_map (fun datom -> context.match_data_pattern source_db bindings e_term a_term v_term datom)
+       |> List.of_seq
      | [ e_term; a_term; v_term; tx_term ] ->
-       context.pattern_datoms source_db a_term
-       |> List.filter_map (fun datom ->
+       let index_e_term = bound_pattern_term bindings e_term in
+       let index_a_term = bound_pattern_term bindings a_term in
+       let index_v_term = bound_pattern_term bindings v_term in
+       let index_tx_term = bound_pattern_term bindings tx_term in
+       context.pattern_datoms source_db index_e_term index_a_term index_v_term (Some index_tx_term)
+       |> Seq.filter_map (fun datom ->
          context.match_data_pattern_tx source_db bindings e_term a_term v_term tx_term datom)
+       |> List.of_seq
      | [ e_term; a_term; v_term; tx_term; op_term ] ->
-       context.pattern_datoms source_db a_term
-       |> List.filter_map (fun datom ->
+       let index_e_term = bound_pattern_term bindings e_term in
+       let index_a_term = bound_pattern_term bindings a_term in
+       let index_v_term = bound_pattern_term bindings v_term in
+       let index_tx_term = bound_pattern_term bindings tx_term in
+       context.pattern_datoms source_db index_e_term index_a_term index_v_term (Some index_tx_term)
+       |> Seq.filter_map (fun datom ->
          context.match_data_pattern_tx_op source_db bindings e_term a_term v_term tx_term op_term datom)
+       |> List.of_seq
      | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms")
   | Relation_source rows ->
     rows

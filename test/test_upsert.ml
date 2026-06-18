@@ -2,6 +2,11 @@ open Datascript
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let datoms_seq = datoms
+
+let datoms db index ?e ?a ?v ?tx () =
+  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
 let assert_equal_triples label expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
   if expected <> actual then failf "%s: unexpected datoms" label

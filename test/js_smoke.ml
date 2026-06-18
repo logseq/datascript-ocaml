@@ -1,5 +1,10 @@
 open Datascript
 
+let datoms_seq = datoms
+
+let datoms db index ?e ?a ?v ?tx () =
+  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
 let () =
   let db =
     empty_db ()

@@ -14,6 +14,7 @@ val refresh_identity : core_context -> db -> db
 val max_eid_in_value : int -> value -> int
 val normalize_datom_for_schema : schema -> datom -> datom
 val refresh_indexes : db -> db
+val refresh_indexes_with_added_datoms : db -> datom list -> db
 val with_datoms : db -> datom list -> db
 val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
 val empty : core_context -> db -> db
@@ -40,8 +41,8 @@ type index_context =
 
 val indexed_attr_required_message : attr -> string
 val validate_index_access : index_context -> db -> index -> attr option -> unit
-val datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
-val datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+val datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+val datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val find_datom : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val find_datom_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val seek_datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list

@@ -2,6 +2,11 @@ open Datascript
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let datoms_seq = datoms
+
+let datoms db index ?e ?a ?v ?tx () =
+  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
 let assert_bool message value =
   if not value then failwith message
 
@@ -230,6 +235,44 @@ let test_init_db_resolves_raw_ref_datoms_from_schema () =
     "q should match init_db raw numeric refs as entity refs"
     [ [ Result_value (String "Petr") ] ]
     (q_string db "[:find ?name :where [1 :friend ?friend] [?friend :name ?name]]")
+
+let test_datoms_returns_lazy_sequence () =
+  let db =
+    init_db
+      [ datom ~e:1 ~a:"name" ~v:(String "Ivan") ()
+      ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
+      ]
+  in
+  let checked = ref 0 in
+  let filtered =
+    filter db (fun _ datom ->
+      incr checked;
+      if !checked > 1 then
+        failwith "datoms should not scan past the first visible item before the first sequence step";
+      datom.e = 1)
+  in
+  match Seq.uncons (datoms_seq filtered Eavt ()) with
+  | Some (datom, _) ->
+    if datom.e <> 1 then failf "expected first lazy datom for entity 1, got %d" datom.e
+  | None -> failwith "expected one visible datom"
+
+let test_datoms_slices_before_filtered_predicate () =
+  let db =
+    init_db
+      [ datom ~e:1 ~a:"age" ~v:(Int 30) ()
+      ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
+      ]
+  in
+  let filtered =
+    filter db (fun _ datom ->
+      if datom.a <> "name" then
+        failwith "datoms should slice the requested attribute before applying filtered-db predicates";
+      true)
+  in
+  match Seq.uncons (datoms_seq filtered Aevt ~a:"name" ()) with
+  | Some (datom, _) ->
+    if datom.a <> "name" then failf "expected first lazy datom for :name, got %s" datom.a
+  | None -> failwith "expected one name datom"
 
 let test_raw_datom_counts_ref_values_in_max_eid () =
   let report =
@@ -16833,6 +16876,8 @@ let () =
   test_init_db_and_indexes ();
   test_init_db_counts_ref_values_in_max_eid ();
   test_init_db_resolves_raw_ref_datoms_from_schema ();
+  test_datoms_returns_lazy_sequence ();
+  test_datoms_slices_before_filtered_predicate ();
   test_raw_datom_counts_ref_values_in_max_eid ();
   test_raw_datom_counts_tx_in_max_tx ();
   test_transact__test_with_datoms ();

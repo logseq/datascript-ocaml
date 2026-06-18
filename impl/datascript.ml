@@ -49,6 +49,7 @@ let normalize_value = Util.normalize_value
 let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 
 let refresh_db_indexes = Db_impl.refresh_indexes
+let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
 
 let with_db_datoms = Db_impl.with_datoms
 
@@ -357,6 +358,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; refresh_tuple_attrs_for_source
   ; history_datoms_for_schema
   ; refresh_db_indexes
+  ; refresh_db_indexes_with_added_datoms
   ; refresh_db_identity
   }
 
@@ -437,6 +439,9 @@ end)
 let entid_ref = Db_access_impl.entid_ref
 let datoms = Db_access_impl.datoms
 let datoms_ref = Db_access_impl.datoms_ref
+let datoms_list db index ?e ?a ?v ?tx () =
+  datoms db index ?e ?a ?v ?tx () |> List.of_seq
+
 let find_datom = Db_access_impl.find_datom
 let find_datom_ref = Db_access_impl.find_datom_ref
 let seek_datoms = Db_access_impl.seek_datoms
@@ -457,7 +462,7 @@ let squuid_time_millis = Db_impl.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
   let context : Conn.reset_context =
-    { store; datoms = (fun db -> datoms db Eavt ()) }
+    { store; datoms = (fun db -> datoms_list db Eavt ()) }
   in
   Conn.reset context ~tx_meta conn db
 
@@ -474,8 +479,8 @@ let entity_id_of_ref = Entity_refs_impl.entity_id_of_ref
 let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
 let entity_context =
-  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; all_datoms = (fun db -> datoms db Eavt ())
+  { Entity.datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
+  ; all_datoms = (fun db -> datoms_list db Eavt ())
   ; compare_value
   ; cardinality
   ; is_ref_attr
@@ -510,7 +515,9 @@ let pull_api_context : Pull_api_impl.context =
   { compare_value
   ; entity
   ; entity_attr_raw
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; cardinality
   ; is_component
   ; is_reverse_ref
   ; reverse_ref
@@ -638,11 +645,38 @@ let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
 let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
   Query.match_reverse_pattern_clause (query_match_context db) bindings e_term reverse_attr v_term datom
 
-let pattern_datoms db a_term =
-  match a_term with
-  | QAttr attr when is_reverse_ref attr ->
-    datoms db Eavt ~a:(reverse_ref attr) ()
-  | _ -> datoms db Eavt ()
+let query_entity_id_term = function
+  | QEntity entity_id -> Some entity_id
+  | QValue (Int entity_id) -> Some entity_id
+  | _ -> None
+
+let query_value_term = function
+  | QValue value -> Some value
+  | _ -> None
+
+let query_tx_term = function
+  | Some (QValue (Int tx)) -> Some tx
+  | _ -> None
+
+let query_attr_uses_avet db attr =
+  is_ref_attr db attr || is_unique db attr || is_indexed db attr
+
+let query_value_uses_avet = function
+  | Nil | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef -> false
+  | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ | Ref_to _ -> true
+
+let pattern_datoms db e_term a_term v_term tx_term =
+  let e = query_entity_id_term e_term in
+  let v = query_value_term v_term in
+  let tx = query_tx_term tx_term in
+  match a_term, v with
+  | QAttr attr, _ when is_reverse_ref attr ->
+    datoms db Aevt ~a:(reverse_ref attr) ?tx ()
+  | QAttr attr, Some value when query_value_uses_avet value && query_attr_uses_avet db attr ->
+    datoms db Avet ?e ~a:attr ~v:value ?tx ()
+  | QAttr attr, _ ->
+    datoms db Aevt ?e ~a:attr ?tx ()
+  | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let match_data_pattern db bindings e_term a_term v_term datom =
   match a_term with
@@ -681,7 +715,7 @@ let collect_query_terms_exn db bindings terms =
 let query_evaluator_context : Query_eval.evaluator_context =
   { result_resolution_context = query_result_context
   ; match_context = query_match_context
-  ; datoms
+  ; datoms = datoms_list
   ; is_reverse_ref
   ; reverse_ref
   ; compare_value
@@ -957,7 +991,7 @@ module Query = struct
 
   type source_context = Query_impl.source_context =
     { match_context : match_context
-    ; pattern_datoms : db -> query_term -> datom list
+    ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
     ; match_data_pattern :
         db ->
         (string * query_result) list ->
@@ -999,7 +1033,21 @@ module Query = struct
 
   let empty_query_callables = Query_impl.empty_query_callables
   let q = Query_impl.q query_context
-  let q_string = Query_impl.q_string query_context
+  let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
+  let cached_query_string input =
+    match Hashtbl.find_opt query_string_cache input with
+    | Some query -> query
+    | None ->
+      let query = parse_query_string input in
+      Hashtbl.replace query_string_cache input query;
+      query
+
+  let q_string ?inputs db input =
+    if string_includes input "pull" then
+      Query_impl.q_string query_context ?inputs db input
+    else
+      q ?inputs db (cached_query_string input)
+
   let q_with = Query_impl.q_with query_context
   let q_with_string = Query_impl.q_with_string query_context
   let q_sources = Query_impl.q_sources query_context

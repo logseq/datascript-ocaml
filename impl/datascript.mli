@@ -126,8 +126,8 @@ module Db : sig
   val is_datom : datom -> bool
   val value_equal : value -> value -> bool
   val same_fact : datom -> datom -> bool
-  val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
-  val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+  val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+  val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   val find_datom : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
   val find_datom_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
   val seek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
@@ -499,7 +499,7 @@ module Query : sig
 
   type source_context =
     { match_context : match_context
-    ; pattern_datoms : db -> query_term -> datom list
+    ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
     ; match_data_pattern :
         db ->
         (string * query_result) list ->
@@ -854,8 +854,8 @@ val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
 val q_return_map :
   ?inputs:query_arg list -> db -> query_return -> query_return_map -> query -> query_output
 val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
-val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
-val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val find_datom : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val find_datom_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val seek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list

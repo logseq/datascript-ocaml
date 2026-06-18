@@ -28,10 +28,17 @@ let from_serializable context snapshot =
     ; aevt_index = []
     ; avet_index = []
     ; vaet_index = []
+    ; eavt_array = [||]
+    ; aevt_array = [||]
+    ; avet_array = [||]
+    ; vaet_array = [||]
+    ; index_arrays_valid = true
     ; history_datoms
     ; historical = snapshot.serializable_historical
     ; max_eid = snapshot.serializable_max_eid
+    ; max_datom_e = 0
     ; max_tx = snapshot.serializable_max_tx
+    ; unique_index = []
     ; filter_pred = None
     ; storage_ref = None
     ; tx_fns = []

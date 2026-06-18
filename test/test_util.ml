@@ -2,6 +2,11 @@ open Datascript
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let datoms_seq = datoms
+
+let datoms db index ?e ?a ?v ?tx () =
+  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
 let assert_equal_value message expected actual =
   if not (Db.value_equal expected actual) then failf "%s" message
 

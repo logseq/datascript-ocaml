@@ -56,7 +56,7 @@ type match_context =
 
 type source_context =
   { match_context : match_context
-  ; pattern_datoms : db -> query_term -> datom list
+  ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
   ; match_data_pattern :
       db ->
       (string * query_result) list ->

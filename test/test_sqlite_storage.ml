@@ -4,6 +4,11 @@ module Sqlite_storage = Logseq_sqlite_storage
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let datoms_seq = datoms
+
+let datoms db index ?e ?a ?v ?tx () =
+  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
 let read_all channel =
   let buffer = Buffer.create 256 in
   (try

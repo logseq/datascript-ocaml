@@ -150,11 +150,11 @@ let test_db__test_index_api () =
   assert_equal_triples
     "Db.datoms exposes index lookup through the db namespace"
     [ 1, "name", String "Ivan" ]
-    (Db.datoms db Avet ~a:"name" ~v:(String "Ivan") ());
+    (Db.datoms db Avet ~a:"name" ~v:(String "Ivan") () |> List.of_seq);
   assert_equal_triples
     "Db.datoms_ref resolves lookup-ref entity bounds through the db namespace"
     [ 1, "email", String "ivan@example.com"; 1, "name", String "Ivan" ]
-    (Db.datoms_ref db Eavt ~e:(Lookup_ref ("email", String "ivan@example.com")) ());
+    (Db.datoms_ref db Eavt ~e:(Lookup_ref ("email", String "ivan@example.com")) () |> List.of_seq);
   assert_equal_triples
     "Db.seek_datoms exposes ordered index seeks through the db namespace"
     [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]

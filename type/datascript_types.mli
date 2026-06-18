@@ -123,10 +123,17 @@ and db =
   ; aevt_index : datom list
   ; avet_index : datom list
   ; vaet_index : datom list
+  ; eavt_array : datom array
+  ; aevt_array : datom array
+  ; avet_array : datom array
+  ; vaet_array : datom array
+  ; index_arrays_valid : bool
   ; history_datoms : datom list
   ; historical : bool
   ; max_eid : entity_id
+  ; max_datom_e : entity_id
   ; max_tx : tx
+  ; unique_index : (attr * value * entity_id) list
   ; filter_pred : (datom -> bool) option
   ; storage_ref : storage option
   ; tx_fns : (entity_id * (db -> value list -> tx_op list)) list

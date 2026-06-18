@@ -320,6 +320,7 @@ type apply_context =
   ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
   ; history_datoms_for_schema : schema -> datom list -> datom list
   ; refresh_db_indexes : db -> db
+  ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 
@@ -912,6 +913,171 @@ let apply_tx context tx_ops db =
         List.fold_left apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data) attrs
       in
       datoms, max_eid, tempids, entity_tempids, tx_data, e
+  and try_apply_bulk_explicit_entities () =
+    let rec has_complex_ref_value value =
+      match value with
+      | Ref_to _ | TxRef -> true
+      | List values | Vector values | Set values -> List.exists has_complex_ref_value values
+      | Map entries ->
+        List.exists
+          (fun (key, value) -> has_complex_ref_value key || has_complex_ref_value value)
+          entries
+      | Tuple values ->
+        List.exists
+          (function
+            | None -> false
+            | Some value -> has_complex_ref_value value)
+          values
+      | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> false
+    in
+    let unique_attr attr =
+      attr = "db/ident"
+      ||
+      match List.assoc_opt attr db.schema with
+      | Some { unique = Some _; _ } -> true
+      | _ -> false
+    in
+    let attr_is_supported attr =
+      attr <> "db/id"
+      && not (String.starts_with ~prefix:"db/" attr)
+      && not (context.resolve_context.is_reverse_ref attr)
+      && not (context.is_tuple_attr db attr)
+      && context.tuple_attrs_for_source db attr = []
+    in
+    let supported_value attr value =
+      not (has_complex_ref_value value)
+      &&
+      if context.resolve_context.is_ref_attr db attr then
+        match value with
+        | Ref _ | Int _ -> true
+        | _ -> false
+      else
+        true
+    in
+    let supported_tx_value attr = function
+      | One_value (List _ | Vector _ | Set _) when context.resolve_context.cardinality db attr = Many ->
+        false
+      | One_value value | Many_values [ value ] -> supported_value attr value
+      | Many_values values -> List.for_all (supported_value attr) values
+      | One_entity _ | Many_entities _ -> false
+    in
+    let supported_entity = function
+      | Entity { db_id = Some (Entity_id _); attrs } ->
+        attrs <> []
+        && List.for_all (fun (attr, tx_value) -> attr_is_supported attr && supported_tx_value attr tx_value) attrs
+      | _ -> false
+    in
+    let duplicate_cardinality_one attrs =
+      let seen = Hashtbl.create (List.length attrs) in
+      List.exists
+        (fun (attr, _) ->
+          context.resolve_context.cardinality db attr = One
+          &&
+          if Hashtbl.mem seen attr then true
+          else (
+            Hashtbl.add seen attr ();
+            false ))
+        attrs
+    in
+    let duplicate_fact facts =
+      let seen = Hashtbl.create (List.length facts) in
+      List.exists
+        (fun d ->
+          let key = d.e, d.a, d.v in
+          if Hashtbl.mem seen key then true
+          else (
+            Hashtbl.add seen key ();
+            false ))
+        facts
+    in
+    let duplicate_unique facts =
+      let seen = Hashtbl.create (List.length facts) in
+      List.exists
+        (fun d ->
+          unique_attr d.a
+          &&
+          let key = d.a, d.v in
+          match Hashtbl.find_opt seen key with
+          | Some entity_id -> entity_id <> d.e
+          | None ->
+            Hashtbl.add seen key d.e;
+            false)
+        facts
+    in
+    let entity_is_new d =
+      d.e > db.max_datom_e
+    in
+    let existing_fact d =
+      (not (entity_is_new d)) && List.exists (context.same_fact d) db.datoms
+    in
+    let existing_cardinality_one_value d =
+      (not (entity_is_new d))
+      && context.resolve_context.cardinality db d.a = One
+      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) db.datoms
+    in
+    let existing_unique_conflict d =
+      unique_attr d.a
+      &&
+      db.unique_index
+      |> List.exists (fun (attr, value, entity_id) ->
+        attr = d.a && context.value_equal value d.v && entity_id <> d.e)
+    in
+    let conflicts_with_existing facts =
+      List.exists
+        (fun d -> existing_fact d || existing_cardinality_one_value d || existing_unique_conflict d)
+        facts
+    in
+    if not (List.for_all supported_entity tx_ops) then
+      None
+    else
+      let build_entity (facts_rev, max_eid) = function
+        | Entity { db_id = Some (Entity_id entity_id); attrs } ->
+          if duplicate_cardinality_one attrs then
+            None
+          else
+            let entity_id = context.resolve_context.validate_entity_id entity_id in
+            let resolved_attrs, max_eid, _ =
+              resolve_entity_attrs context.resolve_context db [] tx max_eid [] attrs
+            in
+            let entity_facts =
+              resolved_attrs
+              |> List.concat_map (fun (attr, tx_value) ->
+                match tx_value with
+                | One_value value -> [ context.datom ~tx ~e:entity_id ~a:attr ~v:value () ]
+                | Many_values values ->
+                  List.map
+                    (fun value -> context.datom ~tx ~e:entity_id ~a:attr ~v:value ())
+                    values
+                | One_entity _ | Many_entities _ -> [])
+            in
+            Some (List.rev_append entity_facts facts_rev, max max_eid entity_id)
+        | _ -> None
+      in
+      let rec build state = function
+        | [] -> Some state
+        | tx_op :: rest ->
+          (match build_entity state tx_op with
+           | None -> None
+           | Some state -> build state rest)
+      in
+      (match build ([], initial_max_eid) tx_ops with
+       | None -> None
+       | Some (facts_rev, max_eid) ->
+         let facts = List.rev facts_rev in
+         if duplicate_fact facts || duplicate_unique facts || conflicts_with_existing facts then
+           None
+         else
+           let facts =
+             facts
+             |> List.map (fun d -> { d with v = context.resolve_context.normalize_value d.v })
+           in
+           let max_eid =
+             List.fold_left
+               (fun max_eid d -> context.resolve_context.max_eid_in_value (max max_eid d.e) d.v)
+               max_eid
+               facts
+           in
+           Some (List.rev_append facts db.datoms, max_eid, [], [], facts))
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
@@ -922,31 +1088,50 @@ let apply_tx context tx_ops db =
       state
       tx_ops
   in
-  let datoms, max_eid, tempids, entity_tempids, tx_data =
-    apply_ops (db.datoms, initial_max_eid, [], [], []) tx_ops
+  let datoms, max_eid, tempids, entity_tempids, tx_data, fast_added_datoms =
+    match try_apply_bulk_explicit_entities () with
+    | Some (datoms, max_eid, tempids, entity_tempids, tx_data) ->
+      datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
+    | None ->
+      let datoms, max_eid, tempids, entity_tempids, tx_data =
+        apply_ops (db.datoms, initial_max_eid, [], [], []) tx_ops
+      in
+      datoms, max_eid, tempids, entity_tempids, tx_data, None
   in
   let tempids = ensure_current_tx_tempid tempids tx in
   validate_tempid_usage tempids entity_tempids;
   let schema =
-    context.schema_from_transaction_datoms
-      ~strict:true
-      ~removed_attrs:!removed_schema_attrs
-      ~removed_fields:!removed_schema_fields
-      ~ignored_schema_entities:!ignored_schema_entities
-      db.schema
-      datoms
+    match fast_added_datoms with
+    | Some _ -> db.schema
+    | None ->
+      context.schema_from_transaction_datoms
+        ~strict:true
+        ~removed_attrs:!removed_schema_attrs
+        ~removed_fields:!removed_schema_fields
+        ~ignored_schema_entities:!ignored_schema_entities
+        db.schema
+        datoms
   in
   let history_tx_data = context.history_datoms_for_schema schema tx_data in
-  ( context.refresh_db_indexes
-      (context.refresh_db_identity
-         { db with
-           schema
-         ; datoms
-         ; history_datoms = db.history_datoms @ history_tx_data
-         ; max_eid
-         ; max_tx = !max_tx_seen
-         ; tx_fns = !current_tx_fns
-         })
+  let db_after =
+    let history_datoms =
+      match fast_added_datoms with
+      | Some _ -> List.rev_append history_tx_data db.history_datoms
+      | None -> db.history_datoms @ history_tx_data
+    in
+    context.refresh_db_identity
+      { db with
+        schema
+      ; datoms
+      ; history_datoms
+      ; max_eid
+      ; max_tx = !max_tx_seen
+      ; tx_fns = !current_tx_fns
+      }
+  in
+  ( (match fast_added_datoms with
+     | Some added_datoms -> context.refresh_db_indexes_with_added_datoms db_after added_datoms
+     | None -> context.refresh_db_indexes db_after)
   , tempids
   , tx_data
   )

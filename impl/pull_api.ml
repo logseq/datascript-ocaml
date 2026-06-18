@@ -4,7 +4,9 @@ type context =
   { compare_value : value -> value -> int
   ; entity : db -> entity_ref -> entity option
   ; entity_attr_raw : entity -> attr -> tx_value option
+  ; datoms_by_entity : db -> entity_id -> datom list
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
+  ; cardinality : db -> attr -> cardinality
   ; is_component : db -> attr -> bool
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
@@ -64,10 +66,11 @@ let rec pull_selector_forward_attr context = function
   | Pull_ref_unlimited (attr, _)
   | Pull_ref_xform (attr, _, _) ->
     if context.is_reverse_ref attr then None else Some attr
+  | Pull_recursive_ref (attr, _, _) ->
+    if context.is_reverse_ref attr then None else Some attr
   | Pull_as (selector, _) -> pull_selector_forward_attr context selector
   | Pull_id
   | Pull_wildcard
-  | Pull_recursive_ref _
   | Pull_reverse_ref _
   | Pull_reverse_ref_default _
   | Pull_reverse_ref_limit _
@@ -79,6 +82,68 @@ let wildcard_shadowed_attrs context selectors =
   selectors
   |> List.filter_map (pull_selector_forward_attr context)
   |> List.sort_uniq String.compare
+
+let rec pull_selector_needs_full_entity context = function
+  | Pull_wildcard -> true
+  | Pull_attr attr
+  | Pull_attr_default (attr, _)
+  | Pull_attr_limit (attr, _)
+  | Pull_attr_unlimited attr
+  | Pull_attr_xform (attr, _)
+  | Pull_attr_default_xform (attr, _, _)
+  | Pull_ref (attr, _)
+  | Pull_ref_default (attr, _, _)
+  | Pull_ref_limit (attr, _, _)
+  | Pull_ref_unlimited (attr, _)
+  | Pull_ref_xform (attr, _, _)
+  | Pull_recursive_ref (attr, _, _) ->
+    context.is_reverse_ref attr
+  | Pull_as (selector, _) -> pull_selector_needs_full_entity context selector
+  | Pull_id
+  | Pull_reverse_ref _
+  | Pull_reverse_ref_default _
+  | Pull_reverse_ref_limit _
+  | Pull_reverse_ref_unlimited _
+  | Pull_reverse_ref_xform _ ->
+    false
+
+let selector_needs_full_entity context selectors =
+  List.exists (pull_selector_needs_full_entity context) selectors
+
+let forward_attrs_for_selectors context selectors =
+  selectors
+  |> List.filter_map (pull_selector_forward_attr context)
+  |> List.sort_uniq String.compare
+
+let tx_value_of_attr_values context db attr values =
+  let values = List.sort context.compare_value values in
+  match context.cardinality db attr, values with
+  | Many, values -> Many_values values
+  | One, value :: _ -> One_value value
+  | One, [] -> Many_values []
+
+let forward_entity context db entity_id attrs =
+  match context.datoms_by_entity db entity_id with
+  | [] -> None
+  | datoms ->
+    let wanted attr = attrs = [] || List.mem attr attrs in
+    let add groups d =
+      if not (wanted d.a) then
+        groups
+      else
+        match List.assoc_opt d.a groups with
+        | None -> (d.a, [ d.v ]) :: groups
+        | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
+    in
+    let attrs =
+      datoms
+      |> List.fold_left add []
+      |> List.filter_map (fun (attr, values) ->
+        match tx_value_of_attr_values context db attr values with
+        | Many_values [] -> None
+        | value -> Some (attr, value))
+    in
+    Some { id = entity_id; db; attrs }
 
 let dedupe_pulled_attrs attrs =
   attrs
@@ -103,7 +168,13 @@ let rec pull_entity_by_id ?visitor context db selector entity_id =
   pull_entity_by_id_visited ?visitor ~root_id:entity_id ~root_reexpanded:false context db [] selector selector entity_id
 
 and pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited context_selector selector entity_id =
-  match context.entity db (Entity_id entity_id) with
+  let entity =
+    if selector_needs_full_entity context selector then
+      context.entity db (Entity_id entity_id)
+    else
+      forward_entity context db entity_id (forward_attrs_for_selectors context selector)
+  in
+  match entity with
   | None -> None
   | Some entity ->
     let attrs =
