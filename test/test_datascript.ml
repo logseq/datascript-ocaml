@@ -401,6 +401,52 @@ let test_vaet_index_returns_ref_datoms_by_value () =
     [ 3, "spouse", Ref 2; 3, "friend", Ref 2; 3, "friend", Ref 1; 2, "friend", Ref 1 ]
     (rseek_datoms db Vaet ~v:(Ref 2) ~a:"spouse" ())
 
+let test_incremental_writes_keep_public_datoms_indexes_correct () =
+  let person id name age friend =
+    Entity
+      { db_id = Some (Entity_id id)
+      ; attrs =
+          [ "name", One_value (String name)
+          ; "age", One_value (Int age)
+          ; "friend", One_value (Ref friend)
+          ]
+      }
+  in
+  let db =
+    List.fold_left
+      (fun db entity -> db_with [ entity ] db)
+      (empty_db ~schema:[ "name", indexed; "age", indexed; "friend", ref_attr ] ())
+      [ person 1 "Ivan" 30 2
+      ; person 2 "Petr" 20 1
+      ; person 3 "Ivan" 40 1
+      ]
+  in
+  assert_equal_triples
+    "incremental EAVT remains sorted by entity"
+    [ 1, "age", Int 30
+    ; 1, "friend", Ref 2
+    ; 1, "name", String "Ivan"
+    ; 2, "age", Int 20
+    ; 2, "friend", Ref 1
+    ; 2, "name", String "Petr"
+    ; 3, "age", Int 40
+    ; 3, "friend", Ref 1
+    ; 3, "name", String "Ivan"
+    ]
+    (datoms db Eavt ());
+  assert_equal_triples
+    "incremental AEVT attr slice remains correct"
+    [ 1, "name", String "Ivan"; 2, "name", String "Petr"; 3, "name", String "Ivan" ]
+    (datoms db Aevt ~a:"name" ());
+  assert_equal_triples
+    "incremental AVET value slice remains correct"
+    [ 1, "name", String "Ivan"; 3, "name", String "Ivan" ]
+    (datoms db Avet ~a:"name" ~v:(String "Ivan") ());
+  assert_equal_triples
+    "incremental VAET ref slice remains correct"
+    [ 2, "friend", Ref 1; 3, "friend", Ref 1 ]
+    (datoms db Vaet ~v:(Ref 1) ())
+
 let test_index_range_returns_avet_values_between_bounds () =
   let db =
     empty_db ~schema:[ "age", indexed; "name", indexed ] ()
@@ -16883,6 +16929,7 @@ let () =
   test_transact__test_with_datoms ();
   test_find_datom_returns_first_index_match ();
   test_vaet_index_returns_ref_datoms_by_value ();
+  test_incremental_writes_keep_public_datoms_indexes_correct ();
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
   test_indexes_compare_numbers_across_value_constructors ();

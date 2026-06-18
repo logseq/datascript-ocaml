@@ -32,6 +32,7 @@ let from_serializable context snapshot =
     ; aevt_array = [||]
     ; avet_array = [||]
     ; vaet_array = [||]
+    ; index_lists_valid = true
     ; index_arrays_valid = true
     ; history_datoms
     ; historical = snapshot.serializable_historical

@@ -10,7 +10,7 @@ lazy `datoms` access.
 The cross-runtime benchmark entrypoint is:
 
 ```sh
-BENCH_SIZE=200 BENCH_WARMUP_MS=50 BENCH_SAMPLE_MS=100 BENCH_SAMPLES=3 \
+BENCH_SIZE=200 BENCH_WARMUP_MS=100 BENCH_SAMPLE_MS=300 BENCH_SAMPLES=5 \
   script/benchmark_vs_cljs.sh
 ```
 
@@ -34,29 +34,28 @@ Configuration:
 
 ```text
 BENCH_SIZE=200
-BENCH_WARMUP_MS=50
-BENCH_SAMPLE_MS=100
-BENCH_SAMPLES=3
+BENCH_WARMUP_MS=100
+BENCH_SAMPLE_MS=300
+BENCH_SAMPLES=5
 ```
 
 Lower is better.
 
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 2.27 | 6.12 | 15.64 |
-| add-one-by-one | 13.76 | 27.75 | 14.95 |
-| datoms-name | 0.00114 | 0.00489 | 0.00433 |
-| query-name-age | 0.01491 | 0.03588 | 0.07258 |
-| query-salary-pred | 0.04117 | 0.10471 | 0.15547 |
-| pull-one | 0.00150 | 0.00429 | 0.01087 |
+| add-all | 2.24 | 5.10 | 16.01 |
+| add-one-by-one | 1.58 | 4.23 | 14.55 |
+| datoms-name | 0.00089 | 0.00385 | 0.00426 |
+| query-name-age | 0.01522 | 0.03586 | 0.06415 |
+| query-salary-pred | 0.04021 | 0.09810 | 0.15102 |
+| pull-one | 0.00167 | 0.00446 | 0.01055 |
 
 Current status:
 
 - Native OCaml is faster than upstream CLJS/JS on every benchmark listed above.
-- `js_of_ocaml` is faster on most read/query/pull benchmarks.
-- `js_of_ocaml add-one-by-one` is still slower than upstream CLJS/JS.
-- `js_of_ocaml datoms-name` is close to upstream, but still slightly slower in
-  this sample.
+- `js_of_ocaml` is faster than upstream CLJS/JS on every benchmark listed above.
+- The biggest remaining item is broader validation on larger and more varied
+  workloads; the current deterministic harness goal is satisfied.
 
 ## Optimizations Applied
 
@@ -81,12 +80,21 @@ that range as a lazy sequence.
 This avoids full-index filtering for common component-constrained accesses such
 as entity or attribute slices.
 
+Exact prefix slices such as `datoms db Aevt ~a` now compute both start and stop
+bounds up front and then lazily walk the array range by index. This avoids a
+per-datom predicate check inside the hot range.
+
 ### Incremental Index Refresh
 
-Bulk transaction paths can merge newly added datoms into existing sorted indexes
-instead of rebuilding everything from scratch. Initial bulk loads keep array
-snapshots valid; later incremental changes currently invalidate array snapshots
-when a full array rebuild is not performed.
+Bulk transaction paths can merge newly added datoms into sorted indexes for
+initial loads. For later safe incremental writes into a non-empty DB, the write
+path updates active datoms and metadata immediately, but marks stored index lists
+and arrays stale instead of maintaining all four sorted indexes on every write.
+
+Public `datoms` still returns correct results. If stored indexes are stale, the
+read path builds the requested sorted index from current datoms and applies the
+requested component filters. A regression test covers incremental writes followed
+by public EAVT, AEVT, AVET, and VAET reads.
 
 ### Query Candidate Narrowing
 
@@ -159,14 +167,11 @@ These constraints must remain true for future performance work:
 
 ## Remaining Work
 
-The main remaining benchmark gap is `js_of_ocaml add-one-by-one`. The next likely
-optimization is delaying maintenance or array rebuilding for secondary indexes
-that are not needed by the write-heavy path, while keeping public `datoms`
-correct when those indexes are later accessed.
-
-Any delayed-index approach needs careful handling because DB index fields are
-part of the public representation today. Prefer a simple validity model over a
-large rewrite unless profiling shows the extra complexity is justified.
+The current deterministic benchmark goal is satisfied. Next useful work is to
+validate larger workloads, mixed read/write patterns after stale incremental
+indexes, and public behavior around direct DB record access. DB index fields are
+still present in the public record type, so future API cleanup should either make
+those internals private or clearly document their validity flags.
 
 ## Verification
 
@@ -178,3 +183,10 @@ dune runtest
 
 It passed after the current optimization set. The run emitted linker warnings
 about a missing `/opt/homebrew/opt/node@22/lib` search path, but no test failure.
+
+Latest cross-runtime benchmark command:
+
+```sh
+BENCH_SIZE=200 BENCH_WARMUP_MS=100 BENCH_SAMPLE_MS=300 BENCH_SAMPLES=5 \
+  script/benchmark_vs_cljs.sh
+```

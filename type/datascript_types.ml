@@ -127,6 +127,7 @@ and db =
   ; aevt_array : datom array
   ; avet_array : datom array
   ; vaet_array : datom array
+  ; index_lists_valid : bool
   ; index_arrays_valid : bool
   ; history_datoms : datom list
   ; historical : bool

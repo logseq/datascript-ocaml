@@ -99,6 +99,7 @@ let refresh_indexes db =
   ; aevt_array = Array.of_list aevt_index
   ; avet_array = Array.of_list avet_index
   ; vaet_array = Array.of_list vaet_index
+  ; index_lists_valid = true
   ; index_arrays_valid = true
   }
 
@@ -115,33 +116,46 @@ let refresh_indexes_with_added_datoms db added_datoms =
   let source_indexes_empty =
     db.eavt_index = [] && db.aevt_index = [] && db.avet_index = [] && db.vaet_index = []
   in
-  let eavt_index =
-    merge_sorted (Util.compare_datom Eavt) (build_index Eavt added_datoms) db.eavt_index
-  in
-  let aevt_index =
-    merge_sorted (Util.compare_datom Aevt) (build_index Aevt added_datoms) db.aevt_index
-  in
-  let avet_index =
-    merge_sorted (Util.compare_datom Avet) (build_avet_index db.schema added_datoms) db.avet_index
-  in
-  let vaet_index =
-    merge_sorted (Util.compare_datom Vaet) (build_vaet_index added_datoms) db.vaet_index
-  in
   let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) db.max_datom_e added_datoms in
   let unique_index = build_unique_index db.schema added_datoms @ db.unique_index in
-  { db with
-    eavt_index
-  ; aevt_index
-  ; avet_index
-  ; vaet_index
-  ; max_datom_e
-  ; unique_index
-  ; eavt_array = if source_indexes_empty then Array.of_list eavt_index else [||]
-  ; aevt_array = if source_indexes_empty then Array.of_list aevt_index else [||]
-  ; avet_array = if source_indexes_empty then Array.of_list avet_index else [||]
-  ; vaet_array = if source_indexes_empty then Array.of_list vaet_index else [||]
-  ; index_arrays_valid = source_indexes_empty
-  }
+  if source_indexes_empty then
+    let eavt_index =
+      merge_sorted (Util.compare_datom Eavt) (build_index Eavt added_datoms) db.eavt_index
+    in
+    let aevt_index =
+      merge_sorted (Util.compare_datom Aevt) (build_index Aevt added_datoms) db.aevt_index
+    in
+    let avet_index =
+      merge_sorted (Util.compare_datom Avet) (build_avet_index db.schema added_datoms) db.avet_index
+    in
+    let vaet_index =
+      merge_sorted (Util.compare_datom Vaet) (build_vaet_index added_datoms) db.vaet_index
+    in
+    { db with
+      eavt_index
+    ; aevt_index
+    ; avet_index
+    ; vaet_index
+    ; max_datom_e
+    ; unique_index
+    ; eavt_array = Array.of_list eavt_index
+    ; aevt_array = Array.of_list aevt_index
+    ; avet_array = Array.of_list avet_index
+    ; vaet_array = Array.of_list vaet_index
+    ; index_lists_valid = true
+    ; index_arrays_valid = true
+    }
+  else
+    { db with
+      max_datom_e
+    ; unique_index
+    ; eavt_array = [||]
+    ; aevt_array = [||]
+    ; avet_array = [||]
+    ; vaet_array = [||]
+    ; index_lists_valid = false
+    ; index_arrays_valid = false
+    }
 
 let with_datoms db datoms =
   refresh_indexes { db with datoms }
@@ -160,6 +174,7 @@ let empty_db context ?(schema = []) ?storage () =
     ; aevt_array = [||]
     ; avet_array = [||]
     ; vaet_array = [||]
+    ; index_lists_valid = true
     ; index_arrays_valid = true
     ; history_datoms = []
     ; historical = false
@@ -197,6 +212,7 @@ let init_db context ?(schema = []) ?storage datoms =
     ; aevt_array = [||]
     ; avet_array = [||]
     ; vaet_array = [||]
+    ; index_lists_valid = true
     ; index_arrays_valid = true
     ; history_datoms
     ; historical = false
@@ -261,24 +277,29 @@ let hash db =
 
 let hash_cache_size () = Hashtbl.length hash_cache
 
-let visible_index_datoms db index =
-  let datoms =
-    match index with
-    | Eavt -> db.eavt_index
-    | Aevt -> db.aevt_index
-    | Avet -> db.avet_index
-    | Vaet -> db.vaet_index
-  in
-  match db.filter_pred with
-  | None -> datoms
-  | Some pred -> List.filter pred datoms
+let build_index_for_db db = function
+  | Eavt -> build_index Eavt db.datoms
+  | Aevt -> build_index Aevt db.datoms
+  | Avet -> build_avet_index db.schema db.datoms
+  | Vaet -> build_vaet_index db.datoms
 
-let raw_index_datoms_list db index =
-  match index with
+let stored_index_datoms_list db = function
   | Eavt -> db.eavt_index
   | Aevt -> db.aevt_index
   | Avet -> db.avet_index
   | Vaet -> db.vaet_index
+
+let raw_index_datoms_list db index =
+  if db.index_lists_valid then
+    stored_index_datoms_list db index
+  else
+    build_index_for_db db index
+
+let visible_index_datoms db index =
+  let datoms = raw_index_datoms_list db index in
+  match db.filter_pred with
+  | None -> datoms
+  | Some pred -> List.filter pred datoms
 
 let raw_index_datoms_array db index =
   match index with
@@ -310,9 +331,20 @@ let rec array_seq_take_while items index pred () =
     else
       Seq.Nil
 
+let rec array_seq_range items index stop () =
+  if index >= stop then
+    Seq.Nil
+  else
+    Seq.Cons (items.(index), array_seq_range items (index + 1) stop)
+
 let seq_slice ~before ~inside items =
   let start = lower_bound_before before items in
   array_seq_take_while items start inside
+
+let seq_range ~before_start ~before_stop items =
+  let start = lower_bound_before before_start items in
+  let stop = lower_bound_before before_stop items in
+  array_seq_range items start stop
 
 let compare_attr = compare
 let compare_entity = compare
@@ -349,7 +381,10 @@ let slice_eavt context items e a v tx =
       ~inside:(fun d -> d.e = e && d.a = a)
       items
   | Some e, _, _, _ ->
-    seq_slice ~before:(fun d -> compare_entity d.e e < 0) ~inside:(fun d -> d.e = e) items
+    seq_range
+      ~before_start:(fun d -> compare_entity d.e e < 0)
+      ~before_stop:(fun d -> compare_entity d.e e <= 0)
+      items
   | _ -> Array.to_seq items
 
 let slice_aevt context items e a v tx =
@@ -377,7 +412,10 @@ let slice_aevt context items e a v tx =
       ~inside:(fun d -> d.a = a && d.e = e)
       items
   | Some a, _, _, _ ->
-    seq_slice ~before:(fun d -> compare_attr d.a a < 0) ~inside:(fun d -> d.a = a) items
+    seq_range
+      ~before_start:(fun d -> compare_attr d.a a < 0)
+      ~before_stop:(fun d -> compare_attr d.a a <= 0)
+      items
   | _ -> Array.to_seq items
 
 let slice_avet context items e a v tx =
@@ -405,7 +443,10 @@ let slice_avet context items e a v tx =
       ~inside:(fun d -> d.a = a && value_order_equal context d.v v)
       items
   | Some a, _, _, _ ->
-    seq_slice ~before:(fun d -> compare_attr d.a a < 0) ~inside:(fun d -> d.a = a) items
+    seq_range
+      ~before_start:(fun d -> compare_attr d.a a < 0)
+      ~before_stop:(fun d -> compare_attr d.a a <= 0)
+      items
   | _ -> Array.to_seq items
 
 let slice_vaet context items e a v tx =
@@ -433,9 +474,9 @@ let slice_vaet context items e a v tx =
       ~inside:(fun d -> value_order_equal context d.v v && d.a = a)
       items
   | Some v, _, _, _ ->
-    seq_slice
-      ~before:(fun d -> compare_value_order context d.v v < 0)
-      ~inside:(fun d -> value_order_equal context d.v v)
+    seq_range
+      ~before_start:(fun d -> compare_value_order context d.v v < 0)
+      ~before_stop:(fun d -> compare_value_order context d.v v <= 0)
       items
   | _ -> Array.to_seq items
 
@@ -514,7 +555,10 @@ let datoms context db index ?e ?a ?v ?tx () =
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms = bounded_index_datoms_seq context db index e a v tx in
   let datoms =
-    if slice_covers_components index e a v tx then
+    if
+      (e, a, v, tx) = (None, None, None, None)
+      || (db.index_arrays_valid && slice_covers_components index e a v tx)
+    then
       datoms
     else
       datoms
