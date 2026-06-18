@@ -11,3 +11,5 @@ case "$ocaml_runner" in
 esac
 
 bash "$repo_root/script/cross_runtime_parity.sh" "$ocaml_runner" "$upstream_runner"
+
+"$ocaml_runner" | grep -q '^fuzz.final.datoms	'

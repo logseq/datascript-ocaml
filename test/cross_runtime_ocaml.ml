@@ -174,6 +174,144 @@ let unique_value = { indexed with unique = Some Value }
 let ref_attr = { one with value_type = Some RefType }
 let many = { one with cardinality = Many }
 
+let fuzz_emails =
+  [| "person-0@example.test"
+   ; "person-1@example.test"
+   ; "person-2@example.test"
+   ; "person-3@example.test"
+  |]
+
+let fuzz_tags = [| "alpha"; "beta"; "gamma"; "delta" |]
+let fuzz_batch_count = 100
+
+let fuzz_lookup email = Lookup_ref ("email", String email)
+
+let fuzz_generated_batch i =
+  let source = fuzz_emails.((i * 5 + 1) mod Array.length fuzz_emails) in
+  let target = fuzz_emails.((i * 7 + 2) mod Array.length fuzz_emails) in
+  let tag = fuzz_tags.((i * 3 + 1) mod Array.length fuzz_tags) in
+  let old_tag = fuzz_tags.((i + 2) mod Array.length fuzz_tags) in
+  let score = 10 + ((i * 17) mod 90) in
+  let ops =
+    [ Add (fuzz_lookup source, "tag", String tag)
+    ; Add (fuzz_lookup source, "score", Int score)
+    ]
+  in
+  let ops =
+    if source = target
+    then ops
+    else ops @ [ Add (fuzz_lookup source, "links", Ref_to (fuzz_lookup target)) ]
+  in
+  if i mod 3 = 0
+  then ops @ [ Retract (fuzz_lookup source, "tag", Some (String old_tag)) ]
+  else ops
+
+let run_fuzz_parity () =
+  let conn = create_conn () in
+  ignore
+    (transact_conn
+       conn
+       [ Entity
+           { db_id = Some (Entity_id 100)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "email")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+               ; "db/unique", One_value (Keyword "db.unique/identity")
+               ; "db/index", One_value (Bool true)
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 101)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "tag")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/many")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 102)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "friend")
+               ; "db/valueType", One_value (Keyword "db.type/ref")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 103)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "links")
+               ; "db/valueType", One_value (Keyword "db.type/ref")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/many")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 104)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "kind")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+               ]
+           }
+       ]);
+  ignore
+    (transact_conn
+       conn
+       [ Entity
+           { db_id = Some (Temp_id "-1")
+           ; attrs =
+               [ "email", One_value (String fuzz_emails.(0))
+               ; "tag", Many_values [ String "alpha"; String "seed" ]
+               ; "kind", One_value (Keyword "person")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Temp_id "-2")
+           ; attrs =
+               [ "email", One_value (String fuzz_emails.(1))
+               ; "friend", One_value (Ref_to (Temp_id "-1"))
+               ; "links", Many_values [ Ref_to (Temp_id "-1") ]
+               ; "tag", Many_values [ String "beta" ]
+               ; "kind", One_value (Keyword "person")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Temp_id "-3")
+           ; attrs =
+               [ "email", One_value (String fuzz_emails.(2))
+               ; "friend", One_value (Ref_to (Temp_id "-2"))
+               ; "links", Many_values [ Ref_to (Temp_id "-1"); Ref_to (Temp_id "-2") ]
+               ; "tag", Many_values [ String "gamma" ]
+               ; "kind", One_value (Keyword "person")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Temp_id "-4")
+           ; attrs =
+               [ "email", One_value (String fuzz_emails.(3))
+               ; "friend", One_value (Ref_to (Temp_id "-3"))
+               ; "links", Many_values [ Ref_to (Temp_id "-1") ]
+               ; "tag", Many_values [ String "delta" ]
+               ; "kind", One_value (Keyword "person")
+               ]
+           }
+       ]);
+  ignore
+    (transact_conn
+       conn
+       [ Entity
+           { db_id = Some (Entity_id 200)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "score")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+               ; "db/index", One_value (Bool true)
+               ]
+           }
+       ]);
+  for i = 0 to fuzz_batch_count - 1 do
+    ignore (transact_conn conn (fuzz_generated_batch i))
+  done;
+  let db = db conn in
+  emit "fuzz.final.schema" (schema_json db);
+  emit "fuzz.final.datoms" (datoms_json (datoms db Eavt ()))
+
 let () =
   let schema = [ "name", unique_identity; "age", indexed; "friend", ref_attr; "aka", many ] in
   let conn = create_conn ~schema () in
@@ -217,8 +355,9 @@ let () =
     (normalize_error (fun () ->
        let error_conn = create_conn ~schema:[ "email", unique_value ] () in
        ignore
-         (transact_conn
-            error_conn
-            [ Entity { db_id = Some (Entity_id 1); attrs = [ "email", One_value (String "a@example.test") ] }
-            ; Entity { db_id = Some (Entity_id 2); attrs = [ "email", One_value (String "a@example.test") ] }
-            ])))
+       (transact_conn
+          error_conn
+          [ Entity { db_id = Some (Entity_id 1); attrs = [ "email", One_value (String "a@example.test") ] }
+          ; Entity { db_id = Some (Entity_id 2); attrs = [ "email", One_value (String "a@example.test") ] }
+            ])));
+  run_fuzz_parity ()
