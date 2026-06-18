@@ -33,7 +33,16 @@ let is_current_tx_alias = function
 
 let remember_current_tx_alias tempids tx alias =
   let tempids = ensure_current_tx_tempid tempids tx in
-  remember_tempid tempids alias tx
+  match List.assoc_opt alias tempids with
+  | Some existing when existing = tx -> tempids
+  | Some _ -> invalid_arg ("conflicting tempid: " ^ alias)
+  | None ->
+    let rec insert_after_current_tx_aliases prefix = function
+      | ((tempid, entity_id) as entry) :: rest when entity_id = tx && (tempid = "db/current-tx" || is_current_tx_alias tempid) ->
+        insert_after_current_tx_aliases (entry :: prefix) rest
+      | rest -> List.rev prefix @ ((alias, tx) :: rest)
+    in
+    insert_after_current_tx_aliases [] tempids
 
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
   | Entity_id e ->
@@ -686,24 +695,29 @@ let apply_tx context tx_ops db =
       let e, attrs, datoms, max_eid, tempids, tx_data =
         match entity.db_id with
         | Some (Temp_id tempid) ->
-          let attrs, max_eid, tempids = resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs in
-          (match context.entity_unique_identity db datoms attrs with
+          let probe_attrs, _, _ =
+            resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
+          in
+          (match context.entity_unique_identity db datoms probe_attrs with
            | Some target_e ->
-             let datoms, tempids, tx_data, attrs =
+             let datoms, tempids, tx_data =
                match List.assoc_opt tempid tempids with
                | Some old_e when old_e <> target_e ->
-                 let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
-                 let attrs =
-                   List.map
-                     (fun (attr, tx_value) -> attr, remap_resolved_tx_value context.resolve_context old_e target_e tx_value)
-                     attrs
-                 in
-                 datoms, tempids, tx_data, attrs
-               | _ -> datoms, tempids, tx_data, attrs
+                 merge_tempid_entity tempid old_e target_e datoms tempids tx_data
+               | Some _ -> datoms, tempids, tx_data
+               | None -> datoms, remember_tempid tempids tempid target_e, tx_data
              in
-             target_e, attrs, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+             let attrs, max_eid, tempids =
+               resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
+             in
+             target_e, attrs, datoms, max max_eid target_e, tempids, tx_data
            | None ->
-             let e, max_eid, tempids = resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid) in
+             let e, max_eid, tempids =
+               resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid)
+             in
+             let attrs, max_eid, tempids =
+               resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
+             in
              e, attrs, datoms, max_eid, tempids, tx_data)
         | Some entity_ref ->
           let e, max_eid, tempids = resolve_entity_ref context.resolve_context db datoms tx max_eid tempids entity_ref in

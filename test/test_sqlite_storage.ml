@@ -1248,8 +1248,8 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
                {:db/id 12 :email \"oleg@example.com\" :score 5}]");
         assert_equal_triples
           "SQLite live parsed transacts derive tuple attrs before persistence"
-          [ 1, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
-          ; 2, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
           ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
           ]
           (datoms (conn_db people_conn) Eavt ~a:"name+email" ());
@@ -1265,8 +1265,8 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
         in
         assert_equal_triples
           "SQLite parsed transacts persist derived tuple attrs"
-          [ 1, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
-          ; 2, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
           ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
           ]
           (datoms people Eavt ~a:"name+email" ());
@@ -1325,7 +1325,7 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           <> Query_scalar
                (Some
                   (Result_pull
-                     { pulled_id = 2
+                     { pulled_id = 1
                      ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
                      }))
         then failwith "SQLite restored db should support pull find specs with pattern inputs";
@@ -1335,11 +1335,11 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
             people
             "[:find (pull ?e pattern) .
               :in $ pattern
-              :where [(ground 2) ?e]]"
+              :where [(ground 1) ?e]]"
           <> Query_scalar
                (Some
                   (Result_pull
-                     { pulled_id = 2
+                     { pulled_id = 1
                      ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
                      }))
         then failwith "SQLite restored db should support symbolic pull pattern inputs";
@@ -1348,9 +1348,9 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))
             ; Result_value (Int 25)
             ; Result_pull
-                { pulled_id = 2
+                { pulled_id = 1
                 ; pulled_attrs =
-                    [ Keyword "db/id", Pulled_scalar (Int 2)
+                    [ Keyword "db/id", Pulled_scalar (Int 1)
                     ; Keyword "name", Pulled_scalar (String "Ivan")
                     ]
                 }
@@ -1358,9 +1358,9 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           ; [ Result_value (Ref_to (Lookup_ref ("name", String "Petr")))
             ; Result_value (Int 44)
             ; Result_pull
-                { pulled_id = 1
+                { pulled_id = 2
                 ; pulled_attrs =
-                    [ Keyword "db/id", Pulled_scalar (Int 1)
+                    [ Keyword "db/id", Pulled_scalar (Int 2)
                     ; Keyword "name", Pulled_scalar (String "Petr")
                     ]
                 }

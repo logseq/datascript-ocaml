@@ -134,6 +134,11 @@
  (libraries datascript))
 
 (executable
+ (name cross_runtime_ocaml)
+ (modules cross_runtime_ocaml)
+ (libraries datascript))
+
+(executable
  (name js_smoke)
  (modes js)
  (modules js_smoke)
@@ -144,3 +149,17 @@
  (deps js_smoke.bc.js)
  (action
   (run node %{dep:js_smoke.bc.js})))
+
+(rule
+ (alias runtest)
+ (deps
+  cross_runtime_parity_test.sh
+  cross_runtime_ocaml.exe
+  ../script/cross_runtime_parity.sh
+  ../script/cross_runtime_upstream.js)
+ (action
+  (run
+   bash
+   %{dep:cross_runtime_parity_test.sh}
+   %{dep:cross_runtime_ocaml.exe}
+   %{dep:../script/cross_runtime_upstream.js})))
