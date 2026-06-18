@@ -25,24 +25,38 @@ fi
 
 tmp_dir="$(mktemp -d)"
 cljs_runner_dir="$upstream_datascript_repo/target/datascript-ocaml-cross-runtime"
-trap 'rm -rf "$tmp_dir" "$cljs_runner_dir"' EXIT
+trap 'rm -rf "$tmp_dir"' EXIT
 
 upstream_out="$tmp_dir/upstream.jsonl"
 ocaml_out="$tmp_dir/ocaml.jsonl"
-cljs_out="$tmp_dir/upstream-fuzz.js"
+cljs_out="$cljs_runner_dir/upstream-fuzz.js"
+cljs_cache_key="$cljs_runner_dir/cache.key"
 mkdir -p "$cljs_runner_dir/cross_runtime"
 cp "$upstream_fuzz_runner" "$cljs_runner_dir/cross_runtime/upstream_fuzz.cljs"
+
+cljs_source_key="$(
+  {
+    shasum "$upstream_fuzz_runner"
+    (
+      cd "$upstream_datascript_repo"
+      git ls-files -z deps.edn src test/node_test_runner.cljs 2>/dev/null | xargs -0 shasum
+    )
+  } | shasum | awk '{print $1}'
+)"
 
 UPSTREAM_DATASCRIPT_JS="$upstream_datascript_js" node "$upstream_runner" > "$upstream_out"
 (
   cd "$upstream_datascript_repo"
-  clojure \
-    -Sdeps '{:paths ["src" "test" "target/datascript-ocaml-cross-runtime"]}' \
-    -M:cljs \
-    -m cljs.main \
-    --target node \
-    --output-to "$cljs_out" \
-    --compile cross-runtime.upstream-fuzz >/dev/null
+  if [ ! -f "$cljs_out" ] || [ ! -f "$cljs_cache_key" ] || [ "$(cat "$cljs_cache_key")" != "$cljs_source_key" ]; then
+    clojure \
+      -Sdeps '{:paths ["src" "test" "target/datascript-ocaml-cross-runtime"]}' \
+      -M:cljs \
+      -m cljs.main \
+      --target node \
+      --output-to "$cljs_out" \
+      --compile cross-runtime.upstream-fuzz >/dev/null
+    printf '%s\n' "$cljs_source_key" > "$cljs_cache_key"
+  fi
   node "$cljs_out"
 ) >> "$upstream_out"
 "$ocaml_runner" > "$ocaml_out"
