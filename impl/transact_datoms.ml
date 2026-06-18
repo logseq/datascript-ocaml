@@ -16,6 +16,7 @@ module Make (Context : sig
   val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   val normalize_value : value -> value
   val validate_entity_id : int -> entity_id
+  val max_allocatable_entity_id : int
   val visible_datoms : db -> datom list
 end) = struct
   open Context
@@ -263,7 +264,10 @@ end) = struct
     let e, attr, value = normalize_entity_attr_value db e attr value in
     add_user_datom_with_report db tx datoms (datom ~tx ~e ~a:attr ~v:value ())
   
-  let allocate_entity_id max_eid = validate_entity_id (max_eid + 1)
+  let allocate_entity_id max_eid =
+    if max_eid >= max_allocatable_entity_id then
+      invalid_arg ("next entity id would enter the transaction id range: " ^ string_of_int (max_eid + 1));
+    validate_entity_id (max_eid + 1)
   
   let rec coerce_tuple_lookup_value db datoms attr value =
     match schema_attr db attr, value with

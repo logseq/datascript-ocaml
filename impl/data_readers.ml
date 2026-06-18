@@ -7,6 +7,7 @@ type context =
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   ; validate_schema : schema -> schema
   ; empty_db : ?schema:schema -> unit -> db
+  ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   ; resolve_value_for_attr :
       db ->
@@ -344,7 +345,7 @@ let db_reader_datoms_of_edn_form context schema = function
     let raw_datoms = List.map (raw_reader_datom_of_edn_form context) forms in
     let max_eid =
       List.fold_left
-        (fun max_eid datom -> context.max_eid_in_value (max max_eid datom.e) datom.v)
+        (fun max_eid datom -> context.max_eid_in_value (context.max_eid_with_entity_id max_eid datom.e) datom.v)
         0
         raw_datoms
     in

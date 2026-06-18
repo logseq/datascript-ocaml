@@ -9,7 +9,9 @@ type core_context =
   }
 
 val max_entity_id : int
+val max_allocatable_entity_id : int
 val validate_entity_id : int -> entity_id
+val max_eid_with_entity_id : int -> entity_id -> entity_id
 val refresh_identity : core_context -> db -> db
 val max_eid_in_value : int -> value -> int
 val normalize_datom_for_schema : schema -> datom -> datom

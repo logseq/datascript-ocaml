@@ -7,6 +7,7 @@ module Db_impl = Db
 type conn = Conn.t
 
 let tx0 = Db_impl.tx0
+let max_allocatable_entity_id = Db_impl.max_allocatable_entity_id
 
 let next_db_uid =
   let counter = ref 0 in
@@ -182,6 +183,7 @@ module Transact_datoms_impl = Transact_datoms.Make (struct
   let datom = datom
   let normalize_value = normalize_value
   let validate_entity_id = validate_entity_id
+  let max_allocatable_entity_id = max_allocatable_entity_id
   let visible_datoms = visible_datoms
 end)
 
@@ -314,6 +316,7 @@ let transact_resolve_context : Transact_impl.context =
   ; is_reverse_ref
   ; reverse_ref
   ; cardinality
+  ; max_eid_with_entity_id = Db_impl.max_eid_with_entity_id
   ; max_eid_in_value
   }
 
@@ -547,6 +550,7 @@ let data_readers_context : Data_readers_impl.context =
   ; datom
   ; validate_schema
   ; empty_db = (fun ?(schema = []) () -> empty_db ~schema ())
+  ; max_eid_with_entity_id = Db_impl.max_eid_with_entity_id
   ; max_eid_in_value
   ; resolve_value_for_attr
   ; init_db = (fun ?(schema = []) datoms -> init_db ~schema datoms)

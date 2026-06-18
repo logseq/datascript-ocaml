@@ -1592,6 +1592,27 @@ let test_logseq_sqlite_import_preserves_clojure_collection_values () =
            db
            "[:find ?pins :where [?e :item/profile ?profile] [(get ?profile :prefs) ?prefs] [(get ?prefs :pins) ?pins]]"))
 
+let test_logseq_sqlite_datom_cache_ignores_uuid_values () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping Logseq SQLite datom cache test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let content =
+        {|["^ ","~:keys",[[95,"~:block/updated-at",1778143747441,536870913],[95,"~:block/uuid","~u00000002-2073-3937-9700-000000000000",536870913],[95,"~:db/ident","~:logseq.property.repeat/recur-unit.month",536870913],[95,"~:logseq.property/built-in?",true,536870913],[95,"~:logseq.property/created-from-property",90,536870913],[96,"~:block/closed-value-property",90,536870913],[96,"~:block/created-at",1778143747441,536870913],[96,"~:block/order","b0N",536870913],[96,"~:block/page",90,536870913],[96,"~:block/parent",90,536870913],[96,"~:block/title","Year",536870913],[96,"^1",1778143747441,536870913],[96,"^2","~u00000002-1520-4385-2400-000000000000",536870913],[96,"^3","~:logseq.property.repeat/recur-unit.year",536870913],[96,"^5",true,536870913],[96,"^6",90,536870913],[97,"^8",1778143747442,536870913],[97,"~:block/name","node repeats?",536870913]]]|}
+      in
+      ignore
+        (run_sql
+           db_path
+           ("create table kvs (addr INTEGER primary key, content TEXT, addresses JSON);\n"
+            ^ "insert into kvs (addr, content, addresses) values (2, "
+            ^ sql_quote content
+            ^ ", '[]');"));
+      let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path in
+      assert_equal_triples
+        "Logseq datom cache codes should not be shifted by UUID values"
+        [ 97, "block/created-at", Int 1778143747442 ]
+        (List.filter (fun datom -> datom.e = 97 && datom.v = Int 1778143747442) datoms))
+
 let default_logseq_graph_db =
   "/Users/tiensonqin/logseq/graphs/demo/db.sqlite"
 
@@ -1725,6 +1746,32 @@ let test_existing_logseq_graph_datoms_support_query_and_transact () =
             "[:find ?e :where [?e :block/name \"ocaml local graph smoke\"]]"));
     if before <> after then failwith "read-only datom loading should not modify the graph file"
 
+let assert_logseq_timestamp_attrs_are_not_refs schema =
+  List.iter
+    (fun attr ->
+      match List.assoc_opt attr schema with
+      | Some { value_type = Some RefType; _ } ->
+        failf "%s should not decode as a ref schema attr" attr
+      | Some _ -> ()
+      | None -> failf "Logseq graph schema should expose :%s" attr)
+    [ "block/created-at"; "block/updated-at" ]
+
+let test_existing_logseq_graph_full_datoms_support_query () =
+  if (not (sqlite3_available ())) || not (Sys.file_exists default_logseq_graph_db) then
+    prerr_endline "Skipping full Logseq graph datom query smoke: sqlite3 or demo graph is unavailable"
+  else
+    let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    assert_logseq_timestamp_attrs_are_not_refs schema;
+    let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
+    let db = init_db ~schema datoms in
+    assert_equal_int
+      "query decoded full Logseq graph datoms"
+      1
+      (List.length (q_string db "[:find ?e :where [?e :block/name \"root tag\"]]"));
+    if before <> after then failwith "read-only full datom loading should not modify the graph file"
+
 let query_for_datom datom =
   Printf.sprintf "[:find ?v :where [%d :%s ?v]]" datom.e datom.a
 
@@ -1787,9 +1834,11 @@ let () =
   test_sqlite_storage_backed_parsed_transact_and_query_pull_parity ();
   test_sqlite_storage_backed_query_input_maps_after_restore ();
   test_logseq_sqlite_import_preserves_clojure_collection_values ();
+  test_logseq_sqlite_datom_cache_ignores_uuid_values ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();
   test_all_existing_logseq_graph_schemas_support_query_and_transact ();
   test_existing_logseq_graph_datoms_support_query_and_transact ();
+  test_existing_logseq_graph_full_datoms_support_query ();
   test_all_existing_logseq_graph_datoms_support_query_and_transact ()

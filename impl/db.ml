@@ -11,19 +11,28 @@ type core_context =
   }
 
 let max_entity_id = 0x7fffffff
+let max_allocatable_entity_id = tx0 - 1
 
 let validate_entity_id entity_id =
   if entity_id < 0 then
     invalid_arg ("entity id must not be negative: " ^ string_of_int entity_id);
   if entity_id > max_entity_id then
-    invalid_arg ("highest supported entity id exceeded: " ^ string_of_int entity_id);
+    invalid_arg
+      ("Highest supported entity id is "
+       ^ string_of_int max_entity_id
+       ^ ", got "
+       ^ string_of_int entity_id);
   entity_id
+
+let max_eid_with_entity_id max_eid entity_id =
+  let entity_id = validate_entity_id entity_id in
+  if entity_id <= max_allocatable_entity_id then max max_eid entity_id else max_eid
 
 let refresh_identity context db =
   { db with db_uid = context.next_db_uid () }
 
 let rec max_eid_in_value max_eid = function
-  | Ref entity_id -> max max_eid (validate_entity_id entity_id)
+  | Ref entity_id -> max_eid_with_entity_id max_eid entity_id
   | List values | Vector values ->
     List.fold_left max_eid_in_value max_eid values
   | Map entries ->
@@ -197,7 +206,7 @@ let init_db context ?(schema = []) ?storage datoms =
   let datoms = List.map (normalize_datom_for_schema schema) datoms in
   let history_datoms = history_datoms_for_schema schema datoms in
   let max_eid =
-    List.fold_left (fun max_eid d -> max_eid_in_value (max max_eid (validate_entity_id d.e)) d.v) 0 datoms
+    List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0 datoms
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
   refresh_indexes

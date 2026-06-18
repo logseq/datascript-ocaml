@@ -7,6 +7,7 @@ type context =
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   ; validate_schema : schema -> schema
   ; empty_db : ?schema:schema -> unit -> db
+  ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   ; resolve_value_for_attr :
       db ->

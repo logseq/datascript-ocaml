@@ -1753,6 +1753,29 @@ let test_transact__test_db_ident_fn () =
 
 let test_transact__test_large_ids_issue_292 () =
   let too_large = 285_873_023_227_265 in
+  let max_supported_entity_id = 0x7fffffff in
+  let first_unsupported_entity_id = max_supported_entity_id + 1 in
+  let highest_supported_message value =
+    "Highest supported entity id is "
+    ^ string_of_int max_supported_entity_id
+    ^ ", got "
+    ^ string_of_int value
+  in
+  let db =
+    empty_db ()
+    |> db_with [ Add (Entity_id max_supported_entity_id, "name", String "Max") ]
+  in
+  assert_equal_triples
+    "Add accepts cljs max supported entity id"
+    [ max_supported_entity_id, "name", String "Max" ]
+    (datoms db Eavt ~e:max_supported_entity_id ~a:"name" ());
+  assert_raises_invalid_arg_message
+    "Add rejects entity ids above cljs max supported range"
+    (highest_supported_message first_unsupported_entity_id)
+    (fun () ->
+      ignore
+        (empty_db ()
+         |> db_with [ Add (Entity_id first_unsupported_entity_id, "name", String "Too large") ]));
   assert_raises_invalid_arg
     "Add rejects negative explicit entity ids"
     (fun () -> ignore (empty_db () |> db_with [ Add (Entity_id (-1), "name", String "Negative") ]));
@@ -1762,21 +1785,66 @@ let test_transact__test_large_ids_issue_292 () =
       ignore
         (empty_db ~schema:[ "ref", ref_attr ] ()
          |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "ref", One_value (Ref (-1)) ] } ]));
-  assert_raises_invalid_arg
+  assert_raises_invalid_arg_message
     "Add rejects entity ids above the supported range"
+    (highest_supported_message too_large)
     (fun () -> ignore (empty_db () |> db_with [ Add (Entity_id too_large, "name", String "Valerii") ]));
-  assert_raises_invalid_arg
+  assert_raises_invalid_arg_message
     "Entity maps reject entity ids above the supported range"
+    (highest_supported_message too_large)
     (fun () ->
       ignore
         (empty_db ()
          |> db_with [ Entity { db_id = Some (Entity_id too_large); attrs = [ "name", One_value (String "Valerii") ] } ]));
-  assert_raises_invalid_arg
+  assert_raises_invalid_arg_message
     "Ref values reject entity ids above the supported range"
+    (highest_supported_message too_large)
     (fun () ->
       ignore
         (empty_db ~schema:[ "ref", ref_attr ] ()
          |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "ref", One_value (Ref too_large) ] } ]))
+
+let test_transact__test_tx_entity_ids_do_not_advance_max_eid () =
+  let tx_entity_id = tx0 + 1 in
+  let db =
+    empty_db ()
+    |> db_with [ Add (Entity_id tx_entity_id, "tx-prop", String "metadata") ]
+  in
+  assert_equal_int
+    "explicit tx entity ids are valid but should not advance max_eid"
+    0
+    db.max_eid;
+  let db =
+    db
+    |> db_with [ Entity { db_id = Some (Temp_id "next"); attrs = [ "name", One_value (String "Ivan") ] } ]
+  in
+  assert_equal_int "tempids should still allocate below tx0" 1 db.max_eid;
+  assert_equal_triples
+    "tempid allocation should start from the ordinary entity range"
+    [ 1, "name", String "Ivan" ]
+    (datoms db Eavt ~e:1 ~a:"name" ())
+
+let test_init_db__test_tx_entity_ids_do_not_advance_max_eid () =
+  let tx_entity_id = tx0 + 1 in
+  let db =
+    init_db
+      [ datom ~tx:tx_entity_id ~e:tx_entity_id ~a:"tx-prop" ~v:(String "metadata") ()
+      ; datom ~tx:tx_entity_id ~e:1 ~a:"created-at" ~v:(Ref tx_entity_id) ()
+      ]
+  in
+  assert_equal_int
+    "init_db should ignore tx entity ids when restoring max_eid"
+    1
+    db.max_eid
+
+let test_transact__test_tempid_allocation_stops_before_tx0 () =
+  let db = { (empty_db ()) with max_eid = tx0 - 1 } in
+  assert_raises_invalid_arg
+    "tempid allocation should not enter the transaction id range"
+    (fun () ->
+      ignore
+        (db
+         |> db_with [ Entity { db_id = Some (Temp_id "next"); attrs = [ "name", One_value (String "Ivan") ] } ]))
 
 let test_db_with_allocates_tempids () =
   let db =
@@ -16979,6 +17047,9 @@ let () =
   test_transact__test_db_fn_returning_entity_without_db_id_issue_474 ();
   test_transact__test_db_ident_fn ();
   test_transact__test_large_ids_issue_292 ();
+  test_transact__test_tx_entity_ids_do_not_advance_max_eid ();
+  test_init_db__test_tx_entity_ids_do_not_advance_max_eid ();
+  test_transact__test_tempid_allocation_stops_before_tx0 ();
   test_db_with_allocates_tempids ();
   test_transact__test_resolve_eid ();
   test_transact__test_resolve_eid_refs ();

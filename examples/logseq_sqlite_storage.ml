@@ -354,7 +354,10 @@ let logseq_schema_attr_of_transit = function
       props
   | _ -> logseq_schema_default_attr
 
-type shallow_reader = { mutable shallow_cache : string array }
+type shallow_reader =
+  { mutable shallow_cache : string array
+  ; shallow_cache_all_strings : bool
+  }
 
 let shallow_cache_code_digits = 44
 let shallow_base_char_code = Char.code '0'
@@ -367,14 +370,20 @@ let shallow_cache_code_to_index text =
     + (Char.code text.[2] - shallow_base_char_code)
   | _ -> -1
 
-let shallow_cacheable text = String.length text > 3
+let shallow_cacheable reader text =
+  String.length text > 3
+  && (reader.shallow_cache_all_strings
+      || starts_with "~:" text
+      || starts_with "~$" text
+      || starts_with "~#" text)
 
 let shallow_is_cache_code text =
   String.length text >= 2 && String.length text <= 3 && text.[0] = '^'
   && not (String.equal text "^ ")
 
 let shallow_remember reader text =
-  if shallow_cacheable text then reader.shallow_cache <- Array.append reader.shallow_cache [| text |]
+  if shallow_cacheable reader text then
+    reader.shallow_cache <- Array.append reader.shallow_cache [| text |]
 
 let shallow_decode_string reader text =
   if shallow_is_cache_code text then
@@ -462,7 +471,7 @@ let shallow_schema_attr reader = function
     logseq_schema_default_attr
 
 let shallow_schema_of_root_content content =
-  let reader = { shallow_cache = [||] } in
+  let reader = { shallow_cache = [||]; shallow_cache_all_strings = true } in
   match Yojson.Safe.from_string content with
   | `List (`String "^ " :: entries) ->
     shallow_pairs entries
@@ -603,7 +612,7 @@ let logseq_datom_of_shallow_json reader = function
   | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
 
 let logseq_datoms_of_row content =
-  let reader = { shallow_cache = [||] } in
+  let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
   match Yojson.Safe.from_string content with
   | `List (`String "^ " :: entries) ->
     shallow_pairs entries

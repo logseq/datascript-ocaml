@@ -12,6 +12,7 @@ type context =
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
+  ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   }
 

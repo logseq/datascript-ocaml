@@ -34,8 +34,8 @@ Configuration:
 
 ```text
 BENCH_SIZE=200
-BENCH_WARMUP_MS=100
-BENCH_SAMPLE_MS=300
+BENCH_WARMUP_MS=200
+BENCH_SAMPLE_MS=500
 BENCH_SAMPLES=5
 ```
 
@@ -43,12 +43,12 @@ Lower is better.
 
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 2.24 | 5.10 | 16.01 |
-| add-one-by-one | 1.58 | 4.23 | 14.55 |
-| datoms-name | 0.00089 | 0.00385 | 0.00426 |
-| query-name-age | 0.01522 | 0.03586 | 0.06415 |
-| query-salary-pred | 0.04021 | 0.09810 | 0.15102 |
-| pull-one | 0.00167 | 0.00446 | 0.01055 |
+| add-all | 2.23 | 5.13 | 14.27 |
+| add-one-by-one | 1.56 | 4.20 | 14.31 |
+| datoms-name | 0.00085 | 0.00384 | 0.00429 |
+| query-name-age | 0.01490 | 0.03514 | 0.06272 |
+| query-salary-pred | 0.04028 | 0.09610 | 0.15142 |
+| pull-one | 0.00164 | 0.00443 | 0.01035 |
 
 Current status:
 

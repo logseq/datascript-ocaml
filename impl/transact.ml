@@ -12,6 +12,7 @@ type context =
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
+  ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   }
 
@@ -47,11 +48,11 @@ let remember_current_tx_alias tempids tx alias =
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
   | Entity_id e ->
     let e = context.validate_entity_id e in
-    e, max max_eid e, tempids
+    e, context.max_eid_with_entity_id max_eid e, tempids
   | CurrentTx -> tx, max_eid, remember_current_tx tempids tx
   | Ident ident ->
     (match context.entid_in_datoms db datoms context.ident_attr (Keyword ident) with
-     | Some e -> e, max max_eid e, tempids
+     | Some e -> e, context.max_eid_with_entity_id max_eid e, tempids
      | None -> invalid_arg "ident did not resolve")
   | Temp_id tempid ->
     if is_current_tx_alias tempid then
@@ -61,18 +62,18 @@ let rec resolve_entity_ref context db datoms tx max_eid tempids = function
        | Some e -> e, max_eid, tempids
        | None ->
          let e = context.allocate_entity_id max_eid in
-         e, e, remember_tempid tempids tempid e)
+         e, context.max_eid_with_entity_id max_eid e, remember_tempid tempids tempid e)
   | Lookup_ref (attr, value) ->
     let value, max_eid, tempids = resolve_value context db datoms tx max_eid tempids value in
     (match context.lookup_ref_entity_id_in_datoms ~strict_missing:true db datoms attr value with
-     | Some e -> e, max max_eid e, tempids
+     | Some e -> e, context.max_eid_with_entity_id max_eid e, tempids
      | None -> invalid_arg (context.unresolved_lookup_ref_message attr value))
 
 and resolve_value context db datoms tx max_eid tempids = function
   | TxRef -> Ref tx, max_eid, remember_current_tx tempids tx
   | Ref e ->
     let e = context.validate_entity_id e in
-    Ref e, max max_eid e, tempids
+    Ref e, context.max_eid_with_entity_id max_eid e, tempids
   | Ref_to entity_ref ->
     let e, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
     Ref e, max_eid, tempids
@@ -187,7 +188,7 @@ let resolve_optional_existing_entity_ref context db datoms tx max_eid tempids = 
   | Lookup_ref (attr, value) ->
     let value, max_eid, tempids = resolve_value context db datoms tx max_eid tempids value in
     (match context.lookup_ref_entity_id_in_datoms ~strict_missing:false db datoms attr value with
-     | Some e -> Some e, max max_eid e, tempids
+     | Some e -> Some e, context.max_eid_with_entity_id max_eid e, tempids
      | None -> None, max_eid, tempids)
   | entity_ref ->
     let e, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
@@ -344,11 +345,11 @@ let apply_tx context tx_ops db =
          datoms
   in
   let rec max_explicit_entity_ref max_eid = function
-    | Entity_id e -> max max_eid (context.resolve_context.validate_entity_id e)
+    | Entity_id e -> context.resolve_context.max_eid_with_entity_id max_eid e
     | Lookup_ref (_, value) -> max_explicit_value max_eid value
     | _ -> max_eid
   and max_explicit_value max_eid = function
-    | Ref entity_id -> max max_eid (context.resolve_context.validate_entity_id entity_id)
+    | Ref entity_id -> context.resolve_context.max_eid_with_entity_id max_eid entity_id
     | Ref_to entity_ref -> max_explicit_entity_ref max_eid entity_ref
     | List values | Vector values ->
       List.fold_left max_explicit_value max_eid values
@@ -400,7 +401,7 @@ let apply_tx context tx_ops db =
       in
       max_explicit_value max_eid new_value
     | Entity entity -> max_explicit_tx_entity max_eid entity
-    | Raw_datom d -> context.resolve_context.max_eid_in_value (max max_eid (context.resolve_context.validate_entity_id d.e)) d.v
+    | Raw_datom d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v
     | InstallTxFn (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
     | CallIdent (entity_ref, args) ->
       let max_eid = max_explicit_entity_ref max_eid entity_ref in
@@ -537,9 +538,9 @@ let apply_tx context tx_ops db =
       match context.resolve_context.entid_in_datoms db datoms attr value, List.assoc_opt tempid tempids with
       | Some target_e, Some old_e when old_e <> target_e ->
         let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
-        target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+        target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | Some target_e, _ ->
-        target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+        target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | None, _ ->
         let e, max_eid, tempids = resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid) in
         e, datoms, max_eid, tempids, tx_data
@@ -548,7 +549,7 @@ let apply_tx context tx_ops db =
       match tuple_identity_target_for_add datoms e attr value with
       | Some target_e ->
         let datoms, tempids, tx_data = merge_tempid_entity tempid e target_e datoms tempids tx_data in
-        target_e, datoms, max max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+        target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | None -> e, datoms, max_eid, tempids, tx_data
   in
   let is_forward_nested_attr = function
@@ -578,7 +579,7 @@ let apply_tx context tx_ops db =
     match entity_ref with
     | Ident ident ->
       (match context.resolve_context.entid_in_datoms (current_db ()) datoms context.resolve_context.ident_attr (Keyword ident) with
-       | Some e -> e, max max_eid e, tempids
+       | Some e -> e, context.resolve_context.max_eid_with_entity_id max_eid e, tempids
        | None -> invalid_arg ("Cannot find entity for transaction fn: " ^ ident))
     | _ ->
       resolve_entity_ref context.resolve_context (current_db ()) datoms tx max_eid tempids entity_ref
@@ -655,13 +656,13 @@ let apply_tx context tx_ops db =
       max_tx_seen := max !max_tx_seen d.tx;
       if d.added then
         let datoms, datom_tx_data = context.add_active_datom_with_report ~allow_tuple:true db d.tx datoms d in
-        datoms, context.resolve_context.max_eid_in_value (max max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
+        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
       else
         begin
         if d.a = "db/ident" then note_schema_ident_retraction datoms d.e (Some d.v);
         note_schema_field_retraction datoms d.e d.a;
         let datoms, datom_tx_data = context.retract_active_datom_with_report d.tx datoms d.e d.a (Some d.v) in
-        datoms, context.resolve_context.max_eid_in_value (max max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
+        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
         end
     | Call f ->
       let db_for_call = context.with_db_datoms { db with max_eid } datoms in
@@ -711,7 +712,7 @@ let apply_tx context tx_ops db =
              let attrs, max_eid, tempids =
                resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
              in
-             target_e, attrs, datoms, max max_eid target_e, tempids, tx_data
+             target_e, attrs, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, tempids, tx_data
            | None ->
              let e, max_eid, tempids =
                resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid)
@@ -729,7 +730,7 @@ let apply_tx context tx_ops db =
           let e = context.resolve_context.allocate_entity_id max_eid in
           let attrs, max_eid, tempids = resolve_entity_attrs context.resolve_context db datoms tx e tempids entity.attrs in
           (match context.entity_unique_identity db datoms attrs with
-           | Some e -> e, attrs, datoms, max max_eid e, tempids, tx_data
+           | Some e -> e, attrs, datoms, context.resolve_context.max_eid_with_entity_id max_eid e, tempids, tx_data
            | None -> e, attrs, datoms, max_eid, tempids, tx_data)
       in
       let entity_tempids =
@@ -894,10 +895,10 @@ let apply_tx context tx_ops db =
       let attrs = List.rev attrs in
       let e, max_eid =
         match context.entity_unique_identity db datoms attrs with
-        | Some e -> e, max max_eid e
+        | Some e -> e, context.resolve_context.max_eid_with_entity_id max_eid e
         | None ->
           let e = context.resolve_context.allocate_entity_id max_eid in
-          e, e
+          e, context.resolve_context.max_eid_with_entity_id max_eid e
       in
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data) (attr, tx_value) =
         match tx_value with
@@ -1050,7 +1051,7 @@ let apply_tx context tx_ops db =
                     values
                 | One_entity _ | Many_entities _ -> [])
             in
-            Some (List.rev_append entity_facts facts_rev, max max_eid entity_id)
+            Some (List.rev_append entity_facts facts_rev, context.resolve_context.max_eid_with_entity_id max_eid entity_id)
         | _ -> None
       in
       let rec build state = function
@@ -1073,7 +1074,7 @@ let apply_tx context tx_ops db =
            in
            let max_eid =
              List.fold_left
-               (fun max_eid d -> context.resolve_context.max_eid_in_value (max max_eid d.e) d.v)
+               (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
                max_eid
                facts
            in
