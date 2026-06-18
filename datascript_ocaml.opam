@@ -3,7 +3,7 @@ synopsis: "An OCaml 5 rewrite of DataScript"
 description: "A top-down OCaml 5 rewrite of DataScript."
 maintainer: "rcmerci"
 authors: ["rcmerci"]
-license: "EPL-1.0"
+license: "MIT"
 depends: [
   "ocaml" {>= "5.2.1"}
   "dune" {>= "3.17"}
