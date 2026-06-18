@@ -464,90 +464,32 @@ let tempid ?part ?value () =
 
 let resolve_tempid ?db:_ tempids tempid = List.assoc_opt tempid tempids
 
-let is_avet_accessible db attr =
-  is_ref_attr db attr
-  || is_unique db attr
-  || is_indexed db attr
+module Db_access_impl = Db_access.Make (struct
+  let is_ref_attr = is_ref_attr
+  let is_unique = is_unique
+  let is_indexed = is_indexed
+  let entid = entid
+  let ident_attr = ident_attr
+  let lookup_ref_entity_id ?strict_missing db attr value = lookup_ref_entity_id ?strict_missing db attr value
+  let normalize_value = normalize_value
+  let unresolved_entity_ref_message = unresolved_entity_ref_message
+  let ref_attr_for_value_resolution = ref_attr_for_value_resolution
+  let entity_ref_of_ref_attr_value = entity_ref_of_ref_attr_value
+  let compare_value = compare_value
+  let first_nonzero = first_nonzero
+  let validate_entity_id = validate_entity_id
+end)
 
-let rec resolve_index_entity_ref db = function
-  | Entity_id entity_id -> Some entity_id
-  | Ident ident -> entid db ident_attr (Keyword ident)
-  | Lookup_ref (attr, value) ->
-    let value = resolve_index_value db value in
-    lookup_ref_entity_id ~strict_missing:true db attr value
-  | CurrentTx | Temp_id _ -> None
-
-and resolve_index_value db = function
-  | Ref_to entity_ref ->
-    (match resolve_index_entity_ref db entity_ref with
-     | Some entity_id -> Ref entity_id
-     | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
-  | List values ->
-    normalize_value (List (List.map (resolve_index_value db) values))
-  | Vector values ->
-    normalize_value (Vector (List.map (resolve_index_value db) values))
-  | Map entries ->
-    normalize_value
-      (Map
-         (List.map
-            (fun (key, value) ->
-              resolve_index_value db key, resolve_index_value db value)
-            entries))
-  | Set values ->
-    normalize_value (Set (List.map (resolve_index_value db) values))
-  | Tuple values ->
-    normalize_value
-      (Tuple
-         (List.map
-            (function
-              | None -> None
-              | Some value -> Some (resolve_index_value db value))
-            values))
-  | value -> normalize_value value
-
-let entid_ref db = function
-  | Entity_id entity_id -> Some (validate_entity_id entity_id)
-  | Ident ident -> entid db ident_attr (Keyword ident)
-  | Lookup_ref (attr, value) -> lookup_ref_entity_id db attr (resolve_index_value db value)
-  | CurrentTx | Temp_id _ -> invalid_arg "transaction-local entity refs cannot be resolved from a db"
-
-let resolve_index_value_option db = Option.map (resolve_index_value db)
-
-let resolve_index_value_for_attr db attr value =
-  match ref_attr_for_value_resolution db attr, entity_ref_of_ref_attr_value value with
-  | Some _, Some entity_ref ->
-    (match resolve_index_entity_ref db entity_ref with
-     | Some entity_id -> Ref entity_id
-     | None -> invalid_arg (unresolved_entity_ref_message entity_ref))
-  | _ -> resolve_index_value db value
-
-let resolve_index_value_option_for_attr db attr = Option.map (resolve_index_value_for_attr db attr)
-
-let resolve_index_value_option_for_optional_attr db attr value =
-  match attr with
-  | Some attr -> resolve_index_value_option_for_attr db attr value
-  | None -> resolve_index_value_option db value
-
-let resolve_index_entity_ref_exn db entity_ref =
-  match resolve_index_entity_ref db entity_ref with
-  | Some entity_id -> entity_id
-  | None -> invalid_arg (unresolved_entity_ref_message entity_ref)
-
-let db_index_context : Db_impl.index_context =
-  { is_avet_accessible
-  ; resolve_entity_ref = resolve_index_entity_ref_exn
-  ; resolve_value_for_optional_attr =
-      (fun db attr value -> resolve_index_value_option_for_optional_attr db attr (Some value) |> Option.get)
-  ; resolve_value_for_attr = resolve_index_value_for_attr
-  ; compare_value
-  ; first_nonzero
-  }
-
-let datoms db index ?e ?a ?v ?tx () =
-  Db_impl.datoms db_index_context db index ?e ?a ?v ?tx ()
-
-let datoms_ref db index ?e ?a ?v ?tx () =
-  Db_impl.datoms_ref db_index_context db index ?e ?a ?v ?tx ()
+let entid_ref = Db_access_impl.entid_ref
+let datoms = Db_access_impl.datoms
+let datoms_ref = Db_access_impl.datoms_ref
+let find_datom = Db_access_impl.find_datom
+let find_datom_ref = Db_access_impl.find_datom_ref
+let seek_datoms = Db_access_impl.seek_datoms
+let seek_datoms_ref = Db_access_impl.seek_datoms_ref
+let rseek_datoms = Db_access_impl.rseek_datoms
+let rseek_datoms_ref = Db_access_impl.rseek_datoms_ref
+let index_range = Db_access_impl.index_range
 
 let diff = Db_impl.diff
 
@@ -566,27 +508,6 @@ let reset_conn ?(tx_meta = []) conn db =
   Conn.reset context ~tx_meta conn db
 
 let reset_conn_bang ?tx_meta conn db = reset_conn ?tx_meta conn db
-
-let find_datom db index ?e ?a ?v ?tx () =
-  Db_impl.find_datom db_index_context db index ?e ?a ?v ?tx ()
-
-let find_datom_ref db index ?e ?a ?v ?tx () =
-  Db_impl.find_datom_ref db_index_context db index ?e ?a ?v ?tx ()
-
-let seek_datoms db index ?e ?a ?v ?tx () =
-  Db_impl.seek_datoms db_index_context db index ?e ?a ?v ?tx ()
-
-let seek_datoms_ref db index ?e ?a ?v ?tx () =
-  Db_impl.seek_datoms_ref db_index_context db index ?e ?a ?v ?tx ()
-
-let rseek_datoms db index ?e ?a ?v ?tx () =
-  Db_impl.rseek_datoms db_index_context db index ?e ?a ?v ?tx ()
-
-let rseek_datoms_ref db index ?e ?a ?v ?tx () =
-  Db_impl.rseek_datoms_ref db_index_context db index ?e ?a ?v ?tx ()
-
-let index_range db attr ?start ?stop () =
-  Db_impl.index_range db_index_context db attr ?start ?stop ()
 
 let rec entity_id_of_ref db = function
   | Entity_id entity_id -> Some entity_id
