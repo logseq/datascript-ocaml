@@ -979,9 +979,6 @@ let parse_binding = Parser_impl.parse_binding
 let parse_in = Parser_impl.parse_in
 let parse_with = Parser_impl.parse_with
 
-let rule_names = Query.rule_names
-let resolve_dynamic_rule_clause = Query.resolve_dynamic_rule_clause
-let resolve_dynamic_rule = Query.resolve_dynamic_rule
 
 let parse_query_return form = Parser_impl.parse_query_return parser_query_context form
 let parse_query_return_map form = Parser_impl.parse_query_return_map parser_query_context form
@@ -1095,48 +1092,25 @@ module Pull_api = struct
   let pull_many_string = pull_many_string
 end
 
-let query_rules_and_where query input_rules =
-  let rules = validate_rule_arities (query.rules @ input_rules) in
-  let names = rule_names rules in
-  List.map (resolve_dynamic_rule names) rules, List.map (resolve_dynamic_rule_clause names) query.where
-
-let q_sources_raw ?(inputs = []) db sources query =
-  let callables, input_bindings, input_rules = initial_query_context db query inputs in
-  let rules, where = query_rules_and_where query input_rules in
-  let bindings = eval_clauses ~callables db sources rules input_bindings where in
-  if has_aggregates query.find then
-    if query.with_vars = [] then
-      aggregate_rows ~callables db sources bindings query.find
-    else
-      aggregate_rows_with ~callables db sources bindings query.find query.with_vars
-  else if query.with_vars <> [] then
-    non_aggregate_rows_with db sources bindings query.find query.with_vars
-  else
-    bindings
-    |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-    |> List.sort_uniq compare
-
-let q_with_raw ?(inputs = []) db with_vars query =
-  let callables, input_bindings, input_rules = initial_query_context db query inputs in
-  let rules, where = query_rules_and_where query input_rules in
-  let bindings = eval_clauses ~callables db [] rules input_bindings where in
-  let with_vars = query.with_vars @ with_vars |> List.sort_uniq compare in
-  if has_aggregates query.find then
-    aggregate_rows_with ~callables db [] bindings query.find with_vars
-  else
-    non_aggregate_rows_with db [] bindings query.find with_vars
+module Query_api_impl = Query_api.Make (struct
+  let empty_db () = empty_db ()
+  let validate_rule_arities = validate_rule_arities
+  let initial_query_context = initial_query_context
+  let eval_clauses = eval_clauses
+  let has_aggregates = has_aggregates
+  let aggregate_rows = aggregate_rows
+  let aggregate_rows_with = aggregate_rows_with
+  let non_aggregate_rows_with = non_aggregate_rows_with
+  let collect_find_specs = collect_find_specs
+  let parse_query_string_with_pull_context = parse_query_string_with_pull_context
+  let parse_query_return_string_with_pull_context = parse_query_return_string_with_pull_context
+  let parse_query_return_map_string_with_pull_context = parse_query_return_map_string_with_pull_context
+  let compare_value = compare_value
+end)
 
 module Query_impl = Query
 
-let query_context : Query_impl.context =
-  { empty_db = (fun () -> empty_db ())
-  ; q_sources = q_sources_raw
-  ; q_with = q_with_raw
-  ; parse_query_string_with_pull_context
-  ; parse_query_return_string_with_pull_context
-  ; parse_query_return_map_string_with_pull_context
-  ; compare_value
-  }
+let query_context = Query_api_impl.query_context
 
 module Query = struct
   type query_callables = Query_impl.query_callables =
