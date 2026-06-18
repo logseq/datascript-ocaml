@@ -9,37 +9,34 @@ let datoms_seq = datoms
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
-let read_all channel =
-  let buffer = Buffer.create 256 in
-  (try
-     while true do
-       Buffer.add_string buffer (input_line channel);
-       Buffer.add_char buffer '\n'
-     done
-   with
-   | End_of_file -> ());
-  Buffer.contents buffer
+let sqlite3_available () = true
 
-let sqlite3_available () =
-  match Sys.command "command -v sqlite3 >/dev/null 2>&1" with
-  | 0 -> true
-  | _ -> false
+let with_sqlite db_path f =
+  let db = Sqlite3.db_open db_path in
+  Fun.protect
+    ~finally:(fun () ->
+      if not (Sqlite3.db_close db) then failf "failed to close SQLite database: %s" db_path)
+    (fun () -> f db)
+
+let check_sql db sql rc =
+  if not (Sqlite3.Rc.is_success rc) then
+    failf "SQLite statement failed with %s for %S: %s" (Sqlite3.Rc.to_string rc) sql (Sqlite3.errmsg db)
 
 let run_sql db_path sql =
-  let argv =
-    [| "sqlite3"; "-batch"; "-noheader"; "-list"; "-separator"; "\t"; db_path |]
-  in
-  let stdout, stdin, stderr = Unix.open_process_args_full "sqlite3" argv [||] in
-  output_string stdin sql;
-  if sql = "" || sql.[String.length sql - 1] <> '\n' then output_char stdin '\n';
-  close_out stdin;
-  let output = read_all stdout in
-  let error = read_all stderr in
-  match Unix.close_process_full (stdout, stdin, stderr) with
-  | Unix.WEXITED 0 -> output
-  | Unix.WEXITED code -> failf "sqlite3 exited with %d: %s" code error
-  | Unix.WSIGNALED signal -> failf "sqlite3 killed by signal %d: %s" signal error
-  | Unix.WSTOPPED signal -> failf "sqlite3 stopped by signal %d: %s" signal error
+  with_sqlite db_path (fun db -> check_sql db sql (Sqlite3.exec db sql))
+
+let select_single_string db_path sql =
+  with_sqlite db_path (fun db ->
+    let stmt = Sqlite3.prepare db sql in
+    Fun.protect
+      ~finally:(fun () -> check_sql db sql (Sqlite3.finalize stmt))
+      (fun () ->
+        match Sqlite3.step stmt with
+        | Sqlite3.Rc.ROW -> Some (Sqlite3.column_text stmt 0)
+        | Sqlite3.Rc.DONE -> None
+        | rc ->
+          check_sql db sql rc;
+          None))
 
 let sql_quote text =
   "'" ^ String.concat "''" (String.split_on_char '\'' text) ^ "'"
@@ -57,6 +54,17 @@ let with_temp_db f =
       if Sys.file_exists db_path then Sys.remove db_path;
       if Sys.file_exists dir then Unix.rmdir dir)
     (fun () -> f db_path)
+
+let without_path f =
+  let old_path = Sys.getenv_opt "PATH" in
+  Fun.protect
+    ~finally:(fun () ->
+      match old_path with
+      | Some path -> Unix.putenv "PATH" path
+      | None -> Unix.putenv "PATH" "")
+    (fun () ->
+      Unix.putenv "PATH" "";
+      f ())
 
 let assert_equal label expected actual =
   if expected <> actual then failf "%s: expected %S, got %S" label expected actual
@@ -176,8 +184,12 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
       store ~storage db;
       assert_equal
         "kvs schema"
-        "CREATE TABLE kvs (addr INTEGER primary key, content TEXT, addresses JSON);\n"
-        (run_sql db_path ".schema kvs");
+        "CREATE TABLE kvs (addr INTEGER primary key, content TEXT, addresses JSON)"
+        (Option.value
+           ~default:""
+           (select_single_string
+              db_path
+              "select sql from sqlite_master where type = 'table' and name = 'kvs';"));
       assert_equal_int "row count" 2 (Sqlite_storage.inspect db_path).row_count;
       assert_equal
         "storage addresses"
@@ -189,6 +201,16 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
         let names = datoms restored Avet ~a:"name" () in
         if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
+
+let test_sqlite_storage_does_not_require_sqlite3_binary () =
+  with_temp_db (fun db_path ->
+    without_path (fun () ->
+      let storage = Sqlite_storage.storage db_path in
+      storage.storage_store [ "2", Storage_tail [] ] [];
+      match storage.storage_restore "2" with
+      | Some (Storage_tail []) -> ()
+      | Some _ -> failwith "SQLite storage should keep payloads without sqlite3 binary"
+      | None -> failwith "SQLite storage should not require sqlite3 binary"))
 
 let test_sqlite_storage_store_ignores_delete_addresses () =
   if not (sqlite3_available ()) then
@@ -1836,6 +1858,7 @@ let test_all_existing_logseq_graph_datoms_support_query_and_transact () =
 let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
+  test_sqlite_storage_does_not_require_sqlite3_binary ();
   test_sqlite_storage_store_ignores_delete_addresses ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();

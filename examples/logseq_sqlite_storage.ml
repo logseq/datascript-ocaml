@@ -21,17 +21,6 @@ let kvs_schema =
 
 let ocaml_payload_prefix = "ocaml-marshal-hex:"
 
-let read_all channel =
-  let buffer = Buffer.create 256 in
-  (try
-     while true do
-       Buffer.add_string buffer (input_line channel);
-       Buffer.add_char buffer '\n'
-     done
-   with
-   | End_of_file -> ());
-  Buffer.contents buffer
-
 let uri_hex_digit value =
   Char.chr (if value < 10 then Char.code '0' + value else Char.code 'A' + value - 10)
 
@@ -53,27 +42,42 @@ let uri_escape_path path =
 let readonly_uri db_path =
   "file:" ^ uri_escape_path db_path ^ "?mode=ro&immutable=1"
 
-let run_sql ?(read_only = false) db_path sql =
-  let sqlite_db_arg = if read_only then readonly_uri db_path else db_path in
-  let argv =
-    Array.of_list
-      ([ "sqlite3"; "-batch"; "-noheader"; "-list"; "-separator"; "\t" ]
-       @ [ sqlite_db_arg ])
+let with_db ?(read_only = false) db_path f =
+  let db =
+    if read_only then Sqlite3.db_open ~uri:true (readonly_uri db_path) else Sqlite3.db_open db_path
   in
-  let stdout, stdin, stderr = Unix.open_process_args_full "sqlite3" argv [||] in
-  output_string stdin sql;
-  if sql = "" || sql.[String.length sql - 1] <> '\n' then output_char stdin '\n';
-  close_out stdin;
-  let output = read_all stdout in
-  let error = read_all stderr in
-  match Unix.close_process_full (stdout, stdin, stderr) with
-  | Unix.WEXITED 0 -> output
-  | Unix.WEXITED code ->
-    invalid_arg (Printf.sprintf "sqlite3 exited with %d while reading %s: %s" code db_path error)
-  | Unix.WSIGNALED signal ->
-    invalid_arg (Printf.sprintf "sqlite3 killed by signal %d while reading %s: %s" signal db_path error)
-  | Unix.WSTOPPED signal ->
-    invalid_arg (Printf.sprintf "sqlite3 stopped by signal %d while reading %s: %s" signal db_path error)
+  Fun.protect
+    ~finally:(fun () ->
+      if not (Sqlite3.db_close db) then invalid_arg ("failed to close SQLite database: " ^ db_path))
+    (fun () -> f db)
+
+let check_sql db sql rc =
+  if not (Sqlite3.Rc.is_success rc) then
+    invalid_arg
+      (Printf.sprintf
+         "SQLite statement failed with %s while reading %s: %s"
+         (Sqlite3.Rc.to_string rc)
+         sql
+         (Sqlite3.errmsg db))
+
+let exec_sql ?(read_only = false) db_path sql =
+  with_db ~read_only db_path (fun db -> check_sql db sql (Sqlite3.exec db sql))
+
+let select_map ?(read_only = false) db_path sql f =
+  with_db ~read_only db_path (fun db ->
+    let stmt = Sqlite3.prepare db sql in
+    Fun.protect
+      ~finally:(fun () -> check_sql db sql (Sqlite3.finalize stmt))
+      (fun () ->
+        let rec loop acc =
+          match Sqlite3.step stmt with
+          | Sqlite3.Rc.ROW -> loop (f stmt :: acc)
+          | Sqlite3.Rc.DONE -> List.rev acc
+          | rc ->
+            check_sql db sql rc;
+            List.rev acc
+        in
+        loop []))
 
 let sql_quote value =
   "'" ^ String.concat "''" (String.split_on_char '\'' value) ^ "'"
@@ -137,16 +141,16 @@ let storage_address_of_sqlite_addr = function
   | address -> string_of_int address
 
 let create_kvs_table db_path =
-  ignore (run_sql db_path (kvs_schema ^ ";"))
+  exec_sql db_path (kvs_schema ^ ";")
 
-let parse_single_int output =
-  match String.trim output with
-  | "" -> 0
-  | value -> int_of_string value
+let select_single_int ?(read_only = false) db_path sql =
+  match select_map ~read_only db_path sql (fun stmt -> Sqlite3.column_int stmt 0) with
+  | [] -> 0
+  | value :: _ -> value
 
 let select_single_string ?(read_only = false) db_path sql =
-  match String.split_on_char '\n' (run_sql ~read_only db_path sql |> String.trim) with
-  | [] | [ "" ] -> None
+  match select_map ~read_only db_path sql (fun stmt -> Sqlite3.column_text stmt 0) with
+  | [] -> None
   | first :: _ -> Some first
 
 let content_format content =
@@ -235,11 +239,10 @@ let decode_root_metadata content =
 
 let inspect ?(read_only = false) db_path =
   let has_kvs_table =
-    parse_single_int
-      (run_sql
-         ~read_only
-         db_path
-         "select count(*) from sqlite_master where type = 'table' and name = 'kvs';")
+    select_single_int
+      ~read_only
+      db_path
+      "select count(*) from sqlite_master where type = 'table' and name = 'kvs';"
     > 0
   in
   if not has_kvs_table then
@@ -252,7 +255,7 @@ let inspect ?(read_only = false) db_path =
     ; root_index_addresses = []
     }
   else
-    let count sql = parse_single_int (run_sql ~read_only db_path sql) in
+    let count sql = select_single_int ~read_only db_path sql in
     let root_content =
       select_single_string ~read_only db_path "select content from kvs where addr = 0 limit 1;"
     in
@@ -631,14 +634,13 @@ let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
     | None -> ""
     | Some limit -> " limit " ^ string_of_int limit
   in
-  run_sql
+  select_map
     ~read_only
     db_path
     ("select content from kvs where addr not in (0, 1) and content like '%~:keys%' order by addr"
      ^ limit_sql
      ^ ";")
-  |> String.split_on_char '\n'
-  |> List.filter (fun line -> String.trim line <> "")
+    (fun stmt -> Sqlite3.column_text stmt 0)
   |> List.concat_map logseq_datoms_of_row
 
 let delete_sql addresses =
@@ -665,7 +667,7 @@ let storage db_path =
   create_kvs_table db_path;
   let store entries _delete_addresses =
     let sql = String.concat "" (List.map upsert_sql entries) in
-    if sql <> "" then ignore (run_sql db_path sql)
+    if sql <> "" then exec_sql db_path sql
   in
   let restore address =
     let addr = sqlite_addr_of_storage_address address in
@@ -673,17 +675,15 @@ let storage db_path =
     Option.bind (select_single_string db_path sql) payload_of_content
   in
   let list_addresses () =
-    run_sql db_path "select addr from kvs order by addr;"
-    |> String.split_on_char '\n'
-    |> List.filter_map (fun line ->
-      match String.trim line with
-      | "" -> None
-      | value -> Some (storage_address_of_sqlite_addr (int_of_string value)))
+    select_map
+      db_path
+      "select addr from kvs order by addr;"
+      (fun stmt -> storage_address_of_sqlite_addr (Sqlite3.column_int stmt 0))
   in
   let delete addresses =
     match delete_sql addresses with
     | "" -> ()
-    | sql -> ignore (run_sql db_path sql)
+    | sql -> exec_sql db_path sql
   in
   { storage_store = store
   ; storage_restore = restore

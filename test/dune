@@ -116,7 +116,7 @@
 (test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
- (libraries datascript logseq_sqlite_storage unix))
+ (libraries datascript logseq_sqlite_storage unix sqlite3))
 
 (test
  (name test_storage)
