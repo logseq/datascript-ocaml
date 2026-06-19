@@ -6,7 +6,7 @@ size="${BENCH_SIZE:-200}"
 warmup_ms="${BENCH_WARMUP_MS:-200}"
 sample_ms="${BENCH_SAMPLE_MS:-500}"
 samples="${BENCH_SAMPLES:-5}"
-upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js}"
+upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-$repo_root/_deps/datascript/release-js/datascript.js}"
 
 if [ ! -f "$upstream_datascript_js" ]; then
   echo "Upstream DataScript JS bundle not found: $upstream_datascript_js" >&2

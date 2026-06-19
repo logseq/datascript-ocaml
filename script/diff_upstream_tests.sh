@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-upstream_dir="${UPSTREAM_TEST_DIR:-/Users/tiensonqin/Codes/projects/datascript/test/datascript/test}"
+upstream_dir="${UPSTREAM_TEST_DIR:-$repo_root/_deps/datascript/test/datascript/test}"
 alias_file="${UPSTREAM_TEST_ALIASES:-$repo_root/test/upstream_test_aliases.tsv}"
 strict="${UPSTREAM_TEST_DIFF_STRICT:-0}"
 

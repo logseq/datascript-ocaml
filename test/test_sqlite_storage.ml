@@ -1790,24 +1790,38 @@ let repo_root =
   find_repo_root (Sys.getcwd ())
 
 let default_logseq_graph_db =
-  Filename.concat repo_root "db.sqlite"
+  match Sys.getenv_opt "LOGSEQ_GRAPH_DB" with
+  | Some path when path <> "" -> path
+  | _ -> Filename.concat repo_root "db.sqlite"
 
-let test_default_logseq_graph_db_uses_repo_root_db_sqlite () =
-  assert_equal "default Logseq graph db file name" "db.sqlite" (Filename.basename default_logseq_graph_db);
-  if not (Sys.file_exists (Filename.concat (Filename.dirname default_logseq_graph_db) "dune-project")) then
-    failf "default Logseq graph db should live in the repo root: %s" default_logseq_graph_db
+let logseq_graphs_dir =
+  Sys.getenv_opt "LOGSEQ_GRAPHS_DIR"
 
 let logseq_graph_dbs () =
-  if Sys.file_exists default_logseq_graph_db then [ default_logseq_graph_db ] else []
+  match logseq_graphs_dir with
+  | Some dir when dir <> "" -> Sqlite_storage.graph_db_paths dir
+  | _ -> if Sys.file_exists default_logseq_graph_db then [ default_logseq_graph_db ] else []
 
-let test_logseq_graph_dbs_uses_repo_root_db_sqlite () =
-  if Sys.file_exists default_logseq_graph_db then
-    match logseq_graph_dbs () with
-    | [ db_path ] -> assert_equal "Logseq graph db path" default_logseq_graph_db db_path
-    | db_paths ->
-      failf
-        "Logseq graph dbs should contain only repo-root db.sqlite, got %d paths"
-        (List.length db_paths)
+let test_default_logseq_graph_db_uses_portable_default () =
+  match Sys.getenv_opt "LOGSEQ_GRAPH_DB" with
+  | Some path when path <> "" -> assert_equal "configured Logseq graph db" path default_logseq_graph_db
+  | _ ->
+    assert_equal "default Logseq graph db file name" "db.sqlite" (Filename.basename default_logseq_graph_db);
+    if not (Sys.file_exists (Filename.concat (Filename.dirname default_logseq_graph_db) "dune-project")) then
+      failf "default Logseq graph db should live in the repo root: %s" default_logseq_graph_db
+
+let test_logseq_graph_dbs_uses_portable_default () =
+  match logseq_graphs_dir with
+  | Some dir when dir <> "" ->
+    ignore (Sqlite_storage.graph_db_paths dir : string list)
+  | _ ->
+    if Sys.file_exists default_logseq_graph_db then
+      match logseq_graph_dbs () with
+      | [ db_path ] -> assert_equal "Logseq graph db path" default_logseq_graph_db db_path
+      | db_paths ->
+        failf
+          "Logseq graph dbs should contain only repo-root db.sqlite, got %d paths"
+          (List.length db_paths)
 
 let test_existing_logseq_graph_is_recognized_read_only () =
   if (not (sqlite3_available ())) || not (Sys.file_exists default_logseq_graph_db) then
@@ -2051,8 +2065,8 @@ let () =
   test_logseq_sqlite_datom_cache_spans_ordered_rows ();
   test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization ();
   test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks_refs ();
-  test_default_logseq_graph_db_uses_repo_root_db_sqlite ();
-  test_logseq_graph_dbs_uses_repo_root_db_sqlite ();
+  test_default_logseq_graph_db_uses_portable_default ();
+  test_logseq_graph_dbs_uses_portable_default ();
   test_existing_logseq_graph_is_recognized_read_only ();
   test_all_existing_logseq_graphs_are_recognized_read_only ();
   test_existing_logseq_graph_schema_supports_query_and_transact ();

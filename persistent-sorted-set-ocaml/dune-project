@@ -1,6 +1,0 @@
-(lang dune 3.17)
-
-(name persistent_sorted_set_ocaml)
-
-(package
- (name persistent_sorted_set_ocaml))

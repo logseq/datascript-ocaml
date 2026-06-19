@@ -5,7 +5,7 @@ upstream DataScript's Clojure/ClojureScript implementation.
 
 Primary reference:
 
-- `/Users/tiensonqin/Codes/projects/datascript/src/datascript/db.cljc`
+- `src/datascript/db.cljc` in the upstream DataScript repository
 
 The goal is semantic compatibility first. Performance work is acceptable only
 when it preserves DataScript's immutable DB value model, datom ordering, lazy
@@ -166,18 +166,11 @@ Not every value near the DB should become an ordered persistent index.
 Moving these to PSS would not improve parity with upstream DataScript and would
 make serialization and equality behavior more complex.
 
-## Local Dependency
+## Persistent Sorted Set Dependency
 
-The repo uses the sibling project:
-
-```text
-persistent-sorted-set-ocaml/lib -> ../../persistent-sorted-set-ocaml/lib
-```
-
-The bridge contains its own `dune-project` so Dune sees
-`persistent_sorted_set_ocaml` as a package while importing only the sibling
-library. It intentionally does not import the sibling tests or benchmarks into
-this workspace.
+The repo depends on `persistent_sorted_set_ocaml` through an opam pin to
+`https://github.com/logseq/persistent-sorted-set-ocaml.git`. It must not depend
+on a sibling checkout or any other local filesystem path.
 
 ## Verification Coverage
 
@@ -198,7 +191,8 @@ Important tests covering this design:
 Full `dune runtest` is the verification gate for this design. It includes the
 native test suite, SQLite storage tests when the opam environment resolves
 `sqlite3`, the JS smoke test, and cross-runtime parity checks against the sibling
-DataScript checkout.
+DataScript checkout configured with `UPSTREAM_DATASCRIPT_REPO` and
+`UPSTREAM_DATASCRIPT_JS`.
 
 ## Maintenance Rules
 

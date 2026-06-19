@@ -2,7 +2,7 @@
 "use strict";
 
 const datascriptPath =
-  process.env.UPSTREAM_DATASCRIPT_JS || "/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js";
+  process.env.UPSTREAM_DATASCRIPT_JS || `${process.cwd()}/_deps/datascript/release-js/datascript.js`;
 const d = require(datascriptPath);
 
 const defaultConfig = { size: 200, warmupMs: 200, sampleMs: 500, samples: 5 };
