@@ -1,4 +1,4 @@
 (library
  (name datascript)
  (public_name datascript_ocaml)
- (libraries datascript_types unix str))
+ (libraries datascript_types persistent_sorted_set_ocaml unix str))

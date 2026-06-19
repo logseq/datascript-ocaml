@@ -29,17 +29,25 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 upstream_out="$tmp_dir/upstream.jsonl"
 ocaml_out="$tmp_dir/ocaml.jsonl"
+patched_src="$tmp_dir/upstream-src"
 cljs_out="$cljs_runner_dir/upstream-fuzz.js"
 cljs_cache_key="$cljs_runner_dir/cache.key"
 mkdir -p "$cljs_runner_dir/cross_runtime"
 cp "$upstream_fuzz_runner" "$cljs_runner_dir/cross_runtime/upstream_fuzz.cljs"
+cp -R "$upstream_datascript_repo/src" "$patched_src"
+perl -0pi -e 's/\[me\.tonsky\.\s+persistent-sorted-set :as set :refer \[BTSet Node Leaf\]\]/[me.tonsky.persistent-sorted-set :as set :refer [BTSet Node Leaf]]/g' \
+  "$patched_src/datascript/storage.cljs"
 
 cljs_source_key="$(
   {
     shasum "$upstream_fuzz_runner"
     (
+      cd "$patched_src"
+      find . -type f -print0 | sort -z | xargs -0 shasum
+    )
+    (
       cd "$upstream_datascript_repo"
-      git ls-files -z deps.edn src test/node_test_runner.cljs 2>/dev/null | xargs -0 shasum
+      git ls-files -z deps.edn test/node_test_runner.cljs 2>/dev/null | xargs -0 shasum
     )
   } | shasum | awk '{print $1}'
 )"
@@ -49,7 +57,7 @@ UPSTREAM_DATASCRIPT_JS="$upstream_datascript_js" node "$upstream_runner" > "$ups
   cd "$upstream_datascript_repo"
   if [ ! -f "$cljs_out" ] || [ ! -f "$cljs_cache_key" ] || [ "$(cat "$cljs_cache_key")" != "$cljs_source_key" ]; then
     clojure \
-      -Sdeps '{:paths ["src" "test" "target/datascript-ocaml-cross-runtime"]}' \
+      -Sdeps "{:paths [\"$patched_src\" \"test\" \"$cljs_runner_dir\"]}" \
       -M:cljs \
       -m cljs.main \
       --target node \

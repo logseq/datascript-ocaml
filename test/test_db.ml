@@ -71,6 +71,8 @@ let indexed =
 
 let unique_identity = { indexed with unique = Some Identity }
 
+let assert_uses_persistent_sorted_set (_index : datom Persistent_sorted_set.t) = ()
+
 let test_db__test_defrecord_updatable () =
   let value = { x = Keyword "ignored"; tag = "kept" } in
   let updated = { value with x = String "updated" } in
@@ -164,9 +166,47 @@ let test_db__test_index_api () =
     [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
     (Db.index_range db "name" ~start:(String "I") ~stop:(String "P") ())
 
+let test_db__test_indexes_use_persistent_sorted_set () =
+  let db =
+    empty_db ~schema:[ "name", indexed; "friend", { indexed with value_type = Some RefType } ] ()
+    |> db_with
+         [ Add (Entity_id 1, "name", String "Ivan")
+         ; Add (Entity_id 1, "friend", Ref 2)
+         ; Add (Entity_id 2, "name", String "Oleg")
+         ]
+  in
+  assert_uses_persistent_sorted_set db.eavt_index;
+  assert_uses_persistent_sorted_set db.aevt_index;
+  assert_uses_persistent_sorted_set db.avet_index;
+  assert_uses_persistent_sorted_set db.vaet_index
+
+let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
+  let db =
+    empty_db ~schema:[ "x", { indexed with cardinality = Many } ] ()
+    |> db_with
+         [ Add (Entity_id 1, "x", Int 1)
+         ; Add (Entity_id 2, "x", Float 1.0)
+         ; Add (Entity_id 3, "x", Int 2)
+         ]
+  in
+  assert_equal_triples
+    "AVET exact int lookup includes comparator-equal float values like upstream DataScript"
+    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
+    (Db.datoms db Avet ~a:"x" ~v:(Int 1) () |> List.of_seq);
+  assert_equal_triples
+    "AVET exact float lookup includes comparator-equal int values like upstream DataScript"
+    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
+    (Db.datoms db Avet ~a:"x" ~v:(Float 1.0) () |> List.of_seq);
+  assert_equal_triples
+    "AVET range preserves comparator-bound numeric behavior"
+    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
+    (Db.index_range db "x" ~start:(Float 1.0) ~stop:(Float 1.0) ())
+
 let () =
   test_db__test_defrecord_updatable ();
   test_db__test_db_hash_cache ();
   test_db__test_uuid ();
   test_db__test_diff ();
-  test_db__test_index_api ()
+  test_db__test_index_api ();
+  test_db__test_indexes_use_persistent_sorted_set ();
+  test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds ()

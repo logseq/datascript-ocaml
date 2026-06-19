@@ -2,8 +2,31 @@ open Datascript
 
 let failf fmt = Printf.ksprintf failwith fmt
 
+let query_result_equal left right =
+  match left, right with
+  | Result_db left, Result_db right -> left == right
+  | Result_db _, _ | _, Result_db _ -> false
+  | _ -> left = right
+
+let rec query_result_list_equal left right =
+  match left, right with
+  | [], [] -> true
+  | left :: left_rest, right :: right_rest ->
+    query_result_equal left right && query_result_list_equal left_rest right_rest
+  | [], _ :: _ | _ :: _, [] -> false
+
+let query_result_option_equal left right =
+  match left, right with
+  | None, None -> true
+  | Some left, Some right -> query_result_equal left right
+  | None, Some _ | Some _, None -> false
+
 let assert_equal_query label expected actual =
-  if expected <> actual then failf "%s: unexpected query result" label
+  if not (List.length expected = List.length actual && List.for_all2 query_result_list_equal expected actual) then
+    failf "%s: unexpected query result" label
+
+let assert_equal_query_row label expected actual =
+  if not (query_result_list_equal expected actual) then failf "%s: unexpected query row" label
 
 let assert_equal_query_rows label expected actual =
   if expected <> actual then failf "%s: unexpected query rows" label
@@ -16,6 +39,12 @@ let assert_equal_rules label expected actual =
 
 let assert_equal_query_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional query result" label
+
+let assert_equal_query_result label expected actual =
+  if not (query_result_equal expected actual) then failf "%s: unexpected query result" label
+
+let assert_equal_query_result_option label expected actual =
+  if not (query_result_option_equal expected actual) then failf "%s: unexpected optional query result" label
 
 let assert_equal_int_option label expected actual =
   if expected <> actual then failf "%s: unexpected optional integer result" label
@@ -79,35 +108,35 @@ let test_query_namespace__test_public_query_api () =
 let test_query_namespace__test_query_result_helpers () =
   let add_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:7 ~added:true () in
   let retract_datom = datom ~e:1 ~a:"name" ~v:(String "Ivan") ~tx:8 ~added:false () in
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_e returns entity results"
     (Result_entity 1)
     (Query.result_of_datom_e add_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_a returns attr results"
     (Result_attr "name")
     (Query.result_of_datom_a add_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_v returns value results"
     (Result_value (String "Ivan"))
     (Query.result_of_datom_v add_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_tx returns tx entity results"
     (Result_entity 7)
     (Query.result_of_datom_tx add_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_op returns add op keywords"
     (Result_value (Keyword "db/add"))
     (Query.result_of_datom_op add_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_datom_op returns retract op keywords"
     (Result_value (Keyword "db/retract"))
     (Query.result_of_datom_op retract_datom);
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_ref turns ref values into entity results"
     (Result_entity 42)
     (Query.result_of_ref (Result_value (Ref 42)));
-  assert_equal_query_option
+  assert_equal_query_result
     "result_of_ref leaves non-ref results unchanged"
     (Result_value (String "Ivan"))
     (Query.result_of_ref (Result_value (String "Ivan")));
@@ -358,7 +387,7 @@ let test_query_namespace__test_query_matching_helpers () =
     "eval_query_term resolves literal values"
     (Some (Result_value (Ref 42)))
     (Query.eval_query_term match_context [] (QValue (Keyword "known-ident")));
-  assert_equal_query_option
+  assert_equal_query_result_option
     "eval_query_term returns default source db"
     (Some (Result_db match_context.source_db))
     (Query.eval_query_term match_context [] (QSource "$"));
@@ -378,7 +407,7 @@ let test_query_namespace__test_query_matching_helpers () =
     "collect_query_terms drops collections with wildcards"
     None
     (Query.collect_query_terms match_context base_binding [ QVar "existing"; QWildcard ]);
-  assert_equal_query
+  assert_equal_query_row
     "collect_query_terms_exn returns evaluated terms"
     [ Result_value (String "kept"); Result_entity 42 ]
     (Query.collect_query_terms_exn match_context base_binding [ QVar "existing"; QEntity 42 ]);
@@ -543,14 +572,14 @@ let test_query_namespace__test_aggregate_helpers () =
     (Query.split_aggregate_terms [ QVar "n"; QValue (String "tag"); QVar "amount" ]);
   assert_raises_invalid_arg "split_aggregate_terms rejects empty terms" (fun () ->
     ignore (Query.split_aggregate_terms []));
-  assert_equal_query
+  assert_equal_query_row
     "custom aggregate receives extra args before values"
     [ Result_value (Int 9); Result_value (Int 1); Result_value (Int 2) ]
     (Query.aggregate_input_values
        (Custom (fun values -> Result_value (Int (List.length values))))
        [ Result_value (Int 9) ]
        [ Result_value (Int 1); Result_value (Int 2) ]);
-  assert_equal_query
+  assert_equal_query_row
     "built-in aggregate ignores extra args after parse-time resolution"
     [ Result_value (Int 1); Result_value (Int 2) ]
     (Query.aggregate_input_values
@@ -592,7 +621,7 @@ let test_query_namespace__test_aggregate_helpers () =
     "eval_query_term_with_sources rejects unknown sources"
     "unknown query source: missing"
     (fun () -> ignore (Query.eval_query_term_with_sources match_context default_db sources [] (QSource "missing")));
-  assert_equal_query
+  assert_equal_query_row
     "collect_dynamic_query_terms_exn evaluates vars and sources"
     [ Result_value (String "Ivan"); Result_db other_db ]
     (Query.collect_dynamic_query_terms_exn
@@ -619,7 +648,7 @@ let test_query_namespace__test_aggregate_helpers () =
    with
    | [ Result_value (Int 2); Result_db db ] when db == other_db -> ()
    | _ -> failwith "aggregate_extra_args should use first group binding and resolve source args");
-  assert_equal_query
+  assert_equal_query_row
     "aggregate_values evaluates the aggregate value term for every group binding"
     [ Result_value (Int 10); Result_value (Int 20) ]
     (Query.aggregate_values
@@ -628,7 +657,7 @@ let test_query_namespace__test_aggregate_helpers () =
        sources
        [ [ "amount", Result_value (Int 10) ]; [ "amount", Result_value (Int 20) ] ]
        [ QVar "amount" ]);
-  assert_equal_query
+  assert_equal_query_row
     "aggregate_values drops bindings where the value term is unbound"
     [ Result_value (Int 10) ]
     (Query.aggregate_values
@@ -735,15 +764,15 @@ let test_query_namespace__test_input_shape_helpers () =
     "values_of_collection_result rejects scalar values"
     None
     (Query.values_of_collection_result (Result_value (String "not-a-collection")));
-  assert_equal_query
+  assert_equal_query_row
     "row_of_collection_result preserves tuple nil slots"
     [ Result_value (Int 1); Result_value Nil; Result_value (Int 3) ]
     (Query.row_of_collection_result (Result_value (Tuple [ Some (Int 1); None; Some (Int 3) ])));
-  assert_equal_query
+  assert_equal_query_row
     "row_of_collection_result wraps scalar values"
     [ Result_value (String "scalar") ]
     (Query.row_of_collection_result (Result_value (String "scalar")));
-  assert_equal_query
+  assert_equal_query_row
     "row_of_scalar_sequence unwraps scalar sequence values"
     [ Result_value (Keyword "left"); Result_value (Keyword "right") ]
     (Query.row_of_scalar_sequence (Result_value (List [ Keyword "left"; Keyword "right" ])));

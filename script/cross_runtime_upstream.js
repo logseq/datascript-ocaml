@@ -31,7 +31,7 @@ function datomValue(value) {
 
 function normalizeDatom(datom) {
   const tx = Math.abs(datom.tx == null ? tx0 : datom.tx);
-  return [datom.e, datom.a, datomValue(datom.v), tx, datom.tx == null || datom.tx >= 0];
+  return [datom.e, attrName(datom.a), datomValue(datom.v), tx, datom.tx == null || datom.tx >= 0];
 }
 
 function normalizeDatoms(datoms) {
@@ -40,6 +40,13 @@ function normalizeDatoms(datoms) {
 
 function normalizeRows(rows) {
   return rows.slice().sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function attrName(attr) {
+  if (typeof attr === "string" && attr.startsWith(":")) {
+    return attr.slice(1);
+  }
+  return String(attr);
 }
 
 function normalizeTempids(tempids) {

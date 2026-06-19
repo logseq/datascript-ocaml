@@ -1,3 +1,4 @@
 (library
  (name datascript_types)
- (public_name datascript_ocaml.types))
+ (public_name datascript_ocaml.types)
+ (libraries persistent_sorted_set_ocaml))

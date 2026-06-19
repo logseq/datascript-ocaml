@@ -1,5 +1,7 @@
 open Datascript_types
 
+module PSet = Persistent_sorted_set
+
 type context =
   { next_db_uid : unit -> int
   ; validate_schema : schema -> schema
@@ -16,6 +18,9 @@ let serializable db =
   ; serializable_max_tx = db.max_tx
   }
 
+let empty_index index =
+  PSet.empty_by (Util.compare_datom index)
+
 let from_serializable context snapshot =
   let schema = context.validate_schema snapshot.serializable_schema in
   let datoms = List.map (context.normalize_datom_for_schema schema) snapshot.serializable_datoms in
@@ -24,16 +29,10 @@ let from_serializable context snapshot =
     { db_uid = context.next_db_uid ()
     ; schema
     ; datoms
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; eavt_array = [||]
-    ; aevt_array = [||]
-    ; avet_array = [||]
-    ; vaet_array = [||]
-    ; index_lists_valid = true
-    ; index_arrays_valid = true
+    ; eavt_index = empty_index Eavt
+    ; aevt_index = empty_index Aevt
+    ; avet_index = empty_index Avet
+    ; vaet_index = empty_index Vaet
     ; history_datoms
     ; historical = snapshot.serializable_historical
     ; max_eid = snapshot.serializable_max_eid

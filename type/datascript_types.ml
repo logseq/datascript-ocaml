@@ -119,16 +119,10 @@ and db =
   { db_uid : int
   ; schema : schema
   ; datoms : datom list
-  ; eavt_index : datom list
-  ; aevt_index : datom list
-  ; avet_index : datom list
-  ; vaet_index : datom list
-  ; eavt_array : datom array
-  ; aevt_array : datom array
-  ; avet_array : datom array
-  ; vaet_array : datom array
-  ; index_lists_valid : bool
-  ; index_arrays_valid : bool
+  ; eavt_index : datom Persistent_sorted_set.t
+  ; aevt_index : datom Persistent_sorted_set.t
+  ; avet_index : datom Persistent_sorted_set.t
+  ; vaet_index : datom Persistent_sorted_set.t
   ; history_datoms : datom list
   ; historical : bool
   ; max_eid : entity_id

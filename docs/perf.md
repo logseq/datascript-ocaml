@@ -71,30 +71,32 @@ boundary. Added coverage checks that:
 - public `datoms` returns a lazy sequence
 - bounded datoms slicing happens before filtered-db predicate checks
 
-### Bounded Index Iteration
+### Persistent Sorted Indexes
 
-The DB stores sorted array snapshots for EAVT, AEVT, AVET, and VAET when index
-arrays are valid. Datoms lookup can then binary-search a bounded range and expose
-that range as a lazy sequence.
+The DB stores EAVT, AEVT, AVET, and VAET as `Persistent_sorted_set.t` values.
+This matches upstream DataScript's persistent sorted set model better than
+whole-index arrays because transactions must preserve the old immutable DB while
+producing a new DB with updated indexes.
 
-This avoids full-index filtering for common component-constrained accesses such
-as entity or attribute slices.
+Bulk construction sorts datoms once and builds each persistent sorted set from
+the sorted array. Incremental safe-add paths update the persistent sorted sets
+with structural sharing instead of marking whole indexes stale.
 
-Exact prefix slices such as `datoms db Aevt ~a` now compute both start and stop
-bounds up front and then lazily walk the array range by index. This avoids a
-per-datom predicate check inside the hot range.
+Exact prefix reads such as `datoms db Aevt ~a`, lower-bound reads such as
+`seek_datoms db Avet ~a ~v`, reverse reads such as `rseek_datoms`, and
+`index_range` use persistent sorted set `slice`/`rslice` bounds. Non-prefix
+named-argument combinations continue to fall back to ordered filtering for
+compatibility.
 
 ### Incremental Index Refresh
 
-Bulk transaction paths can merge newly added datoms into sorted indexes for
-initial loads. For later safe incremental writes into a non-empty DB, the write
-path updates active datoms and metadata immediately, but marks stored index lists
-and arrays stale instead of maintaining all four sorted indexes on every write.
+Bulk construction uses sorted-array PSS builders. For safe incremental writes,
+the write path updates the active datom list and adds new datoms into each
+relevant persistent sorted set. The old DB keeps its previous set roots, and the
+new DB shares unchanged tree structure with them.
 
-Public `datoms` still returns correct results. If stored indexes are stale, the
-read path builds the requested sorted index from current datoms and applies the
-requested component filters. A regression test covers incremental writes followed
-by public EAVT, AEVT, AVET, and VAET reads.
+A regression test covers incremental writes followed by public EAVT, AEVT,
+AVET, and VAET reads.
 
 ### Query Candidate Narrowing
 
@@ -168,21 +170,31 @@ These constraints must remain true for future performance work:
 ## Remaining Work
 
 The current deterministic benchmark goal is satisfied. Next useful work is to
-validate larger workloads, mixed read/write patterns after stale incremental
-indexes, and public behavior around direct DB record access. DB index fields are
-still present in the public record type, so future API cleanup should either make
-those internals private or clearly document their validity flags.
+validate larger workloads and mixed read/write patterns against the persistent
+sorted set implementation. DB index fields are still present in the public record
+type, so future API cleanup should either make those internals private or keep
+their PSS representation documented.
 
 ## Verification
 
-Latest full test command:
+Latest feasible native test command in the current environment:
 
 ```sh
-dune runtest
+dune runtest test/test_datascript.exe test/test_lru.exe test/test_conn.exe \
+  test/test_core.exe test/test_db.exe test/test_data_readers.exe \
+  test/test_built_ins.exe test/test_issues.exe test/test_entity.exe \
+  test/test_listen.exe test/test_lookup_refs.exe test/test_parser.exe \
+  test/test_parser_find.exe test/test_parser_query.exe \
+  test/test_parser_return_map.exe test/test_parser_rules.exe \
+  test/test_parser_where.exe test/test_pull_api.exe test/test_pull_parser.exe \
+  test/test_query_pull.exe test/test_query_namespace.exe test/test_tuples.exe \
+  test/test_serialize.exe test/test_storage.exe test/test_upsert.exe \
+  test/test_util.exe
 ```
 
-It passed after the current optimization set. The run emitted linker warnings
-about a missing `/opt/homebrew/opt/node@22/lib` search path, but no test failure.
+It passed after the persistent sorted set index change. Full `dune runtest`
+currently depends on Dune/Findlib resolving the `sqlite3` library for the SQLite
+storage tests.
 
 Latest cross-runtime benchmark command:
 

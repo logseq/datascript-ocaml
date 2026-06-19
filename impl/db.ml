@@ -1,5 +1,7 @@
 open Datascript_types
 
+module PSet = Persistent_sorted_set
+
 let tx0 = 0x20000000
 
 let datom ?(tx = tx0) ?(added = true) ~e ~a ~v () = { e; a; v; tx; added }
@@ -69,8 +71,14 @@ let datom_has_ref_value = function
   | { v = Ref _; _ } -> true
   | _ -> false
 
+let empty_index index =
+  PSet.empty_by (Util.compare_datom index)
+
 let build_index index datoms =
-  datoms |> List.sort (Util.compare_datom index)
+  let cmp = Util.compare_datom index in
+  let items = Array.of_list datoms in
+  Array.sort cmp items;
+  PSet.of_sorted_array_by cmp items
 
 let build_avet_index schema datoms =
   datoms
@@ -104,67 +112,30 @@ let refresh_indexes db =
   ; vaet_index
   ; max_datom_e
   ; unique_index
-  ; eavt_array = Array.of_list eavt_index
-  ; aevt_array = Array.of_list aevt_index
-  ; avet_array = Array.of_list avet_index
-  ; vaet_array = Array.of_list vaet_index
-  ; index_lists_valid = true
-  ; index_arrays_valid = true
   }
 
-let rec merge_sorted compare left right =
-  match left, right with
-  | [], items | items, [] -> items
-  | left_item :: left_rest, right_item :: right_rest ->
-    if compare left_item right_item <= 0 then
-      left_item :: merge_sorted compare left_rest right
-    else
-      right_item :: merge_sorted compare left right_rest
+let add_datoms_to_index include_datom datoms index_set =
+  List.fold_left
+    (fun index_set datom ->
+      if include_datom datom then PSet.add datom index_set else index_set)
+    index_set
+    datoms
 
 let refresh_indexes_with_added_datoms db added_datoms =
-  let source_indexes_empty =
-    db.eavt_index = [] && db.aevt_index = [] && db.avet_index = [] && db.vaet_index = []
-  in
   let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) db.max_datom_e added_datoms in
   let unique_index = build_unique_index db.schema added_datoms @ db.unique_index in
-  if source_indexes_empty then
-    let eavt_index =
-      merge_sorted (Util.compare_datom Eavt) (build_index Eavt added_datoms) db.eavt_index
-    in
-    let aevt_index =
-      merge_sorted (Util.compare_datom Aevt) (build_index Aevt added_datoms) db.aevt_index
-    in
-    let avet_index =
-      merge_sorted (Util.compare_datom Avet) (build_avet_index db.schema added_datoms) db.avet_index
-    in
-    let vaet_index =
-      merge_sorted (Util.compare_datom Vaet) (build_vaet_index added_datoms) db.vaet_index
-    in
-    { db with
-      eavt_index
-    ; aevt_index
-    ; avet_index
-    ; vaet_index
-    ; max_datom_e
-    ; unique_index
-    ; eavt_array = Array.of_list eavt_index
-    ; aevt_array = Array.of_list aevt_index
-    ; avet_array = Array.of_list avet_index
-    ; vaet_array = Array.of_list vaet_index
-    ; index_lists_valid = true
-    ; index_arrays_valid = true
-    }
-  else
-    { db with
-      max_datom_e
-    ; unique_index
-    ; eavt_array = [||]
-    ; aevt_array = [||]
-    ; avet_array = [||]
-    ; vaet_array = [||]
-    ; index_lists_valid = false
-    ; index_arrays_valid = false
-    }
+  { db with
+    eavt_index = add_datoms_to_index (fun _ -> true) added_datoms db.eavt_index
+  ; aevt_index = add_datoms_to_index (fun _ -> true) added_datoms db.aevt_index
+  ; avet_index =
+      add_datoms_to_index
+        (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
+        added_datoms
+        db.avet_index
+  ; vaet_index = add_datoms_to_index datom_has_ref_value added_datoms db.vaet_index
+  ; max_datom_e
+  ; unique_index
+  }
 
 let with_datoms db datoms =
   refresh_indexes { db with datoms }
@@ -175,16 +146,10 @@ let empty_db context ?(schema = []) ?storage () =
     { db_uid = context.next_db_uid ()
     ; schema
     ; datoms = []
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; eavt_array = [||]
-    ; aevt_array = [||]
-    ; avet_array = [||]
-    ; vaet_array = [||]
-    ; index_lists_valid = true
-    ; index_arrays_valid = true
+    ; eavt_index = empty_index Eavt
+    ; aevt_index = empty_index Aevt
+    ; avet_index = empty_index Avet
+    ; vaet_index = empty_index Vaet
     ; history_datoms = []
     ; historical = false
     ; max_eid = 0
@@ -213,16 +178,10 @@ let init_db context ?(schema = []) ?storage datoms =
     { db_uid = context.next_db_uid ()
     ; schema
     ; datoms
-    ; eavt_index = []
-    ; aevt_index = []
-    ; avet_index = []
-    ; vaet_index = []
-    ; eavt_array = [||]
-    ; aevt_array = [||]
-    ; avet_array = [||]
-    ; vaet_array = [||]
-    ; index_lists_valid = true
-    ; index_arrays_valid = true
+    ; eavt_index = empty_index Eavt
+    ; aevt_index = empty_index Aevt
+    ; avet_index = empty_index Avet
+    ; vaet_index = empty_index Vaet
     ; history_datoms
     ; historical = false
     ; max_eid
@@ -286,23 +245,14 @@ let hash db =
 
 let hash_cache_size () = Hashtbl.length hash_cache
 
-let build_index_for_db db = function
-  | Eavt -> build_index Eavt db.datoms
-  | Aevt -> build_index Aevt db.datoms
-  | Avet -> build_avet_index db.schema db.datoms
-  | Vaet -> build_vaet_index db.datoms
-
-let stored_index_datoms_list db = function
+let stored_index db = function
   | Eavt -> db.eavt_index
   | Aevt -> db.aevt_index
   | Avet -> db.avet_index
   | Vaet -> db.vaet_index
 
 let raw_index_datoms_list db index =
-  if db.index_lists_valid then
-    stored_index_datoms_list db index
-  else
-    build_index_for_db db index
+  stored_index db index |> PSet.to_list
 
 let visible_index_datoms db index =
   let datoms = raw_index_datoms_list db index in
@@ -310,195 +260,8 @@ let visible_index_datoms db index =
   | None -> datoms
   | Some pred -> List.filter pred datoms
 
-let raw_index_datoms_array db index =
-  match index with
-  | Eavt -> db.eavt_array
-  | Aevt -> db.aevt_array
-  | Avet -> db.avet_array
-  | Vaet -> db.vaet_array
-
-let lower_bound_before before items =
-  let rec loop low high =
-    if low >= high then
-      low
-    else
-      let middle = low + ((high - low) / 2) in
-      if before items.(middle) then
-        loop (middle + 1) high
-      else
-        loop low middle
-  in
-  loop 0 (Array.length items)
-
-let rec array_seq_take_while items index pred () =
-  if index >= Array.length items then
-    Seq.Nil
-  else
-    let item = items.(index) in
-    if pred item then
-      Seq.Cons (item, array_seq_take_while items (index + 1) pred)
-    else
-      Seq.Nil
-
-let rec array_seq_range items index stop () =
-  if index >= stop then
-    Seq.Nil
-  else
-    Seq.Cons (items.(index), array_seq_range items (index + 1) stop)
-
-let seq_slice ~before ~inside items =
-  let start = lower_bound_before before items in
-  array_seq_take_while items start inside
-
-let seq_range ~before_start ~before_stop items =
-  let start = lower_bound_before before_start items in
-  let stop = lower_bound_before before_stop items in
-  array_seq_range items start stop
-
-let compare_attr = compare
-let compare_entity = compare
-let compare_tx = compare
-
-let compare_value_order context left right =
-  context.compare_value left right
-
-let value_order_equal context left right =
-  compare_value_order context left right = 0
-
-let slice_eavt context items e a v tx =
-  match e, a, v, tx with
-  | Some e, Some a, Some v, Some tx ->
-    seq_slice
-      ~before:(fun d ->
-        compare_entity d.e e < 0
-        || (d.e = e && compare_attr d.a a < 0)
-        || (d.e = e && d.a = a && compare_value_order context d.v v < 0)
-        || (d.e = e && d.a = a && value_order_equal context d.v v && compare_tx d.tx tx < 0))
-      ~inside:(fun d -> d.e = e && d.a = a && value_order_equal context d.v v && d.tx = tx)
-      items
-  | Some e, Some a, Some v, None ->
-    seq_slice
-      ~before:(fun d ->
-        compare_entity d.e e < 0
-        || (d.e = e && compare_attr d.a a < 0)
-        || (d.e = e && d.a = a && compare_value_order context d.v v < 0))
-      ~inside:(fun d -> d.e = e && d.a = a && value_order_equal context d.v v)
-      items
-  | Some e, Some a, _, _ ->
-    seq_slice
-      ~before:(fun d -> compare_entity d.e e < 0 || (d.e = e && compare_attr d.a a < 0))
-      ~inside:(fun d -> d.e = e && d.a = a)
-      items
-  | Some e, _, _, _ ->
-    seq_range
-      ~before_start:(fun d -> compare_entity d.e e < 0)
-      ~before_stop:(fun d -> compare_entity d.e e <= 0)
-      items
-  | _ -> Array.to_seq items
-
-let slice_aevt context items e a v tx =
-  match a, e, v, tx with
-  | Some a, Some e, Some v, Some tx ->
-    seq_slice
-      ~before:(fun d ->
-        compare_attr d.a a < 0
-        || (d.a = a && compare_entity d.e e < 0)
-        || (d.a = a && d.e = e && compare_value_order context d.v v < 0)
-        || (d.a = a && d.e = e && value_order_equal context d.v v && compare_tx d.tx tx < 0))
-      ~inside:(fun d -> d.a = a && d.e = e && value_order_equal context d.v v && d.tx = tx)
-      items
-  | Some a, Some e, Some v, None ->
-    seq_slice
-      ~before:(fun d ->
-        compare_attr d.a a < 0
-        || (d.a = a && compare_entity d.e e < 0)
-        || (d.a = a && d.e = e && compare_value_order context d.v v < 0))
-      ~inside:(fun d -> d.a = a && d.e = e && value_order_equal context d.v v)
-      items
-  | Some a, Some e, _, _ ->
-    seq_slice
-      ~before:(fun d -> compare_attr d.a a < 0 || (d.a = a && compare_entity d.e e < 0))
-      ~inside:(fun d -> d.a = a && d.e = e)
-      items
-  | Some a, _, _, _ ->
-    seq_range
-      ~before_start:(fun d -> compare_attr d.a a < 0)
-      ~before_stop:(fun d -> compare_attr d.a a <= 0)
-      items
-  | _ -> Array.to_seq items
-
-let slice_avet context items e a v tx =
-  match a, v, e, tx with
-  | Some a, Some v, Some e, Some tx ->
-    seq_slice
-      ~before:(fun d ->
-        compare_attr d.a a < 0
-        || (d.a = a && compare_value_order context d.v v < 0)
-        || (d.a = a && value_order_equal context d.v v && compare_entity d.e e < 0)
-        || (d.a = a && value_order_equal context d.v v && d.e = e && compare_tx d.tx tx < 0))
-      ~inside:(fun d -> d.a = a && value_order_equal context d.v v && d.e = e && d.tx = tx)
-      items
-  | Some a, Some v, Some e, None ->
-    seq_slice
-      ~before:(fun d ->
-        compare_attr d.a a < 0
-        || (d.a = a && compare_value_order context d.v v < 0)
-        || (d.a = a && value_order_equal context d.v v && compare_entity d.e e < 0))
-      ~inside:(fun d -> d.a = a && value_order_equal context d.v v && d.e = e)
-      items
-  | Some a, Some v, _, _ ->
-    seq_slice
-      ~before:(fun d -> compare_attr d.a a < 0 || (d.a = a && compare_value_order context d.v v < 0))
-      ~inside:(fun d -> d.a = a && value_order_equal context d.v v)
-      items
-  | Some a, _, _, _ ->
-    seq_range
-      ~before_start:(fun d -> compare_attr d.a a < 0)
-      ~before_stop:(fun d -> compare_attr d.a a <= 0)
-      items
-  | _ -> Array.to_seq items
-
-let slice_vaet context items e a v tx =
-  match v, a, e, tx with
-  | Some v, Some a, Some e, Some tx ->
-    seq_slice
-      ~before:(fun d ->
-        compare_value_order context d.v v < 0
-        || (value_order_equal context d.v v && compare_attr d.a a < 0)
-        || (value_order_equal context d.v v && d.a = a && compare_entity d.e e < 0)
-        || (value_order_equal context d.v v && d.a = a && d.e = e && compare_tx d.tx tx < 0))
-      ~inside:(fun d -> value_order_equal context d.v v && d.a = a && d.e = e && d.tx = tx)
-      items
-  | Some v, Some a, Some e, None ->
-    seq_slice
-      ~before:(fun d ->
-        compare_value_order context d.v v < 0
-        || (value_order_equal context d.v v && compare_attr d.a a < 0)
-        || (value_order_equal context d.v v && d.a = a && compare_entity d.e e < 0))
-      ~inside:(fun d -> value_order_equal context d.v v && d.a = a && d.e = e)
-      items
-  | Some v, Some a, _, _ ->
-    seq_slice
-      ~before:(fun d -> compare_value_order context d.v v < 0 || (value_order_equal context d.v v && compare_attr d.a a < 0))
-      ~inside:(fun d -> value_order_equal context d.v v && d.a = a)
-      items
-  | Some v, _, _, _ ->
-    seq_range
-      ~before_start:(fun d -> compare_value_order context d.v v < 0)
-      ~before_stop:(fun d -> compare_value_order context d.v v <= 0)
-      items
-  | _ -> Array.to_seq items
-
-let bounded_index_datoms_seq context db index e a v tx =
-  if db.index_arrays_valid then
-    let items = raw_index_datoms_array db index in
-    match index with
-    | Eavt -> slice_eavt context items e a v tx
-    | Aevt -> slice_aevt context items e a v tx
-    | Avet -> slice_avet context items e a v tx
-    | Vaet -> slice_vaet context items e a v tx
-  else
-    raw_index_datoms_list db index |> List.to_seq
+let index_datoms_seq db index =
+  raw_index_datoms_list db index |> List.to_seq
 
 let apply_filter_pred db seq =
   match db.filter_pred with
@@ -507,8 +270,137 @@ let apply_filter_pred db seq =
 
 let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual = expected) maybe
 
-let matches_value maybe expected =
-  Option.fold ~none:true ~some:(fun actual -> value_equal actual expected) maybe
+let matches_value context maybe expected =
+  Option.fold ~none:true ~some:(fun actual -> context.compare_value actual expected = 0) maybe
+
+type bound_fields =
+  { bound_e : bool
+  ; bound_a : bool
+  ; bound_v : bool
+  ; bound_tx : bool
+  }
+
+let bound_datom ?(e = 0) ?(a = "") ?(v = Nil) ?(tx = tx0) () =
+  { e; a; v; tx; added = true }
+
+let compare_bound_fields context fields left right order =
+  let compare_field = function
+    | `E when fields.bound_e -> compare left.e right.e
+    | `A when fields.bound_a -> compare left.a right.a
+    | `V when fields.bound_v -> context.compare_value left.v right.v
+    | `Tx when fields.bound_tx -> compare left.tx right.tx
+    | _ -> 0
+  in
+  order |> List.map compare_field |> context.first_nonzero
+
+let index_order = function
+  | Eavt -> [ `E; `A; `V; `Tx ]
+  | Aevt -> [ `A; `E; `V; `Tx ]
+  | Avet -> [ `A; `V; `E; `Tx ]
+  | Vaet -> [ `V; `A; `E; `Tx ]
+
+let slice_cmp context index from_bound from_fields to_bound to_fields left right =
+  if right == from_bound then
+    compare_bound_fields context from_fields left right (index_order index)
+  else if right == to_bound then
+    compare_bound_fields context to_fields left right (index_order index)
+  else
+    Util.compare_datom index left right
+
+let fields ?(e = false) ?(a = false) ?(v = false) ?(tx = false) () =
+  { bound_e = e; bound_a = a; bound_v = v; bound_tx = tx }
+
+let exact_prefix_bound index e a v tx =
+  match index with
+  | Eavt ->
+    (match e, a, v, tx with
+     | Some e, None, None, None ->
+       Some (bound_datom ~e (), fields ~e:true ())
+     | Some e, Some a, None, None ->
+       Some (bound_datom ~e ~a (), fields ~e:true ~a:true ())
+     | Some e, Some a, Some v, None ->
+       Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
+     | Some e, Some a, Some v, Some tx ->
+       Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
+     | _ -> None)
+  | Aevt ->
+    (match a, e, v, tx with
+     | Some a, None, None, None ->
+       Some (bound_datom ~a (), fields ~a:true ())
+     | Some a, Some e, None, None ->
+       Some (bound_datom ~e ~a (), fields ~e:true ~a:true ())
+     | Some a, Some e, Some v, None ->
+       Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
+     | Some a, Some e, Some v, Some tx ->
+       Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
+     | _ -> None)
+  | Avet ->
+    (match a, v, e, tx with
+     | Some a, None, None, None ->
+       Some (bound_datom ~a (), fields ~a:true ())
+     | Some a, Some v, None, None ->
+       Some (bound_datom ~a ~v (), fields ~a:true ~v:true ())
+     | Some a, Some v, Some e, None ->
+       Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
+     | Some a, Some v, Some e, Some tx ->
+       Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
+     | _ -> None)
+  | Vaet ->
+    (match v, a, e, tx with
+     | Some v, None, None, None ->
+       Some (bound_datom ~v (), fields ~v:true ())
+     | Some v, Some a, None, None ->
+       Some (bound_datom ~a ~v (), fields ~a:true ~v:true ())
+     | Some v, Some a, Some e, None ->
+       Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
+     | Some v, Some a, Some e, Some tx ->
+       Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
+     | _ -> None)
+
+let exact_prefix_datoms context db index e a v tx =
+  match exact_prefix_bound index e a v tx with
+  | None -> None
+  | Some (bound, bound_fields) ->
+    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    Some (PSet.slice ~from_:bound ~to_:bound ~cmp (stored_index db index) |> List.to_seq)
+
+let lower_prefix_datoms context db index e a v tx =
+  match exact_prefix_bound index e a v tx with
+  | None -> None
+  | Some (bound, bound_fields) ->
+    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    Some (PSet.slice ~from_:bound ~cmp (stored_index db index))
+
+let reverse_upper_prefix_datoms context db index e a v tx =
+  match exact_prefix_bound index e a v tx with
+  | None -> None
+  | Some (bound, bound_fields) ->
+    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    Some (PSet.rslice ~from_:bound ~cmp (stored_index db index))
+
+let avet_range_datoms context db attr start stop =
+  let from_bound =
+    match start with
+    | Some value -> bound_datom ~a:attr ~v:value ()
+    | None -> bound_datom ~a:attr ()
+  in
+  let from_fields =
+    match start with
+    | Some _ -> fields ~a:true ~v:true ()
+    | None -> fields ~a:true ()
+  in
+  let to_bound =
+    match stop with
+    | Some value -> bound_datom ~a:attr ~v:value ()
+    | None -> bound_datom ~a:attr ()
+  in
+  let to_fields =
+    match stop with
+    | Some _ -> fields ~a:true ~v:true ()
+    | None -> fields ~a:true ()
+  in
+  let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+  PSet.slice ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
 
 let indexed_attr_required_message attr =
   "Attribute :" ^ attr ^ " should be marked as :db/index true"
@@ -524,54 +416,20 @@ let resolved_entity_ref_option context db = Option.map (context.resolve_entity_r
 let resolved_value_option_for_optional_attr context db attr =
   Option.map (context.resolve_value_for_optional_attr db attr)
 
-let slice_covers_components index e a v tx =
-  match index with
-  | Eavt ->
-    (match e, a, v, tx with
-     | None, None, None, None -> true
-     | Some _, None, None, None -> true
-     | Some _, Some _, None, None -> true
-     | Some _, Some _, Some _, None -> true
-     | Some _, Some _, Some _, Some _ -> true
-     | _ -> false)
-  | Aevt ->
-    (match a, e, v, tx with
-     | None, None, None, None -> true
-     | Some _, None, None, None -> true
-     | Some _, Some _, None, None -> true
-     | Some _, Some _, Some _, None -> true
-     | Some _, Some _, Some _, Some _ -> true
-     | _ -> false)
-  | Avet ->
-    (match a, v, e, tx with
-     | None, None, None, None -> true
-     | Some _, None, None, None -> true
-     | Some _, Some _, None, None -> true
-     | Some _, Some _, Some _, None -> true
-     | Some _, Some _, Some _, Some _ -> true
-     | _ -> false)
-  | Vaet ->
-    (match v, a, e, tx with
-     | None, None, None, None -> true
-     | Some _, None, None, None -> true
-     | Some _, Some _, None, None -> true
-     | Some _, Some _, Some _, None -> true
-     | Some _, Some _, Some _, Some _ -> true
-     | _ -> false)
-
 let datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
-  let datoms = bounded_index_datoms_seq context db index e a v tx in
   let datoms =
-    if
-      (e, a, v, tx) = (None, None, None, None)
-      || (db.index_arrays_valid && slice_covers_components index e a v tx)
-    then
+    match exact_prefix_datoms context db index e a v tx with
+    | Some datoms -> datoms
+    | None -> index_datoms_seq db index
+  in
+  let datoms =
+    if (e, a, v, tx) = (None, None, None, None) then
       datoms
     else
       datoms
-      |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value v d.v && matches tx d.tx)
+      |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
   apply_filter_pred db datoms
 
@@ -627,9 +485,12 @@ let compare_datom_to_bound context index d e a v tx =
 let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
-  datoms context db index ()
-  |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
-  |> List.of_seq
+  match lower_prefix_datoms context db index e a v tx with
+  | Some datoms -> apply_filter_pred db (List.to_seq datoms) |> List.of_seq
+  | None ->
+    datoms context db index ()
+    |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
+    |> List.of_seq
 
 let seek_datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in
@@ -638,10 +499,13 @@ let seek_datoms_ref context db index ?e ?a ?v ?tx () =
 let rseek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
-  datoms context db index ()
-  |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
-  |> List.of_seq
-  |> List.rev
+  match reverse_upper_prefix_datoms context db index e a v tx with
+  | Some datoms -> apply_filter_pred db (List.to_seq datoms) |> List.of_seq
+  | None ->
+    datoms context db index ()
+    |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
+    |> List.of_seq
+    |> List.rev
 
 let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in
@@ -652,10 +516,9 @@ let index_range context db attr ?start ?stop () =
     invalid_arg (indexed_attr_required_message attr);
   let start = Option.map (context.resolve_value_for_attr db attr) start in
   let stop = Option.map (context.resolve_value_for_attr db attr) stop in
-  datoms context db Avet ~a:attr ()
-  |> Seq.filter (fun d ->
-    Option.fold ~none:true ~some:(fun start -> context.compare_value d.v start >= 0) start
-    && Option.fold ~none:true ~some:(fun stop -> context.compare_value d.v stop <= 0) stop)
+  avet_range_datoms context db attr start stop
+  |> List.to_seq
+  |> apply_filter_pred db
   |> List.of_seq
 
 let diff left right =

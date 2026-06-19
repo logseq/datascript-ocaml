@@ -80,18 +80,6 @@ let bench config name f =
   in
   Printf.printf "%s\t%s\n%!" name (format_ms (median samples))
 
-let one =
-  { cardinality = One
-  ; unique = None
-  ; indexed = false
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
-
 let indexed =
   { cardinality = One
   ; unique = None
