@@ -688,8 +688,9 @@ let rec add_query_clause_attrs acc = function
   | SourceMissing (_, _, attr)
   | GetElse (_, attr, _, _)
   | SourceGetElse (_, _, attr, _, _) ->
-    attr :: acc
-  | GetSome (_, attrs, _, _) | SourceGetSome (_, _, attrs, _, _) -> attrs @ acc
+    add_query_attr acc attr
+  | GetSome (_, attrs, _, _) | SourceGetSome (_, _, attrs, _, _) ->
+    List.fold_left add_query_attr acc attrs
   | SourceClause (_, clause) -> add_query_clause_attrs acc clause
   | Not clauses | SourceNot (_, clauses) | NotJoin (_, clauses) | SourceNotJoin (_, _, clauses) ->
     List.fold_left add_query_clause_attrs acc clauses

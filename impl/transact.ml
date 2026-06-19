@@ -326,7 +326,8 @@ type apply_context =
   }
 
 let eavt_datoms db =
-  Persistent_sorted_set.to_list db.eavt_index
+  Persistent_sorted_set.to_list db.eavt_index @ db.duplicate_datoms
+  |> List.sort (Util.compare_datom Eavt)
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";

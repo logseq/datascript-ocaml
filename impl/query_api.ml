@@ -37,6 +37,18 @@ end) = struct
     let rules = validate_rule_arities (query.rules @ input_rules) in
     let names = rule_names rules in
     List.map (resolve_dynamic_rule names) rules, List.map (resolve_dynamic_rule_clause names) query.where
+
+  let dedupe_bindings_for_find bindings find =
+    let vars = Query.grouping_vars_of_find find in
+    match vars with
+    | [] -> bindings
+    | vars ->
+      bindings
+      |> List.filter_map (fun binding ->
+        Query.collect_find_vars binding vars
+        |> Option.map (fun key -> key, binding))
+      |> List.sort_uniq (fun (left, _) (right, _) -> compare left right)
+      |> List.map snd
   
   let q_sources_raw ?(inputs = []) db sources query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
@@ -51,6 +63,7 @@ end) = struct
       non_aggregate_rows_with db sources bindings query.find query.with_vars
     else
       bindings
+      |> fun bindings -> dedupe_bindings_for_find bindings query.find
       |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
       |> List.sort_uniq compare
   

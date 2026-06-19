@@ -85,6 +85,7 @@ type storage_root =
   ; storage_eavt : storage_address
   ; storage_aevt : storage_address
   ; storage_avet : storage_address
+  ; storage_duplicate_datoms : datom list
   ; storage_max_addr : int
   ; storage_branching_factor : int
   }
@@ -131,6 +132,10 @@ and db =
   ; eavt_index : datom Persistent_sorted_set.t
   ; aevt_index : datom Persistent_sorted_set.t
   ; avet_index : datom Persistent_sorted_set.t
+  ; duplicate_datoms : datom list
+  ; duplicate_aevt_datoms : datom list
+  ; duplicate_avet_datoms : datom list
+  ; duplicate_eavt_by_entity : (entity_id, datom list) Hashtbl.t
   ; max_eid : entity_id
   ; max_datom_e : entity_id
   ; max_tx : tx
@@ -258,12 +263,12 @@ type query_clause =
   | SourcePatternTx of string * query_term * query_term * query_term * query_term
   | SourcePatternTxOp of string * query_term * query_term * query_term * query_term * query_term
   | SourceRelationPattern of string * query_term list
-  | Missing of query_term * attr
-  | SourceMissing of string * query_term * attr
-  | GetElse of query_term * attr * query_term * string
-  | SourceGetElse of string * query_term * attr * query_term * string
-  | GetSome of query_term * attr list * string * string
-  | SourceGetSome of string * query_term * attr list * string * string
+  | Missing of query_term * query_term
+  | SourceMissing of string * query_term * query_term
+  | GetElse of query_term * query_term * query_term * string
+  | SourceGetElse of string * query_term * query_term * query_term * string
+  | GetSome of query_term * query_term list * string * string
+  | SourceGetSome of string * query_term * query_term list * string * string
   | GetValue of query_term * query_term * string
   | GetDefaultValue of query_term * query_term * query_term * string
   | CountValue of query_term * string

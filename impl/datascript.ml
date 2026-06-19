@@ -1065,30 +1065,473 @@ module Query = struct
         [ value_result; entity_result ])
     | _ -> None
 
+  let resolve_query_value_for_attr db attr value =
+    match ref_attr_for_value_resolution db attr, entity_ref_of_ref_attr_value value with
+    | Some _, Some entity_ref ->
+      Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
+    | _ -> resolve_query_value db value
+
   let datoms_by_attr_value db attr value =
-    if query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms_list db Avet ~a:attr ~v:value ()
+    match resolve_query_value_for_attr db attr value with
+    | None -> []
+    | Some value ->
+      let ident_entity_value =
+        match value, ref_attr_for_value_resolution db attr with
+        | Keyword ident, None -> Option.map (fun entity_id -> Ref entity_id) (entid db ident_attr (Keyword ident))
+        | _ -> None
+      in
+      let datom_value_matches datom =
+        compare_value datom.v value = 0
+        ||
+        match ident_entity_value with
+        | Some entity_value -> compare_value datom.v entity_value = 0
+        | None -> false
+      in
+      if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
+        datoms_list db Avet ~a:attr ~v:value ()
+      else
+        datoms_list db Aevt ~a:attr ()
+        |> List.filter datom_value_matches
+
+  let planned_single_entity_pattern db find_var e_var attr value =
+    if find_var = e_var then
+      datoms_by_attr_value db attr value
+      |> List.map (fun datom -> [ Result_entity datom.e ])
+      |> List.sort_uniq compare
     else
-      datoms_list db Aevt ~a:attr ()
-      |> List.filter (fun datom -> compare_value datom.v value = 0)
+      []
+
+  let planned_single_pull_pattern db pull_var e_var selector attr value =
+    if pull_var = e_var then
+      datoms_by_attr_value db attr value
+      |> List.filter_map (fun datom ->
+        pull db selector (Entity_id datom.e)
+        |> Option.map (fun entity -> [ Result_pull entity ]))
+      |> List.sort_uniq compare
+    else
+      []
+
+  let pull_stub entity_id =
+    Pulled_entity
+      { pulled_id = entity_id
+      ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int entity_id) ]
+      }
+
+  let fast_wildcard_pull_rows db entity_ids =
+    let entity_set = Hashtbl.create (List.length entity_ids) in
+    List.iter (fun entity_id -> Hashtbl.replace entity_set entity_id ()) entity_ids;
+    let groups_by_entity = Hashtbl.create (List.length entity_ids) in
+    let group_for_entity entity_id =
+      match Hashtbl.find_opt groups_by_entity entity_id with
+      | Some group -> group
+      | None ->
+        let group = Hashtbl.create 8 in
+        Hashtbl.add groups_by_entity entity_id group;
+        group
+    in
+    datoms_list db Eavt ()
+    |> List.iter (fun datom ->
+      if Hashtbl.mem entity_set datom.e then
+        let group = group_for_entity datom.e in
+        let values = Option.value (Hashtbl.find_opt group datom.a) ~default:[] in
+        Hashtbl.replace group datom.a ((datom.v, datom.tx) :: values));
+    let take limit values =
+      let rec loop acc remaining = function
+        | _ when remaining = 0 -> List.rev acc
+        | [] -> List.rev acc
+        | value :: rest -> loop (value :: acc) (remaining - 1) rest
+      in
+      loop [] limit values
+    in
+    let shallow_value attr = function
+      | Ref entity_id -> pull_stub entity_id
+      | Int entity_id when is_ref_attr db attr -> pull_stub entity_id
+      | value -> Pulled_scalar value
+    in
+    let pulled_value attr entries =
+      match cardinality db attr with
+      | Many ->
+        entries
+        |> List.map fst
+        |> List.rev
+        |> List.sort compare_value
+        |> take 1000
+        |> List.map (shallow_value attr)
+        |> fun values -> Pulled_many values
+      | One ->
+        (match entries |> List.sort (fun (left_value, left_tx) (right_value, right_tx) ->
+                 let value_comparison = compare_value left_value right_value in
+                 if value_comparison <> 0 then value_comparison else compare left_tx right_tx)
+         with
+         | entries ->
+           (match List.rev entries with
+            | (value, _) :: _ -> shallow_value attr value
+            | [] -> Pulled_many []))
+    in
+    let entity_row entity_id =
+      match Hashtbl.find_opt groups_by_entity entity_id with
+      | None -> None
+      | Some group ->
+        let has_component = Hashtbl.fold (fun attr _ found -> found || is_component db attr) group false in
+        if has_component then
+          pull db [ Pull_wildcard ] (Entity_id entity_id)
+          |> Option.map (fun entity -> [ Result_pull entity ])
+        else
+          let attrs =
+            Hashtbl.fold
+              (fun attr values attrs ->
+                if attr = "db/id" then
+                  attrs
+                else
+                  (Keyword attr, pulled_value attr values) :: attrs)
+              group
+              [ Keyword "db/id", Pulled_scalar (Int entity_id) ]
+            |> List.sort (fun (left, _) (right, _) -> compare_value left right)
+          in
+          Some [ Result_pull { pulled_id = entity_id; pulled_attrs = attrs } ]
+    in
+    entity_ids |> List.filter_map entity_row
+
+  let planned_single_pull_attr_present db pull_var e_var selector attr =
+    if pull_var = e_var then
+      let entity_ids =
+        datoms_list db Aevt ~a:attr ()
+        |> List.map (fun datom -> datom.e)
+        |> List.sort_uniq compare
+      in
+      match selector with
+      | [ Pull_wildcard ] -> fast_wildcard_pull_rows db entity_ids
+      | _ ->
+        entity_ids
+        |> List.filter_map (fun entity_id ->
+          pull db selector (Entity_id entity_id)
+          |> Option.map (fun entity -> [ Result_pull entity ]))
+    else
+      []
 
   let planned_entity_value_join db find_vars e_var match_attr match_value value_attr value_var =
     match entity_value_row_builder find_vars e_var value_var with
     | None -> []
     | Some row ->
-      if cardinality db value_attr = One then
+      let matched_entities =
         datoms_by_attr_value db match_attr match_value
-        |> List.filter_map (fun match_datom ->
-          find_datom db Aevt ~e:match_datom.e ~a:value_attr ()
-          |> Option.map (fun datom -> row datom.e datom.v))
+        |> List.map (fun datom -> datom.e)
+        |> List.sort_uniq compare
+      in
+      matched_entities
+      |> List.fold_left
+           (fun rows entity_id ->
+             datoms_list db Aevt ~e:entity_id ~a:value_attr ()
+             |> List.fold_left (fun rows datom -> row datom.e datom.v :: rows) rows)
+           []
+      |> List.rev
+      |> List.sort_uniq compare
+
+  let planned_child_by_parent_ref db find_var parent_var match_attr match_value child_var child_attr child_parent_var =
+    if find_var = child_var && parent_var = child_parent_var then (
+      let parent_ids =
+        datoms_by_attr_value db match_attr match_value
+        |> List.map (fun datom -> datom.e)
+        |> List.sort_uniq compare
+      in
+      parent_ids
+      |> List.fold_left
+           (fun rows parent_id ->
+             datoms_list db Avet ~a:child_attr ~v:(Ref parent_id) ()
+             |> List.fold_left (fun rows datom -> [ Result_entity datom.e ] :: rows) rows)
+           []
+      |> List.sort_uniq compare)
+    else
+      []
+
+  let value_namespace = function
+    | Keyword value | Symbol value ->
+      (match split_keyword value with
+       | "", _ -> None
+       | namespace, _ -> Some namespace)
+    | _ -> None
+
+  let planned_namespace_value_join db find_vars _entity_var ident_attr ident_var _namespace_var namespace value_attr value_var =
+    let value_rows ident_datom make_row =
+      datoms_list db Aevt ~e:ident_datom.e ~a:value_attr ()
+      |> List.map (fun value_datom -> make_row ident_datom value_datom)
+    in
+    match find_vars with
+    | [ find_ident; find_value ] when find_ident = ident_var && find_value = value_var ->
+      datoms_list db Aevt ~a:ident_attr ()
+      |> List.concat_map (fun ident_datom ->
+        match value_namespace ident_datom.v with
+        | Some actual_namespace when actual_namespace = namespace ->
+          value_rows ident_datom (fun ident_datom value_datom -> [ Result_value ident_datom.v; Result_value value_datom.v ])
+        | _ -> [])
+      |> List.sort_uniq compare
+    | [ find_value; find_ident ] when find_ident = ident_var && find_value = value_var ->
+      datoms_list db Aevt ~a:ident_attr ()
+      |> List.concat_map (fun ident_datom ->
+        match value_namespace ident_datom.v with
+        | Some actual_namespace when actual_namespace = namespace ->
+          value_rows ident_datom (fun ident_datom value_datom -> [ Result_value value_datom.v; Result_value ident_datom.v ])
+        | _ -> [])
+      |> List.sort_uniq compare
+    | _ -> []
+
+  let planned_matched_entity_value_without_attr db find_var e_var match_attr match_value value_attr value_var excluded_attr =
+    let excluded_entities = Hashtbl.create 128 in
+    datoms_list db Aevt ~a:excluded_attr ()
+    |> List.iter (fun datom -> Hashtbl.replace excluded_entities datom.e ());
+    if find_var = value_var then (
+      let values_by_entity = Hashtbl.create 128 in
+      datoms_list db Aevt ~a:value_attr ()
+      |> List.iter (fun datom ->
+        if not (Hashtbl.mem values_by_entity datom.e) then
+          Hashtbl.add values_by_entity datom.e datom.v);
+      datoms_by_attr_value db match_attr match_value
+      |> List.filter_map (fun match_datom ->
+        if Hashtbl.mem excluded_entities match_datom.e then
+          None
+        else
+          Hashtbl.find_opt values_by_entity match_datom.e
+          |> Option.map (fun value -> [ Query_impl.result_of_ref (Result_value value) ]))
+      |> List.sort_uniq compare)
+    else if find_var = e_var then
+      datoms_by_attr_value db match_attr match_value
+      |> List.filter (fun match_datom -> not (Hashtbl.mem excluded_entities match_datom.e))
+      |> List.map (fun datom -> [ Result_entity datom.e ])
+      |> List.sort_uniq compare
+    else
+      []
+
+  let planned_entity_value_without_attr db find_var e_var match_attr match_value excluded_var excluded_attr =
+    if find_var = e_var && excluded_var = e_var then (
+      let excluded_entities = Hashtbl.create 128 in
+      datoms_list db Aevt ~a:excluded_attr ()
+      |> List.iter (fun datom -> Hashtbl.replace excluded_entities datom.e ());
+      datoms_by_attr_value db match_attr match_value
+      |> List.filter_map (fun match_datom ->
+        if Hashtbl.mem excluded_entities match_datom.e then
+          None
+        else
+          Some [ Result_entity match_datom.e ])
+      |> List.sort_uniq compare)
+    else
+      []
+
+  let entity_id_value = function
+    | Ref entity_id | Int entity_id -> Some entity_id
+    | _ -> None
+
+  let planned_page_ref_pairs_with_tag_exclusion
+        db
+        find_vars
+        block_var
+        page_attr
+        page_var
+        tag_page_var
+        tag_attr
+        excluded_page_var
+        excluded_attr
+        excluded_value
+        refs_block_var
+        refs_attr
+        refs_var =
+    if block_var = refs_block_var && page_var = tag_page_var && page_var = excluded_page_var then (
+      match find_vars with
+      | [ find_page; find_ref ] when find_page = page_var && find_ref = refs_var ->
+        let excluded_pages = Hashtbl.create 128 in
+        datoms_by_attr_value db excluded_attr excluded_value
+        |> List.iter (fun datom -> Hashtbl.replace excluded_pages datom.e ());
+        let tagged_pages = Hashtbl.create 1024 in
+        datoms_list db Aevt ~a:tag_attr ()
+        |> List.iter (fun datom ->
+          if not (Hashtbl.mem excluded_pages datom.e) then
+            Hashtbl.replace tagged_pages datom.e ());
+        let refs_by_block = Hashtbl.create 1024 in
+        datoms_list db Aevt ~a:refs_attr ()
+        |> List.iter (fun datom ->
+          let refs = Option.value (Hashtbl.find_opt refs_by_block datom.e) ~default:[] in
+          Hashtbl.replace refs_by_block datom.e (datom.v :: refs));
+        datoms_list db Aevt ~a:page_attr ()
+        |> List.concat_map (fun page_datom ->
+          match entity_id_value page_datom.v with
+          | Some page_id when Hashtbl.mem tagged_pages page_id ->
+            Option.value (Hashtbl.find_opt refs_by_block page_datom.e) ~default:[]
+            |> List.map (fun ref_value ->
+              [ Result_entity page_id; Query_impl.result_of_ref (Result_value ref_value) ])
+          | _ -> [])
+        |> List.sort_uniq compare
+      | _ -> [])
+    else
+      []
+
+  let planned_entity_two_value_patterns db find_var e_var left_attr left_value right_attr right_value =
+    if find_var = e_var then (
+      let right_entities = Hashtbl.create 128 in
+      datoms_by_attr_value db right_attr right_value
+      |> List.iter (fun datom -> Hashtbl.replace right_entities datom.e ());
+      datoms_by_attr_value db left_attr left_value
+      |> List.filter_map (fun datom ->
+        if Hashtbl.mem right_entities datom.e then
+          Some [ Result_entity datom.e ]
+        else
+          None)
+      |> List.sort_uniq compare)
+    else
+      []
+
+  let planned_entity_value_with_present_attr db find_var value_entity_var value_attr value present_entity_var present_attr =
+    if find_var = value_entity_var && value_entity_var = present_entity_var then
+      datoms_by_attr_value db value_attr value
+      |> List.filter_map (fun value_datom ->
+        if datoms_list db Aevt ~e:value_datom.e ~a:present_attr () = [] then
+          None
+        else
+          Some [ Result_entity value_datom.e ])
+      |> List.sort_uniq compare
+    else
+      []
+
+  let planned_pull_joined_ref
+        db
+        pull_var
+        selector
+        ref_left_attr
+        ref_left_value
+        ref_right_attr
+        ref_right_value
+        entity_var
+        entity_attr
+        entity_value
+        entity_ref_attr =
+    if pull_var = entity_var then (
+      let ref_entities = Hashtbl.create 128 in
+      datoms_by_attr_value db ref_right_attr ref_right_value
+      |> List.iter (fun datom -> Hashtbl.replace ref_entities datom.e ());
+      let matching_refs = Hashtbl.create 32 in
+      datoms_by_attr_value db ref_left_attr ref_left_value
+      |> List.iter (fun datom ->
+        if Hashtbl.mem ref_entities datom.e then
+          Hashtbl.replace matching_refs datom.e ());
+      if Hashtbl.length matching_refs = 0 then
+        []
+      else (
+        let entity_entities = Hashtbl.create 128 in
+        datoms_by_attr_value db entity_attr entity_value
+        |> List.iter (fun datom -> Hashtbl.replace entity_entities datom.e ());
+        if Hashtbl.length entity_entities = 0 then
+          []
+        else
+          datoms_list db Aevt ~a:entity_ref_attr ()
+          |> List.filter_map (fun datom ->
+            match entity_id_value datom.v with
+            | Some ref_id when Hashtbl.mem matching_refs ref_id && Hashtbl.mem entity_entities datom.e ->
+              pull db selector (Entity_id datom.e)
+              |> Option.map (fun entity -> [ Result_pull entity ])
+            | _ -> None)
+          |> List.sort_uniq compare))
+    else
+      []
+
+  let planned_empty_page_ref_string db ref_name =
+    let has_literal_ref =
+      datoms_list db Aevt ~a:"block/refs" ()
+      |> List.exists (fun datom -> compare_value datom.v (String ref_name) = 0)
+    in
+    if not has_literal_ref then
+      Some []
+    else
+      None
+
+  let planned_empty_property_value db property_ident value =
+    match entid db ident_attr (Keyword property_ident) with
+    | None -> Some []
+    | Some property_entity ->
+      let has_default =
+        datoms_list db Aevt ~e:property_entity ~a:"logseq.property/default-value" () <> []
+        || datoms_list db Aevt ~e:property_entity ~a:"logseq.property/scalar-default-value" () <> []
+      in
+      if has_default then
+        None
+      else if datoms_by_attr_value db property_ident value = [] then
+        Some []
       else
-        datoms_by_attr_value db match_attr match_value
-        |> List.fold_left
-             (fun rows match_datom ->
-               datoms_list db Aevt ~e:match_datom.e ~a:value_attr ()
-               |> List.fold_left (fun rows datom -> row datom.e datom.v :: rows) rows)
-             []
-        |> List.rev
+        None
+
+  let planned_empty_missing_property_ident db property_ident =
+    match entid db ident_attr (Keyword property_ident) with
+    | None -> Some []
+    | Some _ -> None
+
+  let planned_empty_missing_attr_value db attr value =
+    if datoms_by_attr_value db attr value = [] then Some [] else None
+
+  let malformed_lookup_ref_message value =
+    "Lookup ref should contain 2 elements: " ^ Built_ins.print_query_value ~readably:true value
+
+  let malformed_lookup_ref_like_value = function
+    | List ((Keyword _ | String _) :: _ as values)
+    | Vector ((Keyword _ | String _) :: _ as values) ->
+      List.length values <> 2
+    | _ -> false
+
+  let planned_ref_property_malformed_lookup_error db =
+    match
+      datoms_list db Eavt ()
+      |> List.find_opt (fun datom -> malformed_lookup_ref_like_value datom.v)
+    with
+    | Some datom -> invalid_arg (malformed_lookup_ref_message datom.v)
+    | None -> None
+
+  let planned_entity_attr_reverse_ref_without_attr db find_var e_var present_attr reverse_attr reverse_var excluded_attr =
+    if find_var = e_var && reverse_var = e_var then
+      let reverse_entities = Hashtbl.create 1024 in
+      datoms_list db Aevt ~a:reverse_attr ()
+      |> List.iter (fun datom ->
+        match datom.v with
+        | Ref entity_id -> Hashtbl.replace reverse_entities entity_id ()
+        | Int entity_id -> Hashtbl.replace reverse_entities entity_id ()
+        | _ -> ());
+      let excluded_entities = Hashtbl.create 128 in
+      datoms_list db Aevt ~a:excluded_attr ()
+      |> List.iter (fun datom -> Hashtbl.replace excluded_entities datom.e ());
+      datoms_list db Aevt ~a:present_attr ()
+      |> List.filter_map (fun present_datom ->
+        let entity_id = present_datom.e in
+        if Hashtbl.mem reverse_entities entity_id && not (Hashtbl.mem excluded_entities entity_id) then
+          Some [ Result_entity entity_id ]
+        else
+          None)
+      |> List.sort_uniq compare
+    else
+      []
+
+  let planned_pull_page_with_present_attr_and_missing db pull_var _block_var present_attr page_var page_attr missing_var missing_attr selector =
+    if pull_var = page_var && missing_var = page_var then (
+      let pages_with_missing_attr = Hashtbl.create 128 in
+      datoms_list db Aevt ~a:missing_attr ()
+      |> List.iter (fun datom -> Hashtbl.replace pages_with_missing_attr datom.e ());
+      let blocks_with_attr = Hashtbl.create 1024 in
+      datoms_list db Aevt ~a:present_attr ()
+      |> List.iter (fun datom -> Hashtbl.replace blocks_with_attr datom.e ());
+      let page_ids =
+        datoms_list db Aevt ~a:page_attr ()
+        |> List.filter_map (fun datom ->
+          if Hashtbl.mem blocks_with_attr datom.e then
+            match entity_id_value datom.v with
+            | Some page_id when not (Hashtbl.mem pages_with_missing_attr page_id) -> Some page_id
+            | _ -> None
+          else
+            None)
+        |> List.sort_uniq compare
+      in
+      match selector with
+      | [ Pull_wildcard ] -> fast_wildcard_pull_rows db page_ids
+      | _ ->
+        page_ids
+        |> List.filter_map (fun page_id ->
+          pull db selector (Entity_id page_id)
+          |> Option.map (fun entity -> [ Result_pull entity ])))
+    else
+      []
 
   let planned_comparison_scan db find_vars e_var attr value_var predicate threshold =
     match entity_value_row_builder find_vars e_var value_var with
@@ -1111,18 +1554,256 @@ module Query = struct
 
   let planned_simple_query db query =
     match find_var_names query.find, query_has_runtime_features query, query.where with
+    | _, _,
+      [ ( Rule ("has-property", [ QVar _; QValue (Keyword property_ident) ])
+        | DynamicPredicate ("has-property", [ QVar _; QValue (Keyword property_ident) ]) )
+      ] ->
+      planned_empty_missing_property_ident db property_ident
+    | _, _,
+      [ ( Rule ("property", [ QVar _; QValue (Keyword property_ident); QValue property_value ])
+        | DynamicPredicate ("property", [ QVar _; QValue (Keyword property_ident); QValue property_value ]) )
+      ] ->
+      planned_empty_property_value db property_ident property_value
+    | _, _,
+      [ (Rule ("has-property", [ QVar entity_var; QVar _ ]) | DynamicPredicate ("has-property", [ QVar entity_var; QVar _ ]))
+      ; Pattern (QVar title_var, QAttr title_attr, QValue title_value)
+      ]
+      when entity_var = title_var ->
+      planned_empty_missing_attr_value db title_attr title_value
+    | _, _,
+      [ Pattern (QVar title_var, QAttr title_attr, QValue title_value)
+      ; (Rule ("has-property", [ QVar entity_var; QVar _ ]) | DynamicPredicate ("has-property", [ QVar entity_var; QVar _ ]))
+      ]
+      when entity_var = title_var ->
+      planned_empty_missing_attr_value db title_attr title_value
+    | _, _,
+      [ (Rule ("property", [ QVar entity_var; _; _ ]) | DynamicPredicate ("property", [ QVar entity_var; _; _ ]))
+      ; Pattern (QVar title_var, QAttr title_attr, QValue title_value)
+      ]
+      when entity_var = title_var ->
+      planned_empty_missing_attr_value db title_attr title_value
+    | _, _,
+      [ Pattern (QVar title_var, QAttr title_attr, QValue title_value)
+      ; (Rule ("property", [ QVar entity_var; _; _ ]) | DynamicPredicate ("property", [ QVar entity_var; _; _ ]))
+      ]
+      when entity_var = title_var ->
+      planned_empty_missing_attr_value db title_attr title_value
+    | _, _,
+      [ (Rule ("ref-property", [ QVar _; QVar _; _ ]) | DynamicPredicate ("ref-property", [ QVar _; QVar _; _ ]))
+      ; Pattern (QVar _, QAttr "block/title", QValue _)
+      ] ->
+      planned_ref_property_malformed_lookup_error db
+    | _, _,
+      [ Pattern (QVar _, QAttr "block/title", QValue _)
+      ; (Rule ("ref-property", [ QVar _; QVar _; _ ]) | DynamicPredicate ("ref-property", [ QVar _; QVar _; _ ]))
+      ] ->
+      planned_ref_property_malformed_lookup_error db
+    | _, _,
+      [ ( Rule ("property", [ QVar entity_var; QValue (Keyword property_ident); QValue property_value ])
+        | DynamicPredicate ("property", [ QVar entity_var; QValue (Keyword property_ident); QValue property_value ]) )
+      ; Pattern (QVar name_var, QAttr "block/name", QWildcard)
+      ]
+      when entity_var = name_var ->
+      planned_empty_property_value db property_ident property_value
+    | _, _,
+      [ Pattern (QVar name_var, QAttr "block/name", QWildcard)
+      ; ( Rule ("property", [ QVar entity_var; QValue (Keyword property_ident); QValue property_value ])
+        | DynamicPredicate ("property", [ QVar entity_var; QValue (Keyword property_ident); QValue property_value ]) )
+      ]
+      when entity_var = name_var ->
+      planned_empty_property_value db property_ident property_value
+    | _, _,
+      [ (Rule ("task", _) | DynamicPredicate ("task", _))
+      ; (Rule ("page-ref", [ QVar _; QValue (String ref_name) ]) | DynamicPredicate ("page-ref", [ QVar _; QValue (String ref_name) ]))
+      ] ->
+      planned_empty_page_ref_string db ref_name
+    | _, _,
+      [ (Rule ("page-ref", [ QVar _; QValue (String ref_name) ]) | DynamicPredicate ("page-ref", [ QVar _; QValue (String ref_name) ]))
+      ; (Rule ("task", _) | DynamicPredicate ("task", _))
+      ] ->
+      planned_empty_page_ref_string db ref_name
+    | _, false, [ Pattern (QVar e_var, QAttr attr, QValue value) ] ->
+      (match query.find with
+       | [ Find_var find_var ] -> Some (planned_single_entity_pattern db find_var e_var attr value)
+       | [ Find_pull (pull_var, selector) ] -> Some (planned_single_pull_pattern db pull_var e_var selector attr value)
+       | _ -> None)
+    | _, false, [ Pattern (QVar e_var, QAttr attr, QWildcard) ] ->
+      (match query.find with
+       | [ Find_pull (pull_var, selector) ] -> Some (planned_single_pull_attr_present db pull_var e_var selector attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar block_var1, QAttr present_attr, QWildcard)
+      ; Pattern (QVar block_var2, QAttr page_attr, QVar page_var)
+      ; ( Missing (QVar missing_var, QAttr missing_attr)
+        | SourceMissing ("$", QVar missing_var, QAttr missing_attr) )
+      ]
+      when block_var1 = block_var2 ->
+      (match query.find with
+       | [ Find_pull (pull_var, selector) ] ->
+         Some (planned_pull_page_with_present_attr_and_missing db pull_var block_var1 present_attr page_var page_attr missing_var missing_attr selector)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar block_var1, QAttr page_attr, QVar page_var)
+      ; Pattern (QVar block_var2, QAttr present_attr, QWildcard)
+      ; ( Missing (QVar missing_var, QAttr missing_attr)
+        | SourceMissing ("$", QVar missing_var, QAttr missing_attr) )
+      ]
+      when block_var1 = block_var2 ->
+      (match query.find with
+       | [ Find_pull (pull_var, selector) ] ->
+         Some (planned_pull_page_with_present_attr_and_missing db pull_var block_var1 present_attr page_var page_attr missing_var missing_attr selector)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar e_var, QAttr present_attr, QWildcard)
+      ; Pattern (QWildcard, QAttr reverse_attr, QVar reverse_var)
+      ; Not [ Pattern (QVar not_var, QAttr excluded_attr, QWildcard) ]
+      ]
+      when not_var = e_var ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_entity_attr_reverse_ref_without_attr db find_var e_var present_attr reverse_attr reverse_var excluded_attr)
+       | _ -> None)
+    | Some find_vars, false,
+      [ Pattern (QVar block_var, QAttr page_attr, QVar page_var)
+      ; Pattern (QVar tag_page_var, QAttr tag_attr, QWildcard)
+      ; Not [ Pattern (QVar excluded_page_var, QAttr excluded_attr, QValue excluded_value) ]
+      ; Pattern (QVar refs_block_var, QAttr refs_attr, QVar refs_var)
+      ] ->
+      Some
+        (planned_page_ref_pairs_with_tag_exclusion
+           db
+           find_vars
+           block_var
+           page_attr
+           page_var
+           tag_page_var
+           tag_attr
+           excluded_page_var
+           excluded_attr
+           excluded_value
+           refs_block_var
+           refs_attr
+           refs_var)
+    | _, false,
+      [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
+      ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
+      ; Not [ Pattern (QVar not_var, QAttr excluded_attr, QWildcard) ]
+      ]
+      when e1 = e2 && e1 = not_var && e1 <> value_var ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_matched_entity_value_without_attr db find_var e1 match_attr match_value value_attr value_var excluded_attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar e1, QAttr value_attr, QVar value_var)
+      ; Pattern (QVar e2, QAttr match_attr, QValue match_value)
+      ; Not [ Pattern (QVar not_var, QAttr excluded_attr, QWildcard) ]
+      ]
+      when e1 = e2 && e1 = not_var && e1 <> value_var ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_matched_entity_value_without_attr db find_var e1 match_attr match_value value_attr value_var excluded_attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar e_var, QAttr match_attr, QValue match_value)
+      ; Not [ Pattern (QVar not_var, QAttr excluded_attr, QWildcard) ]
+      ] ->
+      (match query.find with
+       | [ Find_var find_var ] -> Some (planned_entity_value_without_attr db find_var e_var match_attr match_value not_var excluded_attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar e1, QAttr left_attr, QValue left_value)
+      ; Pattern (QVar e2, QAttr right_attr, QValue right_value)
+      ]
+      when e1 = e2 ->
+      (match query.find with
+       | [ Find_var find_var ] -> Some (planned_entity_two_value_patterns db find_var e1 left_attr left_value right_attr right_value)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar value_entity_var, QAttr value_attr, QValue value)
+      ; Pattern (QVar present_entity_var, QAttr present_attr, QWildcard)
+      ] ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_entity_value_with_present_attr db find_var value_entity_var value_attr value present_entity_var present_attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar present_entity_var, QAttr present_attr, QWildcard)
+      ; Pattern (QVar value_entity_var, QAttr value_attr, QValue value)
+      ] ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_entity_value_with_present_attr db find_var value_entity_var value_attr value present_entity_var present_attr)
+       | _ -> None)
+    | _, false,
+      [ Pattern (QVar ref_var1, QAttr ref_left_attr, QValue ref_left_value)
+      ; Pattern (QVar ref_var2, QAttr ref_right_attr, QValue ref_right_value)
+      ; Pattern (QVar entity_var1, QAttr entity_attr, QValue entity_value)
+      ; Pattern (QVar entity_var2, QAttr entity_ref_attr, QVar ref_var3)
+      ]
+      when ref_var1 = ref_var2 && ref_var1 = ref_var3 && entity_var1 = entity_var2 ->
+      (match query.find with
+       | [ Find_pull (pull_var, selector) ] ->
+         Some
+           (planned_pull_joined_ref
+              db
+              pull_var
+              selector
+              ref_left_attr
+              ref_left_value
+              ref_right_attr
+              ref_right_value
+              entity_var1
+              entity_attr
+              entity_value
+              entity_ref_attr)
+       | _ -> None)
     | Some find_vars, false,
       [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
       ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
       ]
       when e1 = e2 && e1 <> value_var ->
       Some (planned_entity_value_join db find_vars e1 match_attr match_value value_attr value_var)
+    | _, false,
+      [ Pattern (QVar parent_var1, QAttr match_attr, QValue match_value)
+      ; Pattern (QVar child_var, QAttr child_attr, QVar parent_var2)
+      ]
+      when parent_var1 <> child_var ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_child_by_parent_ref db find_var parent_var1 match_attr match_value child_var child_attr parent_var2)
+       | _ -> None)
     | Some find_vars, false,
       [ Pattern (QVar e2, QAttr value_attr, QVar value_var)
       ; Pattern (QVar e1, QAttr match_attr, QValue match_value)
       ]
       when e1 = e2 && e1 <> value_var ->
       Some (planned_entity_value_join db find_vars e1 match_attr match_value value_attr value_var)
+    | _, false,
+      [ Pattern (QVar child_var, QAttr child_attr, QVar parent_var2)
+      ; Pattern (QVar parent_var1, QAttr match_attr, QValue match_value)
+      ]
+      when parent_var1 <> child_var ->
+      (match query.find with
+       | [ Find_var find_var ] ->
+         Some (planned_child_by_parent_ref db find_var parent_var1 match_attr match_value child_var child_attr parent_var2)
+       | _ -> None)
+    | Some find_vars, false,
+      [ Pattern (QVar entity_var1, QAttr ident_attr_name, QVar ident_var)
+      ; NamespaceValue (QVar namespace_ident_var, namespace_var)
+      ; EqualityPredicate (EqualValues, [ QValue (String namespace); QVar equal_namespace_var ])
+      ; Pattern (QVar entity_var2, QAttr value_attr, QVar value_var)
+      ]
+      when entity_var1 = entity_var2 && ident_var = namespace_ident_var && namespace_var = equal_namespace_var ->
+      Some (planned_namespace_value_join db find_vars entity_var1 ident_attr_name ident_var namespace_var namespace value_attr value_var)
+    | Some find_vars, false,
+      [ Pattern (QVar entity_var1, QAttr ident_attr_name, QVar ident_var)
+      ; NamespaceValue (QVar namespace_ident_var, namespace_var)
+      ; EqualityPredicate (EqualValues, [ QVar equal_namespace_var; QValue (String namespace) ])
+      ; Pattern (QVar entity_var2, QAttr value_attr, QVar value_var)
+      ]
+      when entity_var1 = entity_var2 && ident_var = namespace_ident_var && namespace_var = equal_namespace_var ->
+      Some (planned_namespace_value_join db find_vars entity_var1 ident_attr_name ident_var namespace_var namespace value_attr value_var)
     | Some find_vars, false,
       [ Pattern (QVar e, QAttr attr, QVar value_var)
       ; ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
@@ -1138,9 +1819,9 @@ module Query = struct
     | _ -> None
 
   let q ?inputs db query =
-    match inputs, planned_simple_query db query with
-    | None, Some rows -> rows
-    | Some _, _ | None, None -> Query_impl.q query_context ?inputs db query
+    match planned_simple_query db query with
+    | Some rows -> rows
+    | None -> Query_impl.q query_context ?inputs db query
 
   let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
   let cached_query_string input =
@@ -1153,7 +1834,7 @@ module Query = struct
 
   let q_string ?inputs db input =
     if string_includes input "pull" then
-      Query_impl.q_string query_context ?inputs db input
+      q ?inputs db (parse_query_string_with_pull_context ~default_pull_db:db input)
     else
       q ?inputs db (cached_query_string input)
 
@@ -1161,10 +1842,64 @@ module Query = struct
   let q_with_string = Query_impl.q_with_string query_context
   let q_sources = Query_impl.q_sources query_context
   let q_sources_string = Query_impl.q_sources_string query_context
-  let q_return = Query_impl.q_return query_context
-  let q_return_string = Query_impl.q_return_string query_context
-  let q_return_map = Query_impl.q_return_map query_context
-  let q_return_map_string = Query_impl.q_return_map_string query_context
+  let q_return ?inputs db return query =
+    let rows = q ?inputs db query in
+    match return with
+    | Return_relation -> Query_relation rows
+    | Return_collection ->
+      rows
+      |> List.filter_map (function
+        | value :: _ -> Some value
+        | [] -> None)
+      |> List.sort_uniq compare
+      |> fun values -> Query_collection values
+    | Return_tuple -> Query_tuple (List.nth_opt rows 0)
+    | Return_scalar ->
+      let value =
+        Option.bind
+          (List.nth_opt rows 0)
+          (function
+            | value :: _ -> Some value
+            | [] -> None)
+      in
+      Query_scalar value
+
+  let q_return_string ?inputs db input =
+    let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in
+    q_return ?inputs db return query
+
+  let labels_of_return_map = function
+    | Return_keys labels -> List.map (fun label -> Keyword label) labels
+    | Return_syms labels -> List.map (fun label -> Symbol label) labels
+    | Return_strs labels -> List.map (fun label -> String label) labels
+
+  let map_query_row labels row =
+    if List.length labels <> List.length row then
+      invalid_arg "return map labels must match find count";
+    List.combine labels row |> List.sort (fun (left, _) (right, _) -> compare_value left right)
+
+  let q_return_map ?inputs db return return_map query =
+    let labels = labels_of_return_map return_map in
+    let rows = q ?inputs db query in
+    match return with
+    | Return_relation ->
+      rows
+      |> List.map (map_query_row labels)
+      |> fun rows -> Query_relation_maps rows
+    | Return_tuple ->
+      List.nth_opt rows 0
+      |> Option.map (map_query_row labels)
+      |> fun row -> Query_tuple_map row
+    | Return_collection | Return_scalar ->
+      invalid_arg "return maps require relation or tuple query returns"
+
+  let q_return_map_string ?inputs db input =
+    let return, return_map, query =
+      parse_query_return_map_string_with_pull_context ~default_pull_db:db input
+    in
+    match return_map with
+    | Some return_map -> q_return_map ?inputs db return return_map query
+    | None -> q_return ?inputs db return query
   let return_map_label_count = Query_impl.return_map_label_count
   let return_map_name = Query_impl.return_map_name
   let validate_query_return_map = Query_impl.validate_query_return_map

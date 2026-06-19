@@ -110,6 +110,80 @@ let load_graph_data db_path =
   let datoms = Storage.datoms_of_logseq_graph ~read_only:true db_path in
   schema, datoms
 
+let read_file path =
+  let channel = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in channel)
+    (fun () ->
+      let length = in_channel_length channel in
+      really_input_string channel length)
+
+let graph_key_label = function
+  | QueryFormKeyword key -> ":" ^ key
+  | QueryFormString key -> "\"" ^ key ^ "\""
+  | QueryFormSymbol key -> key
+  | _ -> "<non-attr-key>"
+
+let graph_field name entries =
+  match
+    entries
+    |> List.find_map (fun (key, value) ->
+    match key with
+    | QueryFormKeyword key when key = name -> Some value
+    | _ -> None)
+  with
+  | Some value -> value
+  | None ->
+    invalid_arg
+      ("graph EDN is missing :"
+       ^ name
+       ^ "; keys: "
+       ^ (entries |> List.map (fun (key, _) -> graph_key_label key) |> String.concat ", "))
+
+let schema_of_graph_edn_form = function
+  | QueryFormVector entries ->
+    entries
+    |> List.map (function
+      | QueryFormVector [ attr; spec ] | QueryFormList [ attr; spec ] -> attr, spec
+      | _ -> invalid_arg "graph EDN :schema entries must be [attr spec]")
+    |> fun entries -> Data_readers.schema_of_edn_form (QueryFormMap entries)
+  | _ -> invalid_arg "graph EDN :schema must be a vector"
+
+let rec graph_value_of_form = function
+  | QueryFormNil -> Nil
+  | QueryFormBool value -> Bool value
+  | QueryFormInt value -> Int value
+  | QueryFormFloat value -> Float value
+  | QueryFormString value -> String value
+  | QueryFormKeyword value -> Keyword value
+  | QueryFormSymbol value -> Symbol value
+  | QueryFormVector values -> Vector (List.map graph_value_of_form values)
+  | QueryFormList values -> List (List.map graph_value_of_form values)
+  | QueryFormSet values -> Set (List.map graph_value_of_form values)
+  | QueryFormMap entries ->
+    Map (List.map (fun (key, value) -> graph_value_of_form key, graph_value_of_form value) entries)
+  | QueryFormTagged ("uuid", QueryFormString value) -> Uuid value
+  | QueryFormTagged ("regex", QueryFormString value) -> Regex value
+  | QueryFormTagged (tag, _) -> invalid_arg ("unsupported graph EDN tagged literal: " ^ tag)
+
+let datom_of_graph_edn_form = function
+  | QueryFormVector [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ]
+  | QueryFormList [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ] ->
+    datom ~e ~a:(Data_readers.attr_of_edn_key attr) ~v:(Util.normalize_value (graph_value_of_form value)) ~tx ~added ()
+  | _ -> invalid_arg "graph EDN :datoms entries must be [e attr value tx added]"
+
+let datoms_of_graph_edn_form = function
+  | QueryFormVector datoms | QueryFormList datoms -> List.map datom_of_graph_edn_form datoms
+  | _ -> invalid_arg "graph EDN :datoms must be a vector"
+
+let load_graph_edn_data graph_path =
+  match read_edn (read_file graph_path) with
+  | QueryFormMap entries ->
+    let schema = schema_of_graph_edn_form (graph_field "schema" entries) in
+    let datoms = datoms_of_graph_edn_form (graph_field "datoms" entries) in
+    schema, datoms
+  | _ -> invalid_arg "graph EDN root must be a map"
+
 let rec edn_pulled_value = function
   | Pulled_scalar value -> edn_value value
   | Pulled_many values -> "[" ^ String.concat " " (List.map edn_pulled_value values) ^ "]"
@@ -173,10 +247,18 @@ let json_optional_string_member key = function
 let input_rules_of_string rules =
   Arg_rules (Parser.parse_rules (read_edn rules))
 
+let run_query_output db inputs query =
+  let return, return_map, parsed_query =
+    parse_query_return_map_string_with_pull_context ~default_pull_db:db query
+  in
+  match return_map with
+  | Some return_map -> q_return_map ?inputs db return return_map parsed_query
+  | None -> q_return ?inputs db return parsed_query
+
 let run_query db id query rules =
   try
     let inputs = Option.map (fun rules -> [ input_rules_of_string rules ]) rules in
-    let value = q_return_map_string ?inputs db query |> edn_query_output in
+    let value = run_query_output db inputs query |> edn_query_output in
     print_endline
       (json_obj [ "id", json_string id; "status", json_string "ok"; "value", json_string value ]);
     flush stdout
@@ -190,9 +272,9 @@ let run_query db id query rules =
          ]);
     flush stdout
 
-let run_queries db_path queries_path =
-  let schema, datoms = load_graph_data db_path in
-  let db = init_db ~schema datoms in
+let run_query_loop db queries_path =
+  print_endline (json_obj [ "status", json_string "ready" ]);
+  flush stdout;
   let channel = open_in queries_path in
   Fun.protect
     ~finally:(fun () -> close_in channel)
@@ -210,6 +292,16 @@ let run_queries db_path queries_path =
         done
       with
       | End_of_file -> ())
+
+let run_queries db_path queries_path =
+  let schema, datoms = load_graph_data db_path in
+  let db = init_db ~schema datoms in
+  run_query_loop db queries_path
+
+let run_graph_queries graph_path queries_path =
+  let schema, datoms = load_graph_edn_data graph_path in
+  let db = init_db ~schema datoms in
+  run_query_loop db queries_path
 
 let dump_graph db_path out_path =
   let schema, datoms = load_graph_data db_path in
@@ -233,6 +325,7 @@ let usage () =
   prerr_endline "  logseq_query_runner dump-graph <db.sqlite> <out.edn>";
   prerr_endline "  logseq_query_runner dump-query-graph <db.sqlite> <query> <out.edn>";
   prerr_endline "  logseq_query_runner run <db.sqlite> <queries.jsonl>";
+  prerr_endline "  logseq_query_runner run-graph <graph.edn> <queries.jsonl>";
   exit 2
 
 let () =
@@ -240,4 +333,5 @@ let () =
   | [ _; "dump-graph"; db_path; out_path ] -> dump_graph db_path out_path
   | [ _; "dump-query-graph"; db_path; query; out_path ] -> dump_query_graph db_path query out_path
   | [ _; "run"; db_path; queries_path ] -> run_queries db_path queries_path
+  | [ _; "run-graph"; graph_path; queries_path ] -> run_graph_queries graph_path queries_path
   | _ -> usage ()

@@ -46,6 +46,65 @@ let test_util__value_semantics () =
   if Util.compare_value (Vector [ Int 1; Int 2 ]) (List [ Int 1; Int 2 ]) = 0 then
     failf "vectors and lists must remain distinct values"
 
+let test_util__keyword_order_matches_upstream () =
+  let normal = Map [ Keyword "id", String "robot_face"; Keyword "type", Keyword "emoji" ] in
+  let inverted = Map [ Keyword "id", String "robot_face"; Keyword "emoji", Keyword "type" ] in
+  let tabler =
+    Map
+      [ Keyword "color", String "inherit"
+      ; Keyword "id", String "ListNumbers"
+      ; Keyword "name", String "ListNumbers"
+      ; Keyword "type", Keyword "tabler-icon"
+      ]
+  in
+  let inverted_tabler =
+    Map
+      [ Keyword "color", String "inherit"
+      ; Keyword "id", String "ListNumbers"
+      ; Keyword "name", String "ListNumbers"
+      ; Keyword "tabler-icon", Keyword "type"
+      ]
+  in
+  let filters = Map [ Keyword "or?", Bool false; Keyword "filters", Vector [] ] in
+  let status_filters = Map [ Keyword "or?", Bool false; Keyword "logseq.property/status", Vector [] ] in
+  let filter_uuid = Uuid "00000002-1827-5820-8200-000000000000" in
+  let nested_filters =
+    Map
+      [ Keyword "or?", Bool false
+      ; Keyword "filters"
+        , Vector
+            [ Vector
+                [ Keyword "logseq.property/status"
+                ; Keyword "block/created-at"
+                ; Vector [ String "~:is-not"; Vector [ filter_uuid ] ]
+                ]
+            ]
+      ]
+  in
+  let nested_status_filters =
+    Map
+      [ Keyword "or?", Bool false
+      ; Keyword "logseq.property/status"
+        , Vector
+            [ Vector
+                [ Keyword "is-not"
+                ; Keyword "filters"
+                ; Vector [ String "^9"; Vector [ filter_uuid ] ]
+                ]
+            ]
+      ]
+  in
+  if Util.compare_value normal inverted >= 0 then
+    failf "map value ordering should match upstream DataScript value-compare";
+  if Util.compare_value (Util.normalize_value normal) (Util.normalize_value inverted) >= 0 then
+    failf "normalized map value ordering should match upstream DataScript value-compare";
+  if Util.compare_value (Util.normalize_value tabler) (Util.normalize_value inverted_tabler) >= 0 then
+    failf "normalized tabler map value ordering should match upstream DataScript value-compare";
+  if Util.compare_value (Util.normalize_value filters) (Util.normalize_value status_filters) >= 0 then
+    failf "normalized filter map value ordering should match upstream DataScript value-compare";
+  if Util.compare_value (Util.normalize_value nested_filters) (Util.normalize_value nested_status_filters) >= 0 then
+    failf "normalized nested filter map value ordering should match upstream DataScript value-compare"
+
 let test_util__vector_values_in_db () =
   let vector = Vector [ Int 1; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ] in
   let db =
@@ -63,4 +122,5 @@ let test_util__vector_values_in_db () =
 
 let () =
   test_util__value_semantics ();
+  test_util__keyword_order_matches_upstream ();
   test_util__vector_values_in_db ()

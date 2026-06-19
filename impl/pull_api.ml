@@ -134,18 +134,22 @@ let forward_entity context db entity_id attrs =
   | [] -> None
   | datoms ->
     let wanted attr = attrs = [] || List.mem attr attrs in
-    let add groups d =
-      if not (wanted d.a) then
-        groups
-      else
-        match List.assoc_opt d.a groups with
-        | None -> (d.a, [ d.v ]) :: groups
-        | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
+    let groups = Hashtbl.create 8 in
+    let attr_order = ref [] in
+    let add d =
+      if wanted d.a then (
+        if not (Hashtbl.mem groups d.a) then
+          attr_order := d.a :: !attr_order;
+        let values = Option.value (Hashtbl.find_opt groups d.a) ~default:[] in
+        Hashtbl.replace groups d.a (d.v :: values))
     in
     let attrs =
       datoms
-      |> List.fold_left add []
-      |> List.filter_map (fun (attr, values) ->
+      |> List.iter add;
+      !attr_order
+      |> List.rev
+      |> List.filter_map (fun attr ->
+        let values = Hashtbl.find groups attr in
         match tx_value_of_attr_values context db attr values with
         | Many_values [] -> None
         | value -> Some (attr, value))

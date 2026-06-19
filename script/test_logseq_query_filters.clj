@@ -59,6 +59,29 @@
        "fi\n"
        "exit 1\n"))
 
+(defn fake-ready-runner-script []
+  (str "#!/bin/sh\n"
+       "set -eu\n"
+       "if [ \"$1\" = \"dump-graph\" ]; then\n"
+       "  printf '{:schema {}, :datoms []}' > \"$3\"\n"
+       "  exit 0\n"
+       "fi\n"
+       "if [ \"$1\" = \"run\" ]; then\n"
+       "  sleep 2\n"
+       "  printf '{\"status\":\"ready\"}\\n'\n"
+       "  while IFS= read -r line; do\n"
+       "    id=$(printf '%s' \"$line\" | sed 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/')\n"
+       "    printf '{\"id\":\"%s\",\"status\":\"ok\",\"value\":\"[[42]]\"}\\n' \"$id\"\n"
+       "  done < \"$3\"\n"
+       "  exit 0\n"
+       "fi\n"
+       "exit 1\n"))
+
+(defn report-ocaml-elapsed-ms [report]
+  (some->> (re-find #"- OCaml elapsed ms: ([0-9]+)" report)
+           second
+           Long/parseLong))
+
 (deftest comparator-ignores-existing-nbb-cache-entries-and-dedupes-query-forms
   (let [queries-path (str test-root "/compare-queries.edn")
         runner-path (str test-root "/fake-runner.sh")
@@ -100,6 +123,38 @@
       (is (str/includes? report "- Batch query ids: normal"))
       (is (not (str/includes? report "- Batch query ids: cache")))
       (is (not (str/includes? report "- Batch query ids: duplicate"))))))
+
+(deftest comparator-starts-query-timing-after-ocaml-ready-line
+  (let [queries-path (str test-root "/ready-queries.edn")
+        runner-path (str test-root "/fake-ready-runner.sh")
+        report-path (str test-root "/ready-report.md")]
+    (recreate-dir test-root)
+    (spit
+      queries-path
+      (pr-str
+        [{:id "normal"
+          :file "src/query.cljs"
+          :line 1
+          :query '[:find ?e :where [?e]]}]))
+    (write-file runner-path (fake-ready-runner-script))
+    (.setExecutable (io/file runner-path) true)
+    (let [{:keys [exit err]} (shell/sh
+                               "clojure"
+                               "-Sdeps"
+                               compare-deps
+                               "-M"
+                               "script/compare_logseq_queries.clj"
+                               queries-path
+                               "unused.sqlite"
+                               runner-path
+                               report-path
+                               "0"
+                               "1"
+                               "missing-runtime-inputs.edn")
+          report (if (.exists (io/file report-path)) (slurp report-path) "")]
+      (is (zero? exit) err)
+      (is (str/includes? report "- Mismatches: 1"))
+      (is (< (or (report-ocaml-elapsed-ms report) Long/MAX_VALUE) 1000)))))
 
 (let [{:keys [fail error]} (run-tests)]
   (shutdown-agents)

@@ -280,6 +280,28 @@ let test_pull_api__test_pull_map () =
     ; kw "name", scalar (String "Petr")
     ]
 
+let test_pull_api__test_pull_ref_preserves_duplicate_many_datoms () =
+  let db =
+    init_db
+      ~schema:[ "db/ident", unique_identity; "block/title", many; "block/tags", ref_many ]
+      [ datom ~tx:1 ~e:2 ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+      ; datom ~tx:1 ~e:10 ~a:"block/title" ~v:(String "Template") ()
+      ; datom ~tx:1 ~e:10 ~a:"block/tags" ~v:(Ref 2) ()
+      ; datom ~tx:1 ~e:10 ~a:"block/tags" ~v:(Ref 2) ()
+      ]
+  in
+  expect_pull
+    "pull ref preserves duplicate many datoms"
+    db
+    [ Pull_attr "block/title"; Pull_ref ("block/tags", [ Pull_attr "db/ident" ]) ]
+    (Entity_id 10)
+    [ kw "block/tags", many_values
+        [ entity 2 [ kw "db/ident", scalar (Keyword "logseq.class/Tag") ]
+        ; entity 2 [ kw "db/ident", scalar (Keyword "logseq.class/Tag") ]
+        ]
+    ; kw "block/title", many_values [ scalar (String "Template") ]
+    ]
+
 let test_pull_api__test_pull_recursion () =
   let db =
     test_db ()
@@ -397,6 +419,7 @@ let () =
   test_pull_api__test_pull_as ();
   test_pull_api__test_pull_attr_with_opts ();
   test_pull_api__test_pull_map ();
+  test_pull_api__test_pull_ref_preserves_duplicate_many_datoms ();
   test_pull_api__test_pull_recursion ();
   test_pull_api__test_dual_recursion ();
   test_pull_api__test_deep_recursion ();

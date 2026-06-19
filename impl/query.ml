@@ -749,9 +749,11 @@ and vars_of_clause = function
   | SourcePatternTx (_, e, a, v, tx) -> vars_of_query_terms [ e; a; v; tx ]
   | SourcePatternTxOp (_, e, a, v, tx, op) -> vars_of_query_terms [ e; a; v; tx; op ]
   | SourceRelationPattern (_, terms) -> vars_of_query_terms terms
-  | Missing (e, _) | SourceMissing (_, e, _) -> vars_of_query_term e
-  | GetElse (e, _, _, output) | SourceGetElse (_, e, _, _, output) -> output :: vars_of_query_term e
-  | GetSome (e, _, attr, value) | SourceGetSome (_, e, _, attr, value) -> attr :: value :: vars_of_query_term e
+  | Missing (e, attr) | SourceMissing (_, e, attr) -> vars_of_query_terms [ e; attr ]
+  | GetElse (e, attr, default, output) | SourceGetElse (_, e, attr, default, output) ->
+    output :: vars_of_query_terms [ e; attr; default ]
+  | GetSome (e, attrs, attr, value) | SourceGetSome (_, e, attrs, attr, value) ->
+    attr :: value :: vars_of_query_terms (e :: attrs)
   | GetValue (m, key, output) -> output :: vars_of_query_terms [ m; key ]
   | GetDefaultValue (m, key, default, output) -> output :: vars_of_query_terms [ m; key; default ]
   | CountValue (term, output) -> output :: vars_of_query_term term
@@ -884,12 +886,12 @@ let rec sources_of_clause = function
   | SourcePatternTxOp (source, e, a, v, tx, op) ->
     named_source source @ sources_of_query_terms [ e; a; v; tx; op ]
   | SourceRelationPattern (source, terms) -> named_source source @ sources_of_query_terms terms
-  | Missing (entity, _) -> sources_of_query_term entity
-  | SourceMissing (source, entity, _) -> named_source source @ sources_of_query_term entity
-  | GetElse (entity, _, _, _) -> sources_of_query_term entity
-  | SourceGetElse (source, entity, _, _, _) -> named_source source @ sources_of_query_term entity
-  | GetSome (entity, _, _, _) -> sources_of_query_term entity
-  | SourceGetSome (source, entity, _, _, _) -> named_source source @ sources_of_query_term entity
+  | Missing (entity, attr) -> sources_of_query_terms [ entity; attr ]
+  | SourceMissing (source, entity, attr) -> named_source source @ sources_of_query_terms [ entity; attr ]
+  | GetElse (entity, attr, default, _) -> sources_of_query_terms [ entity; attr; default ]
+  | SourceGetElse (source, entity, attr, default, _) -> named_source source @ sources_of_query_terms [ entity; attr; default ]
+  | GetSome (entity, attrs, _, _) -> sources_of_query_terms (entity :: attrs)
+  | SourceGetSome (source, entity, attrs, _, _) -> named_source source @ sources_of_query_terms (entity :: attrs)
   | GetValue (map, key, _) -> sources_of_query_terms [ map; key ]
   | GetDefaultValue (map, key, default, _) -> sources_of_query_terms [ map; key; default ]
   | CountValue (term, _)
@@ -1936,12 +1938,8 @@ let query_input_arity_error ~consume_rules declarations provided =
     |> List.length
     |> ( + ) 1
   in
-  invalid_arg
-    (Printf.sprintf
-       "Wrong number of arguments for bindings [%s], %d required, %d provided"
-       labels
-       required
-       provided)
+  let kind = if provided < required then "Too few inputs passed" else "Extra inputs passed" in
+  invalid_arg (Printf.sprintf "%s, expected: [%s], got: %d" kind labels provided)
 
 let bind_query_inputs ~query_input_of_arg ~consume_rules declarations args =
   let provided = List.length args + 1 in

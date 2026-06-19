@@ -13,6 +13,8 @@ let assert_query_set label expected actual =
 let kw name = Keyword name
 let scalar value = Pulled_scalar value
 let pull id attrs = Result_pull { pulled_id = id; pulled_attrs = attrs }
+let entity id attrs = Pulled_entity { pulled_id = id; pulled_attrs = attrs }
+let many_values values = Pulled_many values
 
 let db =
   empty_db ()
@@ -110,6 +112,80 @@ let test_query_pull__test_lookup_refs () =
        db
        "[:find ?ref ?a (pull ?ref [:db/id :name]) :in $ [?ref ...] :where [?ref :age ?a] [(>= ?a 18)]]")
 
+let test_query_pull__test_pull_preserves_duplicate_many_ref_datoms () =
+  let many =
+    { cardinality = Many
+    ; unique = None
+    ; indexed = false
+    ; is_component = false
+    ; no_history = false
+    ; doc = None
+    ; value_type = None
+    ; tuple_attrs = None
+    ; tuple_types = None
+    }
+  in
+  let unique_identity =
+    { many with cardinality = One; unique = Some Identity; indexed = true }
+  in
+  let ref_many =
+    { many with value_type = Some RefType }
+  in
+  let db =
+    init_db
+      ~schema:[ "db/ident", unique_identity; "block/title", { many with cardinality = One }; "block/tags", ref_many ]
+      [ datom ~tx:1 ~e:2 ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+      ; datom ~tx:1 ~e:10 ~a:"block/title" ~v:(String "Template") ()
+      ; datom ~tx:1 ~e:10 ~a:"block/tags" ~v:(Ref 2) ()
+      ; datom ~tx:1 ~e:10 ~a:"block/tags" ~v:(Ref 2) ()
+      ]
+  in
+  assert_query_set
+    "query pull preserves duplicate many ref datoms"
+    [ [ pull
+          10
+          [ kw "block/tags", many_values
+              [ entity 2 [ kw "db/ident", scalar (Keyword "logseq.class/Tag") ]
+              ; entity 2 [ kw "db/ident", scalar (Keyword "logseq.class/Tag") ]
+              ]
+          ; kw "block/title", scalar (String "Template")
+          ]
+      ]
+    ]
+    (q_string
+       db
+       "[:find (pull ?b [:block/title {:block/tags [:db/ident]}]) :where [?b :block/tags :logseq.class/Tag]]")
+
+let test_query_pull__test_simple_pull_uses_ref_ident_pattern () =
+  let many_ref =
+    { cardinality = Many
+    ; unique = None
+    ; indexed = false
+    ; is_component = false
+    ; no_history = false
+    ; doc = None
+    ; value_type = Some RefType
+    ; tuple_attrs = None
+    ; tuple_types = None
+    }
+  in
+  let db =
+    init_db
+      ~schema:[ "block/tags", many_ref ]
+      [ datom ~e:1 ~a:"block/tags" ~v:(Ref 2) ~tx:536870913 ~added:true ()
+      ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ~tx:536870913 ~added:true ()
+      ; datom ~e:2 ~a:"block/title" ~v:(String "Tag") ~tx:536870913 ~added:true ()
+      ; datom ~e:3 ~a:"block/tags" ~v:(Ref 2) ~tx:536870913 ~added:true ()
+      ]
+  in
+  (match q_return_string db "[:find (pull ?b [:db/id]) :where [?b :block/tags :logseq.class/Tag]]" with
+   | Query_relation rows ->
+     assert_query_set
+       "simple pull query resolves keyword ident in ref value pattern"
+       [ [ pull 1 [ kw "db/id", scalar (Int 1) ] ]; [ pull 3 [ kw "db/id", scalar (Int 3) ] ] ]
+       rows
+   | _ -> failf "simple pull query should return a relation")
+
 let () =
   test_query_pull__test_basics ();
   test_query_pull__test_var_pattern ();
@@ -117,4 +193,6 @@ let () =
   test_query_pull__test_find_spec ();
   test_query_pull__test_find_spec_input ();
   test_query_pull__test_aggregates ();
-  test_query_pull__test_lookup_refs ()
+  test_query_pull__test_lookup_refs ();
+  test_query_pull__test_pull_preserves_duplicate_many_ref_datoms ();
+  test_query_pull__test_simple_pull_uses_ref_ident_pattern ()

@@ -74,6 +74,13 @@ let debug_pulled_attrs attrs =
      |> String.concat ", ")
   ^ "}"
 
+let debug_query_result = function
+  | Result_value value -> debug_value value
+  | Result_entity entity_id -> "entity:" ^ string_of_int entity_id
+  | Result_attr attr -> "attr:" ^ attr
+  | Result_db _ -> "<db>"
+  | Result_pull entity -> debug_pulled_entity entity
+
 let assert_equal_triples label expected actual =
   let triples = List.map (fun d -> d.e, d.a, d.v) actual in
   if expected <> triples then
@@ -96,7 +103,13 @@ let assert_equal_pulled_attrs label expected entity =
       (debug_pulled_attrs entity.pulled_attrs)
 
 let assert_equal_query label expected actual =
-  if expected <> actual then failf "%s: unexpected query result" label
+  if expected <> actual then
+    let format_rows rows =
+      rows
+      |> List.map (fun row -> "[" ^ (row |> List.map debug_query_result |> String.concat " ") ^ "]")
+      |> String.concat " "
+    in
+    failf "%s: expected [%s], got [%s]" label (format_rows expected) (format_rows actual)
 
 let assert_equal_query_set label expected actual =
   let normalize rows = List.sort_uniq compare rows in
@@ -198,6 +211,18 @@ let test_init_db_and_indexes () =
     "avet can filter by attribute and value"
     [ ivan ]
     (datoms db Avet ~a:"name" ~v:(String "Ivan") ())
+
+let test_init_db_preserves_duplicate_datoms () =
+  let tag = datom ~tx:1 ~e:10 ~a:"block/tags" ~v:(Ref 2) () in
+  let db = init_db ~schema:[ "block/tags", ref_many ] [ tag; tag ] in
+  assert_equal_datoms
+    "init_db preserves exact duplicate datoms in EAVT"
+    [ tag; tag ]
+    (datoms db Eavt ~e:10 ~a:"block/tags" ());
+  assert_equal_datoms
+    "init_db preserves exact duplicate datoms in AVET"
+    [ tag; tag ]
+    (datoms db Avet ~a:"block/tags" ~v:(Ref 2) ())
 
 let test_init_db_counts_ref_values_in_max_eid () =
   let db =
@@ -1351,7 +1376,7 @@ let test_transact__test_uncomparable_issue_356 () =
   in
   assert_equal_triples
     "map values can be stored in cardinality-many attrs without duplicating facts"
-    [ 1, "multi", map1; 1, "multi", map2 ]
+    [ 1, "multi", map2; 1, "multi", map1 ]
     (datoms multi_db Eavt ());
   assert_equal_triples
     "map values can be used as cardinality-many lookup values"
@@ -7543,14 +7568,14 @@ let test_parse_query_with_and_rules_match_upstream_messages () =
 let test_q_input_arity_matches_upstream_validation_messages () =
   let db = empty_db () in
   assert_raises_invalid_arg_message
-    "q reports too few supplied input args like upstream query-v3"
-    "Wrong number of arguments for bindings [$ ?a], 2 required, 1 provided"
+    "q reports too few supplied input args like upstream"
+    "Too few inputs passed, expected: [$ ?a], got: 1"
     (fun () ->
        ignore
          (q_string db "[:find ?a :in $ ?a]" ~inputs:[]));
   assert_raises_invalid_arg_message
-    "q reports too many supplied input args for explicit source input like upstream query-v3"
-    "Wrong number of arguments for bindings [$], 1 required, 2 provided"
+    "q reports too many supplied input args for explicit source input like upstream"
+    "Extra inputs passed, expected: [$], got: 2"
     (fun () ->
        ignore
          (q_string
@@ -7558,8 +7583,8 @@ let test_q_input_arity_matches_upstream_validation_messages () =
             "[:find ?a :in $ :where [?a]]"
             ~inputs:[ Arg_scalar (Result_value (Int 1)) ]));
   assert_raises_invalid_arg_message
-    "q reports too many supplied input args for inferred default source like upstream query-v3"
-    "Wrong number of arguments for bindings [$], 1 required, 2 provided"
+    "q reports too many supplied input args for inferred default source like upstream"
+    "Extra inputs passed, expected: [$], got: 2"
     (fun () ->
        ignore
          (q_string
@@ -8771,7 +8796,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "age", QVar "age")
-        ; GetElse (QVar "e", "height", QValue (Int 300), "height")
+        ; GetElse (QVar "e", QAttr "height", QValue (Int 300), "height")
         ]
     }
   in
@@ -8798,7 +8823,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
             ; inputs = []
             ; with_vars = []
             ; rules = []
-            ; where = [ GetElse (QEntity 1, "height", QValue Nil, "height") ]
+            ; where = [ GetElse (QEntity 1, QAttr "height", QValue Nil, "height") ]
             }));
   let get_some_query =
     { find = [ Find_var "e"; Find_var "attr"; Find_var "value" ]
@@ -8807,7 +8832,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "name", QWildcard)
-        ; GetSome (QVar "e", [ "height"; "age" ], "attr", "value")
+        ; GetSome (QVar "e", [ QAttr "height"; QAttr "age" ], "attr", "value")
         ]
     }
   in
@@ -8825,7 +8850,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "age", QVar "age")
-        ; Missing (QVar "e", "height")
+        ; Missing (QVar "e", QAttr "height")
         ]
     }
   in
@@ -8840,7 +8865,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "age", QWildcard)
-        ; Missing (QVar "e", "_parent")
+        ; Missing (QVar "e", QAttr "_parent")
         ]
     }
   in
@@ -8855,7 +8880,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ SourcePattern ("people", QVar "e", QAttr "age", QWildcard)
-        ; SourceMissing ("people", QVar "e", "height")
+        ; SourceMissing ("people", QVar "e", QAttr "height")
         ]
     }
   in
@@ -8870,7 +8895,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ SourcePattern ("people", QVar "e", QAttr "age", QWildcard)
-        ; SourceGetElse ("people", QVar "e", "height", QValue (Int 300), "height")
+        ; SourceGetElse ("people", QVar "e", QAttr "height", QValue (Int 300), "height")
         ]
     }
   in
@@ -8888,7 +8913,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ SourcePattern ("people", QVar "e", QAttr "name", QWildcard)
-        ; SourceGetSome ("people", QVar "e", [ "height"; "age" ], "attr", "value")
+        ; SourceGetSome ("people", QVar "e", [ QAttr "height"; QAttr "age" ], "attr", "value")
         ]
     }
   in
@@ -11112,7 +11137,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_scalar ("person", Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetElse (QVar "person", "height", QValue (String "Unknown"), "height") ]
+    ; where = [ GetElse (QVar "person", QAttr "height", QValue (String "Unknown"), "height") ]
     }
   in
   assert_equal_query
@@ -11124,7 +11149,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_entity_ref ("person", Lookup_ref ("name", String "Ivan")) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetElse (QVar "person", "height", QValue (String "Unknown"), "height") ]
+    ; where = [ GetElse (QVar "person", QAttr "height", QValue (String "Unknown"), "height") ]
     }
   in
   assert_equal_query
@@ -11136,7 +11161,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_scalar ("person", Result_value (Ref_to (Lookup_ref ("name", String "Petr")))) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetSome (QVar "person", [ "weight"; "age"; "height" ], "attr", "value") ]
+    ; where = [ GetSome (QVar "person", [ QAttr "weight"; QAttr "age"; QAttr "height" ], "attr", "value") ]
     }
   in
   assert_equal_query
@@ -11148,7 +11173,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_entity_ref ("person", Lookup_ref ("name", String "Petr")) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetSome (QVar "person", [ "weight"; "age"; "height" ], "attr", "value") ]
+    ; where = [ GetSome (QVar "person", [ QAttr "weight"; QAttr "age"; QAttr "height" ], "attr", "value") ]
     }
   in
   assert_equal_query
@@ -11677,6 +11702,57 @@ let test_parse_query_return_shapes () =
     q_return db Return_collection (parse_query collection_form)
     <> Query_collection [ Result_value (String "Ivan"); Result_value (String "Petr") ]
   then failwith "parse_query should accept find collection syntax";
+  let q80_form =
+    QueryFormVector
+      [ QueryFormKeyword "find"
+      ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormSymbol "..." ]
+      ; QueryFormKeyword "where"
+      ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormKeyword "block/title" ]
+      ; QueryFormVector [ QueryFormSymbol "_"; QueryFormKeyword "block/page"; QueryFormSymbol "?b" ]
+      ; QueryFormList
+          [ QueryFormSymbol "not"
+          ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormKeyword "logseq.property/built-in?" ]
+          ]
+      ]
+  in
+  let return, query = parse_query_return q80_form in
+  if return <> Return_collection then failwith "parse_query_return should detect q80 collection return";
+  if query.find <> [ Find_var "b" ] then failwith "parse_query_return should preserve q80 find var";
+  if query.inputs <> [ Input_source_decl "$" ] then failwith "parse_query_return should infer q80 default input";
+  if query.with_vars <> [] then failwith "parse_query_return should not infer q80 with vars";
+  if query.rules <> [] then failwith "parse_query_return should not infer q80 rules";
+  (match query.where with
+   | [ first; second; third ] ->
+     if first <> Pattern (QVar "b", QAttr "block/title", QWildcard) then
+       failwith "parse_query_return should preserve q80 title clause";
+     if second <> Pattern (QWildcard, QAttr "block/page", QVar "b") then
+       failwith "parse_query_return should preserve q80 page clause";
+     if third <> Not [ Pattern (QVar "b", QAttr "logseq.property/built-in?", QWildcard) ] then
+       failwith "parse_query_return should preserve q80 not clause"
+   | _ -> failwith "parse_query_return should preserve q80 where clause count");
+  let q81_form =
+    QueryFormVector
+      [ QueryFormKeyword "find"
+      ; QueryFormVector [ QueryFormSymbol "?ident"; QueryFormSymbol "..." ]
+      ; QueryFormKeyword "where"
+      ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormKeyword "block/tags"; QueryFormKeyword "logseq.class/Tag" ]
+      ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormKeyword "db/ident"; QueryFormSymbol "?ident" ]
+      ; QueryFormList
+          [ QueryFormSymbol "not"
+          ; QueryFormVector [ QueryFormSymbol "?b"; QueryFormKeyword "logseq.property/built-in?" ]
+          ]
+      ]
+  in
+  let return, query = parse_query_return q81_form in
+  if return <> Return_collection then failwith "parse_query_return should detect q81 collection return";
+  if query.find <> [ Find_var "ident" ] then failwith "parse_query_return should preserve q81 find var";
+  if
+    query.where
+    <> [ Pattern (QVar "b", QAttr "block/tags", QValue (Keyword "logseq.class/Tag"))
+       ; Pattern (QVar "b", QAttr "db/ident", QVar "ident")
+       ; Not [ Pattern (QVar "b", QAttr "logseq.property/built-in?", QWildcard) ]
+       ]
+  then failwith "parse_query_return should preserve q81 planner shape";
   let list_collection_form =
     QueryFormVector
       [ QueryFormKeyword "find"
@@ -17104,6 +17180,7 @@ let () =
   test_datom_defaults ();
   test_empty_db ();
   test_init_db_and_indexes ();
+  test_init_db_preserves_duplicate_datoms ();
   test_init_db_counts_ref_values_in_max_eid ();
   test_init_db_preserves_raw_int_datoms_for_ref_attrs ();
   test_datoms_returns_lazy_sequence ();

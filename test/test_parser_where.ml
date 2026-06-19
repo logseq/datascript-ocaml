@@ -24,6 +24,7 @@ let list forms = QueryFormList forms
 
 let test_parser_where__pattern () =
   assert_equal "three term pattern" (Pattern (QVar "e", QVar "a", QVar "v")) (Parser.parse_clause (vec [ sym "?e"; sym "?a"; sym "?v" ]));
+  assert_equal "two term attr pattern" (Pattern (QVar "e", QAttr "name", QWildcard)) (Parser.parse_clause (vec [ sym "?e"; kw "name" ]));
   assert_equal "four term wildcard pattern" (PatternTx (QWildcard, QVar "a", QWildcard, QWildcard)) (Parser.parse_clause (vec [ sym "_"; sym "?a"; sym "_"; sym "_" ]));
   assert_equal
     "source pattern"
@@ -98,23 +99,23 @@ let test_parser_where__clause_helper_batch () =
     (Parser.parse_source_pattern_clause "other" [ sym "?e"; kw "name"; sym "?v"; sym "?tx" ]);
   assert_equal
     "parse_missing_clause parses default missing"
-    (Missing (QVar "e", "name"))
+    (Missing (QVar "e", QAttr "name"))
     (Parser.parse_missing_clause [ sym "?e"; kw "name" ]);
   assert_equal
     "parse_missing_clause parses sourced missing"
-    (SourceMissing ("other", QVar "e", "name"))
+    (SourceMissing ("other", QVar "e", QAttr "name"))
     (Parser.parse_missing_clause [ sym "$other"; sym "?e"; kw "name" ]);
   assert_equal
     "parse_get_else_clause parses default get-else"
-    (GetElse (QVar "e", "name", QValue (String "unknown"), "out"))
+    (GetElse (QVar "e", QAttr "name", QValue (String "unknown"), "out"))
     (Parser.parse_get_else_clause [ sym "?e"; kw "name"; str "unknown" ] "?out");
   assert_equal
     "parse_get_else_clause parses variable defaults"
-    (GetElse (QVar "e", "name", QVar "fallback", "out"))
+    (GetElse (QVar "e", QAttr "name", QVar "fallback", "out"))
     (Parser.parse_get_else_clause [ sym "?e"; kw "name"; sym "?fallback" ] "?out");
   assert_equal
     "parse_get_else_clause parses sourced get-else"
-    (SourceGetElse ("other", QVar "e", "name", QValue (String "unknown"), "out"))
+    (SourceGetElse ("other", QVar "e", QAttr "name", QValue (String "unknown"), "out"))
     (Parser.parse_get_else_clause [ sym "$other"; sym "?e"; kw "name"; str "unknown" ] "?out");
   assert_equal
     "parse_two_output_vars parses output tuples"
@@ -122,11 +123,11 @@ let test_parser_where__clause_helper_batch () =
     (Parser.parse_two_output_vars (vec [ sym "?attr"; sym "?value" ]));
   assert_equal
     "parse_get_some_clause parses default get-some"
-    (GetSome (QVar "e", [ "name"; "age" ], "attr", "value"))
+    (GetSome (QVar "e", [ QAttr "name"; QAttr "age" ], "attr", "value"))
     (Parser.parse_get_some_clause [ sym "?e"; kw "name"; kw "age" ] (vec [ sym "?attr"; sym "?value" ]));
   assert_equal
     "parse_get_some_clause parses sourced get-some"
-    (SourceGetSome ("other", QVar "e", [ "name" ], "attr", "value"))
+    (SourceGetSome ("other", QVar "e", [ QAttr "name" ], "attr", "value"))
     (Parser.parse_get_some_clause [ sym "$other"; sym "?e"; kw "name" ] (vec [ sym "?attr"; sym "?value" ]));
   assert_equal
     "parse_get_clause parses get with default"

@@ -26,12 +26,19 @@ let attr_value_for_query context db entity_id attr =
 let attr_present_for_query context db entity_id attr =
   Option.is_some (attr_value_for_query context db entity_id attr)
 
-let eval_missing_clause context clause_db bindings entity_term attr =
-  match query_term_entity_id (context.match_context clause_db) bindings entity_term with
-  | Some entity_id when not (attr_present_for_query context clause_db entity_id attr) -> [ bindings ]
-  | Some _ | None -> []
+let eval_attr_term context db bindings attr_term =
+  match eval_query_term (context.match_context db) bindings attr_term with
+  | Some (Result_attr attr) -> Some attr
+  | Some (Result_value (Keyword attr | String attr | Symbol attr)) -> Some attr
+  | Some _ -> invalid_arg "query attribute must resolve to an attribute"
+  | None -> None
 
-let eval_get_else_clause context clause_db bindings entity_term attr default_term output_var =
+let eval_missing_clause context clause_db bindings entity_term attr_term =
+  match query_term_entity_id (context.match_context clause_db) bindings entity_term, eval_attr_term context clause_db bindings attr_term with
+  | Some entity_id, Some attr when not (attr_present_for_query context clause_db entity_id attr) -> [ bindings ]
+  | _ -> []
+
+let eval_get_else_clause context clause_db bindings entity_term attr_term default_term output_var =
   let default =
     match eval_query_term (context.match_context clause_db) bindings default_term with
     | Some (Result_value value) -> value
@@ -39,19 +46,20 @@ let eval_get_else_clause context clause_db bindings entity_term attr default_ter
     | None -> invalid_arg "insufficient bindings"
   in
   if default = Nil then invalid_arg "get-else: nil default value is not supported";
-  match query_term_entity_id (context.match_context clause_db) bindings entity_term with
-  | None -> []
-  | Some entity_id ->
+  match query_term_entity_id (context.match_context clause_db) bindings entity_term, eval_attr_term context clause_db bindings attr_term with
+  | Some entity_id, Some attr ->
     let value = Option.value (attr_value_for_query context clause_db entity_id attr) ~default in
     (match bind_var (context.result_resolution_context clause_db) output_var (Result_value value) bindings with
      | Some bindings -> [ bindings ]
      | None -> [])
+  | _ -> []
 
-let eval_get_some_clause context clause_db bindings entity_term attrs attr_var value_var =
+let eval_get_some_clause context clause_db bindings entity_term attr_terms attr_var value_var =
   match query_term_entity_id (context.match_context clause_db) bindings entity_term with
   | None -> []
   | Some entity_id ->
-    attrs
+    attr_terms
+    |> List.filter_map (eval_attr_term context clause_db bindings)
     |> List.find_map (fun attr ->
       Option.map (fun value -> attr, value) (attr_value_for_query context clause_db entity_id attr))
     |> (function

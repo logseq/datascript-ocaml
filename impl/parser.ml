@@ -757,7 +757,16 @@ let query_attr_name = function
   | QueryFormKeyword attr | QueryFormString attr -> attr
   | _ -> invalid_arg "expected query attribute"
 
+let parse_attr_term = function
+  | QueryFormKeyword attr | QueryFormString attr -> QAttr attr
+  | form -> parse_pattern_term ~source_position:false form
+
 let parse_data_pattern_clause = function
+  | [ e; (QueryFormKeyword _ | QueryFormString _ as a) ] ->
+    Pattern
+      ( parse_pattern_term ~entity_position:true ~source_position:false e
+      , parse_pattern_term ~attr_position:true ~source_position:false a
+      , QWildcard )
   | [ e; a; v ] ->
     Pattern
       ( parse_pattern_term ~entity_position:true ~source_position:false e
@@ -820,10 +829,10 @@ let parse_source_pattern_clause source_name terms =
 
 let parse_missing_clause = function
   | [ entity; attr ] ->
-    Missing (parse_pattern_term ~entity_position:true entity, query_attr_name attr)
+    Missing (parse_pattern_term ~entity_position:true entity, parse_attr_term attr)
   | QueryFormSymbol source :: entity :: attr :: [] when is_query_source_symbol source ->
     SourceMissing
-      (query_source_name source, parse_pattern_term ~entity_position:true entity, query_attr_name attr)
+      (query_source_name source, parse_pattern_term ~entity_position:true entity, parse_attr_term attr)
   | _ -> invalid_arg "missing? requires an entity and an attribute"
 
 let parse_get_else_clause args output =
@@ -832,14 +841,14 @@ let parse_get_else_clause args output =
   | [ entity; attr; default ] ->
     GetElse
       ( parse_pattern_term ~entity_position:true entity
-      , query_attr_name attr
+      , parse_attr_term attr
       , parse_pattern_term ~source_position:false default
       , output_var )
   | QueryFormSymbol source :: entity :: attr :: default :: [] when is_query_source_symbol source ->
     SourceGetElse
       ( query_source_name source
       , parse_pattern_term ~entity_position:true entity
-      , query_attr_name attr
+      , parse_attr_term attr
       , parse_pattern_term ~source_position:false default
       , output_var )
   | _ -> invalid_arg "get-else requires an entity, an attribute, a default, and an output"
@@ -858,7 +867,7 @@ let parse_get_some_clause args output =
     | attrs ->
       GetSome
         ( parse_pattern_term ~entity_position:true entity
-        , List.map query_attr_name attrs
+        , List.map parse_attr_term attrs
         , attr_var
         , value_var )
   in
@@ -870,7 +879,7 @@ let parse_get_some_clause args output =
        SourceGetSome
          ( query_source_name source
          , parse_pattern_term ~entity_position:true entity
-         , List.map query_attr_name attrs
+         , List.map parse_attr_term attrs
          , attr_var
          , value_var ))
   | entity :: attrs -> build entity attrs

@@ -156,6 +156,7 @@ let root_of_stored_indexes db eavt_address aevt_address avet_address =
   ; storage_eavt = eavt_address
   ; storage_aevt = aevt_address
   ; storage_avet = avet_address
+  ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
   ; storage_branching_factor = (PSet.settings db.eavt_index).branching_factor
   }
@@ -207,7 +208,8 @@ let restore_root_snapshot storage =
      | Some eavt ->
        Some
          { serializable_schema = root.storage_schema
-         ; serializable_datoms = PSet.to_list eavt
+         ; serializable_datoms =
+             PSet.to_list eavt @ root.storage_duplicate_datoms |> List.sort (Util.compare_datom Eavt)
          ; serializable_max_eid = root.storage_max_eid
          ; serializable_max_tx = root.storage_max_tx
          }
@@ -252,12 +254,30 @@ let restore context storage =
       | None -> invalid_arg ("storage root points at a missing index: " ^ address)
     in
     let schema = Schema.validate_schema root.storage_schema in
+    let duplicate_datoms = root.storage_duplicate_datoms in
+    let duplicate_eavt_by_entity =
+      let table = Hashtbl.create 1024 in
+      List.iter
+        (fun datom ->
+          let existing = Option.value (Hashtbl.find_opt table datom.e) ~default:[] in
+          Hashtbl.replace table datom.e (datom :: existing))
+        duplicate_datoms;
+      Hashtbl.iter (fun entity_id datoms -> Hashtbl.replace table entity_id (List.rev datoms)) table;
+      table
+    in
     let db =
       { db_uid = context.next_db_uid ()
       ; schema
       ; eavt_index = restore_index Eavt root.storage_eavt
       ; aevt_index = restore_index Aevt root.storage_aevt
       ; avet_index = restore_index Avet root.storage_avet
+      ; duplicate_datoms
+      ; duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms
+      ; duplicate_avet_datoms =
+          duplicate_datoms
+          |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible schema datom.a)
+          |> List.sort (Util.compare_datom Avet)
+      ; duplicate_eavt_by_entity
       ; max_eid = root.storage_max_eid
       ; max_datom_e = root.storage_max_eid
       ; max_tx = root.storage_max_tx

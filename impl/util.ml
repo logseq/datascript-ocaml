@@ -70,6 +70,194 @@ let compare_option_with compare_item left right =
   | Some _, None -> 1
   | Some left, Some right -> compare_item left right
 
+let i32 value = Int32.of_int value
+let i32_to_int value = Int32.to_int value
+let i32_add left right = Int32.add left right
+let i32_mul left right = Int32.mul left right
+let i32_xor left right = Int32.logxor left right
+let i32_shift_left value bits = Int32.shift_left value bits
+let i32_shift_right value bits = Int32.shift_right value bits
+let i32_shift_right_logical value bits = Int32.shift_right_logical value bits
+
+let i32_rotate_left value bits =
+  Int32.logor (Int32.shift_left value bits) (Int32.shift_right_logical value (32 - bits))
+
+let murmur3_mix_k1 value =
+  value
+  |> fun value -> i32_mul value (i32 (-862048943))
+  |> fun value -> i32_rotate_left value 15
+  |> fun value -> i32_mul value (i32 461845907)
+
+let murmur3_mix_h1 hash value =
+  i32_xor hash value
+  |> fun hash -> i32_rotate_left hash 13
+  |> fun hash -> i32_add (i32_mul hash (i32 5)) (i32 (-430675100))
+
+let murmur3_fmix hash length =
+  i32_xor hash (i32 length)
+  |> fun hash -> i32_xor hash (i32_shift_right_logical hash 16)
+  |> fun hash -> i32_mul hash (i32 (-2048144789))
+  |> fun hash -> i32_xor hash (i32_shift_right_logical hash 13)
+  |> fun hash -> i32_mul hash (i32 (-1028477387))
+  |> fun hash -> i32_xor hash (i32_shift_right_logical hash 16)
+
+let murmur3_hash_int value =
+  if value = 0 then 0
+  else
+    value
+    |> i32
+    |> murmur3_mix_k1
+    |> murmur3_mix_h1 Int32.zero
+    |> fun hash -> murmur3_fmix hash 4
+    |> i32_to_int
+
+let murmur3_hash_long value =
+  if value = Int64.zero then 0
+  else
+    let low = Int64.to_int value |> i32 in
+    let high = Int64.shift_right_logical value 32 |> Int64.to_int |> i32 in
+    Int32.zero
+    |> fun hash -> murmur3_mix_h1 hash (murmur3_mix_k1 low)
+    |> fun hash -> murmur3_mix_h1 hash (murmur3_mix_k1 high)
+    |> fun hash -> murmur3_fmix hash 8
+    |> i32_to_int
+
+let murmur3_hash_unencoded_chars text =
+  let hash = ref Int32.zero in
+  let index = ref 1 in
+  let length = String.length text in
+  while !index < length do
+    let code =
+      Char.code text.[!index - 1] lor (Char.code text.[!index] lsl 16)
+    in
+    hash := murmur3_mix_h1 !hash (murmur3_mix_k1 (i32 code));
+    index := !index + 2
+  done;
+  if length land 1 = 1 then
+    hash := i32_xor !hash (murmur3_mix_k1 (i32 (Char.code text.[length - 1])));
+  murmur3_fmix !hash (2 * length) |> i32_to_int
+
+let java_string_hash text =
+  let hash = ref Int32.zero in
+  String.iter
+    (fun ch -> hash := i32_add (i32_mul !hash (i32 31)) (i32 (Char.code ch)))
+    text;
+  i32_to_int !hash
+
+let hex_value = function
+  | '0' .. '9' as ch -> Char.code ch - Char.code '0'
+  | 'a' .. 'f' as ch -> 10 + Char.code ch - Char.code 'a'
+  | 'A' .. 'F' as ch -> 10 + Char.code ch - Char.code 'A'
+  | _ -> invalid_arg "invalid UUID hex digit"
+
+let uuid_halves uuid =
+  let digits =
+    uuid
+    |> String.to_seq
+    |> Seq.filter (( <> ) '-')
+    |> List.of_seq
+  in
+  if List.length digits <> 32 then invalid_arg ("invalid UUID: " ^ uuid);
+  let take_hex count digits =
+    let rec loop acc remaining rest =
+      if remaining = 0 then acc, rest
+      else
+        match rest with
+        | [] -> invalid_arg ("invalid UUID: " ^ uuid)
+        | ch :: rest ->
+          loop
+            (Int64.logor (Int64.shift_left acc 4) (Int64.of_int (hex_value ch)))
+            (remaining - 1)
+            rest
+    in
+    loop Int64.zero count digits
+  in
+  let most, rest = take_hex 16 digits in
+  let least, _ = take_hex 16 rest in
+  most, least
+
+let int64_low_i32 value =
+  Int64.logand value 0xffffffffL |> Int64.to_int |> i32
+
+let int64_high_i32 value =
+  Int64.shift_right_logical value 32 |> int64_low_i32
+
+let java_uuid_hash uuid =
+  let most, least = uuid_halves uuid in
+  i32_xor
+    (i32_xor (int64_high_i32 most) (int64_low_i32 most))
+    (i32_xor (int64_high_i32 least) (int64_low_i32 least))
+  |> i32_to_int
+
+let clojure_hash_combine seed hash =
+  i32_xor
+    (i32 seed)
+    (i32_add
+       (i32_add (i32 hash) (i32 (-1640531527)))
+       (i32_add (i32_shift_left (i32 seed) 6) (i32_shift_right (i32 seed) 2)))
+  |> i32_to_int
+
+let clojure_symbol_hash symbol =
+  let namespace, name = split_keyword symbol in
+  let namespace_hash = if namespace = "" then 0 else java_string_hash namespace in
+  clojure_hash_combine (murmur3_hash_unencoded_chars name) namespace_hash
+
+let clojure_keyword_hash name =
+  i32_add (i32 (clojure_symbol_hash name)) (i32 (-1640531527)) |> i32_to_int
+
+let murmur3_mix_coll_hash hash count =
+  hash
+  |> i32
+  |> murmur3_mix_k1
+  |> murmur3_mix_h1 Int32.zero
+  |> fun hash -> murmur3_fmix hash count
+  |> i32_to_int
+
+let murmur3_hash_ordered hashes =
+  let count, hash =
+    List.fold_left
+      (fun (count, hash) value_hash ->
+        count + 1, i32_add (i32_mul (i32 31) hash) (i32 value_hash))
+      (0, i32 1)
+      hashes
+  in
+  murmur3_mix_coll_hash (i32_to_int hash) count
+
+let murmur3_hash_unordered hashes =
+  let count, hash =
+    List.fold_left
+      (fun (count, hash) value_hash -> count + 1, i32_add hash (i32 value_hash))
+      (0, Int32.zero)
+      hashes
+  in
+  murmur3_mix_coll_hash (i32_to_int hash) count
+
+let rec clojure_hasheq = function
+  | Nil -> 0
+  | Bool true -> 1231
+  | Bool false -> 1237
+  | Int value -> murmur3_hash_long (Int64.of_int value)
+  | Float value -> Hashtbl.hash value
+  | String value -> murmur3_hash_int (java_string_hash value)
+  | Symbol value -> clojure_symbol_hash value
+  | Keyword value -> clojure_keyword_hash value
+  | List values | Vector values -> murmur3_hash_ordered (List.map clojure_hasheq values)
+  | Set values -> murmur3_hash_unordered (List.map clojure_hasheq values)
+  | Map entries ->
+    entries
+    |> List.map (fun (key, value) -> murmur3_hash_ordered [ clojure_hasheq key; clojure_hasheq value ])
+    |> murmur3_hash_unordered
+  | Tuple values ->
+    values
+    |> List.map (function None -> 0 | Some value -> clojure_hasheq value)
+    |> murmur3_hash_ordered
+  | Ref value -> murmur3_hash_long (Int64.of_int value)
+  | Uuid value -> java_uuid_hash value
+  | Instant value -> murmur3_hash_long (Int64.of_int value)
+  | Regex value -> Hashtbl.hash value
+  | TxRef -> Hashtbl.hash TxRef
+  | Ref_to value -> Hashtbl.hash (Ref_to value)
+
 let value_type_rank = function
   | Nil -> 0
   | Keyword _ -> 1
@@ -111,8 +299,8 @@ let rec compare_value left right =
   | Vector left, Vector right -> compare_list_with compare_value left right
   | List left, Tuple right ->
     compare_list_with (compare_option_with compare_value) (List.map (fun value -> Some value) left) right
-  | Set left, Set right -> compare_list_with compare_value left right
-  | Map left, Map right -> compare_list_with compare_map_entry left right
+  | Set _, Set _ -> compare (clojure_hasheq left) (clojure_hasheq right)
+  | Map _, Map _ -> compare (clojure_hasheq left) (clojure_hasheq right)
   | Tuple left, Tuple right -> compare_list_with (compare_option_with compare_value) left right
   | Tuple left, List right ->
     compare_list_with (compare_option_with compare_value) left (List.map (fun value -> Some value) right)
