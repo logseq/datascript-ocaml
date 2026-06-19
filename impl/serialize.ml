@@ -17,13 +17,13 @@ let serializable db =
   }
 
 let empty_index index =
-  PSet.empty_by (Util.compare_datom index)
+  PSet.empty_by ~cmp:(Util.compare_datom index) ()
 
 let index_from_datoms index datoms =
   let cmp = Util.compare_datom index in
   let items = Array.of_list datoms in
   Array.sort cmp items;
-  PSet.of_sorted_array_by cmp items
+  PSet.of_sorted_array_by ~cmp items
 
 let from_serializable context snapshot =
   let schema = context.validate_schema snapshot.serializable_schema in

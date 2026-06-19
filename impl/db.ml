@@ -63,13 +63,13 @@ let normalize_datom_for_schema schema d =
   Util.normalize_datom_value d
 
 let empty_index index =
-  PSet.empty_by (Util.compare_datom index)
+  PSet.empty_by ~cmp:(Util.compare_datom index) ()
 
 let build_index index datoms =
   let cmp = Util.compare_datom index in
   let items = Array.of_list datoms in
   Array.sort cmp items;
-  PSet.of_sorted_array_by cmp items
+  PSet.of_sorted_array_by ~cmp items
 
 let build_avet_index schema datoms =
   datoms

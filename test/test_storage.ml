@@ -133,6 +133,17 @@ let test_storage__test_gc () =
       [ 1, "name", String "Alex"; 2, "name", String "Oleg"; 3, "name", String "Petr" ]
       (datoms restored Eavt ())
 
+let test_storage__test_restored_db_addresses () =
+  let storage = memory_storage () in
+  let db = small_db () in
+  store ~storage db;
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored db"
+  in
+  assert_upstream_storage_addresses "addresses should include restored db live nodes" (addresses [ restored ])
+
 let test_storage__test_conn () =
   let storage = memory_storage () in
   let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
@@ -226,5 +237,6 @@ let () =
   test_storage__test_upstream_wire_addresses ();
   test_storage__test_file_storage ();
   test_storage__test_gc ();
+  test_storage__test_restored_db_addresses ();
   test_storage__test_conn ();
   test_storage__test_db_with_tail ()

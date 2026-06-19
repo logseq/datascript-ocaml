@@ -160,12 +160,22 @@ let root_of_stored_indexes db eavt_address aevt_address avet_address =
   ; storage_branching_factor = (PSet.settings db.eavt_index).branching_factor
   }
 
+let storage_backed_index node_storage index index_set =
+  let cmp = Util.compare_datom index in
+  let settings = PSet.settings index_set in
+  let items = index_set |> PSet.to_list |> Array.of_list in
+  PSet.of_sorted_array_by ~settings ~storage:node_storage ~cmp items
+
+let store_index node_storage index index_set =
+  let storage_backed = storage_backed_index node_storage index index_set in
+  fst (PSet.store storage_backed)
+
 let store_to_storage db storage =
   let pending_entries = ref [] in
   let node_storage = buffered_node_storage pending_entries in
-  let eavt_address, _ = PSet.store node_storage db.eavt_index in
-  let aevt_address, _ = PSet.store node_storage db.aevt_index in
-  let avet_address, _ = PSet.store node_storage db.avet_index in
+  let eavt_address = store_index node_storage Eavt db.eavt_index in
+  let aevt_address = store_index node_storage Aevt db.aevt_index in
+  let avet_address = store_index node_storage Avet db.avet_index in
   let root = root_of_stored_indexes db eavt_address aevt_address avet_address in
   storage.storage_store
     (List.rev !pending_entries
@@ -264,16 +274,30 @@ let storage_addresses storage = storage.storage_list_addresses ()
 
 let storage (db : db) = db.storage_ref
 
+let rec node_addresses storage address =
+  match storage.storage_restore address with
+  | Some (Storage_node (PSet.Leaf _)) -> [ address ]
+  | Some (Storage_node (PSet.Branch (_, child_addresses))) ->
+    address :: List.concat_map (node_addresses storage) child_addresses
+  | Some _ -> [ address ]
+  | None -> []
+
+let storage_root_addresses storage =
+  match storage.storage_restore root_address with
+  | Some (Storage_root root) ->
+    [ root_address; tail_address ]
+    @ node_addresses storage root.storage_eavt
+    @ node_addresses storage root.storage_aevt
+    @ node_addresses storage root.storage_avet
+  | Some (Storage_tail _) | Some (Storage_node _) | None ->
+    []
+
 let addresses dbs =
   dbs
   |> List.concat_map (fun db ->
     match db.storage_ref with
     | None -> []
-    | Some _storage ->
-      [ root_address; tail_address ]
-      @ PSet.walk_addresses db.eavt_index
-      @ PSet.walk_addresses db.aevt_index
-      @ PSet.walk_addresses db.avet_index)
+    | Some storage -> storage_root_addresses storage)
   |> List.sort_uniq compare
 
 let settings (db : db) =
@@ -283,24 +307,7 @@ let settings (db : db) =
   ]
 
 let collect_garbage storage =
-  let rec walk_node address =
-    match storage.storage_restore address with
-    | Some (Storage_node (PSet.Leaf _)) -> [ address ]
-    | Some (Storage_node (PSet.Branch (_, child_addresses))) ->
-      address :: List.concat_map walk_node child_addresses
-    | Some _ -> [ address ]
-    | None -> []
-  in
-  let live =
-    match storage.storage_restore root_address with
-    | Some (Storage_root root) ->
-      [ root_address; tail_address ]
-      @ walk_node root.storage_eavt
-      @ walk_node root.storage_aevt
-      @ walk_node root.storage_avet
-    | Some (Storage_tail _) | Some (Storage_node _) | None ->
-      []
-  in
+  let live = storage_root_addresses storage in
   storage.storage_list_addresses ()
   |> List.filter (fun address -> not (List.mem address live))
   |> storage.storage_delete
