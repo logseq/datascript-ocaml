@@ -830,15 +830,12 @@ let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
         [ [ Result_value (String "Petr") ] ]
         (q_string db "[:find ?name :where [?e :name ?name]]");
       assert_equal_tx_flags
-        "SQLite restored history keeps name additions and retractions"
-        [ 1, "name", String "Ivan", true
-        ; 1, "name", String "Ivan", false
-        ; 1, "name", String "Petr", true
-        ]
+        "SQLite restored history exposes current name facts"
+        [ 1, "name", String "Petr", true ]
         (datoms (history db) Eavt ~a:"name" ());
       assert_equal_triples
-        "SQLite restored history excludes no-history attrs"
-        []
+        "SQLite restored history exposes current no-history facts"
+        [ 1, "secret", String "beta" ]
         (datoms (history db) Eavt ~a:"secret" ());
       assert_equal_query
         "SQLite restored active db keeps latest no-history value"

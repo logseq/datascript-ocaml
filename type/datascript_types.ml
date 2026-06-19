@@ -72,8 +72,6 @@ type datom =
 type serializable_db =
   { serializable_schema : schema
   ; serializable_datoms : datom list
-  ; serializable_history_datoms : datom list
-  ; serializable_historical : bool
   ; serializable_max_eid : entity_id
   ; serializable_max_tx : tx
   }
@@ -118,13 +116,10 @@ type tx_op =
 and db =
   { db_uid : int
   ; schema : schema
-  ; datoms : datom list
   ; eavt_index : datom Persistent_sorted_set.t
   ; aevt_index : datom Persistent_sorted_set.t
   ; avet_index : datom Persistent_sorted_set.t
   ; vaet_index : datom Persistent_sorted_set.t
-  ; history_datoms : datom list
-  ; historical : bool
   ; max_eid : entity_id
   ; max_datom_e : entity_id
   ; max_tx : tx

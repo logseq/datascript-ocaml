@@ -91,9 +91,9 @@ compatibility.
 ### Incremental Index Refresh
 
 Bulk construction uses sorted-array PSS builders. For safe incremental writes,
-the write path updates the active datom list and adds new datoms into each
-relevant persistent sorted set. The old DB keeps its previous set roots, and the
-new DB shares unchanged tree structure with them.
+the write path adds new datoms into each relevant persistent sorted set. The old
+DB keeps its previous set roots, and the new DB shares unchanged tree structure
+with them.
 
 A regression test covers incremental writes followed by public EAVT, AEVT,
 AVET, and VAET reads.
@@ -140,11 +140,11 @@ conditions:
 For supported fast-path transactions, strict schema recomputation is skipped
 because schema-changing attributes are excluded.
 
-### History Append Avoidance
+### Transaction Staging Lists
 
-Fast-path transaction history uses prepend-oriented accumulation instead of
-repeated append copying. This avoids quadratic list copying in add-heavy
-workloads.
+Transaction code still uses local datom lists while applying a batch. Those
+lists are staging values only; the resulting DB stores current facts in PSS
+indexes instead of retaining a duplicate active datom list.
 
 ### Existing Fact and Unique Checks
 

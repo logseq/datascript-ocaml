@@ -20,11 +20,10 @@ val refresh_indexes_with_added_datoms : db -> datom list -> db
 val with_datoms : db -> datom list -> db
 val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
 val empty : core_context -> db -> db
-val history_datoms_for_schema : schema -> datom list -> datom list
 val init_db : core_context -> ?schema:schema -> ?storage:storage -> datom list -> db
 val history : core_context -> db -> db
 val is_history : db -> bool
-val visible_active_datoms : db -> datom list
+val visible_datoms : db -> datom list
 val is_filtered : db -> bool
 val unfiltered : core_context -> db -> db
 val filter : core_context -> db -> (db -> datom -> bool) -> db

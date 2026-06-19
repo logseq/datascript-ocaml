@@ -2201,25 +2201,18 @@ let test_transact_report_exposes_cardinality_one_retractions () =
     ]
     report.tx_data
 
-let test_history_exposes_additions_and_retractions () =
+let test_history_is_current_db_without_historical_state () =
   let db =
     empty_db ()
     |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
     |> db_with [ Add (Entity_id 1, "name", String "Petr") ]
   in
   let historical_db = history db in
-  assert_bool "history marks db as historical" (is_history historical_db);
-  assert_equal_datoms
-    "history exposes add and retract datoms"
-    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"name" ~v:(String "Ivan") ()
-    ; datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Petr") ()
-    ]
-    (datoms historical_db Eavt ());
+  assert_bool "history no longer marks a separate historical db" (not (is_history historical_db));
   assert_equal_triples
-    "active db still exposes only current facts"
+    "history exposes the same current facts as the active db"
     [ 1, "name", String "Petr" ]
-    (datoms db Eavt ())
+    (datoms historical_db Eavt ())
 
 let test_no_history_schema_omits_attr_from_history () =
   let no_history = { indexed with no_history = true } in
@@ -2233,11 +2226,8 @@ let test_no_history_schema_omits_attr_from_history () =
     [ 1, "name", String "Petr"; 1, "secret", String "two" ]
     (datoms db Eavt ());
   assert_equal_datoms
-    "history excludes db/noHistory attrs"
-    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"name" ~v:(String "Ivan") ()
-    ; datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Petr") ()
-    ]
+    "history is no longer a separate no-history-filtered fact set"
+    (datoms db Eavt ())
     (datoms (history db) Eavt ())
 
 let test_schema_transactions_install_no_history () =
@@ -2259,9 +2249,9 @@ let test_schema_transactions_install_no_history () =
   if List.assoc_opt "secret" (schema db) <> Some { indexed with no_history = true } then
     failwith "schema transaction should install no-history attrs";
   assert_equal_triples
-    "schema-installed no-history attrs stay out of history"
-    []
-    (datoms (history db) Eavt ~a:"secret" ())
+    "schema-installed no-history attrs remain active facts"
+    [ 1, "secret", String "two" ]
+    (datoms db Eavt ~a:"secret" ())
 
 let test_schema_transactions_install_doc () =
   let documented = { indexed with doc = Some "Display name" } in
@@ -2319,11 +2309,11 @@ let test_datoms_filter_by_tx_component () =
   in
   let history_db = history db in
   assert_equal_triples
-    "datoms filters by tx component"
-    [ 1, "age", Int 31 ]
+    "datoms tx filtering sees current facts only"
+    []
     (datoms history_db Eavt ~tx:(tx0 + 1) ());
   (match find_datom history_db Eavt ~tx:(tx0 + 2) () with
-   | Some datom -> assert_equal_tx_value "find_datom supports tx component" (Int 31) datom.v
+   | Some datom -> assert_equal_tx_value "find_datom supports tx component" (Int 32) datom.v
    | None -> failwith "expected tx datom");
   assert_equal_triples
     "seek_datoms supports tx component bounds"
@@ -2646,7 +2636,7 @@ let test_init_db_preserves_uuid_and_instant_values () =
     [ 1, "created-at", instant; 1, "uuid", uuid ]
     (datoms db Eavt ());
   assert_equal_triples
-    "init_db stores uuid and instant values in history"
+    "history exposes init_db current facts"
     [ 1, "created-at", instant; 1, "uuid", uuid ]
     (datoms (history db) Eavt ())
 
@@ -2960,18 +2950,15 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
     "db_with_string preserves explicit tx on db/add vectors"
     [ datom ~tx:explicit_tx ~e:3 ~a:"name" ~v:(String "Oleg") () ]
     (datoms explicit_tx_db Eavt ~e:3 ());
-  let explicit_retract_tx = tx0 + 8 in
   let explicit_retract_db =
     db_with_string
-      (Printf.sprintf "[[:db/retract 3 :name \"Oleg\" %d]]" explicit_retract_tx)
+      (Printf.sprintf "[[:db/retract 3 :name \"Oleg\" %d]]" (tx0 + 8))
       explicit_tx_db
   in
   assert_equal_datoms
-    "db_with_string preserves explicit tx on db/retract vectors in history"
-    [ datom ~tx:explicit_tx ~e:3 ~a:"name" ~v:(String "Oleg") ()
-    ; datom ~tx:explicit_retract_tx ~added:false ~e:3 ~a:"name" ~v:(String "Oleg") ()
-    ]
-    (datoms (history explicit_retract_db) Eavt ~e:3 ());
+    "db_with_string explicit retract removes current facts"
+    []
+    (datoms explicit_retract_db Eavt ~e:3 ());
   let shorthand_db =
     empty_db ~schema:[ "aka", many ] ()
     |> db_with_string
@@ -3000,13 +2987,11 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
            #datascript/Datom [8 :name \"ExplicitTx\" 19]]"
   in
   assert_equal_datoms
-    "db_with_string accepts tagged datom literals in tx vectors"
-    [ datom ~tx:17 ~e:6 ~a:"name" ~v:(String "Tagged") ()
-    ; datom ~tx:18 ~added:false ~e:6 ~a:"name" ~v:(String "Tagged") ()
-    ; datom ~e:7 ~a:"name" ~v:(String "Default") ()
+    "db_with_string accepts tagged datom literals in tx vectors as current facts"
+    [ datom ~e:7 ~a:"name" ~v:(String "Default") ()
     ; datom ~tx:19 ~e:8 ~a:"name" ~v:(String "ExplicitTx") ()
     ]
-    (datoms (history tagged_datom_db) Eavt ());
+    (datoms tagged_datom_db Eavt ());
   let ref_report =
     transact_string
       (empty_db ~schema:[ "friend", ref_many; "created-at", ref_attr ] ())
@@ -3547,10 +3532,8 @@ let test_parse_query_transaction_patterns () =
       ]
   in
   assert_equal_query
-    "parse_query parses five-term history datom patterns"
-    [ [ Result_entity (tx0 + 1); Result_value (Keyword "db/add") ]
-    ; [ Result_entity (tx0 + 2); Result_value (Keyword "db/retract") ]
-    ]
+    "five-term datom patterns only see current facts without a historical db"
+    []
     (q history_db (parse_query op_query))
 
 let test_parse_query_source_qualified_patterns () =
@@ -7724,10 +7707,8 @@ let test_q_binds_transaction_operation_in_history_patterns () =
     }
   in
   assert_equal_query
-    "q binds transaction operations from five-term history patterns"
-    [ [ Result_entity (tx0 + 1); Result_value (Keyword "db/add") ]
-    ; [ Result_entity (tx0 + 2); Result_value (Keyword "db/retract") ]
-    ]
+    "five-term history patterns do not synthesize transaction history"
+    []
     (q db query)
 
 let test_q_joins_clauses () =
@@ -17066,7 +17047,7 @@ let () =
   test_transact_report_exposes_resolved_tx_datoms ();
   test_transact_report_exposes_tx_meta ();
   test_transact_report_exposes_cardinality_one_retractions ();
-  test_history_exposes_additions_and_retractions ();
+  test_history_is_current_db_without_historical_state ();
   test_no_history_schema_omits_attr_from_history ();
   test_datoms_filter_by_tx_component ();
   test_reverse_ref_helpers ();

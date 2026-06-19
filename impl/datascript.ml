@@ -59,8 +59,6 @@ let empty_db ?(schema = []) ?storage () =
 
 let empty db = Db_impl.empty db_core_context db
 
-let history_datoms_for_schema = Db_impl.history_datoms_for_schema
-
 let init_db ?(schema = []) ?storage datoms =
   Db_impl.init_db db_core_context ~schema ?storage datoms
 
@@ -68,7 +66,7 @@ let history db = Db_impl.history db_core_context db
 
 let is_history = Db_impl.is_history
 
-let visible_datoms = Db_impl.visible_active_datoms
+let visible_datoms = Db_impl.visible_datoms
 
 let is_filtered = Db_impl.is_filtered
 
@@ -359,7 +357,6 @@ let transact_apply_context : Transact_impl.apply_context =
   ; normalize_entity_attr_value
   ; tuple_direct_write_matches_sources
   ; refresh_tuple_attrs_for_source
-  ; history_datoms_for_schema
   ; refresh_db_indexes
   ; refresh_db_indexes_with_added_datoms
   ; refresh_db_identity

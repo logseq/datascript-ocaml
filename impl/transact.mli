@@ -66,7 +66,6 @@ type apply_context =
   ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
   ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool
   ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
-  ; history_datoms_for_schema : schema -> datom list -> datom list
   ; refresh_db_indexes : db -> db
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_identity : db -> db

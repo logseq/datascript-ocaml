@@ -319,14 +319,17 @@ type apply_context =
   ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
   ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool
   ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
-  ; history_datoms_for_schema : schema -> datom list -> datom list
   ; refresh_db_indexes : db -> db
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 
+let eavt_datoms db =
+  Persistent_sorted_set.to_list db.eavt_index
+
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
+  let initial_datoms = eavt_datoms db in
   let tx = db.max_tx + 1 in
   let current_schema = ref db.schema in
   let current_tx_fns = ref db.tx_fns in
@@ -1009,12 +1012,12 @@ let apply_tx context tx_ops db =
       d.e > db.max_datom_e
     in
     let existing_fact d =
-      (not (entity_is_new d)) && List.exists (context.same_fact d) db.datoms
+      (not (entity_is_new d)) && List.exists (context.same_fact d) initial_datoms
     in
     let existing_cardinality_one_value d =
       (not (entity_is_new d))
       && context.resolve_context.cardinality db d.a = One
-      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) db.datoms
+      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) initial_datoms
     in
     let existing_unique_conflict d =
       unique_attr d.a
@@ -1078,7 +1081,7 @@ let apply_tx context tx_ops db =
                max_eid
                facts
            in
-           Some (List.rev_append facts db.datoms, max_eid, [], [], facts))
+           Some (List.rev_append facts initial_datoms, max_eid, [], [], facts))
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
@@ -1095,7 +1098,7 @@ let apply_tx context tx_ops db =
       datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
     | None ->
       let datoms, max_eid, tempids, entity_tempids, tx_data =
-        apply_ops (db.datoms, initial_max_eid, [], [], []) tx_ops
+        apply_ops (initial_datoms, initial_max_eid, [], [], []) tx_ops
       in
       datoms, max_eid, tempids, entity_tempids, tx_data, None
   in
@@ -1113,26 +1116,23 @@ let apply_tx context tx_ops db =
         db.schema
         datoms
   in
-  let history_tx_data = context.history_datoms_for_schema schema tx_data in
   let db_after =
-    let history_datoms =
-      match fast_added_datoms with
-      | Some _ -> List.rev_append history_tx_data db.history_datoms
-      | None -> db.history_datoms @ history_tx_data
-    in
-    context.refresh_db_identity
-      { db with
-        schema
-      ; datoms
-      ; history_datoms
-      ; max_eid
-      ; max_tx = !max_tx_seen
-      ; tx_fns = !current_tx_fns
-      }
+    { db with
+      schema
+    ; max_eid
+    ; max_tx = !max_tx_seen
+    ; tx_fns = !current_tx_fns
+    }
   in
   ( (match fast_added_datoms with
-     | Some added_datoms -> context.refresh_db_indexes_with_added_datoms db_after added_datoms
-     | None -> context.refresh_db_indexes db_after)
+     | Some added_datoms ->
+       db_after
+       |> fun db -> context.refresh_db_indexes_with_added_datoms db added_datoms
+       |> context.refresh_db_identity
+     | None ->
+       db_after
+       |> fun db -> context.with_db_datoms db datoms
+       |> context.refresh_db_identity)
   , tempids
   , tx_data
   )

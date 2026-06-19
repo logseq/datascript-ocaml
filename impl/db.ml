@@ -98,13 +98,13 @@ let build_unique_index schema datoms =
     else
       None)
 
-let refresh_indexes db =
-  let eavt_index = build_index Eavt db.datoms in
-  let aevt_index = build_index Aevt db.datoms in
-  let avet_index = build_avet_index db.schema db.datoms in
-  let vaet_index = build_vaet_index db.datoms in
-  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 db.datoms in
-  let unique_index = build_unique_index db.schema db.datoms in
+let set_indexes_from_datoms db datoms =
+  let eavt_index = build_index Eavt datoms in
+  let aevt_index = build_index Aevt datoms in
+  let avet_index = build_avet_index db.schema datoms in
+  let vaet_index = build_vaet_index datoms in
+  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 datoms in
+  let unique_index = build_unique_index db.schema datoms in
   { db with
     eavt_index
   ; aevt_index
@@ -113,6 +113,12 @@ let refresh_indexes db =
   ; max_datom_e
   ; unique_index
   }
+
+let eavt_datoms db =
+  PSet.to_list db.eavt_index
+
+let refresh_indexes db =
+  set_indexes_from_datoms db (eavt_datoms db)
 
 let add_datoms_to_index include_datom datoms index_set =
   List.fold_left
@@ -138,69 +144,58 @@ let refresh_indexes_with_added_datoms db added_datoms =
   }
 
 let with_datoms db datoms =
-  refresh_indexes { db with datoms }
+  set_indexes_from_datoms db datoms
 
 let empty_db context ?(schema = []) ?storage () =
   let schema = Schema.validate_schema schema in
-  refresh_indexes
-    { db_uid = context.next_db_uid ()
-    ; schema
-    ; datoms = []
-    ; eavt_index = empty_index Eavt
-    ; aevt_index = empty_index Aevt
-    ; avet_index = empty_index Avet
-    ; vaet_index = empty_index Vaet
-    ; history_datoms = []
-    ; historical = false
-    ; max_eid = 0
-    ; max_datom_e = 0
-    ; max_tx = tx0
-    ; unique_index = []
-    ; filter_pred = None
-    ; storage_ref = storage
-    ; tx_fns = []
-    }
+  { db_uid = context.next_db_uid ()
+  ; schema
+  ; eavt_index = empty_index Eavt
+  ; aevt_index = empty_index Aevt
+  ; avet_index = empty_index Avet
+  ; vaet_index = empty_index Vaet
+  ; max_eid = 0
+  ; max_datom_e = 0
+  ; max_tx = tx0
+  ; unique_index = []
+  ; filter_pred = None
+  ; storage_ref = storage
+  ; tx_fns = []
+  }
 
 let empty context db = empty_db context ~schema:db.schema ?storage:db.storage_ref ()
-
-let history_datoms_for_schema schema tx_data =
-  List.filter (fun d -> not (Schema.schema_has_no_history schema d.a)) tx_data
 
 let init_db context ?(schema = []) ?storage datoms =
   let schema = Schema.validate_schema schema in
   let datoms = List.map (normalize_datom_for_schema schema) datoms in
-  let history_datoms = history_datoms_for_schema schema datoms in
   let max_eid =
     List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0 datoms
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
-  refresh_indexes
-    { db_uid = context.next_db_uid ()
-    ; schema
-    ; datoms
-    ; eavt_index = empty_index Eavt
-    ; aevt_index = empty_index Aevt
-    ; avet_index = empty_index Avet
-    ; vaet_index = empty_index Vaet
-    ; history_datoms
-    ; historical = false
-    ; max_eid
-    ; max_datom_e = 0
-    ; max_tx
-    ; unique_index = []
-    ; filter_pred = None
-    ; storage_ref = storage
-    ; tx_fns = []
-    }
+  { db_uid = context.next_db_uid ()
+  ; schema
+  ; eavt_index = empty_index Eavt
+  ; aevt_index = empty_index Aevt
+  ; avet_index = empty_index Avet
+  ; vaet_index = empty_index Vaet
+  ; max_eid
+  ; max_datom_e = 0
+  ; max_tx
+  ; unique_index = []
+  ; filter_pred = None
+  ; storage_ref = storage
+  ; tx_fns = []
+  }
+  |> fun db -> with_datoms db datoms
 
-let history context db = with_datoms (refresh_identity context { db with historical = true }) db.history_datoms
+let history context db = refresh_identity context db
 
-let is_history db = db.historical
+let is_history _db = false
 
-let visible_active_datoms db =
+let visible_datoms db =
   match db.filter_pred with
-  | None -> db.datoms
-  | Some pred -> List.filter pred db.datoms
+  | None -> eavt_datoms db
+  | Some pred -> List.filter pred (eavt_datoms db)
 
 let is_filtered db = Option.is_some db.filter_pred
 
@@ -233,9 +228,7 @@ let hash db =
     let hash =
       Hashtbl.hash
         ( db.schema
-        , db.datoms
-        , db.history_datoms
-        , db.historical
+        , eavt_datoms db
         , db.max_eid
         , db.max_tx
         )
