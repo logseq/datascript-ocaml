@@ -260,8 +260,8 @@ type query_clause =
   | SourceRelationPattern of string * query_term list
   | Missing of query_term * attr
   | SourceMissing of string * query_term * attr
-  | GetElse of query_term * attr * value * string
-  | SourceGetElse of string * query_term * attr * value * string
+  | GetElse of query_term * attr * query_term * string
+  | SourceGetElse of string * query_term * attr * query_term * string
   | GetSome of query_term * attr list * string * string
   | SourceGetSome of string * query_term * attr list * string * string
   | GetValue of query_term * query_term * string

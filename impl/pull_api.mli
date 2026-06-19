@@ -7,6 +7,7 @@ type context =
   ; datoms_by_entity : db -> entity_id -> datom list
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
   ; cardinality : db -> attr -> cardinality
+  ; is_ref_attr : db -> attr -> bool
   ; is_component : db -> attr -> bool
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr

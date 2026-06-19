@@ -128,13 +128,13 @@ end) = struct
            values
     | _ -> false
   
-  let add_active_datom_with_report ?(allow_tuple = false) db tx datoms d =
+  let add_active_datom_with_report ?(allow_tuple = false) ?(validate_value = true) db tx datoms d =
     let d = { d with v = normalize_value d.v } in
     if is_tuple_attr db d.a && not allow_tuple then
       if tuple_direct_write_matches_sources db datoms d then datoms, []
       else invalid_arg "cannot modify tuple attributes directly"
     else begin
-      validate_datom_value db d;
+      if validate_value then validate_datom_value db d;
       if has_unique_conflict db datoms d then invalid_arg "unique constraint";
       if List.exists (same_fact d) datoms then datoms, []
       else

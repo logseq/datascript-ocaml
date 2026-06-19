@@ -467,6 +467,11 @@ val parse_query_return : query_form -> query_return * query
 val parse_query_return_string : string -> query_return * query
 val parse_query_return_map : query_form -> query_return * query_return_map option * query
 val parse_query_return_map_string : string -> query_return * query_return_map option * query
+val parse_query_return_map_string_with_pull_context :
+  ?default_pull_db:db ->
+  ?pull_db_for_source:(string -> db) ->
+  string ->
+  query_return * query_return_map option * query
 
 module Query : sig
   type query_callables =

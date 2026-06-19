@@ -106,11 +106,15 @@ let test_parser_where__clause_helper_batch () =
     (Parser.parse_missing_clause [ sym "$other"; sym "?e"; kw "name" ]);
   assert_equal
     "parse_get_else_clause parses default get-else"
-    (GetElse (QVar "e", "name", String "unknown", "out"))
+    (GetElse (QVar "e", "name", QValue (String "unknown"), "out"))
     (Parser.parse_get_else_clause [ sym "?e"; kw "name"; str "unknown" ] "?out");
   assert_equal
+    "parse_get_else_clause parses variable defaults"
+    (GetElse (QVar "e", "name", QVar "fallback", "out"))
+    (Parser.parse_get_else_clause [ sym "?e"; kw "name"; sym "?fallback" ] "?out");
+  assert_equal
     "parse_get_else_clause parses sourced get-else"
-    (SourceGetElse ("other", QVar "e", "name", String "unknown", "out"))
+    (SourceGetElse ("other", QVar "e", "name", QValue (String "unknown"), "out"))
     (Parser.parse_get_else_clause [ sym "$other"; sym "?e"; kw "name"; str "unknown" ] "?out");
   assert_equal
     "parse_two_output_vars parses output tuples"

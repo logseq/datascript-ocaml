@@ -59,7 +59,7 @@ type apply_context =
   ; compare_and_set_failure_message : db -> datom list -> entity_id -> attr -> value option -> string
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   ; normalize_datom_for_schema : schema -> datom -> datom
-  ; add_active_datom_with_report : ?allow_tuple:bool -> db -> tx -> datom list -> datom -> datom list * datom list
+  ; add_active_datom_with_report : ?allow_tuple:bool -> ?validate_value:bool -> db -> tx -> datom list -> datom -> datom list * datom list
   ; validate_explicit_upsert_target : db -> datom list -> entity_id -> (attr * tx_value) list -> unit
   ; entity_unique_identity : db -> datom list -> (attr * tx_value) list -> entity_id option
   ; existing_unique_entity : db -> attr -> value -> entity_id option

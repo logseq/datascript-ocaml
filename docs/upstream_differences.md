@@ -88,6 +88,51 @@ test-validation` to `test_q_input_arity_matches_upstream_validation_messages`.
 The tested validation behavior matches, but the full upstream `query_v3`
 implementation is not ported as a separate surface.
 
+### DataScript: Entity Construction Is Not Lazy
+
+Upstream DataScript entities behave as lazy entity views: constructing an entity
+does not require building the full attribute map, and attributes are resolved
+when requested.
+
+The OCaml `entity` type currently stores a concrete `attrs` list. Calling
+`entity db entity_ref` resolves the entity id, materializes forward attributes
+from the EAVT entity slice, scans visible datoms for reverse attributes, sorts
+the resulting attributes, and then returns the entity record. Referenced entity
+values are still expanded later by `entity_attr`, but the base entity attribute
+map is already materialized.
+
+The current behavior can still match observable entity results, but it is an
+implementation divergence from upstream laziness and can affect performance for
+call sites that only need one attribute from an entity. Exact upstream parity
+should move entity values back toward lazy views and make `entity_attr` perform
+bounded per-attribute index access.
+
+### DataScript: Seek And Range APIs Materialize Lists
+
+Public `datoms` and `datoms_ref` return `Seq.t` and preserve lazy index access
+for normal datom reads. The adjacent seek and range APIs are still eager:
+
+- `seek_datoms` / `seek_datoms_ref`
+- `rseek_datoms` / `rseek_datoms_ref`
+- `index_range`
+
+Those functions return `datom list` and force the requested range before
+returning. Upstream exposes these reads as sequence/iterator-style results, so
+callers can consume only the prefix they need. Exact upstream laziness would
+change these OCaml APIs, or add lazy variants and route compatibility layers
+through them.
+
+### DataScript: Direct Lookup Refs Scan Visible Datoms
+
+Some unique-value checks already use the `AVET` index, including transaction
+conflict checks. Direct `entid` and lookup-ref resolution still go through
+`visible_datoms` and then scan a list for the matching unique attribute/value.
+
+That preserves result behavior, but it is an eager path where upstream can use
+indexed lookup. Exact parity should route direct lookup-ref resolution through a
+bounded `AVET` lookup, while keeping transaction-local datom-list paths for
+staged transaction state.
+
 ### DataScript: Public Options Are Narrower Than Upstream
 
 Upstream `empty-db`, `init-db`, `create-conn`, and restore paths accept option
@@ -158,6 +203,23 @@ has:
 DataScript OCaml can use the sequence APIs to preserve lazy index behavior, but
 the public PSS API is not an exact upstream API match.
 
+### Persistent Sorted Set: Restored Sequence And Count Paths Can Materialize
+
+Upstream restored sorted sets keep enough iterator and metadata state to support
+lazy traversal and cheap count when restore metadata is available. The OCaml PSS
+port has lazy restored-path coverage for several range/list operations, but some
+paths still force more than upstream:
+
+- `to_seq` over restored/deferred sources materializes the restored tree before
+  yielding the first element.
+- `count` traverses or materializes restored sets because the OCaml storage
+  shape does not keep upstream-style count/depth metadata.
+
+This can affect DataScript storage-backed indexes when a path converts a
+restored PSS sequence to `Seq.t` or counts a restored index. Exact upstream
+parity would keep restored iteration cursor-based and preserve count metadata
+through restore.
+
 ### Persistent Sorted Set: Settings And Storage Shape Differ
 
 Upstream settings include at least `:branching-factor` and `:ref-type`
@@ -204,5 +266,14 @@ evidence shows parity or there is no upstream surface in the checked-out source:
    document them as permanent typed-OCaml divergences.
 4. For PSS, decide whether public `slice`/`rslice` should return lazy sequence
    values by default to match upstream API shape more closely.
-5. Keep the existing coverage scripts and cross-runtime parity gate as required
+5. Add lazy seek/range APIs for `seek_datoms`, `rseek_datoms`, and
+   `index_range`, then route compatibility layers through those APIs.
+6. Route direct lookup-ref resolution through bounded `AVET` lookup instead of
+   scanning `visible_datoms`, while preserving transaction-local datom-list
+   behavior.
+7. Rework entity values into lazy views so constructing an entity does not
+   materialize all forward and reverse attributes before `entity_attr` access.
+8. Keep restored PSS `to_seq` and `count` lazy/metadata-backed enough for
+   storage-backed DataScript indexes.
+9. Keep the existing coverage scripts and cross-runtime parity gate as required
    checks, but treat them as necessary rather than sufficient for exactness.

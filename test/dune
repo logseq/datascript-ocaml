@@ -124,6 +124,11 @@
  (libraries datascript logseq_sqlite_storage unix sqlite3))
 
 (test
+ (name test_logseq_query_parity)
+ (modules test_logseq_query_parity)
+ (libraries datascript logseq_sqlite_storage unix sqlite3))
+
+(test
  (name test_storage)
  (modules test_storage)
  (libraries datascript unix))

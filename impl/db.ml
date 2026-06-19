@@ -59,13 +59,8 @@ let value_equal = Util.value_equal
 let same_fact left right = left.e = right.e && left.a = right.a && value_equal left.v right.v
 
 let normalize_datom_for_schema schema d =
-  let d = Util.normalize_datom_value d in
-  if Schema.schema_attr_is_ref schema d.a then
-    match d.v with
-    | Int entity_id -> { d with v = Ref (validate_entity_id entity_id) }
-    | _ -> d
-  else
-    d
+  ignore schema;
+  Util.normalize_datom_value d
 
 let empty_index index =
   PSet.empty_by (Util.compare_datom index)

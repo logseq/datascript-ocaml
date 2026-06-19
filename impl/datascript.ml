@@ -515,6 +515,7 @@ let pull_api_context : Pull_api_impl.context =
   ; datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
   ; cardinality
+  ; is_ref_attr
   ; is_component
   ; is_reverse_ref
   ; reverse_ref

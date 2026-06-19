@@ -211,7 +211,7 @@ let test_init_db_counts_ref_values_in_max_eid () =
     6
     (Option.get (resolve_tempid report.tempids "next"))
 
-let test_init_db_resolves_raw_ref_datoms_from_schema () =
+let test_init_db_preserves_raw_int_datoms_for_ref_attrs () =
   let db =
     init_db
       ~schema:[ "friend", ref_attr ]
@@ -221,20 +221,13 @@ let test_init_db_resolves_raw_ref_datoms_from_schema () =
       ]
   in
   assert_equal_datoms
-    "init_db should normalize raw numeric ref datoms by schema"
-    [ datom ~e:1 ~a:"friend" ~v:(Ref 2) () ]
+    "init_db should preserve raw numeric datom values under ref schema like upstream d/datom"
+    [ datom ~e:1 ~a:"friend" ~v:(Int 2) () ]
     (datoms db Eavt ~e:1 ~a:"friend" ());
-  (match pull db [ Pull_ref ("friend", [ Pull_attr "name" ]) ] (Entity_id 1) with
-   | Some entity ->
-     assert_equal_pulled_attrs
-       "pull should expand init_db raw numeric refs"
-       [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
-       entity
-   | None -> failwith "expected pull to find init_db entity with raw ref");
   assert_equal_query
-    "q should match init_db raw numeric refs as entity refs"
-    [ [ Result_value (String "Petr") ] ]
-    (q_string db "[:find ?name :where [1 :friend ?friend] [?friend :name ?name]]")
+    "q should expose init_db raw numeric ref-attr datoms as scalar values"
+    [ [ Result_value (Int 2) ] ]
+    (q_string db "[:find ?friend :where [1 :friend ?friend]]")
 
 let test_datoms_returns_lazy_sequence () =
   let db =
@@ -294,16 +287,13 @@ let test_raw_datom_counts_ref_values_in_max_eid () =
          ]
   in
   assert_equal_datoms
-    "Raw_datom should normalize raw numeric ref values by schema"
-    [ datom ~e:1 ~a:"friend" ~v:(Ref 2) () ]
+    "Raw_datom should preserve raw numeric values under ref schema like upstream d/datom"
+    [ datom ~e:1 ~a:"friend" ~v:(Int 2) () ]
     (datoms db Eavt ~e:1 ~a:"friend" ());
-  match pull db [ Pull_ref ("friend", [ Pull_attr "name" ]) ] (Entity_id 1) with
-  | Some entity ->
-    assert_equal_pulled_attrs
-      "pull should expand Raw_datom raw numeric refs"
-      [ kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] } ]
-      entity
-  | None -> failwith "expected pull to find Raw_datom entity with raw ref"
+  assert_equal_query
+    "q should expose Raw_datom raw numeric ref-attr values as scalars"
+    [ [ Result_value (Int 2) ] ]
+    (q_string db "[:find ?friend :where [1 :friend ?friend]]")
 
 let test_raw_datom_counts_tx_in_max_tx () =
   let db =
@@ -8623,7 +8613,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "age", QVar "age")
-        ; GetElse (QVar "e", "height", Int 300, "height")
+        ; GetElse (QVar "e", "height", QValue (Int 300), "height")
         ]
     }
   in
@@ -8634,6 +8624,12 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; [ Result_entity 3; Result_value (Int 37); Result_value (Int 300) ]
     ]
     (q db get_else_query);
+  assert_equal_query
+    "q get-else accepts a bound variable default like upstream"
+    [ [ Result_value (String "Ivan") ]; [ Result_value (String "Petr") ]; [ Result_value (String "Slava") ] ]
+    (q_string
+       db
+       "[:find ?display :where [?e :name ?fallback] [(get-else $ ?e :nickname ?fallback) ?display]]");
   assert_raises_invalid_arg
     "q get-else rejects nil defaults"
     (fun () ->
@@ -8644,7 +8640,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
             ; inputs = []
             ; with_vars = []
             ; rules = []
-            ; where = [ GetElse (QEntity 1, "height", Nil, "height") ]
+            ; where = [ GetElse (QEntity 1, "height", QValue Nil, "height") ]
             }));
   let get_some_query =
     { find = [ Find_var "e"; Find_var "attr"; Find_var "value" ]
@@ -8716,7 +8712,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ SourcePattern ("people", QVar "e", QAttr "age", QWildcard)
-        ; SourceGetElse ("people", QVar "e", "height", Int 300, "height")
+        ; SourceGetElse ("people", QVar "e", "height", QValue (Int 300), "height")
         ]
     }
   in
@@ -10958,7 +10954,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_scalar ("person", Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetElse (QVar "person", "height", String "Unknown", "height") ]
+    ; where = [ GetElse (QVar "person", "height", QValue (String "Unknown"), "height") ]
     }
   in
   assert_equal_query
@@ -10970,7 +10966,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
     ; inputs = [ Input_entity_ref ("person", Lookup_ref ("name", String "Ivan")) ]
     ; with_vars = []
     ; rules = []
-    ; where = [ GetElse (QVar "person", "height", String "Unknown", "height") ]
+    ; where = [ GetElse (QVar "person", "height", QValue (String "Unknown"), "height") ]
     }
   in
   assert_equal_query
@@ -16951,7 +16947,7 @@ let () =
   test_empty_db ();
   test_init_db_and_indexes ();
   test_init_db_counts_ref_values_in_max_eid ();
-  test_init_db_resolves_raw_ref_datoms_from_schema ();
+  test_init_db_preserves_raw_int_datoms_for_ref_attrs ();
   test_datoms_returns_lazy_sequence ();
   test_datoms_slices_before_filtered_predicate ();
   test_raw_datom_counts_ref_values_in_max_eid ();

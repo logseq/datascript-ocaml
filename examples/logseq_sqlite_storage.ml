@@ -111,6 +111,24 @@ let starts_with prefix value =
   let prefix_len = String.length prefix in
   String.length value >= prefix_len && String.sub value 0 prefix_len = prefix
 
+let contains_substring value pattern =
+  let value_len = String.length value in
+  let pattern_len = String.length pattern in
+  if pattern_len = 0 then
+    true
+  else if pattern_len > value_len then
+    false
+  else
+    let rec loop index =
+      if index + pattern_len > value_len then
+        false
+      else if String.sub value index pattern_len = pattern then
+        true
+      else
+        loop (index + 1)
+    in
+    loop 0
+
 let payload_to_content payload =
   ocaml_payload_prefix ^ hex_encode (Marshal.to_string payload [])
 
@@ -625,12 +643,11 @@ let logseq_int_of_shallow_json reader = function
 
 let logseq_datom_of_shallow_json reader = function
   | `List [ entity; attr; value; tx ] ->
-    datom
-      ~e:(logseq_int_of_shallow_json reader entity)
-      ~a:(logseq_attr_of_shallow_json reader attr)
-      ~v:(logseq_value_of_shallow_json reader value)
-      ~tx:(logseq_int_of_shallow_json reader tx)
-      ()
+    let e = logseq_int_of_shallow_json reader entity in
+    let a = logseq_attr_of_shallow_json reader attr in
+    let v = logseq_value_of_shallow_json reader value in
+    let tx = logseq_int_of_shallow_json reader tx in
+    datom ~e ~a ~v ~tx ()
   | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
 
 let logseq_datoms_of_row_with_reader reader content =
@@ -652,7 +669,12 @@ let logseq_datoms_of_row content =
 
 let add_query_attr acc = function
   | QAttr attr -> attr :: acc
+  | QValue (Keyword attr | String attr | Symbol attr) -> attr :: acc
   | QVar _ | QEntity _ | QIdent _ | QLookupRef _ | QValue _ | QSource _ | QWildcard -> acc
+
+let add_short_pattern_attrs acc = function
+  | _ :: attr :: _ -> add_query_attr acc attr
+  | _ -> acc
 
 let rec add_query_clause_attrs acc = function
   | Pattern (_, attr, _)
@@ -681,7 +703,8 @@ let rec add_query_clause_attrs acc = function
       (fun acc branch -> List.fold_left add_query_clause_attrs acc branch)
       acc
       branches
-  | SourceRelationPattern _
+  | SourceRelationPattern (_, terms) ->
+    add_short_pattern_attrs acc terms
   | GetValue _
   | GetDefaultValue _
   | CountValue _
@@ -776,9 +799,44 @@ let rec add_query_clause_attrs acc = function
   | SourceRule _ ->
     acc
 
+let rec add_pull_selector_attrs acc = function
+  | Pull_id -> "db/id" :: acc
+  | Pull_wildcard -> acc
+  | Pull_attr attr
+  | Pull_attr_default (attr, _)
+  | Pull_attr_limit (attr, _)
+  | Pull_attr_unlimited attr
+  | Pull_attr_xform (attr, _)
+  | Pull_attr_default_xform (attr, _, _) ->
+    attr :: acc
+  | Pull_ref (attr, selectors)
+  | Pull_ref_default (attr, selectors, _)
+  | Pull_ref_limit (attr, selectors, _)
+  | Pull_ref_unlimited (attr, selectors)
+  | Pull_ref_xform (attr, selectors, _)
+  | Pull_recursive_ref (attr, selectors, _)
+  | Pull_reverse_ref (attr, selectors)
+  | Pull_reverse_ref_default (attr, selectors, _)
+  | Pull_reverse_ref_limit (attr, selectors, _)
+  | Pull_reverse_ref_unlimited (attr, selectors)
+  | Pull_reverse_ref_xform (attr, selectors, _) ->
+    List.fold_left add_pull_selector_attrs (attr :: acc) selectors
+  | Pull_as (selector, _) -> add_pull_selector_attrs acc selector
+
+let add_find_spec_attrs acc = function
+  | Find_pull (_, selectors) | Find_pull_source (_, _, selectors) ->
+    List.fold_left add_pull_selector_attrs acc selectors
+  | Find_var _
+  | Find_pull_var _
+  | Find_pull_source_var _
+  | Find_aggregate _ ->
+    acc
+
 let query_attrs query =
   let attrs =
     List.fold_left add_query_clause_attrs [] query.where
+    |> fun attrs -> List.fold_left add_find_spec_attrs attrs query.find
+    |> List.cons "db/ident"
     |> List.sort_uniq String.compare
   in
   query.rules
@@ -805,18 +863,47 @@ let logseq_keys_and_attrs_sql attrs =
     "content like " ^ sql_like_pattern "~:keys" ^ " and (" ^ attr_sql ^ ")"
 
 let datoms_of_logseq_graph_for_attrs ?(read_only = false) db_path attrs =
-  let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
   let include_all = attrs = [] in
-  select_map
+  let row_starts_segment content =
+    starts_with "[\"^ \",\"" content && not (starts_with "[\"^ \",\"^" content)
+  in
+  let row_mentions_attr content attr =
+    contains_substring content ("~:" ^ attr)
+  in
+  let segment_mentions_attr rows =
+    include_all || List.exists (fun row -> List.exists (row_mentions_attr row) attrs) rows
+  in
+  let decode_segment rows =
+    if not (segment_mentions_attr rows) then
+      []
+    else
+      let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
+      rows
+      |> List.concat_map (fun content ->
+        let datoms = logseq_datoms_of_row_with_reader reader content in
+        if include_all then datoms else List.filter (fun datom -> List.mem datom.a attrs) datoms)
+  in
+  let flush_segment segment acc =
+    match segment with
+    | [] -> acc
+    | segment -> List.rev_append (decode_segment (List.rev segment)) acc
+  in
+  let rows =
+    select_map
     ~read_only
     db_path
     ("select content from kvs where addr not in (0, 1) and "
-     ^ logseq_keys_and_attrs_sql attrs
+     ^ logseq_keys_or_shorthand_row_sql
      ^ " order by addr;")
     (fun stmt -> Sqlite3.column_text stmt 0)
-  |> List.concat_map (fun content ->
-    let datoms = logseq_datoms_of_row_with_reader reader content in
-    if include_all then datoms else List.filter (fun datom -> List.mem datom.a attrs) datoms)
+  in
+  let rec collect current acc = function
+    | [] -> List.rev (flush_segment current acc)
+    | row :: rest when row_starts_segment row && current <> [] ->
+      collect [ row ] (flush_segment current acc) rest
+    | row :: rest -> collect (row :: current) acc rest
+  in
+  collect [] [] rows
 
 let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
   let limit_sql =
@@ -836,9 +923,16 @@ let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
     (fun stmt -> Sqlite3.column_text stmt 0)
   |> List.concat_map (logseq_datoms_of_row_with_reader reader)
 
-let query_logseq_graph ?(read_only = false) db_path query_string =
-  let _, _, query = parse_query_return_map_string query_string in
+let parse_logseq_query_with_schema ?(read_only = false) db_path query_string =
   let schema = schema_of_logseq_graph ~read_only db_path in
+  let schema_db = empty_db ~schema () in
+  let return, return_map, query =
+    parse_query_return_map_string_with_pull_context ~default_pull_db:schema_db query_string
+  in
+  schema, return, return_map, query
+
+let query_logseq_graph ?(read_only = false) db_path query_string =
+  let schema, _, _, query = parse_logseq_query_with_schema ~read_only db_path query_string in
   let graph_datoms = datoms_of_logseq_graph_for_attrs ~read_only db_path (query_attrs query) in
   let db = init_db ~schema graph_datoms in
   q_return_map_string db query_string

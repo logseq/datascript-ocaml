@@ -31,7 +31,13 @@ let eval_missing_clause context clause_db bindings entity_term attr =
   | Some entity_id when not (attr_present_for_query context clause_db entity_id attr) -> [ bindings ]
   | Some _ | None -> []
 
-let eval_get_else_clause context clause_db bindings entity_term attr default output_var =
+let eval_get_else_clause context clause_db bindings entity_term attr default_term output_var =
+  let default =
+    match eval_query_term (context.match_context clause_db) bindings default_term with
+    | Some (Result_value value) -> value
+    | Some _ -> invalid_arg "get-else default must resolve to a value"
+    | None -> invalid_arg "insufficient bindings"
+  in
   if default = Nil then invalid_arg "get-else: nil default value is not supported";
   match query_term_entity_id (context.match_context clause_db) bindings entity_term with
   | None -> []

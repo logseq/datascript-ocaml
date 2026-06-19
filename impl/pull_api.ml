@@ -7,6 +7,7 @@ type context =
   ; datoms_by_entity : db -> entity_id -> datom list
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
   ; cardinality : db -> attr -> cardinality
+  ; is_ref_attr : db -> attr -> bool
   ; is_component : db -> attr -> bool
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
@@ -26,13 +27,19 @@ let compare_pull_key context left right =
 let pulled_id_stub entity_id =
   Pulled_entity { pulled_id = entity_id; pulled_attrs = [ pull_key_of_attr "db/id", Pulled_scalar (Int entity_id) ] }
 
-let shallow_pulled_value = function
-  | Ref entity_id -> pulled_id_stub entity_id
-  | value -> Pulled_scalar value
+let ref_entity_id_of_value context db attr = function
+  | Ref entity_id -> Some entity_id
+  | Int entity_id when context.is_ref_attr db attr -> context.entity_id_of_ref db (Entity_id entity_id)
+  | _ -> None
 
-let scalar_or_many = function
-  | One_value value -> shallow_pulled_value value
-  | Many_values values -> Pulled_many (List.map shallow_pulled_value values)
+let shallow_pulled_value context db attr value =
+  match ref_entity_id_of_value context db attr value with
+  | Some entity_id -> pulled_id_stub entity_id
+  | None -> Pulled_scalar value
+
+let scalar_or_many context db attr = function
+  | One_value value -> shallow_pulled_value context db attr value
+  | Many_values values -> Pulled_many (List.map (shallow_pulled_value context db attr) values)
   | One_entity _ | Many_entities _ -> invalid_arg "nested entity values are not stored"
 
 let default_pull_limit = 1000
@@ -253,7 +260,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
      | None -> []
      | Some value ->
        let pulled =
-         pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited selector default_pull_limit value
+         pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited attr selector default_pull_limit value
        in
        (match pulled with
         | Pulled_many [] -> []
@@ -264,7 +271,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
      | None -> [ pull_key_of_attr attr, Pulled_scalar default ]
      | Some value ->
        let pulled =
-         pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited selector default_pull_limit value
+         pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited attr selector default_pull_limit value
        in
        (match pulled with
         | Pulled_many [] -> []
@@ -274,7 +281,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     (match context.entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited selector limit value in
+       let pulled = pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited attr selector limit value in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ pull_key_of_attr attr, value ]))
@@ -283,7 +290,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     (match context.entity_attr_raw entity attr with
      | None -> []
      | Some value ->
-       let pulled = pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded context db visited selector value in
+       let pulled = pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded context db visited attr selector value in
        (match pulled with
         | Pulled_many [] -> []
         | value -> [ pull_key_of_attr attr, value ]))
@@ -291,7 +298,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull_attr context visitor entity.id attr;
     let pulled =
       context.entity_attr_raw entity attr
-      |> Option.map (pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited selector default_pull_limit)
+      |> Option.map (pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited attr selector default_pull_limit)
       |> Option.value ~default:(Pulled_scalar Nil)
       |> f
     in
@@ -417,12 +424,13 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
 
 and pulled_attr_value ?visitor ~root_id ~root_reexpanded context db visited entity attr value =
   if context.is_component db attr then
-    pull_component_value ?visitor ~root_id ~root_reexpanded context db visited entity.id value
+    pull_component_value ?visitor ~root_id ~root_reexpanded context db visited entity.id attr value
   else
-    scalar_or_many value
+    scalar_or_many context db attr value
 
-and pull_component_value ?visitor ~root_id ~root_reexpanded context db visited current_id = function
-  | One_value (Ref entity_id) ->
+and pull_component_value ?visitor ~root_id ~root_reexpanded context db visited current_id attr = function
+  | One_value value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+    let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
     if List.mem entity_id (current_id :: visited) then pulled_id_stub entity_id
     else
       (match
@@ -438,11 +446,12 @@ and pull_component_value ?visitor ~root_id ~root_reexpanded context db visited c
            entity_id
        with
        | Some entity -> Pulled_entity entity
-       | None -> Pulled_scalar (Ref entity_id))
+       | None -> Pulled_scalar value)
   | Many_values values ->
     values
     |> List.filter_map (function
-      | Ref entity_id ->
+      | value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+        let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
         if List.mem entity_id (current_id :: visited) then
           Some (pulled_id_stub entity_id)
         else
@@ -459,17 +468,19 @@ and pull_component_value ?visitor ~root_id ~root_reexpanded context db visited c
           |> Option.map (fun entity -> Pulled_entity entity)
       | _ -> None)
     |> fun values -> Pulled_many values
-  | value -> scalar_or_many value
+  | value -> scalar_or_many context db attr value
 
-and pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited selector limit = function
-  | One_value (Ref entity_id) ->
+and pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited attr selector limit = function
+  | One_value value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+    let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
     (match pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector entity_id with
      | Some entity -> Pulled_entity entity
      | None -> Pulled_many [])
   | Many_values values ->
     values
     |> List.filter_map (function
-      | Ref entity_id ->
+      | value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+        let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
         pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector entity_id
         |> Option.map (fun entity -> Pulled_entity entity)
       | _ -> None)
@@ -478,13 +489,13 @@ and pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visi
       | Some limit -> take limit values
       | None -> values)
     |> fun values -> Pulled_many values
-  | value -> scalar_or_many value
+  | value -> scalar_or_many context db attr value
 
-and pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited selector limit value =
-  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited selector (Some limit) value
+and pull_ref_value ?visitor ~root_id ~root_reexpanded context db visited attr selector limit value =
+  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited attr selector (Some limit) value
 
-and pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded context db visited selector value =
-  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited selector None value
+and pull_ref_value_unlimited ?visitor ~root_id ~root_reexpanded context db visited attr selector value =
+  pull_ref_value_with_limit ?visitor ~root_id ~root_reexpanded context db visited attr selector None value
 
 and pull_recursive_ref_value
   ?visitor
@@ -579,18 +590,21 @@ and pull_recursive_ref_value
     pull_reverse_children (context.reverse_ref attr)
   else
     match value with
-    | One_value (Ref entity_id) ->
+    | One_value value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+      let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
       (match pull_child entity_id with
        | Some value -> value
        | None -> Pulled_many [])
     | Many_values values ->
       values
       |> List.filter_map (function
-        | Ref entity_id -> pull_child entity_id
+        | value when Option.is_some (ref_entity_id_of_value context db attr value) ->
+          let entity_id = Option.get (ref_entity_id_of_value context db attr value) in
+          pull_child entity_id
         | _ -> None)
       |> take default_pull_limit
       |> fun values -> Pulled_many values
-    | value -> scalar_or_many value
+    | value -> scalar_or_many context db attr value
 
 let pull ?visitor context db selector entity_ref =
   match context.entity_id_of_ref db entity_ref with

@@ -824,14 +824,14 @@ let parse_get_else_clause args output =
     GetElse
       ( parse_pattern_term ~entity_position:true entity
       , query_attr_name attr
-      , query_value_of_form default
+      , parse_pattern_term ~source_position:false default
       , output_var )
   | QueryFormSymbol source :: entity :: attr :: default :: [] when is_query_source_symbol source ->
     SourceGetElse
       ( query_source_name source
       , parse_pattern_term ~entity_position:true entity
       , query_attr_name attr
-      , query_value_of_form default
+      , parse_pattern_term ~source_position:false default
       , output_var )
   | _ -> invalid_arg "get-else requires an entity, an attribute, a default, and an output"
 

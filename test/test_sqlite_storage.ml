@@ -2170,8 +2170,8 @@ let datom_has_unsupported_entity_id schema datom =
   unsupported_entity_id datom.e
   ||
   match List.assoc_opt datom.a schema, datom.v with
-  | Some { value_type = Some RefType; _ }, Int entity_id -> unsupported_entity_id entity_id
   | _, Ref entity_id -> unsupported_entity_id entity_id
+  | Some { value_type = Some RefType; _ }, Int _
   | _ -> false
 
 let find_unsupported_entity_id_datoms schema datoms =
