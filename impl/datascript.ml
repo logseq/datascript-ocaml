@@ -1075,6 +1075,7 @@ module Query = struct
     match resolve_query_value_for_attr db attr value with
     | None -> []
     | Some value ->
+      let value = coerce_tuple_lookup_value db (visible_datoms db) attr value in
       let ident_entity_value =
         match value, ref_attr_for_value_resolution db attr with
         | Keyword ident, None -> Option.map (fun entity_id -> Ref entity_id) (entid db ident_attr (Keyword ident))
