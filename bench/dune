@@ -2,3 +2,16 @@
  (name bench_ocaml)
  (modes exe js)
  (libraries datascript unix))
+
+(rule
+ (alias bench)
+ (deps
+  bench_ocaml.exe
+  bench_ocaml.bc.js
+  bench_upstream.js
+  ../script/benchmark_vs_cljs.sh)
+ (action
+  (setenv
+   BENCH_SKIP_BUILD
+   1
+   (run bash %{dep:../script/benchmark_vs_cljs.sh}))))
