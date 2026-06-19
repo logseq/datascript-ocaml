@@ -104,7 +104,7 @@ let test_storage__test_gc () =
   let db = small_db () in
   store ~storage db;
   store_tail storage [ [ datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Alex") () ] ];
-  storage.storage_store [ "stale/node", Storage_tail [] ] [];
+  storage.storage_store [ "stale/node", Storage_tail [] ];
   collect_garbage storage;
   assert_equal_strings
     "collect_garbage keeps only live root and tail"

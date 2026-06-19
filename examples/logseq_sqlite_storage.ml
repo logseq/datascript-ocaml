@@ -865,7 +865,7 @@ let upsert_sql (address, payload) =
 
 let storage db_path =
   create_kvs_table db_path;
-  let store entries _delete_addresses =
+  let store entries =
     let sql = String.concat "" (List.map upsert_sql entries) in
     if sql <> "" then exec_sql db_path sql
   in

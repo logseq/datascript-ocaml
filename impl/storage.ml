@@ -18,15 +18,12 @@ let tail_address = "datascript/tail"
 
 let memory_storage () =
   let disk = ref [] in
-  let store entries delete_addresses =
+  let store entries =
     disk :=
-      !disk
-      |> List.filter (fun (address, _) -> not (List.mem address delete_addresses))
-      |> fun disk ->
-        List.fold_left
-          (fun disk (address, payload) -> (address, payload) :: List.remove_assoc address disk)
-          disk
-          entries
+      List.fold_left
+        (fun disk (address, payload) -> (address, payload) :: List.remove_assoc address disk)
+        !disk
+        entries
   in
   let restore address = List.assoc_opt address !disk in
   let list_addresses () =
@@ -115,8 +112,7 @@ let file_storage dir =
       addresses
   in
   { storage_store =
-      (fun entries delete_addresses ->
-        delete delete_addresses;
+      (fun entries ->
         List.iter (fun (address, payload) -> write_payload address payload) entries)
   ; storage_restore = read_payload
   ; storage_list_addresses = list_addresses
@@ -128,7 +124,6 @@ let store_to_storage context db storage =
     [ root_address, Storage_db (context.serializable db)
     ; tail_address, Storage_tail []
     ]
-    []
 
 let store context ?storage db =
   match storage, db.storage_ref with
@@ -137,7 +132,7 @@ let store context ?storage db =
   | None, None -> invalid_arg "db has no attached storage"
 
 let store_tail storage tail =
-  storage.storage_store [ tail_address, Storage_tail tail ] []
+  storage.storage_store [ tail_address, Storage_tail tail ]
 
 let tail_compaction_threshold = 32
 

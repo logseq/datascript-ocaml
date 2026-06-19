@@ -221,27 +221,32 @@ let test_sqlite_storage_does_not_require_sqlite3_binary () =
   with_temp_db (fun db_path ->
     without_path (fun () ->
       let storage = Sqlite_storage.storage db_path in
-      storage.storage_store [ "2", Storage_tail [] ] [];
+      storage.storage_store [ "2", Storage_tail [] ];
       match storage.storage_restore "2" with
       | Some (Storage_tail []) -> ()
       | Some _ -> failwith "SQLite storage should keep payloads without sqlite3 binary"
       | None -> failwith "SQLite storage should not require sqlite3 binary"))
 
-let test_sqlite_storage_store_ignores_delete_addresses () =
+let test_sqlite_storage_store_and_delete_are_separate () =
   if not (sqlite3_available ()) then
-    prerr_endline "Skipping SQLite storage delete-address test: sqlite3 is not available"
+    prerr_endline "Skipping SQLite storage explicit delete test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
       let storage = Sqlite_storage.storage db_path in
-      storage.storage_store [ "2", Storage_tail [] ] [];
-      storage.storage_store [ "3", Storage_tail [] ] [ "2" ];
+      storage.storage_store [ "2", Storage_tail [] ];
+      storage.storage_store [ "3", Storage_tail [] ];
       (match storage.storage_restore "2" with
        | Some (Storage_tail []) -> ()
        | Some _ -> failwith "SQLite storage should keep the original payload"
-       | None -> failwith "SQLite storage store should ignore delete_addresses");
+       | None -> failwith "SQLite storage store should not delete addresses");
       assert_equal
-        "storage addresses after ignored delete addresses"
+        "storage addresses before explicit delete"
         "2,3"
+        (String.concat "," (storage_addresses storage));
+      storage.storage_delete [ "2" ];
+      assert_equal
+        "storage addresses after explicit delete"
+        "3"
         (String.concat "," (storage_addresses storage)))
 
 let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
@@ -2236,7 +2241,7 @@ let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
   test_sqlite_storage_does_not_require_sqlite3_binary ();
-  test_sqlite_storage_store_ignores_delete_addresses ();
+  test_sqlite_storage_store_and_delete_are_separate ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();

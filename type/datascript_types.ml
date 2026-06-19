@@ -83,7 +83,7 @@ type storage_payload =
   | Storage_tail of datom list list
 
 type storage =
-  { storage_store : (storage_address * storage_payload) list -> storage_address list -> unit
+  { storage_store : (storage_address * storage_payload) list -> unit
   ; storage_restore : storage_address -> storage_payload option
   ; storage_list_addresses : unit -> storage_address list
   ; storage_delete : storage_address list -> unit
