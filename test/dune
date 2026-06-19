@@ -24,6 +24,11 @@
  (libraries datascript persistent_sorted_set_ocaml))
 
 (test
+ (name test_perf)
+ (modules test_perf)
+ (libraries datascript unix))
+
+(test
  (name test_data_readers)
  (modules test_data_readers)
  (libraries datascript))

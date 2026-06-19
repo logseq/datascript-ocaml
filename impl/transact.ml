@@ -329,7 +329,8 @@ let eavt_datoms db =
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
-  let initial_datoms = eavt_datoms db in
+  let initial_datoms = lazy (eavt_datoms db) in
+  let initial_datoms_list () = Lazy.force initial_datoms in
   let tx = db.max_tx + 1 in
   let current_schema = ref db.schema in
   let current_tx_fns = ref db.tx_fns in
@@ -1012,12 +1013,12 @@ let apply_tx context tx_ops db =
       d.e > db.max_datom_e
     in
     let existing_fact d =
-      (not (entity_is_new d)) && List.exists (context.same_fact d) initial_datoms
+      (not (entity_is_new d)) && List.exists (context.same_fact d) (initial_datoms_list ())
     in
     let existing_cardinality_one_value d =
       (not (entity_is_new d))
       && context.resolve_context.cardinality db d.a = One
-      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) initial_datoms
+      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) (initial_datoms_list ())
     in
     let existing_unique_conflict d =
       unique_attr d.a
@@ -1081,7 +1082,7 @@ let apply_tx context tx_ops db =
                max_eid
                facts
            in
-           Some (List.rev_append facts initial_datoms, max_eid, [], [], facts))
+           Some (facts, max_eid, [], [], facts))
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
@@ -1098,7 +1099,7 @@ let apply_tx context tx_ops db =
       datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
     | None ->
       let datoms, max_eid, tempids, entity_tempids, tx_data =
-        apply_ops (initial_datoms, initial_max_eid, [], [], []) tx_ops
+        apply_ops (initial_datoms_list (), initial_max_eid, [], [], []) tx_ops
       in
       datoms, max_eid, tempids, entity_tempids, tx_data, None
   in

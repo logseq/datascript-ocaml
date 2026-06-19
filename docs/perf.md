@@ -30,32 +30,63 @@ The benchmark script supports these knobs:
 
 ## Latest Verified Results
 
+Verified on 2026-06-19.
+
 Configuration:
 
 ```text
-BENCH_SIZE=200
 BENCH_WARMUP_MS=200
 BENCH_SAMPLE_MS=500
 BENCH_SAMPLES=5
+UPSTREAM_DATASCRIPT_JS=/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js
 ```
 
 Lower is better.
 
+### Size 200
+
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 2.23 | 5.13 | 14.27 |
-| add-one-by-one | 1.56 | 4.20 | 14.31 |
-| datoms-name | 0.00085 | 0.00384 | 0.00429 |
-| query-name-age | 0.01490 | 0.03514 | 0.06272 |
-| query-salary-pred | 0.04028 | 0.09610 | 0.15142 |
-| pull-one | 0.00164 | 0.00443 | 0.01035 |
+| add-all | 3.05 | 6.72 | 14.25 |
+| add-one-by-one | 3.22 | 7.80 | 14.35 |
+| datoms-name | 0.01654 | 0.05378 | 0.00431 |
+| query-name-age | 0.02199 | 0.05820 | 0.06224 |
+| query-salary-pred | 0.00985 | 0.02585 | 0.15149 |
+| pull-one | 0.00313 | 0.00950 | 0.01040 |
+
+### Size 1000
+
+| Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
+| --- | ---: | ---: | ---: |
+| add-all | 17.44 | 40.15 | 81.42 |
+| add-one-by-one | 22.76 | 61.44 | 80.87 |
+| datoms-name | 0.07618 | 0.25536 | 0.01825 |
+| query-name-age | 0.12468 | 0.31969 | 0.19548 |
+| query-salary-pred | 0.04302 | 0.11631 | 0.63592 |
+| pull-one | 0.00329 | 0.01021 | 0.01051 |
+
+### Size 10000
+
+| Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
+| --- | ---: | ---: | ---: |
+| add-all | 209.66 | 496.00 | 999.61 |
+| add-one-by-one | 727.86 | 2906.00 | 999.67 |
+| datoms-name | 0.76836 | 2.75 | 0.19502 |
+| query-name-age | 1.94 | 5.19 | 1.71 |
+| query-salary-pred | 0.65311 | 1.44 | 6.43 |
+| pull-one | 0.00327 | 0.01041 | 0.01058 |
 
 Current status:
 
-- Native OCaml is faster than upstream CLJS/JS on every benchmark listed above.
-- `js_of_ocaml` is faster than upstream CLJS/JS on every benchmark listed above.
-- The biggest remaining item is broader validation on larger and more varied
-  workloads; the current deterministic harness goal is satisfied.
+- The sequential explicit-id transaction regression is fixed for native OCaml:
+  size 10000 `add-one-by-one` dropped from 10212.84 ms to 727.86 ms.
+- `js_of_ocaml` also improved on the same path: size 10000
+  `add-one-by-one` dropped from 11707.00 ms to 2906.00 ms.
+- Native OCaml remains faster than upstream CLJS/JS on bulk add, small and
+  medium one-by-one add, salary predicate query, and pull.
+- Upstream CLJS/JS remains faster for `datoms-name`, and at size 10000 it is
+  still faster for `query-name-age` and one-by-one add. Those are tracked as
+  remaining gaps, not hidden by local API changes.
 
 ## Optimizations Applied
 
@@ -77,6 +108,14 @@ The DB stores EAVT, AEVT, AVET, and VAET as `Persistent_sorted_set.t` values.
 This matches upstream DataScript's persistent sorted set model better than
 whole-index arrays because transactions must preserve the old immutable DB while
 producing a new DB with updated indexes.
+
+2026-06-19 root-cause fix: `persistent-sorted-set-ocaml` now exposes
+`to_seq : 'a seq -> 'a Seq.t`, and tree-backed `seq`/`slice_seq` sources stream
+from the persistent sorted tree instead of first materializing a list. This
+matches upstream `me.tonsky.persistent-sorted-set`, where `slice` returns an
+iterator over B+ tree paths. DataScript's `datoms` path consumes
+`PSet.seq |> PSet.to_seq` and `PSet.slice_seq |> PSet.to_seq`, keeping public
+index reads lazy without adding array-backed duplicate indexes.
 
 Bulk construction sorts datoms once and builds each persistent sorted set from
 the sorted array. Incremental safe-add paths update the persistent sorted sets
@@ -140,6 +179,14 @@ conditions:
 For supported fast-path transactions, strict schema recomputation is skipped
 because schema-changing attributes are excluded.
 
+2026-06-19 root-cause fix: `Transact.apply_tx` no longer materializes the full
+EAVT index before trying the explicit-id entity fast path. Full active datoms
+are forced only when the fallback transaction interpreter or old-entity conflict
+checks need them. For new explicit entity ids, the fast path returns only the
+added facts and lets `refresh_indexes_with_added_datoms` update the PSS roots,
+matching upstream's incremental persistent-index behavior instead of rebuilding
+or scanning the whole DB for every small transaction.
+
 ### Transaction Staging Lists
 
 Transaction code still uses local datom lists while applying a batch. Those
@@ -199,6 +246,10 @@ storage tests.
 Latest cross-runtime benchmark command:
 
 ```sh
-BENCH_SIZE=200 BENCH_WARMUP_MS=100 BENCH_SAMPLE_MS=300 BENCH_SAMPLES=5 \
+BENCH_SIZE=200 BENCH_WARMUP_MS=200 BENCH_SAMPLE_MS=500 BENCH_SAMPLES=5 \
+  UPSTREAM_DATASCRIPT_JS=/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js \
   script/benchmark_vs_cljs.sh
 ```
+
+The same command was repeated with `BENCH_SIZE=1000` and `BENCH_SIZE=10000` for
+the 2026-06-19 tables above.

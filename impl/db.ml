@@ -254,7 +254,7 @@ let visible_index_datoms db index =
   | Some pred -> List.filter pred datoms
 
 let index_datoms_seq db index =
-  raw_index_datoms_list db index |> List.to_seq
+  stored_index db index |> PSet.seq |> PSet.to_seq
 
 let apply_filter_pred db seq =
   match db.filter_pred with
@@ -355,7 +355,7 @@ let exact_prefix_datoms context db index e a v tx =
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = slice_cmp context index bound bound_fields bound bound_fields in
-    Some (PSet.slice ~from_:bound ~to_:bound ~cmp (stored_index db index) |> List.to_seq)
+    Some (PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> PSet.to_seq)
 
 let lower_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
