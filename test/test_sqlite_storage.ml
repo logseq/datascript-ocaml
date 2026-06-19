@@ -41,6 +41,21 @@ let select_single_string db_path sql =
 let sql_quote text =
   "'" ^ String.concat "''" (String.split_on_char '\'' text) ^ "'"
 
+let json_quote text =
+  let buffer = Buffer.create (String.length text + 2) in
+  Buffer.add_char buffer '"';
+  String.iter
+    (function
+      | '"' -> Buffer.add_string buffer "\\\""
+      | '\\' -> Buffer.add_string buffer "\\\\"
+      | '\n' -> Buffer.add_string buffer "\\n"
+      | '\r' -> Buffer.add_string buffer "\\r"
+      | '\t' -> Buffer.add_string buffer "\\t"
+      | ch -> Buffer.add_char buffer ch)
+    text;
+  Buffer.add_char buffer '"';
+  Buffer.contents buffer
+
 let with_temp_db f =
   let dir =
     Filename.concat
@@ -1779,6 +1794,183 @@ let test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks
          | Query_relation rows -> rows
          | _ -> failwith "direct Logseq SQLite query should return relation rows"))
 
+let logseq_schema_attr_json attr schema =
+  let props =
+    [ Some ("~:db/cardinality", (match schema.cardinality with Many -> "~:db.cardinality/many" | One -> "~:db.cardinality/one"))
+    ; (match schema.unique with
+       | Some Identity -> Some ("~:db/unique", "~:db.unique/identity")
+       | Some Value -> Some ("~:db/unique", "~:db.unique/value")
+       | None -> None)
+    ; if schema.indexed then Some ("~:db/index", "true") else None
+    ; if schema.is_component then Some ("~:db/isComponent", "true") else None
+    ; if schema.no_history then Some ("~:db/noHistory", "true") else None
+    ; (match schema.value_type with
+       | Some RefType -> Some ("~:db/valueType", "~:db.type/ref")
+       | Some StringType -> Some ("~:db/valueType", "~:db.type/string")
+       | Some KeywordType -> Some ("~:db/valueType", "~:db.type/keyword")
+       | Some NumberType -> Some ("~:db/valueType", "~:db.type/number")
+       | Some UuidType -> Some ("~:db/valueType", "~:db.type/uuid")
+       | Some InstantType -> Some ("~:db/valueType", "~:db.type/instant")
+       | Some TupleType -> Some ("~:db/valueType", "~:db.type/tuple")
+       | None -> None)
+    ]
+    |> List.filter_map Fun.id
+    |> List.concat_map (fun (key, value) ->
+      [ json_quote key; if value = "true" then value else json_quote value ])
+  in
+  [ json_quote ("~:" ^ attr); "[" ^ String.concat "," (json_quote "^ " :: props) ^ "]" ]
+
+let logseq_root_content schema =
+  let schema_entries = List.concat_map (fun (attr, schema) -> logseq_schema_attr_json attr schema) schema in
+  "["
+  ^ String.concat
+      ","
+      [ json_quote "^ "
+      ; json_quote "~:schema"
+      ; "[" ^ String.concat "," (json_quote "^ " :: schema_entries) ^ "]"
+      ; json_quote "~:max-eid"
+      ; "1000"
+      ; json_quote "~:max-tx"
+      ; "536870913"
+      ; json_quote "~:eavt"
+      ; "2"
+      ; json_quote "~:aevt"
+      ; "3"
+      ; json_quote "~:avet"
+      ; "4"
+      ]
+  ^ "]"
+
+let logseq_json_of_value = function
+  | String value -> json_quote value
+  | Int value -> string_of_int value
+  | Bool value -> if value then "true" else "false"
+  | Keyword value -> json_quote ("~:" ^ value)
+  | Ref entity_id -> string_of_int entity_id
+  | value -> failf "unsupported Logseq test value: %s" (string_of_value value)
+
+let logseq_row_content datoms =
+  let datom_json datom =
+    "["
+    ^ String.concat
+        ","
+        [ string_of_int datom.e
+        ; json_quote ("~:" ^ datom.a)
+        ; logseq_json_of_value datom.v
+        ; string_of_int datom.tx
+        ]
+    ^ "]"
+  in
+  "["
+  ^ String.concat
+      ","
+      [ json_quote "^ "
+      ; json_quote "~:keys"
+      ; "[" ^ String.concat "," (List.map datom_json datoms) ^ "]"
+      ]
+  ^ "]"
+
+let insert_logseq_rows db_path rows =
+  run_sql
+    db_path
+    ("create table kvs (addr INTEGER primary key, content TEXT, addresses JSON);\n"
+     ^ (rows
+        |> List.map (fun (addr, content) ->
+          Printf.sprintf
+            "insert into kvs (addr, content, addresses) values (%d, %s, '[]');\n"
+            addr
+            (sql_quote content))
+        |> String.concat ""))
+
+let test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping generated Logseq SQLite query test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let schema =
+        [ "db/ident", unique_identity
+        ; "block/name", unique_identity
+        ; "block/title", indexed
+        ; "block/tags", ref_many
+        ; "block/page", ref_attr
+        ; "block/created-at", indexed
+        ; "block/updated-at", indexed
+        ; "block/order", indexed
+        ; "logseq.property/type", indexed
+        ; "logseq.property/public?", indexed
+        ; "user/priority", indexed
+        ]
+      in
+      let report =
+        transact
+          (empty_db ~schema ())
+          [ Add (Entity_id 100, "db/ident", Keyword "logseq.class/Property")
+          ; Add (Entity_id 100, "block/title", String "Property")
+          ; Add (Entity_id 100, "block/name", String "property")
+          ; Add (Entity_id 101, "db/ident", Keyword "logseq.class/Page")
+          ; Add (Entity_id 101, "block/title", String "Page")
+          ; Add (Entity_id 101, "block/name", String "page")
+          ; Add (Entity_id 200, "db/ident", Keyword "user/priority")
+          ; Add (Entity_id 200, "block/title", String "Priority")
+          ; Add (Entity_id 200, "block/name", String "priority")
+          ; Add (Entity_id 200, "block/tags", Keyword "logseq.class/Property")
+          ; Add (Entity_id 200, "logseq.property/type", Keyword "default")
+          ; Add (Entity_id 200, "logseq.property/public?", Bool true)
+          ; Add (Entity_id 300, "block/title", String "Project Alpha")
+          ; Add (Entity_id 300, "block/name", String "project alpha")
+          ; Add (Entity_id 300, "block/tags", Keyword "logseq.class/Page")
+          ; Add (Entity_id 400, "block/title", String "Ship generated sqlite")
+          ; Add (Entity_id 400, "block/page", Ref 300)
+          ; Add (Entity_id 400, "block/order", String "a0")
+          ; Add (Entity_id 400, "block/created-at", Int 1781829000000)
+          ; Add (Entity_id 400, "block/updated-at", Int 1781829297990)
+          ; Add (Entity_id 400, "user/priority", String "high")
+          ]
+      in
+      insert_logseq_rows
+        db_path
+        [ 0, logseq_root_content schema
+        ; 1, "[]"
+        ; 2, logseq_row_content report.tx_data
+        ];
+      assert_equal_query
+        "generated Logseq sqlite should query property pages"
+        [ [ Result_value (String "Priority")
+          ; Result_value (Keyword "user/priority")
+          ; Result_value (Keyword "default")
+          ]
+        ]
+        (match
+           Sqlite_storage.query_logseq_graph
+             ~read_only:true
+             db_path
+             "[:find ?title ?ident ?type
+               :where [?p :block/tags :logseq.class/Property]
+                      [?p :block/title ?title]
+                      [?p :db/ident ?ident]
+                      [?p :logseq.property/type ?type]]"
+         with
+         | Query_relation rows -> rows
+         | _ -> failwith "generated Logseq property query should return relation rows");
+      assert_equal_query
+        "generated Logseq sqlite should query transacted blocks with custom properties"
+        [ [ Result_value (String "Ship generated sqlite")
+          ; Result_value (String "high")
+          ; Result_value (Int 1781829297990)
+          ]
+        ]
+        (match
+           Sqlite_storage.query_logseq_graph
+             ~read_only:true
+             db_path
+             "[:find ?title ?priority ?updated
+               :where [?b :block/title ?title]
+                      [?b :user/priority ?priority]
+                      [?b :block/updated-at ?updated]]"
+         with
+         | Query_relation rows -> rows
+         | _ -> failwith "generated Logseq block query should return relation rows"))
+
 let rec find_repo_root dir =
   if Sys.file_exists (Filename.concat dir "dune-project") then dir
   else
@@ -2065,6 +2257,7 @@ let () =
   test_logseq_sqlite_datom_cache_spans_ordered_rows ();
   test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization ();
   test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks_refs ();
+  test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks ();
   test_default_logseq_graph_db_uses_portable_default ();
   test_logseq_graph_dbs_uses_portable_default ();
   test_existing_logseq_graph_is_recognized_read_only ();
