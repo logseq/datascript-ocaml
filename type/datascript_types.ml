@@ -78,8 +78,20 @@ type serializable_db =
 
 type storage_address = string
 
+type storage_root =
+  { storage_schema : schema
+  ; storage_max_eid : entity_id
+  ; storage_max_tx : tx
+  ; storage_eavt : storage_address
+  ; storage_aevt : storage_address
+  ; storage_avet : storage_address
+  ; storage_max_addr : int
+  ; storage_branching_factor : int
+  }
+
 type storage_payload =
-  | Storage_db of serializable_db
+  | Storage_root of storage_root
+  | Storage_node of datom Persistent_sorted_set.stored_node
   | Storage_tail of datom list list
 
 type storage =

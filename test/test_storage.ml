@@ -10,9 +10,16 @@ let datoms db index ?e ?a ?v ?tx () =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d, got %d" label expected actual
 
-let assert_equal_strings label expected actual =
-  if expected <> actual then
-    failf "%s: expected [%s], got [%s]" label (String.concat "," expected) (String.concat "," actual)
+let assert_upstream_storage_addresses label addresses =
+  if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
+    failf "%s: storage should not use OCaml snapshot address names" label;
+  if not (List.mem "0" addresses) then failf "%s: storage should include upstream root address 0" label;
+  if not (List.mem "1" addresses) then failf "%s: storage should include upstream tail address 1" label;
+  if List.length addresses < 5 then
+    failf
+      "%s: storage should include root, tail, and separate index nodes, got [%s]"
+      label
+      (String.concat "," addresses)
 
 let assert_equal_triples label expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
@@ -51,10 +58,7 @@ let test_storage__test_basics () =
   let storage = memory_storage () in
   let db = small_db () in
   store ~storage db;
-  assert_equal_strings
-    "store writes root and tail addresses"
-    [ "datascript/root"; "datascript/tail" ]
-    (storage_addresses storage);
+  assert_upstream_storage_addresses "store writes upstream storage addresses" (storage_addresses storage);
   (match restore storage with
    | None -> failwith "restore should read stored db"
    | Some restored ->
@@ -72,6 +76,23 @@ let test_storage__test_basics () =
    | Some restored ->
      if schema restored <> [ "name", indexed ] then failwith "restore should preserve schema")
 
+let test_storage__test_upstream_wire_addresses () =
+  let storage = memory_storage () in
+  let db = small_db () in
+  store ~storage db;
+  let addresses = storage_addresses storage in
+  if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
+    failwith "storage should not use OCaml snapshot address names";
+  (match storage.storage_restore "0", storage.storage_restore "1" with
+   | Some _, Some (Storage_tail []) -> ()
+   | None, _ -> failwith "storage should write upstream root address 0"
+   | _, None -> failwith "storage should write upstream tail address 1"
+   | _, Some _ -> failwith "storage tail address should contain the transaction tail");
+  if List.length addresses < 5 then
+    failf
+      "storage should write root, tail, and separate index nodes, got [%s]"
+      (String.concat "," addresses)
+
 let test_storage__test_file_storage () =
   let dir =
     Filename.concat
@@ -87,10 +108,7 @@ let test_storage__test_file_storage () =
       store ~storage db;
       store_tail storage [ [ datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Alex") () ] ];
       let restored_storage = file_storage dir in
-      assert_equal_strings
-        "file_storage lists persisted addresses"
-        [ "datascript/root"; "datascript/tail" ]
-        (storage_addresses restored_storage);
+      assert_upstream_storage_addresses "file_storage lists persisted addresses" (storage_addresses restored_storage);
       match restore restored_storage with
       | None -> failwith "file_storage should restore stored db"
       | Some restored ->
@@ -106,10 +124,7 @@ let test_storage__test_gc () =
   store_tail storage [ [ datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Alex") () ] ];
   storage.storage_store [ "stale/node", Storage_tail [] ];
   collect_garbage storage;
-  assert_equal_strings
-    "collect_garbage keeps only live root and tail"
-    [ "datascript/root"; "datascript/tail" ]
-    (storage_addresses storage);
+  assert_upstream_storage_addresses "collect_garbage keeps live storage addresses" (storage_addresses storage);
   match restore storage with
   | None -> failwith "restore should work after garbage collection"
   | Some restored ->
@@ -121,10 +136,7 @@ let test_storage__test_gc () =
 let test_storage__test_conn () =
   let storage = memory_storage () in
   let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
-  assert_equal_strings
-    "storage-backed create_conn stores initial root and tail"
-    [ "datascript/root"; "datascript/tail" ]
-    (storage_addresses storage);
+  assert_upstream_storage_addresses "storage-backed create_conn stores upstream addresses" (storage_addresses storage);
   ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
   ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Oleg") ]);
   let restored =
@@ -150,7 +162,7 @@ let test_storage__test_conn () =
        (List.init 34 (fun index ->
           let entity_id = index + 4 in
           Add (Entity_id entity_id, "name", String (string_of_int entity_id)))));
-  (match storage.storage_restore "datascript/tail" with
+  (match storage.storage_restore "1" with
    | Some (Storage_tail []) -> ()
    | _ -> failwith "overflowing storage-backed conn tail should compact");
   let from_db_storage = memory_storage () in
@@ -211,6 +223,7 @@ let test_storage__test_db_with_tail () =
 
 let () =
   test_storage__test_basics ();
+  test_storage__test_upstream_wire_addresses ();
   test_storage__test_file_storage ();
   test_storage__test_gc ();
   test_storage__test_conn ();

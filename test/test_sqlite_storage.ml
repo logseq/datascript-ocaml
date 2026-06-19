@@ -9,6 +9,17 @@ let datoms_seq = datoms
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
+let assert_upstream_storage_addresses label addresses =
+  if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
+    failf "%s: storage should not use OCaml snapshot address names" label;
+  if not (List.mem "0" addresses) then failf "%s: storage should include upstream root address 0" label;
+  if not (List.mem "1" addresses) then failf "%s: storage should include upstream tail address 1" label;
+  if List.length addresses < 5 then
+    failf
+      "%s: storage should include root, tail, and separate index nodes, got [%s]"
+      label
+      (String.concat "," addresses)
+
 let sqlite3_available () = true
 
 let with_sqlite db_path f =
@@ -205,11 +216,8 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
            (select_single_string
               db_path
               "select sql from sqlite_master where type = 'table' and name = 'kvs';"));
-      assert_equal_int "row count" 2 (Sqlite_storage.inspect db_path).row_count;
-      assert_equal
-        "storage addresses"
-        "datascript/root,datascript/tail"
-        (String.concat "," (storage_addresses storage));
+      assert_equal_int "row count" 5 (Sqlite_storage.inspect db_path).row_count;
+      assert_upstream_storage_addresses "storage addresses" (storage_addresses storage);
       match restore (Sqlite_storage.storage db_path) with
       | None -> failwith "SQLite storage should restore the stored db"
       | Some restored ->
@@ -1122,10 +1130,9 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
         "SQLite reset schema persists unique identity tempid upsert semantics"
         [ [ Result_entity 1; Result_value (String "ivan@example.com"); Result_value (String "Ivan Upserted") ] ]
         (q_string db "[:find ?e ?email ?name :where [?e :email ?email] [?e :name ?name]]");
-      assert_equal
+      assert_upstream_storage_addresses
         "SQLite reset schema compacts stale tail"
-        "datascript/root,datascript/tail"
-        (String.concat "," (storage_addresses storage)))
+        (storage_addresses storage))
 
 let test_sqlite_storage_backed_aggregates_and_upserts_after_restore () =
   if not (sqlite3_available ()) then

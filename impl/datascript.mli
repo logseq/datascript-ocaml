@@ -216,16 +216,12 @@ module Serialize : sig
 end
 
 module Storage : sig
-  type store_context =
-    { serializable : db -> serializable_db
-    }
-
   type tail_context =
     { apply_group : db -> datom list -> db
     }
 
   type restore_context =
-    { from_serializable : serializable_db -> db
+    { next_db_uid : unit -> int
     ; db_with_tail : db -> datom list list -> db
     }
 
@@ -233,7 +229,7 @@ module Storage : sig
   val tail_address : storage_address
   val memory_storage : unit -> storage
   val file_storage : string -> storage
-  val store : store_context -> ?storage:storage -> db -> unit
+  val store : ?storage:storage -> db -> unit
   val store_tail : storage -> datom list list -> unit
   val tail_compaction_threshold : int
   val tail_datom_count : datom list list -> int

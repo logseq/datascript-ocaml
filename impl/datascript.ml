@@ -87,11 +87,8 @@ let serialize_context : Serialize.context =
 let from_serializable snapshot =
   Serialize.from_serializable serialize_context snapshot
 
-let storage_store_context : Storage.store_context =
-  { serializable }
-
 let store ?storage db =
-  Storage.store storage_store_context ?storage db
+  Storage.store ?storage db
 
 let memory_storage = Storage.memory_storage
 let file_storage = Storage.file_storage
@@ -397,7 +394,7 @@ let db_with_tail db tail =
   Storage.db_with_tail storage_tail_context db tail
 
 let storage_restore_context : Storage.restore_context =
-  { from_serializable; db_with_tail }
+  { next_db_uid; db_with_tail }
 
 let restore storage =
   Storage.restore storage_restore_context storage

@@ -127,8 +127,8 @@ let payload_of_content content =
     None
 
 let sqlite_addr_of_storage_address = function
-  | "datascript/root" | "0" -> 0
-  | "datascript/tail" | "1" -> 1
+  | "0" -> 0
+  | "1" -> 1
   | address ->
     (try int_of_string address with
      | Failure _ ->
@@ -136,8 +136,8 @@ let sqlite_addr_of_storage_address = function
          ("SQLite Logseq storage uses integer addresses; unsupported address: " ^ address))
 
 let storage_address_of_sqlite_addr = function
-  | 0 -> "datascript/root"
-  | 1 -> "datascript/tail"
+  | 0 -> "0"
+  | 1 -> "1"
   | address -> string_of_int address
 
 let create_kvs_table db_path =

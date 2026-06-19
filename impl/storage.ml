@@ -1,20 +1,27 @@
 open Datascript_types
 
-type store_context =
-  { serializable : db -> serializable_db
-  }
+module PSet = Persistent_sorted_set
 
 type tail_context =
   { apply_group : db -> datom list -> db
   }
 
 type restore_context =
-  { from_serializable : serializable_db -> db
+  { next_db_uid : unit -> int
   ; db_with_tail : db -> datom list list -> db
   }
 
-let root_address = "datascript/root"
-let tail_address = "datascript/tail"
+let root_address = "0"
+let tail_address = "1"
+
+let max_storage_addr = ref 1_000_000
+
+let next_storage_address () =
+  incr max_storage_addr;
+  string_of_int !max_storage_addr
+
+let note_storage_root root =
+  max_storage_addr := max !max_storage_addr root.storage_max_addr
 
 let memory_storage () =
   let disk = ref [] in
@@ -119,16 +126,57 @@ let file_storage dir =
   ; storage_delete = delete
   }
 
-let store_to_storage context db storage =
-  storage.storage_store
-    [ root_address, Storage_db (context.serializable db)
-    ; tail_address, Storage_tail []
-    ]
+let buffered_node_storage pending_entries =
+  { PSet.store_node =
+      (fun node ->
+        let address = next_storage_address () in
+        pending_entries := (address, Storage_node node) :: !pending_entries;
+        address)
+  ; restore_node = (fun _address -> None)
+  ; accessed = (fun _address -> ())
+  }
 
-let store context ?storage db =
+let restoring_node_storage storage =
+  { PSet.store_node =
+      (fun _node ->
+        invalid_arg "restored storage nodes cannot be stored through a restore adapter")
+  ; restore_node =
+      (fun address ->
+        match storage.storage_restore address with
+        | Some (Storage_node node) -> Some node
+        | Some _ -> invalid_arg ("storage node address does not contain a node: " ^ address)
+        | None -> None)
+  ; accessed = (fun _address -> ())
+  }
+
+let root_of_stored_indexes db eavt_address aevt_address avet_address =
+  { storage_schema = db.schema
+  ; storage_max_eid = db.max_eid
+  ; storage_max_tx = db.max_tx
+  ; storage_eavt = eavt_address
+  ; storage_aevt = aevt_address
+  ; storage_avet = avet_address
+  ; storage_max_addr = !max_storage_addr
+  ; storage_branching_factor = (PSet.settings db.eavt_index).branching_factor
+  }
+
+let store_to_storage db storage =
+  let pending_entries = ref [] in
+  let node_storage = buffered_node_storage pending_entries in
+  let eavt_address, _ = PSet.store node_storage db.eavt_index in
+  let aevt_address, _ = PSet.store node_storage db.aevt_index in
+  let avet_address, _ = PSet.store node_storage db.avet_index in
+  let root = root_of_stored_indexes db eavt_address aevt_address avet_address in
+  storage.storage_store
+    (List.rev !pending_entries
+     @ [ root_address, Storage_root root
+       ; tail_address, Storage_tail []
+       ])
+
+let store ?storage db =
   match storage, db.storage_ref with
-  | Some storage, _ -> store_to_storage context db storage
-  | None, Some storage -> store_to_storage context db storage
+  | Some storage, _ -> store_to_storage db storage
+  | None, Some storage -> store_to_storage db storage
   | None, None -> invalid_arg "db has no attached storage"
 
 let store_tail storage tail =
@@ -141,14 +189,27 @@ let tail_datom_count tail =
 
 let restore_root_snapshot storage =
   match storage.storage_restore root_address with
-  | Some (Storage_db snapshot) -> Some snapshot
+  | Some (Storage_root root) ->
+    note_storage_root root;
+    let settings = { PSet.branching_factor = root.storage_branching_factor } in
+    let node_storage = restoring_node_storage storage in
+    (match PSet.restore ~cmp:(Util.compare_datom Eavt) ~settings node_storage root.storage_eavt with
+     | Some eavt ->
+       Some
+         { serializable_schema = root.storage_schema
+         ; serializable_datoms = PSet.to_list eavt
+         ; serializable_max_eid = root.storage_max_eid
+         ; serializable_max_tx = root.storage_max_tx
+         }
+     | None -> invalid_arg ("storage root points at a missing index: " ^ root.storage_eavt))
   | Some (Storage_tail _) -> invalid_arg "storage root does not contain a db"
+  | Some (Storage_node _) -> invalid_arg "storage root does not contain root metadata"
   | None -> None
 
 let restore_tail_groups storage =
   match storage.storage_restore tail_address with
   | Some (Storage_tail tail) -> tail
-  | Some (Storage_db _) -> invalid_arg "storage tail does not contain datom groups"
+  | Some (Storage_root _) | Some (Storage_node _) -> invalid_arg "storage tail does not contain datom groups"
   | None -> []
 
 let db_with_tail context db tail =
@@ -169,11 +230,35 @@ let db_with_tail context db tail =
     tail
 
 let restore context storage =
-  match restore_root_snapshot storage with
+  match storage.storage_restore root_address with
   | None -> None
-  | Some snapshot ->
-    let db = context.db_with_tail (context.from_serializable snapshot) (restore_tail_groups storage) in
-    Some { db with storage_ref = Some storage }
+  | Some (Storage_root root) ->
+    note_storage_root root;
+    let settings = { PSet.branching_factor = root.storage_branching_factor } in
+    let node_storage = restoring_node_storage storage in
+    let restore_index index address =
+      match PSet.restore ~cmp:(Util.compare_datom index) ~settings node_storage address with
+      | Some index -> index
+      | None -> invalid_arg ("storage root points at a missing index: " ^ address)
+    in
+    let schema = Schema.validate_schema root.storage_schema in
+    let db =
+      { db_uid = context.next_db_uid ()
+      ; schema
+      ; eavt_index = restore_index Eavt root.storage_eavt
+      ; aevt_index = restore_index Aevt root.storage_aevt
+      ; avet_index = restore_index Avet root.storage_avet
+      ; max_eid = root.storage_max_eid
+      ; max_datom_e = root.storage_max_eid
+      ; max_tx = root.storage_max_tx
+      ; filter_pred = None
+      ; storage_ref = Some storage
+      ; tx_fns = []
+      }
+    in
+    Some (context.db_with_tail db (restore_tail_groups storage))
+  | Some (Storage_tail _) -> invalid_arg "storage root does not contain root metadata"
+  | Some (Storage_node _) -> invalid_arg "storage root does not contain root metadata"
 
 let storage_addresses storage = storage.storage_list_addresses ()
 
@@ -184,7 +269,11 @@ let addresses dbs =
   |> List.concat_map (fun db ->
     match db.storage_ref with
     | None -> []
-    | Some storage -> storage.storage_list_addresses ())
+    | Some _storage ->
+      [ root_address; tail_address ]
+      @ PSet.walk_addresses db.eavt_index
+      @ PSet.walk_addresses db.aevt_index
+      @ PSet.walk_addresses db.avet_index)
   |> List.sort_uniq compare
 
 let settings (db : db) =
@@ -194,9 +283,23 @@ let settings (db : db) =
   ]
 
 let collect_garbage storage =
+  let rec walk_node address =
+    match storage.storage_restore address with
+    | Some (Storage_node (PSet.Leaf _)) -> [ address ]
+    | Some (Storage_node (PSet.Branch (_, child_addresses))) ->
+      address :: List.concat_map walk_node child_addresses
+    | Some _ -> [ address ]
+    | None -> []
+  in
   let live =
-    [ root_address; tail_address ]
-    |> List.filter (fun address -> Option.is_some (storage.storage_restore address))
+    match storage.storage_restore root_address with
+    | Some (Storage_root root) ->
+      [ root_address; tail_address ]
+      @ walk_node root.storage_eavt
+      @ walk_node root.storage_aevt
+      @ walk_node root.storage_avet
+    | Some (Storage_tail _) | Some (Storage_node _) | None ->
+      []
   in
   storage.storage_list_addresses ()
   |> List.filter (fun address -> not (List.mem address live))

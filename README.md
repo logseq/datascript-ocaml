@@ -4,6 +4,9 @@ An OCaml 5 rewrite of DataScript, focused on matching the behavior of the Clojur
 
 This project is still under active development. Compatibility with upstream DataScript is verified through OCaml tests and cross-runtime parity checks against the ClojureScript implementation.
 
+See [docs/compatibility.md](docs/compatibility.md) for explicit compatibility
+boundaries that are intentionally OCaml-specific.
+
 ## Goals
 
 - Preserve DataScript semantics for transactions, datoms, indexes, entities, pull, and query.
