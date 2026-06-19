@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-size="${BENCH_SIZE:-200}"
+size="${BENCH_SIZE:-1000}"
 warmup_ms="${BENCH_WARMUP_MS:-200}"
 sample_ms="${BENCH_SAMPLE_MS:-500}"
 samples="${BENCH_SAMPLES:-5}"
