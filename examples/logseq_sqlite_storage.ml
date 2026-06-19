@@ -357,6 +357,26 @@ let logseq_schema_attr_of_transit = function
       props
   | _ -> logseq_schema_default_attr
 
+let logseq_timestamp_attrs =
+  [ "created-at"; "updated-at"; "block/created-at"; "block/updated-at" ]
+
+let ends_with suffix value =
+  let suffix_len = String.length suffix in
+  let value_len = String.length value in
+  value_len >= suffix_len && String.sub value (value_len - suffix_len) suffix_len = suffix
+
+let logseq_timestamp_attr attr =
+  List.mem attr logseq_timestamp_attrs
+  || ends_with "/graph-created-at" attr
+  || ends_with "/graph-last-gc-at" attr
+  || ends_with "/imported-at" attr
+  || ends_with "/imported-last-updated-at" attr
+  || ends_with "-created-at" attr
+  || ends_with "-updated-at" attr
+
+let normalize_logseq_schema_attr attr schema =
+  if logseq_timestamp_attr attr then { schema with value_type = None } else schema
+
 type shallow_reader =
   { mutable shallow_cache : string array
   ; shallow_cache_all_strings : bool
@@ -377,8 +397,7 @@ let shallow_cacheable reader text =
   String.length text > 3
   && (reader.shallow_cache_all_strings
       || starts_with "~:" text
-      || starts_with "~$" text
-      || starts_with "~#" text)
+      || starts_with "~$" text)
 
 let shallow_is_cache_code text =
   String.length text >= 2 && String.length text <= 3 && text.[0] = '^'
@@ -486,7 +505,7 @@ let shallow_schema_of_root_content content =
            |> shallow_pairs
            |> List.filter_map (fun (attr, schema) ->
              match shallow_keyword reader attr with
-             | Some attr -> Some (attr, shallow_schema_attr reader schema)
+             | Some attr -> Some (attr, shallow_schema_attr reader schema |> normalize_logseq_schema_attr attr)
              | None ->
                shallow_scan reader schema;
                None))
@@ -518,7 +537,7 @@ let schema_of_logseq_graph ?(read_only = false) db_path =
       entries
       |> List.filter_map (fun (attr, schema) ->
         match keyword_of_transit attr with
-        | Some attr -> Some (attr, logseq_schema_attr_of_transit schema)
+        | Some attr -> Some (attr, logseq_schema_attr_of_transit schema |> normalize_logseq_schema_attr attr)
         | None -> None)
     | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
     | None -> invalid_arg "Logseq graph root metadata has no :schema"
@@ -614,19 +633,190 @@ let logseq_datom_of_shallow_json reader = function
       ()
   | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
 
-let logseq_datoms_of_row content =
-  let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
+let logseq_datoms_of_row_with_reader reader content =
   match Yojson.Safe.from_string content with
   | `List (`String "^ " :: entries) ->
+    (match entries with
+     | `String text :: _ when not (shallow_is_cache_code text) -> reader.shallow_cache <- [||]
+     | _ -> ());
     shallow_pairs entries
     |> List.find_map (fun (key, value) ->
       match shallow_keyword reader key, value with
       | Some "keys", `List datoms -> Some (List.map (logseq_datom_of_shallow_json reader) datoms)
-      | _ ->
-        shallow_scan reader value;
-        None)
+      | _ -> None)
     |> Option.value ~default:[]
   | _ -> []
+
+let logseq_datoms_of_row content =
+  logseq_datoms_of_row_with_reader { shallow_cache = [||]; shallow_cache_all_strings = false } content
+
+let add_query_attr acc = function
+  | QAttr attr -> attr :: acc
+  | QVar _ | QEntity _ | QIdent _ | QLookupRef _ | QValue _ | QSource _ | QWildcard -> acc
+
+let rec add_query_clause_attrs acc = function
+  | Pattern (_, attr, _)
+  | PatternTx (_, attr, _, _)
+  | PatternTxOp (_, attr, _, _, _)
+  | SourcePattern (_, _, attr, _)
+  | SourcePatternTx (_, _, attr, _, _)
+  | SourcePatternTxOp (_, _, attr, _, _, _) ->
+    add_query_attr acc attr
+  | Missing (_, attr)
+  | SourceMissing (_, _, attr)
+  | GetElse (_, attr, _, _)
+  | SourceGetElse (_, _, attr, _, _) ->
+    attr :: acc
+  | GetSome (_, attrs, _, _) | SourceGetSome (_, _, attrs, _, _) -> attrs @ acc
+  | SourceClause (_, clause) -> add_query_clause_attrs acc clause
+  | Not clauses | SourceNot (_, clauses) | NotJoin (_, clauses) | SourceNotJoin (_, _, clauses) ->
+    List.fold_left add_query_clause_attrs acc clauses
+  | Or branches
+  | SourceOr (_, branches)
+  | OrJoin (_, branches)
+  | SourceOrJoin (_, _, branches)
+  | OrJoinRequired (_, _, branches)
+  | SourceOrJoinRequired (_, _, _, branches) ->
+    List.fold_left
+      (fun acc branch -> List.fold_left add_query_clause_attrs acc branch)
+      acc
+      branches
+  | SourceRelationPattern _
+  | GetValue _
+  | GetDefaultValue _
+  | CountValue _
+  | EmptyValue _
+  | NotEmptyValue _
+  | ContainsValue _
+  | ValuePredicate _
+  | NumericPredicate _
+  | ComparisonPredicate _
+  | ComparisonPredicateN _
+  | EqualityPredicate _
+  | ArithmeticValue _
+  | CompareValue _
+  | ExtremumValue _
+  | BooleanPredicate _
+  | BooleanNotPredicate _
+  | BooleanNotValue _
+  | IdentityValue _
+  | BooleanAndPredicate _
+  | BooleanAndValue _
+  | BooleanOrPredicate _
+  | BooleanOrValue _
+  | RandomValue _
+  | RandomIntValue _
+  | DifferPredicate _
+  | IdenticalPredicate _
+  | TypeValue _
+  | MetaValue _
+  | NameValue _
+  | NamespaceValue _
+  | KeywordFromName _
+  | KeywordFromNamespaceName _
+  | StringIncludesValue _
+  | StringStartsWithValue _
+  | StringEndsWithValue _
+  | StringLowerCaseValue _
+  | StringUpperCaseValue _
+  | StringCapitalizeValue _
+  | StringReverseValue _
+  | StringTrimValue _
+  | StringTrimLeftValue _
+  | StringTrimRightValue _
+  | StringTrimNewlineValue _
+  | StringIndexOfValue _
+  | StringLastIndexOfValue _
+  | StringSubstringValue _
+  | StringBuildValue _
+  | PrintStringValue _
+  | PrintLineStringValue _
+  | PrStringValue _
+  | PrnStringValue _
+  | StringJoinPlainValue _
+  | StringJoinValue _
+  | StringReplaceValue _
+  | StringReplaceFirstValue _
+  | StringEscapeValue _
+  | RePatternValue _
+  | ReFindValue _
+  | ReMatchesValue _
+  | ReSeqValue _
+  | ReFindPredicate _
+  | ReMatchesPredicate _
+  | StringBlankValue _
+  | StringSplitValue _
+  | StringSplitLimitValue _
+  | StringSplitLinesValue _
+  | Ground _
+  | GroundCollection _
+  | GroundTuple _
+  | GroundRelation _
+  | GroundTerm _
+  | GroundTermCollection _
+  | GroundTermTuple _
+  | GroundTermRelation _
+  | VectorValue _
+  | ListValue _
+  | SetValue _
+  | HashMapValue _
+  | ArrayMapValue _
+  | RangeEndValue _
+  | RangeValue _
+  | RangeStepValue _
+  | TupleFunction _
+  | UntupleFunction _
+  | Predicate _
+  | Function _
+  | DynamicPredicate _
+  | DynamicFunction _
+  | DynamicFunctionCollection _
+  | DynamicFunctionRelation _
+  | Rule _
+  | SourceRule _ ->
+    acc
+
+let query_attrs query =
+  let attrs =
+    List.fold_left add_query_clause_attrs [] query.where
+    |> List.sort_uniq String.compare
+  in
+  query.rules
+  |> List.fold_left
+       (fun attrs rule -> List.fold_left add_query_clause_attrs attrs rule.rule_body)
+       attrs
+  |> List.sort_uniq String.compare
+
+let sql_like_pattern text =
+  "'%" ^ String.concat "''" (String.split_on_char '\'' text) ^ "%'"
+
+let logseq_keys_or_shorthand_row_sql =
+  "(content like " ^ sql_like_pattern "~:keys" ^ " or content like " ^ sql_like_pattern "[\"^ \",\"^" ^ ")"
+
+let logseq_keys_and_attrs_sql attrs =
+  match attrs with
+  | [] -> logseq_keys_or_shorthand_row_sql
+  | attrs ->
+    let attr_sql =
+      attrs
+      |> List.map (fun attr -> "content like " ^ sql_like_pattern ("~:" ^ attr))
+      |> String.concat " or "
+    in
+    "content like " ^ sql_like_pattern "~:keys" ^ " and (" ^ attr_sql ^ ")"
+
+let datoms_of_logseq_graph_for_attrs ?(read_only = false) db_path attrs =
+  let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
+  let include_all = attrs = [] in
+  select_map
+    ~read_only
+    db_path
+    ("select content from kvs where addr not in (0, 1) and "
+     ^ logseq_keys_and_attrs_sql attrs
+     ^ " order by addr;")
+    (fun stmt -> Sqlite3.column_text stmt 0)
+  |> List.concat_map (fun content ->
+    let datoms = logseq_datoms_of_row_with_reader reader content in
+    if include_all then datoms else List.filter (fun datom -> List.mem datom.a attrs) datoms)
 
 let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
   let limit_sql =
@@ -634,14 +824,24 @@ let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
     | None -> ""
     | Some limit -> " limit " ^ string_of_int limit
   in
+  let reader = { shallow_cache = [||]; shallow_cache_all_strings = false } in
   select_map
     ~read_only
     db_path
-    ("select content from kvs where addr not in (0, 1) and content like '%~:keys%' order by addr"
+    ("select content from kvs where addr not in (0, 1) and "
+     ^ logseq_keys_or_shorthand_row_sql
+     ^ " order by addr"
      ^ limit_sql
      ^ ";")
     (fun stmt -> Sqlite3.column_text stmt 0)
-  |> List.concat_map logseq_datoms_of_row
+  |> List.concat_map (logseq_datoms_of_row_with_reader reader)
+
+let query_logseq_graph ?(read_only = false) db_path query_string =
+  let _, _, query = parse_query_return_map_string query_string in
+  let schema = schema_of_logseq_graph ~read_only db_path in
+  let graph_datoms = datoms_of_logseq_graph_for_attrs ~read_only db_path (query_attrs query) in
+  let db = init_db ~schema graph_datoms in
+  q_return_map_string db query_string
 
 let delete_sql addresses =
   match addresses with

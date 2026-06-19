@@ -786,6 +786,7 @@ let initial_query_context = Query_runtime_impl.initial_query_context
 module Query_where_impl = Query_where.Make (struct
   let query_evaluator_context = query_evaluator_context
   let edn_string_of_value = edn_string_of_value
+  let query_source_context = query_source_context
   let query_match_context = query_match_context
   let eval_query_term = eval_query_term
   let collect_query_terms_exn = collect_query_terms_exn
@@ -1033,7 +1034,113 @@ module Query = struct
     }
 
   let empty_query_callables = Query_impl.empty_query_callables
-  let q = Query_impl.q query_context
+
+  let query_has_runtime_features query =
+    let default_inputs =
+      match query.inputs with
+      | [] | [ Input_source_decl "$" ] -> true
+      | _ -> false
+    in
+    (not default_inputs) || query.with_vars <> [] || query.rules <> []
+
+  let find_var_names = function
+    | [ Find_var left; Find_var right ] -> Some [ left; right ]
+    | _ -> None
+
+  let entity_value_row entity_id value =
+    let entity_result = Result_entity entity_id
+    and value_result = Query_impl.result_of_ref (Result_value value) in
+    entity_result, value_result
+
+  let entity_value_row_builder find_vars e_var value_var =
+    match find_vars with
+    | [ find_e; find_v ] when find_e = e_var && find_v = value_var ->
+      Some (fun entity_id value ->
+        let entity_result, value_result = entity_value_row entity_id value in
+        [ entity_result; value_result ])
+    | [ find_v; find_e ] when find_e = e_var && find_v = value_var ->
+      Some (fun entity_id value ->
+        let entity_result, value_result = entity_value_row entity_id value in
+        [ value_result; entity_result ])
+    | _ -> None
+
+  let datoms_by_attr_value db attr value =
+    if query_value_uses_avet value && query_attr_uses_avet db attr then
+      datoms_list db Avet ~a:attr ~v:value ()
+    else
+      datoms_list db Aevt ~a:attr ()
+      |> List.filter (fun datom -> compare_value datom.v value = 0)
+
+  let planned_entity_value_join db find_vars e_var match_attr match_value value_attr value_var =
+    match entity_value_row_builder find_vars e_var value_var with
+    | None -> []
+    | Some row ->
+      if cardinality db value_attr = One then
+        datoms_by_attr_value db match_attr match_value
+        |> List.filter_map (fun match_datom ->
+          find_datom db Aevt ~e:match_datom.e ~a:value_attr ()
+          |> Option.map (fun datom -> row datom.e datom.v))
+      else
+        datoms_by_attr_value db match_attr match_value
+        |> List.fold_left
+             (fun rows match_datom ->
+               datoms_list db Aevt ~e:match_datom.e ~a:value_attr ()
+               |> List.fold_left (fun rows datom -> row datom.e datom.v :: rows) rows)
+             []
+        |> List.rev
+
+  let planned_comparison_scan db find_vars e_var attr value_var predicate threshold =
+    match entity_value_row_builder find_vars e_var value_var with
+    | None -> []
+    | Some row ->
+      let candidates =
+        match predicate with
+        | GreaterThan | GreaterOrEqual when query_attr_uses_avet db attr ->
+          index_range db attr ~start:threshold ()
+        | LessThan | LessOrEqual when query_attr_uses_avet db attr ->
+          index_range db attr ~stop:threshold ()
+        | _ -> datoms_list db Aevt ~a:attr ()
+      in
+      candidates
+      |> List.filter_map (fun datom ->
+        if Built_ins.matches_comparison_predicate predicate (compare_value datom.v threshold) then
+          Some (row datom.e datom.v)
+        else
+          None)
+
+  let planned_simple_query db query =
+    match find_var_names query.find, query_has_runtime_features query, query.where with
+    | Some find_vars, false,
+      [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
+      ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
+      ]
+      when e1 = e2 && e1 <> value_var ->
+      Some (planned_entity_value_join db find_vars e1 match_attr match_value value_attr value_var)
+    | Some find_vars, false,
+      [ Pattern (QVar e2, QAttr value_attr, QVar value_var)
+      ; Pattern (QVar e1, QAttr match_attr, QValue match_value)
+      ]
+      when e1 = e2 && e1 <> value_var ->
+      Some (planned_entity_value_join db find_vars e1 match_attr match_value value_attr value_var)
+    | Some find_vars, false,
+      [ Pattern (QVar e, QAttr attr, QVar value_var)
+      ; ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
+      ]
+      when compared_var = value_var && e <> value_var ->
+      Some (planned_comparison_scan db find_vars e attr value_var predicate threshold)
+    | Some find_vars, false,
+      [ ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
+      ; Pattern (QVar e, QAttr attr, QVar value_var)
+      ]
+      when compared_var = value_var && e <> value_var ->
+      Some (planned_comparison_scan db find_vars e attr value_var predicate threshold)
+    | _ -> None
+
+  let q ?inputs db query =
+    match inputs, planned_simple_query db query with
+    | None, Some rows -> rows
+    | Some _, _ | None, None -> Query_impl.q query_context ?inputs db query
+
   let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
   let cached_query_string input =
     match Hashtbl.find_opt query_string_cache input with

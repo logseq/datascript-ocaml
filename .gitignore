@@ -2,3 +2,6 @@ _build/
 _opam/
 *.install
 .DS_Store
+/db.sqlite
+/db.sqlite-shm
+/db.sqlite-wal

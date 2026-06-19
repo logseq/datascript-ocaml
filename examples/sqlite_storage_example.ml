@@ -112,10 +112,7 @@ let edn_of_query_output = function
     |> fun body -> "{" ^ body ^ "}"
 
 let run_query db_path query =
-  let schema = Storage.schema_of_logseq_graph ~read_only:true db_path in
-  let graph_datoms = Storage.datoms_of_logseq_graph ~read_only:true db_path in
-  let db = init_db ~schema graph_datoms in
-  q_return_string db query |> edn_of_query_output |> print_endline
+  Storage.query_logseq_graph ~read_only:true db_path query |> edn_of_query_output |> print_endline
 
 let usage () =
   prerr_endline "Usage:";
