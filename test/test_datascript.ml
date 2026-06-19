@@ -2205,20 +2205,7 @@ let test_transact_report_exposes_cardinality_one_retractions () =
     ]
     report.tx_data
 
-let test_history_is_current_db_without_historical_state () =
-  let db =
-    empty_db ()
-    |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
-    |> db_with [ Add (Entity_id 1, "name", String "Petr") ]
-  in
-  let historical_db = history db in
-  assert_bool "history no longer marks a separate historical db" (not (is_history historical_db));
-  assert_equal_triples
-    "history exposes the same current facts as the active db"
-    [ 1, "name", String "Petr" ]
-    (datoms historical_db Eavt ())
-
-let test_no_history_schema_omits_attr_from_history () =
+let test_no_history_schema_keeps_current_values () =
   let no_history = { indexed with no_history = true } in
   let db =
     empty_db ~schema:[ "name", indexed; "secret", no_history ] ()
@@ -2228,11 +2215,7 @@ let test_no_history_schema_omits_attr_from_history () =
   assert_equal_triples
     "active db keeps current no-history values"
     [ 1, "name", String "Petr"; 1, "secret", String "two" ]
-    (datoms db Eavt ());
-  assert_equal_datoms
-    "history is no longer a separate no-history-filtered fact set"
     (datoms db Eavt ())
-    (datoms (history db) Eavt ())
 
 let test_schema_transactions_install_no_history () =
   let db =
@@ -2311,18 +2294,17 @@ let test_datoms_filter_by_tx_component () =
     |> db_with [ Add (Entity_id 1, "age", Int 31) ]
     |> db_with [ Add (Entity_id 1, "age", Int 32) ]
   in
-  let history_db = history db in
   assert_equal_triples
     "datoms tx filtering sees current facts only"
     []
-    (datoms history_db Eavt ~tx:(tx0 + 1) ());
-  (match find_datom history_db Eavt ~tx:(tx0 + 2) () with
+    (datoms db Eavt ~tx:(tx0 + 1) ());
+  (match find_datom db Eavt ~tx:(tx0 + 2) () with
    | Some datom -> assert_equal_tx_value "find_datom supports tx component" (Int 32) datom.v
    | None -> failwith "expected tx datom");
   assert_equal_triples
     "seek_datoms supports tx component bounds"
     [ 1, "age", Int 32 ]
-    (seek_datoms history_db Eavt ~e:1 ~a:"age" ~v:(Int 32) ~tx:(tx0 + 2) ())
+    (seek_datoms db Eavt ~e:1 ~a:"age" ~v:(Int 32) ~tx:(tx0 + 2) ())
 
 let test_reverse_ref_helpers () =
   if is_reverse_ref "friend" then failwith "plain attr should not be reverse";
@@ -2639,10 +2621,7 @@ let test_init_db_preserves_uuid_and_instant_values () =
     "init_db preserves uuid and instant values"
     [ 1, "created-at", instant; 1, "uuid", uuid ]
     (datoms db Eavt ());
-  assert_equal_triples
-    "history exposes init_db current facts"
-    [ 1, "created-at", instant; 1, "uuid", uuid ]
-    (datoms (history db) Eavt ())
+  ()
 
 let test_q_finds_values () =
   let db =
@@ -3515,10 +3494,9 @@ let test_parse_query_transaction_patterns () =
     "parse_query parses four-term datom patterns"
     [ [ Result_value (String "Ivan"); Result_entity (tx0 + 1) ] ]
     (q current_db (parse_query tx_query));
-  let history_db =
+  let retracted_db =
     current_db
     |> db_with [ Retract (Entity_id 1, "name", Some (String "Ivan")) ]
-    |> history
   in
   let op_query =
     QueryFormVector
@@ -3538,7 +3516,7 @@ let test_parse_query_transaction_patterns () =
   assert_equal_query
     "five-term datom patterns only see current facts without a historical db"
     []
-    (q history_db (parse_query op_query))
+    (q retracted_db (parse_query op_query))
 
 let test_parse_query_source_qualified_patterns () =
   let names =
@@ -7693,7 +7671,6 @@ let test_q_binds_transaction_operation_in_history_patterns () =
     empty_db ()
     |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
     |> db_with [ Retract (Entity_id 1, "name", Some (String "Ivan")) ]
-    |> history
   in
   let query =
     { find = [ Find_var "tx"; Find_var "op" ]
@@ -7711,7 +7688,7 @@ let test_q_binds_transaction_operation_in_history_patterns () =
     }
   in
   assert_equal_query
-    "five-term history patterns do not synthesize transaction history"
+    "five-term patterns do not synthesize transaction history"
     []
     (q db query)
 
@@ -17051,8 +17028,7 @@ let () =
   test_transact_report_exposes_resolved_tx_datoms ();
   test_transact_report_exposes_tx_meta ();
   test_transact_report_exposes_cardinality_one_retractions ();
-  test_history_is_current_db_without_historical_state ();
-  test_no_history_schema_omits_attr_from_history ();
+  test_no_history_schema_keeps_current_values ();
   test_datoms_filter_by_tx_component ();
   test_reverse_ref_helpers ();
   test_entity_maps_expand_reverse_attrs ();

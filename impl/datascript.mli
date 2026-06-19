@@ -382,8 +382,6 @@ val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
 val empty : db -> db
 val is_db : db -> bool
 val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-val history : db -> db
-val is_history : db -> bool
 val filter : db -> (db -> datom -> bool) -> db
 val is_filtered : db -> bool
 val unfiltered_db : db -> db

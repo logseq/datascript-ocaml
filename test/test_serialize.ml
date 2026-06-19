@@ -79,9 +79,7 @@ let test_serialize__test_pr_read () =
     ]
     (datoms db Eavt ());
   if entid db "name" (String "Petr") <> Some 1 then
-    failwith "db_from_reader_string should restore schema";
-  if datoms (history db) Eavt () <> datoms db Eavt () then
-    failwith "db_from_reader_string should initialize history datoms"
+    failwith "db_from_reader_string should restore schema"
 
 let test_serialize__test_init_db () =
   let source_datoms =
@@ -149,7 +147,6 @@ let test_serialize__serialize () =
   in
   let restored = db |> serializable |> from_serializable in
   assert_equal_datoms "from_serializable restores active datoms" (datoms db Eavt ()) (datoms restored Eavt ());
-  assert_equal_datoms "from_serializable restores history datoms" (datoms (history db) Eavt ()) (datoms (history restored) Eavt ());
   if entid restored "name" (String "Petr") <> Some 1 then
     failwith "from_serializable should preserve schema"
 

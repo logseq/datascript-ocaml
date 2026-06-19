@@ -62,10 +62,6 @@ let empty db = Db_impl.empty db_core_context db
 let init_db ?(schema = []) ?storage datoms =
   Db_impl.init_db db_core_context ~schema ?storage datoms
 
-let history db = Db_impl.history db_core_context db
-
-let is_history = Db_impl.is_history
-
 let visible_datoms = Db_impl.visible_datoms
 
 let is_filtered = Db_impl.is_filtered

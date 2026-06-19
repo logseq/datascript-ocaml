@@ -160,10 +160,6 @@ let init_db context ?(schema = []) ?storage datoms =
   }
   |> fun db -> with_datoms db datoms
 
-let history context db = refresh_identity context db
-
-let is_history _db = false
-
 let visible_datoms db =
   match db.filter_pred with
   | None -> eavt_datoms db
