@@ -38,7 +38,7 @@ Configuration:
 BENCH_WARMUP_MS=200
 BENCH_SAMPLE_MS=500
 BENCH_SAMPLES=5
-UPSTREAM_DATASCRIPT_JS=/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js
+UPSTREAM_DATASCRIPT_JS=_deps/datascript/release-js/datascript.js
 ```
 
 Lower is better.
@@ -247,7 +247,7 @@ Latest cross-runtime benchmark command:
 
 ```sh
 BENCH_SIZE=200 BENCH_WARMUP_MS=200 BENCH_SAMPLE_MS=500 BENCH_SAMPLES=5 \
-  UPSTREAM_DATASCRIPT_JS=/Users/tiensonqin/Codes/projects/datascript/release-js/datascript.js \
+  UPSTREAM_DATASCRIPT_JS=_deps/datascript/release-js/datascript.js \
   script/benchmark_vs_cljs.sh
 ```
 
