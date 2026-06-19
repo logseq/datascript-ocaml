@@ -157,6 +157,12 @@
 
 (rule
  (alias runtest)
+ (deps ../js/datascript_js.bc.js js_facade_runner.js)
+ (action
+  (run node %{dep:js_facade_runner.js} %{dep:../js/datascript_js.bc.js})))
+
+(rule
+ (alias runtest)
  (deps
   cross_runtime_parity_test.sh
   cross_runtime_ocaml.exe

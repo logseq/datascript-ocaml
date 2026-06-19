@@ -18,15 +18,11 @@ root/tail/index-node layout.
 
 ## JS Facade Compatibility
 
-The js_of_ocaml build is not an upstream-compatible JavaScript facade.
-
-Upstream DataScript exposes `datascript/js.cljs`, which converts JavaScript data
-to ClojureScript values and exports JavaScript-oriented functions such as
-`empty_db`, `init_db`, `q`, `pull`, `db_with`, `transact`, `datoms`, and
+The js_of_ocaml facade exports the same JavaScript-oriented entry points as
+upstream `datascript/js.cljs`, including `empty_db`, `init_db`, `q`, `pull`,
+`pull_many`, `db_with`, `create_conn`, `transact`, `datoms`, `seek_datoms`, and
 `index_range`.
 
-This repository supports compiling the OCaml implementation with js_of_ocaml and
-tests that runtime path, but it does not expose the upstream JavaScript API
-shape or conversion behavior. JavaScript consumers should treat the generated
-js_of_ocaml output as an OCaml runtime artifact, not as a drop-in replacement for
-upstream `datascript.js`.
+The facade accepts JavaScript schema objects and transaction entity maps, keeps
+DB and connection values as opaque handles between calls, and converts query,
+pull, datom, and transaction report results back to JavaScript values.

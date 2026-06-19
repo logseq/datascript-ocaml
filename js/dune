@@ -1,0 +1,4 @@
+(executable
+ (name datascript_js)
+ (modes js)
+ (libraries datascript js_of_ocaml yojson))
