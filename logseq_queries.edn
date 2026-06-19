@@ -196,99 +196,29 @@
   :line 5,
   :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
   :id "q20"}
- {:file "deps/db/test/logseq/db/common/initial_data_refs_test.cljs",
-  :line 5,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
+ {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
+  :line 17,
+  :query
+  [:find
+   (pull ?b [*])
+   :in
+   $
+   ?current-page
+   :where
+   [?b :block/page ?bp]
+   [?bp :block/name ?current-page]],
   :id "q21"}
- {:file "deps/db/test/logseq/db/common/initial_data_refs_test.cljs",
-  :line 30,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
+ {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
+  :line 17,
+  :query
+  [:find
+   (pull ?b [*])
+   :in
+   $
+   ?current-block
+   :where
+   [?b :block/parent ?current-block]],
   :id "q22"}
- {:file "deps/db/test/logseq/db/common/initial_data_refs_test.cljs",
-  :line 30,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q23"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 44,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q24"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 122,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q25"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 122,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q26"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 144,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q27"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 144,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q28"}
- {:file "deps/db/test/logseq/db/common/view_test.cljs",
-  :line 144,
-  :query [:find ?e . :in $ ?title :where [?e :block/title ?title]],
-  :id "q29"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 17,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?current-page
-   :where
-   [?b :block/page ?bp]
-   [?bp :block/name ?current-page]],
-  :id "q30"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 17,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?current-page
-   :where
-   [?b :block/page ?bp]
-   [?bp :block/name ?current-page]],
-  :id "q31"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 17,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?current-block
-   :where
-   [?b :block/parent ?current-block]],
-  :id "q32"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 17,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?current-block
-   :where
-   [?b :block/parent ?current-block]],
-  :id "q33"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 17,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?current-block
-   :where
-   [?b :block/parent ?current-block]],
-  :id "q34"}
  {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
   :line 17,
   :query
@@ -299,7 +229,7 @@
    ?parent-block
    :where
    [?parent-block :block/parent]],
-  :id "q35"}
+  :id "q23"}
  {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
   :line 92,
   :query
@@ -312,20 +242,7 @@
    %
    :where
    (between ?b ?start ?end)],
-  :id "q36"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 92,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?start
-   ?end
-   %
-   :where
-   (between ?b ?start ?end)],
-  :id "q37"}
+  :id "q24"}
  {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
   :line 118,
   :query
@@ -337,20 +254,7 @@
    :where
    [?b :block/page ?e]
    [?e :block/name ?page]],
-  :id "q38"}
- {:file "deps/db/test/logseq/db/frontend/inputs_test.cljs",
-  :line 151,
-  :query
-  [:find
-   (pull ?b [*])
-   :in
-   $
-   ?start
-   ?end
-   %
-   :where
-   (between ?b ?start ?end)],
-  :id "q39"}
+  :id "q25"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 24,
   :query
@@ -358,7 +262,7 @@
    (pull ?b [:block/title])
    :where
    (has-property ?b :user.property/foo)],
-  :id "q40"}
+  :id "q26"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 24,
   :query
@@ -366,7 +270,7 @@
    (pull ?b [:block/title])
    :where
    (has-property ?b :user.property/foo2)],
-  :id "q41"}
+  :id "q27"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 24,
   :query
@@ -375,7 +279,7 @@
    :where
    (has-property ?b ?p)
    [?b :block/title "Page1"]],
-  :id "q42"}
+  :id "q28"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -383,7 +287,7 @@
    (pull ?b [:block/title])
    :where
    (ref-property ?b :user.property/foo "bar")],
-  :id "q43"}
+  :id "q29"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -391,7 +295,7 @@
    (pull ?b [:block/title])
    :where
    (ref-property ?b :user.property/foo "baz")],
-  :id "q44"}
+  :id "q30"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -400,7 +304,7 @@
    :where
    (ref-property ?b ?p "bar")
    [?b :block/title "Page1"]],
-  :id "q45"}
+  :id "q31"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -408,7 +312,7 @@
    (pull ?b [:block/title])
    :where
    (ref-property ?b :user.property/number-many 5)],
-  :id "q46"}
+  :id "q32"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -416,7 +320,7 @@
    (pull ?b [:block/title])
    :where
    (ref-property ?b :user.property/number-many 20)],
-  :id "q47"}
+  :id "q33"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -425,7 +329,7 @@
    :where
    (ref-property ?b ?p 5)
    [?b :block/title "Page1"]],
-  :id "q48"}
+  :id "q34"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -433,7 +337,7 @@
    (pull ?b [:block/title])
    :where
    (ref-property ?b :user.property/page-many "Page A")],
-  :id "q49"}
+  :id "q35"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -442,7 +346,7 @@
    :where
    [?b :user.property/page-many ?pv]
    [?pv :block/title "Page B"]],
-  :id "q50"}
+  :id "q36"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -451,7 +355,7 @@
    :where
    (ref-property ?b ?p _)
    [?b :block/title "Page1"]],
-  :id "q51"}
+  :id "q37"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -461,7 +365,7 @@
    :where
    (ref-property ?b ?p ?val)
    [?b :block/title "Page1"]],
-  :id "q52"}
+  :id "q38"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 48,
   :query
@@ -470,7 +374,7 @@
    :where
    [?b :user.property/page-many ?pv]
    (ref-property ?pv :user.property/foo "bar A")],
-  :id "q53"}
+  :id "q39"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -478,7 +382,7 @@
    (pull ?b [:block/title])
    :where
    (property ?b :user.property/foo "bar")],
-  :id "q54"}
+  :id "q40"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -486,7 +390,7 @@
    (pull ?b [:block/title])
    :where
    (property ?b :user.property/foo "baz")],
-  :id "q55"}
+  :id "q41"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -495,7 +399,7 @@
    :where
    (property ?b ?p "bar")
    [?b :block/title "Page1"]],
-  :id "q56"}
+  :id "q42"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -503,7 +407,7 @@
    (pull ?b [:block/title])
    :where
    (property ?b :user.property/number-many 5)],
-  :id "q57"}
+  :id "q43"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -511,12 +415,12 @@
    (pull ?b [:block/title])
    :where
    (property ?b :user.property/number-many 20)],
-  :id "q58"}
+  :id "q44"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
   [:find [?p ...] :where (property ?b ?p 5) [?b :block/title "Page1"]],
-  :id "q59"}
+  :id "q45"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -524,21 +428,12 @@
    (pull ?b [:block/title])
    :where
    (property ?b :user.property/page-many "Page A")],
-  :id "q60"}
- {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
-  :line 139,
-  :query
-  [:find
-   (pull ?b [:block/title])
-   :where
-   [?b :user.property/page-many ?pv]
-   [?pv :block/title "Page B"]],
-  :id "q61"}
+  :id "q46"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
   [:find [?p ...] :where (property ?b ?p _) [?b :block/title "Page1"]],
-  :id "q62"}
+  :id "q47"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -548,7 +443,7 @@
    :where
    (property ?b ?p ?val)
    [?b :block/title "Page1"]],
-  :id "q63"}
+  :id "q48"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 139,
   :query
@@ -557,7 +452,7 @@
    :where
    [?b :user.property/page-many ?pv]
    (property ?pv :user.property/foo "bar A")],
-  :id "q64"}
+  :id "q49"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 230,
   :query
@@ -569,7 +464,7 @@
    ?tag-ids
    :where
    (tags ?b ?tag-ids)],
-  :id "q65"}
+  :id "q50"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 230,
   :query
@@ -577,25 +472,20 @@
    (pull ?b [:block/title])
    :where
    (tags ?b #{:user.class/Person})],
-  :id "q66"}
+  :id "q51"}
  {:file "deps/db/test/logseq/db/frontend/rules_test.cljs",
   :line 230,
   :query [:find (pull ?b [:block/title]) :where (tags ?b #{"Person"})],
-  :id "q67"}
+  :id "q52"}
  {:file "deps/db/test/logseq/db/sqlite/build_test.cljs",
   :line 201,
   :query
   [:find [?b ...] :in $ ?page-id :where [?b :block/page ?page-id]],
-  :id "q68"}
- {:file "deps/db/test/logseq/db/sqlite/build_test.cljs",
-  :line 201,
-  :query
-  [:find [?b ...] :in $ ?page-id :where [?b :block/page ?page-id]],
-  :id "q69"}
+  :id "q53"}
  {:file "deps/db/test/logseq/db/sqlite/create_graph_test.cljs",
   :line 14,
   :query [:find [?b ...] :where [?b :db/ident]],
-  :id "q70"}
+  :id "q54"}
  {:file "deps/db/test/logseq/db/sqlite/create_graph_test.cljs",
   :line 49,
   :query
@@ -603,7 +493,7 @@
    [(pull ?b [:db/ident :logseq.property/built-in?]) ...]
    :where
    [?b :db/ident]],
-  :id "q71"}
+  :id "q55"}
  {:file "deps/db/test/logseq/db/sqlite/create_graph_test.cljs",
   :line 49,
   :query
@@ -611,450 +501,7 @@
    [(pull ?b [:logseq.property/built-in? :block/title]) ...]
    :where
    [?b :block/tags :logseq.class/Page]],
-  :id "q72"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/datascript/parser.cljc",
-  :line 699,
-  :query
-  {:error :parser/query,
-   :return-map (cons (:type (:qreturn-map q)) return-symbols),
-   :find find-elements,
-   :form form},
-  :id "q73"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query
-  [:find
-   ?lid
-   ?status
-   ?starttime
-   ?endtime
-   (min ?paid)
-   (distinct ?studentinfo)
-   ?lgid
-   :in
-   $
-   ?tid
-   ?week
-   ?list
-   :where
-   [?lid :lesson/teacherid ?tid]
-   [?lid :lesson/week ?week]
-   [?lid :lesson/lessongroupid ?lgid]
-   [?eid :enrollment/lessongroup_id ?lgid]
-   [?eid :enrollment/student_id ?sid]
-   [?iid :invoice/enrollment_id ?eid]
-   [?sid :student/firstname ?fname]
-   [?sid :student/lastname ?lname]
-   [?iid :invoice/paid ?paid]
-   [?lid :lesson/status ?status]
-   [?lid :lesson/starttime ?starttime]
-   [?lid :lesson/endtime ?endtime]
-   [(?list ?sid ?fname ?lname) ?studentinfo]],
-  :id "q74"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query [:find ?e :where [?e :name "Ivan"] [?e :age 1]],
-  :id "q75"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 465,
-  :query
-  [:find
-   ?page-title
-   :where
-   [?page :block/name ?page-name]
-   [(get-else $ ?page :block/title ?page-name) ?page-title]],
-  :id "q76"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 478,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/title ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q77"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 478,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/name ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q78"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 787,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?block :block/refs ?ref-page]],
-  :id "q79"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 787,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?p :block/tags]
-   (not [?p :block/tags :logseq.class/Journal])
-   [?block :block/refs ?ref-page]],
-  :id "q80"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 802,
-  :query [:find ?page ?tag :where [?page :block/tags ?tag]],
-  :id "q81"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db.cljs",
-  :line 834,
-  :query
-  [:find
-   ?e
-   ?a
-   :in
-   $
-   ?v
-   :where
-   [?e ?a ?v]
-   [?ea :db/ident ?a]
-   [?ea :logseq.property/classes ?c]],
-  :id "q82"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 33,
-  :query [:find [?e ...] :in $ ?eid % :where (alias ?eid ?e)],
-  :id "q83"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 112,
-  :query [:find [?c ...] :in $ ?id % :where (parent ?id ?c)],
-  :id "q84"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/common/view.cljs",
-  :line 392,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   %
-   ?prop
-   :where
-   (has-property-or-object-property? ?b ?prop)],
-  :id "q85"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/frontend/class.cljs",
-  :line 140,
-  :query [:find [?c ...] :in $ ?p % :where (class-extends ?p ?c)],
-  :id "q86"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/frontend/db_ident.cljc",
-  :line 4,
-  :query
-  [:find
-   [?ident ...]
-   :in
-   $
-   ?ident-name
-   :where
-   [?b :db/ident ?ident]
-   [(str ?ident) ?str-ident]
-   [(clojure.string/starts-with? ?str-ident ?ident-name)]],
-  :id "q87"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?db-ident ...]
-   :where
-   [?p :db/ident ?db-ident]
-   [?p :block/tags :logseq.class/Property]
-   (not [?p :logseq.property/built-in?])],
-  :id "q88"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?class ...]
-   :where
-   [?class :block/tags :logseq.class/Tag]
-   (not [?class :logseq.property/built-in?])],
-  :id "q89"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 769,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:file/path
-      :file/content
-      :file/created-at
-      :file/last-modified-at])
-    ...]
-   :where
-   [?b :file/path]],
-  :id "q90"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 777,
-  :query
-  [:find [(pull ?b [:db/ident :kv/value]) ...] :where [?b :kv/value]],
-  :id "q91"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 785,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:block/uuid
-      :block/created-at
-      #:logseq.property.history{:block [:block/uuid]}
-      #:logseq.property.history{:property [:db/ident]}
-      #:logseq.property.history{:ref-value [:db/ident :block/uuid]}
-      :logseq.property.history/scalar-value])
-    ...]
-   :where
-   [?b :logseq.property.history/block]],
-  :id "q92"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q93"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?uuid ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q94"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 1864,
-  :query [:find (pull ?b [*]) :in $ ?p % :where (has-property ?b ?p)],
-  :id "q95"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   (pull ?b [:db/id :db/ident])
-   :where
-   [?b :block/tags :logseq.class/Tag]],
-  :id "q96"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   ?t
-   ?prop
-   :in
-   $
-   ?user-classes
-   :where
-   [?b :block/tags ?t]
-   [?t :db/ident ?class]
-   [(contains? ?user-classes ?class)]
-   [?b ?prop _]
-   [?prop-e :db/ident ?prop]
-   [?prop-e :block/tags :logseq.class/Property]],
-  :id "q97"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/op/construct.cljc",
-  :line 317,
-  :query
-  [:find
-   ?ident
-   .
-   :in
-   $
-   ?title
-   :where
-   [?e :block/title ?title]
-   [?e :block/tags :logseq.class/Property]
-   [?e :db/ident ?ident]],
-  :id "q98"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/page.cljs",
-  :line 203,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?attribute
-   ?parent-name
-   ?child-name
-   :where
-   [?b ?attribute ?p]
-   [?b :block/name ?child-name]
-   [?p :block/name ?parent-name]],
-  :id "q99"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/property.cljs",
-  :line 320,
-  :query
-  [:find
-   [?v ...]
-   :in
-   $
-   ?title
-   :where
-   [?v :block/title ?title]
-   [?v :block/tags :logseq.class/Tag]],
-  :id "q100"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/property.cljs",
-  :line 320,
-  :query
-  [:find
-   [?v ...]
-   :in
-   $
-   ?property-id
-   ?raw-value
-   :where
-   [?b ?property-id ?v]
-   (or
-    [?v :block/title ?raw-value]
-    [?v :logseq.property/value ?raw-value])],
-  :id "q101"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/property.cljs",
-  :line 417,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?property-id
-   ?value-id
-   :where
-   [?e ?property-id ?value-id]],
-  :id "q102"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/recycle.cljs",
-  :line 250,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?cutoff
-   :where
-   [?e :logseq.property/deleted-at ?deleted-at]
-   [(<= ?deleted-at ?cutoff)]],
-  :id "q103"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/template.cljs",
-  :line 32,
-  :query
-  [:find
-   ?title
-   .
-   :in
-   $
-   ?journal-day
-   :where
-   [?p :block/journal-day ?journal-day]
-   [?p :block/title ?title]],
-  :id "q104"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/validate.cljs",
-  :line 41,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(missing? $ ?b :logseq.property/built-in?)]
-   [(not= ?b ?eid)]],
-  :id "q105"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/validate.cljs",
-  :line 41,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(not= ?b ?eid)]
-   [?b :block/parent ?bp]
-   [?eid :block/parent ?ep]
-   [(= ?bp ?ep)]],
-  :id "q106"}
- {:file
-  "deps/graph-parser/.nbb/.cache/303dfc5ced7079bdd842e8eecd99a8ef26c4601a/nbb-deps/logseq/outliner/validate.cljs",
-  :line 41,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(not= ?b ?eid)]],
-  :id "q107"}
+  :id "q56"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/datascript/parser.cljc",
   :line 699,
@@ -1063,70 +510,7 @@
    :return-map (cons (:type (:qreturn-map q)) return-symbols),
    :find find-elements,
    :form form},
-  :id "q108"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 424,
-  :query
-  [:find
-   ?page-title
-   :where
-   [?page :block/name ?page-name]
-   [(get-else $ ?page :block/title ?page-name) ?page-title]],
-  :id "q109"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 437,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/title ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q110"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 437,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/name ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q111"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 738,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?block :block/refs ?ref-page]],
-  :id "q112"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 738,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?p :block/tags]
-   (not [?p :block/tags :logseq.class/Journal])
-   [?block :block/refs ?ref-page]],
-  :id "q113"}
- {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
-  :line 753,
-  :query [:find ?page ?tag :where [?page :block/tags ?tag]],
-  :id "q114"}
+  :id "q57"}
  {:file "deps/graph-parser/cljs-test-runner-out/logseq/db.cljs",
   :line 785,
   :query
@@ -1142,95 +526,7 @@
    [?ea :logseq.property/classes ?c]
    [?ea :db/ident ?a]
    [?e ?a ?v]],
-  :id "q115"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/common/initial_data.cljs",
-  :line 33,
-  :query [:find [?e ...] :in $ ?eid % :where (alias ?eid ?e)],
-  :id "q116"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/common/initial_data.cljs",
-  :line 112,
-  :query [:find [?c ...] :in $ ?id % :where (parent ?id ?c)],
-  :id "q117"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/frontend/class.cljs",
-  :line 140,
-  :query [:find [?c ...] :in $ ?p % :where (class-extends ?p ?c)],
-  :id "q118"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/frontend/db_ident.cljc",
-  :line 4,
-  :query
-  [:find
-   [?ident ...]
-   :in
-   $
-   ?ident-name
-   :where
-   [?b :db/ident ?ident]
-   [(str ?ident) ?str-ident]
-   [(clojure.string/starts-with? ?str-ident ?ident-name)]],
-  :id "q119"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?db-ident ...]
-   :where
-   [?p :db/ident ?db-ident]
-   [?p :block/tags :logseq.class/Property]
-   (not [?p :logseq.property/built-in?])],
-  :id "q120"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?class ...]
-   :where
-   [?class :block/tags :logseq.class/Tag]
-   (not [?class :logseq.property/built-in?])],
-  :id "q121"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/sqlite/export.cljs",
-  :line 769,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:file/path
-      :file/content
-      :file/created-at
-      :file/last-modified-at])
-    ...]
-   :where
-   [?b :file/path]],
-  :id "q122"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/sqlite/export.cljs",
-  :line 777,
-  :query
-  [:find [(pull ?b [:db/ident :kv/value]) ...] :where [?b :kv/value]],
-  :id "q123"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/db/sqlite/export.cljs",
-  :line 785,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:block/uuid
-      :block/created-at
-      #:logseq.property.history{:block [:block/uuid]}
-      #:logseq.property.history{:property [:db/ident]}
-      #:logseq.property.history{:ref-value [:db/ident :block/uuid]}
-      :logseq.property.history/scalar-value])
-    ...]
-   :where
-   [?b :logseq.property.history/block]],
-  :id "q124"}
+  :id "q58"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/block_test.cljs",
   :line 107,
@@ -1242,7 +538,7 @@
    ?content
    :where
    [?b :block/title ?content]],
-  :id "q125"}
+  :id "q59"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter.cljs",
   :line 233,
@@ -1256,7 +552,7 @@
    [?b :block/uuid ?uuid]
    [?b :block/tags :logseq.class/Tag]
    [?b :block/name ?name]],
-  :id "q126"}
+  :id "q60"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter.cljs",
   :line 233,
@@ -1270,12 +566,12 @@
    [?b :block/uuid ?uuid]
    [?b :block/tags :logseq.class/Tag]
    [?b :block/name ?name]],
-  :id "q127"}
+  :id "q61"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter.cljs",
   :line 1864,
   :query [:find (pull ?b [*]) :in $ ?p % :where (has-property ?b ?p)],
-  :id "q128"}
+  :id "q62"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter.cljs",
   :line 2365,
@@ -1284,7 +580,7 @@
    (pull ?b [:db/id :db/ident])
    :where
    [?b :block/tags :logseq.class/Tag]],
-  :id "q129"}
+  :id "q63"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter.cljs",
   :line 2365,
@@ -1302,12 +598,12 @@
    [?b ?prop _]
    [?prop-e :db/ident ?prop]
    [?prop-e :block/tags :logseq.class/Property]],
-  :id "q130"}
+  :id "q64"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 36,
   :query [:find [?b ...] :in $ ?prop % :where (has-property ?b ?prop)],
-  :id "q131"}
+  :id "q65"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 42,
@@ -1321,7 +617,7 @@
    %
    :where
    (property ?b ?prop ?prop-value)],
-  :id "q132"}
+  :id "q66"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 63,
@@ -1334,7 +630,7 @@
    :where
    [?b :block/title ?title]
    [?b :block/tags :logseq.class/Template]],
-  :id "q133"}
+  :id "q67"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 312,
@@ -1343,63 +639,63 @@
    (pull ?b [:block/title #:block{:tags [:db/ident]}])
    :where
    [?b :block/tags :logseq.class/Tag]],
-  :id "q134"}
+  :id "q68"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Journal]],
-  :id "q135"}
+  :id "q69"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Asset]],
-  :id "q136"}
+  :id "q70"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Task]],
-  :id "q137"}
+  :id "q71"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Query]],
-  :id "q138"}
+  :id "q72"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Card]],
-  :id "q139"}
+  :id "q73"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Cards]],
-  :id "q140"}
+  :id "q74"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Code-block]],
-  :id "q141"}
+  :id "q75"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Math-block]],
-  :id "q142"}
+  :id "q76"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Template]],
-  :id "q143"}
+  :id "q77"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query [:find ?b :where [?b :block/tags :logseq.class/Quote-block]],
-  :id "q144"}
+  :id "q78"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query
   [:find ?b :where [?b :block/tags :logseq.class/Pdf-annotation]],
-  :id "q145"}
+  :id "q79"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1410,7 +706,7 @@
    [?b :block/title]
    [_ :block/page ?b]
    (not [?b :logseq.property/built-in?])],
-  :id "q146"}
+  :id "q80"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1421,7 +717,7 @@
    [?b :block/tags :logseq.class/Tag]
    [?b :db/ident ?ident]
    (not [?b :logseq.property/built-in?])],
-  :id "q147"}
+  :id "q81"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1431,7 +727,7 @@
    :where
    [?b :file/path "logseq/custom.css"]
    [?b :file/content ?content]],
-  :id "q148"}
+  :id "q82"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1441,7 +737,7 @@
    :where
    [?b :file/path "logseq/custom.js"]
    [?b :file/content ?content]],
-  :id "q149"}
+  :id "q83"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1450,7 +746,7 @@
    [(pull ?b [:db/ident]) ...]
    :where
    [?b :block/tags :logseq.class/Property]],
-  :id "q150"}
+  :id "q84"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1459,7 +755,7 @@
    [(pull ?b [:db/ident :logseq.property/type]) ...]
    :where
    [?b :block/tags :logseq.class/Property]],
-  :id "q151"}
+  :id "q85"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1468,7 +764,7 @@
    (pull ?b [:block/title #:block{:tags [:db/ident]}])
    :where
    [?b :block/tags :logseq.class/Property]],
-  :id "q152"}
+  :id "q86"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1480,13 +776,13 @@
    ?content
    :where
    [?b :block/title ?content]],
-  :id "q153"}
+  :id "q87"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
   :query
   [:find [?b ...] :where [?b :block/title "y"] [?b :block/parent]],
-  :id "q154"}
+  :id "q88"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1496,7 +792,7 @@
    :where
    [?b :block/tags :logseq.class/Template]
    [?b :block/title ?title]],
-  :id "q155"}
+  :id "q89"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1507,7 +803,7 @@
    [?b :block/tags :logseq.class/Template]
    [?b :block/page ?page]
    [?page :block/uuid ?page-uuid]],
-  :id "q156"}
+  :id "q90"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1517,7 +813,7 @@
    :where
    [?b :block/tags :logseq.class/Pdf-annotation]
    [?b :block/title ""]],
-  :id "q157"}
+  :id "q91"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1538,7 +834,7 @@
    [?asset :block/tags :logseq.class/Asset]
    [?b :block/title "[:span]"]
    [?b :logseq.property/asset ?asset]],
-  :id "q158"}
+  :id "q92"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1559,7 +855,7 @@
    [?asset :block/tags :logseq.class/Asset]
    [?b :block/title "[:span]"]
    [?b :logseq.property/asset ?asset]],
-  :id "q159"}
+  :id "q93"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1574,31 +870,7 @@
    [?b :block/page ?bp]
    [?bp :block/journal-day 20250612]
    [?l :block/title ?title]],
-  :id "q160"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 339,
-  :query
-  [:find
-   [(pull ?b [*]) ...]
-   :in
-   $
-   ?title
-   :where
-   [?b :block/link ?l]
-   [?b :block/page ?bp]
-   [?bp :block/journal-day 20250612]
-   [?l :block/title ?title]],
-  :id "q161"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 339,
-  :query
-  [:find
-   (pull ?b [:block/title #:block{:tags [:db/ident]}])
-   :where
-   [?b :block/tags :logseq.class/Tag]],
-  :id "q162"}
+  :id "q94"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1608,7 +880,7 @@
    :where
    [?b :db/ident ?ident]
    [?b :block/name "description"]],
-  :id "q163"}
+  :id "q95"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 339,
@@ -1619,60 +891,12 @@
    [?b :block/tags ?t]
    [?b :block/name "task"]
    [?t :block/title ?t-title]],
-  :id "q164"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 986,
-  :query
-  [:find
-   [?ident ...]
-   :where
-   [?b :block/tags :logseq.class/Tag]
-   [?b :db/ident ?ident]
-   (not [?b :logseq.property/built-in?])],
-  :id "q165"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 986,
-  :query [:find ?b :where [?b :block/tags :logseq.class/Task]],
-  :id "q166"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 986,
-  :query [:find ?b :where [?b :block/tags :logseq.class/Query]],
-  :id "q167"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 986,
-  :query [:find ?b :where [?b :block/tags :logseq.class/Card]],
-  :id "q168"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 1068,
-  :query
-  [:find
-   [?ident ...]
-   :where
-   [?b :block/tags :logseq.class/Tag]
-   [?b :db/ident ?ident]
-   (not [?b :logseq.property/built-in?])],
-  :id "q169"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 1140,
-  :query
-  [:find
-   [?ident ...]
-   :where
-   [?b :block/tags :logseq.class/Tag]
-   [?b :db/ident ?ident]
-   (not [?b :logseq.property/built-in?])],
-  :id "q170"}
+  :id "q96"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 1251,
   :query [:find ?p . :where [?p :block/journal-day 20260301]],
-  :id "q171"}
+  :id "q97"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 1251,
@@ -1685,103 +909,13 @@
    :where
    [?b :block/page ?page]
    [?b :block/parent ?page]],
-  :id "q172"}
+  :id "q98"}
  {:file
   "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
   :line 1251,
   :query
   [:find [?c ...] :in $ ?parent :where [?c :block/parent ?parent]],
-  :id "q173"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 1353,
-  :query [:find ?p . :where [?p :block/journal-day 20260301]],
-  :id "q174"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 1353,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?page
-   :where
-   [?b :block/page ?page]
-   [?b :block/parent ?page]],
-  :id "q175"}
- {:file
-  "deps/graph-parser/cljs-test-runner-out/logseq/graph_parser/exporter_test.cljs",
-  :line 1353,
-  :query
-  [:find [?c ...] :in $ ?parent :where [?c :block/parent ?parent]],
-  :id "q176"}
- {:file "deps/graph-parser/src/logseq/graph_parser/exporter.cljs",
-  :line 234,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q177"}
- {:file "deps/graph-parser/src/logseq/graph_parser/exporter.cljs",
-  :line 234,
-  :query
-  [:find
-   [?uuid ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q178"}
- {:file "deps/graph-parser/src/logseq/graph_parser/exporter.cljs",
-  :line 2157,
-  :query [:find (pull ?b [*]) :in $ ?p % :where (has-property ?b ?p)],
-  :id "q179"}
- {:file "deps/graph-parser/src/logseq/graph_parser/exporter.cljs",
-  :line 2762,
-  :query
-  [:find
-   (pull ?b [:db/id :db/ident])
-   :where
-   [?b :block/tags :logseq.class/Tag]],
-  :id "q180"}
- {:file "deps/graph-parser/src/logseq/graph_parser/exporter.cljs",
-  :line 2762,
-  :query
-  [:find
-   ?t
-   ?prop
-   :in
-   $
-   ?user-classes
-   :where
-   [?b :block/tags ?t]
-   [?t :db/ident ?class]
-   [(contains? ?user-classes ?class)]
-   [?b ?prop _]
-   [?prop-e :db/ident ?prop]
-   [?prop-e :block/tags :logseq.class/Property]],
-  :id "q181"}
- {:file "deps/graph-parser/test/logseq/graph_parser/block_test.cljs",
-  :line 119,
-  :query
-  [:find
-   (pull ?b [* #:block{:refs [:block/uuid]}])
-   :in
-   $
-   ?content
-   :where
-   [?b :block/title ?content]],
-  :id "q182"}
+  :id "q99"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/.graph-validator/schema.cljs",
   :line 6,
@@ -1794,42 +928,29 @@
    %
    :where
    (page-property ?b :type ?type)],
-  :id "q183"}
- {:file
-  "deps/graph-parser/test/resources/docs-0.10.12/.graph-validator/schema.cljs",
-  :line 19,
-  :query
-  [:find
-   (pull ?b [:block/properties])
-   :in
-   $
-   ?type
-   %
-   :where
-   (page-property ?b :type ?type)],
-  :id "q184"}
+  :id "q100"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
   :query
   [:find (pull ?b [*]) :where (page-property ?b :type "Feature")],
-  :id "q185"}
+  :id "q101"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
   :query
   [:find (pull ?b [*]) :where (page-property ?b :type "UI Element")],
-  :id "q186"}
+  :id "q102"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
   :query [:find (pull ?b [*]) :where (page-property ?b :type "Class")],
-  :id "q187"}
+  :id "q103"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
   :query [:find ?p :where [_ :block/properties ?p]],
-  :id "q188"}
+  :id "q104"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
@@ -1846,7 +967,7 @@
    [?b :block/updated-at ?timestamp]
    [(>= ?timestamp ?start)]
    [(<= ?timestamp ?end)]],
-  :id "q189"}
+  :id "q105"}
  {:file
   "deps/graph-parser/test/resources/docs-0.10.12/script/query.cljs",
   :line 40,
@@ -1856,298 +977,7 @@
    :where
    (task ?b #{"TODO" "DOING"})
    (page-ref ?b "docs")],
-  :id "q190"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/datascript/parser.cljc",
-  :line 699,
-  :query
-  {:error :parser/query,
-   :return-map (cons (:type (:qreturn-map q)) return-symbols),
-   :find find-elements,
-   :form form},
-  :id "q191"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query
-  [:find
-   ?lid
-   ?status
-   ?starttime
-   ?endtime
-   (min ?paid)
-   (distinct ?studentinfo)
-   ?lgid
-   :in
-   $
-   ?tid
-   ?week
-   ?list
-   :where
-   [?lid :lesson/teacherid ?tid]
-   [?lid :lesson/week ?week]
-   [?lid :lesson/lessongroupid ?lgid]
-   [?eid :enrollment/lessongroup_id ?lgid]
-   [?eid :enrollment/student_id ?sid]
-   [?iid :invoice/enrollment_id ?eid]
-   [?sid :student/firstname ?fname]
-   [?sid :student/lastname ?lname]
-   [?iid :invoice/paid ?paid]
-   [?lid :lesson/status ?status]
-   [?lid :lesson/starttime ?starttime]
-   [?lid :lesson/endtime ?endtime]
-   [(?list ?sid ?fname ?lname) ?studentinfo]],
-  :id "q192"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query [:find ?e :where [?e :name "Ivan"] [?e :age 1]],
-  :id "q193"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 465,
-  :query
-  [:find
-   ?page-title
-   :where
-   [?page :block/name ?page-name]
-   [(get-else $ ?page :block/title ?page-name) ?page-title]],
-  :id "q194"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 478,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/title ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q195"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 478,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/name ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q196"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 787,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?block :block/refs ?ref-page]],
-  :id "q197"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 787,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?p :block/tags]
-   (not [?p :block/tags :logseq.class/Journal])
-   [?block :block/refs ?ref-page]],
-  :id "q198"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 802,
-  :query [:find ?page ?tag :where [?page :block/tags ?tag]],
-  :id "q199"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db.cljs",
-  :line 834,
-  :query
-  [:find
-   ?e
-   ?a
-   :in
-   $
-   ?v
-   :where
-   [?e ?a ?v]
-   [?ea :db/ident ?a]
-   [?ea :logseq.property/classes ?c]],
-  :id "q200"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 33,
-  :query [:find [?e ...] :in $ ?eid % :where (alias ?eid ?e)],
-  :id "q201"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 112,
-  :query [:find [?c ...] :in $ ?id % :where (parent ?id ?c)],
-  :id "q202"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/common/view.cljs",
-  :line 392,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   %
-   ?prop
-   :where
-   (has-property-or-object-property? ?b ?prop)],
-  :id "q203"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/frontend/class.cljs",
-  :line 140,
-  :query [:find [?c ...] :in $ ?p % :where (class-extends ?p ?c)],
-  :id "q204"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/frontend/db_ident.cljc",
-  :line 4,
-  :query
-  [:find
-   [?ident ...]
-   :in
-   $
-   ?ident-name
-   :where
-   [?b :db/ident ?ident]
-   [(str ?ident) ?str-ident]
-   [(clojure.string/starts-with? ?str-ident ?ident-name)]],
-  :id "q205"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?db-ident ...]
-   :where
-   [?p :db/ident ?db-ident]
-   [?p :block/tags :logseq.class/Property]
-   (not [?p :logseq.property/built-in?])],
-  :id "q206"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?class ...]
-   :where
-   [?class :block/tags :logseq.class/Tag]
-   (not [?class :logseq.property/built-in?])],
-  :id "q207"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 769,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:file/path
-      :file/content
-      :file/created-at
-      :file/last-modified-at])
-    ...]
-   :where
-   [?b :file/path]],
-  :id "q208"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 777,
-  :query
-  [:find [(pull ?b [:db/ident :kv/value]) ...] :where [?b :kv/value]],
-  :id "q209"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 785,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:block/uuid
-      :block/created-at
-      #:logseq.property.history{:block [:block/uuid]}
-      #:logseq.property.history{:property [:db/ident]}
-      #:logseq.property.history{:ref-value [:db/ident :block/uuid]}
-      :logseq.property.history/scalar-value])
-    ...]
-   :where
-   [?b :logseq.property.history/block]],
-  :id "q210"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q211"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?uuid ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q212"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 1864,
-  :query [:find (pull ?b [*]) :in $ ?p % :where (has-property ?b ?p)],
-  :id "q213"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   (pull ?b [:db/id :db/ident])
-   :where
-   [?b :block/tags :logseq.class/Tag]],
-  :id "q214"}
- {:file
-  "deps/outliner/.nbb/.cache/ab4991fd1ff9f0eb73dc29ad2a9cbe54b561041d/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   ?t
-   ?prop
-   :in
-   $
-   ?user-classes
-   :where
-   [?b :block/tags ?t]
-   [?t :db/ident ?class]
-   [(contains? ?user-classes ?class)]
-   [?b ?prop _]
-   [?prop-e :db/ident ?prop]
-   [?prop-e :block/tags :logseq.class/Property]],
-  :id "q215"}
+  :id "q106"}
  {:file "deps/outliner/src/logseq/outliner/op/construct.cljc",
   :line 320,
   :query
@@ -2161,7 +991,7 @@
    [?e :block/title ?title]
    [?e :block/tags :logseq.class/Property]
    [?e :db/ident ?ident]],
-  :id "q216"}
+  :id "q107"}
  {:file "deps/outliner/src/logseq/outliner/page.cljs",
   :line 202,
   :query
@@ -2176,7 +1006,7 @@
    [?b ?attribute ?p]
    [?b :block/name ?child-name]
    [?p :block/name ?parent-name]],
-  :id "q217"}
+  :id "q108"}
  {:file "deps/outliner/src/logseq/outliner/property.cljs",
   :line 430,
   :query
@@ -2188,7 +1018,7 @@
    :where
    [?v :block/title ?title]
    [?v :block/tags :logseq.class/Tag]],
-  :id "q218"}
+  :id "q109"}
  {:file "deps/outliner/src/logseq/outliner/property.cljs",
   :line 430,
   :query
@@ -2203,7 +1033,7 @@
    (or
     [?v :block/title ?raw-value]
     [?v :logseq.property/value ?raw-value])],
-  :id "q219"}
+  :id "q110"}
  {:file "deps/outliner/src/logseq/outliner/property.cljs",
   :line 551,
   :query
@@ -2215,7 +1045,7 @@
    ?value-id
    :where
    [?e ?property-id ?value-id]],
-  :id "q220"}
+  :id "q111"}
  {:file "deps/outliner/src/logseq/outliner/recycle.cljs",
   :line 260,
   :query
@@ -2227,7 +1057,7 @@
    :where
    [?e :logseq.property/deleted-at ?deleted-at]
    [(<= ?deleted-at ?cutoff)]],
-  :id "q221"}
+  :id "q112"}
  {:file "deps/outliner/src/logseq/outliner/template.cljs",
   :line 32,
   :query
@@ -2240,7 +1070,7 @@
    :where
    [?p :block/journal-day ?journal-day]
    [?p :block/title ?title]],
-  :id "q222"}
+  :id "q113"}
  {:file "deps/outliner/src/logseq/outliner/validate.cljs",
   :line 47,
   :query
@@ -2256,7 +1086,7 @@
    [?b :block/tags ?tag-id]
    [(missing? $ ?b :logseq.property/built-in?)]
    [(not= ?b ?eid)]],
-  :id "q223"}
+  :id "q114"}
  {:file "deps/outliner/src/logseq/outliner/validate.cljs",
   :line 47,
   :query
@@ -2274,7 +1104,7 @@
    [?b :block/parent ?bp]
    [?eid :block/parent ?ep]
    [(= ?bp ?ep)]],
-  :id "q224"}
+  :id "q115"}
  {:file "deps/outliner/src/logseq/outliner/validate.cljs",
   :line 47,
   :query
@@ -2289,7 +1119,7 @@
    [?b :block/title ?title]
    [?b :block/tags ?tag-id]
    [(not= ?b ?eid)]],
-  :id "q225"}
+  :id "q116"}
  {:file "deps/outliner/test/logseq/outliner/op_test.cljs",
   :line 139,
   :query
@@ -2303,7 +1133,7 @@
    [?b :block/title ?title]
    [?b :block/page ?page]
    [?page :block/title ?page-title]],
-  :id "q226"}
+  :id "q117"}
  {:file "deps/outliner/test/logseq/outliner/page_test.cljs",
   :line 24,
   :query
@@ -2313,7 +1143,7 @@
    [?b :block/title "class1"]
    [?b :block/tags ?t]
    [?t :block/title ?tag-title]],
-  :id "q227"}
+  :id "q118"}
  {:file "deps/outliner/test/logseq/outliner/page_test.cljs",
   :line 24,
   :query
@@ -2321,21 +1151,21 @@
    [(pull ?b [#:block{:parent [:block/title]}]) ...]
    :where
    [?b :block/title "keys"]],
-  :id "q228"}
+  :id "q119"}
  {:file "deps/outliner/test/logseq/outliner/property_test.cljs",
   :line 375,
   :query
   [:find [(pull ?b [*]) ...] :where [?b :logseq.property/value 3]],
-  :id "q229"}
+  :id "q120"}
  {:file "deps/outliner/test/logseq/outliner/property_test.cljs",
   :line 375,
   :query
   [:find [(pull ?b [*]) ...] :where [?b :logseq.property/value 2]],
-  :id "q230"}
+  :id "q121"}
  {:file "deps/outliner/test/logseq/outliner/validate_test.cljs",
   :line 270,
   :query [:find [?b ...] :where [?b :block/title] [?b :block/tags]],
-  :id "q231"}
+  :id "q122"}
  {:file "deps/outliner/test/logseq/outliner/validate_test.cljs",
   :line 270,
   :query
@@ -2344,240 +1174,7 @@
    ?child
    :where
    [?child :logseq.property.class/extends ?parent]],
-  :id "q232"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/datascript/parser.cljc",
-  :line 699,
-  :query
-  {:error :parser/query,
-   :return-map (cons (:type (:qreturn-map q)) return-symbols),
-   :find find-elements,
-   :form form},
-  :id "q233"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query
-  [:find
-   ?lid
-   ?status
-   ?starttime
-   ?endtime
-   (min ?paid)
-   (distinct ?studentinfo)
-   ?lgid
-   :in
-   $
-   ?tid
-   ?week
-   ?list
-   :where
-   [?lid :lesson/teacherid ?tid]
-   [?lid :lesson/week ?week]
-   [?lid :lesson/lessongroupid ?lgid]
-   [?eid :enrollment/lessongroup_id ?lgid]
-   [?eid :enrollment/student_id ?sid]
-   [?iid :invoice/enrollment_id ?eid]
-   [?sid :student/firstname ?fname]
-   [?sid :student/lastname ?lname]
-   [?iid :invoice/paid ?paid]
-   [?lid :lesson/status ?status]
-   [?lid :lesson/starttime ?starttime]
-   [?lid :lesson/endtime ?endtime]
-   [(?list ?sid ?fname ?lname) ?studentinfo]],
-  :id "q234"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query [:find ?e :where [?e :name "Ivan"] [?e :age 1]],
-  :id "q235"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 424,
-  :query
-  [:find
-   ?page-title
-   :where
-   [?page :block/name ?page-name]
-   [(get-else $ ?page :block/title ?page-name) ?page-title]],
-  :id "q236"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 437,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/title ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q237"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 437,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/name ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q238"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 738,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?block :block/refs ?ref-page]],
-  :id "q239"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 738,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?p :block/tags]
-   (not [?p :block/tags :logseq.class/Journal])
-   [?block :block/refs ?ref-page]],
-  :id "q240"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 753,
-  :query [:find ?page ?tag :where [?page :block/tags ?tag]],
-  :id "q241"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db.cljs",
-  :line 785,
-  :query
-  [:find
-   ?e
-   ?a
-   :in
-   $
-   ?v
-   :where
-   [?c :logseq.property.class/enable-bidirectional? ?c-enable?]
-   [(true? ?c-enable?)]
-   [?ea :logseq.property/classes ?c]
-   [?ea :db/ident ?a]
-   [?e ?a ?v]],
-  :id "q242"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 33,
-  :query [:find [?e ...] :in $ ?eid % :where (alias ?eid ?e)],
-  :id "q243"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 112,
-  :query [:find [?c ...] :in $ ?id % :where (parent ?id ?c)],
-  :id "q244"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/common/view.cljs",
-  :line 303,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   %
-   ?prop
-   :where
-   (has-property-or-object-property? ?b ?prop)],
-  :id "q245"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/frontend/class.cljs",
-  :line 140,
-  :query [:find [?c ...] :in $ ?p % :where (class-extends ?p ?c)],
-  :id "q246"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/frontend/db_ident.cljc",
-  :line 4,
-  :query
-  [:find
-   [?ident ...]
-   :in
-   $
-   ?ident-name
-   :where
-   [?b :db/ident ?ident]
-   [(str ?ident) ?str-ident]
-   [(clojure.string/starts-with? ?str-ident ?ident-name)]],
-  :id "q247"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?db-ident ...]
-   :where
-   [?p :db/ident ?db-ident]
-   [?p :block/tags :logseq.class/Property]
-   (not [?p :logseq.property/built-in?])],
-  :id "q248"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?class ...]
-   :where
-   [?class :block/tags :logseq.class/Tag]
-   (not [?class :logseq.property/built-in?])],
-  :id "q249"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 769,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:file/path
-      :file/content
-      :file/created-at
-      :file/last-modified-at])
-    ...]
-   :where
-   [?b :file/path]],
-  :id "q250"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 777,
-  :query
-  [:find [(pull ?b [:db/ident :kv/value]) ...] :where [?b :kv/value]],
-  :id "q251"}
- {:file
-  "deps/publishing/.nbb/.cache/a85a58cb80fd057546cdfdd58017726906e3d2df/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 785,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:block/uuid
-      :block/created-at
-      #:logseq.property.history{:block [:block/uuid]}
-      #:logseq.property.history{:property [:db/ident]}
-      #:logseq.property.history{:ref-value [:db/ident :block/uuid]}
-      :logseq.property.history/scalar-value])
-    ...]
-   :where
-   [?b :logseq.property.history/block]],
-  :id "q252"}
+  :id "q123"}
  {:file "deps/publishing/script/publishing.cljs",
   :line 9,
   :query
@@ -2586,7 +1183,7 @@
    :where
    [?b :file/path "logseq/config.edn"]
    [?b :file/content ?content]],
-  :id "q253"}
+  :id "q124"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 7,
   :query
@@ -2598,7 +1195,7 @@
    :where
    (property ?p :logseq.property/publishing-public? true)
    [?p :block/name]],
-  :id "q254"}
+  :id "q125"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 32,
   :query
@@ -2610,7 +1207,7 @@
    :where
    (property ?p :logseq.property/publishing-public? false)
    [?p :block/name]],
-  :id "q255"}
+  :id "q126"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 43,
   :query
@@ -2624,7 +1221,7 @@
    [?page :block/name]
    [(contains? ?pages ?page)]
    (alias ?page ?e)],
-  :id "q256"}
+  :id "q127"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 57,
   :query
@@ -2632,7 +1229,7 @@
    [(pull ?b [:block/uuid :logseq.property.asset/type]) ...]
    :where
    [?b :block/tags :logseq.class/Asset]],
-  :id "q257"}
+  :id "q128"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 107,
   :query
@@ -2645,7 +1242,7 @@
    [?p :db/ident ?a]
    [?node ?a ?v]
    [(missing? $ ?a :logseq.property/built-in?)]],
-  :id "q258"}
+  :id "q129"}
  {:file "deps/publishing/src/logseq/publishing/db.cljs",
   :line 120,
   :query
@@ -2659,11 +1256,11 @@
    [?p :db/valueType :db.type/ref]
    [?node ?a ?pv]
    [(missing? $ ?p :logseq.property/built-in?)]],
-  :id "q259"}
+  :id "q130"}
  {:file "deps/publishing/test/logseq/publishing/db_test.cljs",
   :line 9,
   :query [:find (pull ?b [*]) :where [?b :block/name]],
-  :id "q260"}
+  :id "q131"}
  {:file "deps/publishing/test/logseq/publishing/db_test.cljs",
   :line 9,
   :query
@@ -2673,536 +1270,12 @@
    [?b :block/title]
    [?b :block/page ?p]
    [(missing? $ ?p :logseq.property/built-in?)]],
-  :id "q261"}
- {:file "deps/publishing/test/logseq/publishing/db_test.cljs",
-  :line 67,
-  :query [:find (pull ?b [*]) :where [?b :block/name]],
-  :id "q262"}
- {:file "deps/publishing/test/logseq/publishing/db_test.cljs",
-  :line 67,
-  :query
-  [:find
-   (pull ?p [*])
-   :where
-   [?b :block/title]
-   [?b :block/page ?p]
-   [(missing? $ ?p :logseq.property/built-in?)]],
-  :id "q263"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/datascript/parser.cljc",
-  :line 699,
-  :query
-  {:error :parser/query,
-   :return-map (cons (:type (:qreturn-map q)) return-symbols),
-   :find find-elements,
-   :form form},
-  :id "q264"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query
-  [:find
-   ?lid
-   ?status
-   ?starttime
-   ?endtime
-   (min ?paid)
-   (distinct ?studentinfo)
-   ?lgid
-   :in
-   $
-   ?tid
-   ?week
-   ?list
-   :where
-   [?lid :lesson/teacherid ?tid]
-   [?lid :lesson/week ?week]
-   [?lid :lesson/lessongroupid ?lgid]
-   [?eid :enrollment/lessongroup_id ?lgid]
-   [?eid :enrollment/student_id ?sid]
-   [?iid :invoice/enrollment_id ?eid]
-   [?sid :student/firstname ?fname]
-   [?sid :student/lastname ?lname]
-   [?iid :invoice/paid ?paid]
-   [?lid :lesson/status ?status]
-   [?lid :lesson/starttime ?starttime]
-   [?lid :lesson/endtime ?endtime]
-   [(?list ?sid ?fname ?lname) ?studentinfo]],
-  :id "q265"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/datascript/query_v3.cljc",
-  :line 917,
-  :query [:find ?e :where [?e :name "Ivan"] [?e :age 1]],
-  :id "q266"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 426,
-  :query
-  [:find
-   ?page-title
-   :where
-   [?page :block/name ?page-name]
-   [(get-else $ ?page :block/title ?page-name) ?page-title]],
-  :id "q267"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 439,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/title ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q268"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 439,
-  :query
-  [:find
-   [?p ...]
-   :in
-   $
-   ?name
-   [?tag-ident ...]
-   :where
-   [?p :block/name ?name]
-   [?p :block/tags ?tag]
-   [?tag :db/ident ?tag-ident]],
-  :id "q269"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 740,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?block :block/refs ?ref-page]],
-  :id "q270"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 740,
-  :query
-  [:find
-   ?p
-   ?ref-page
-   :where
-   [?block :block/page ?p]
-   [?p :block/tags]
-   (not [?p :block/tags :logseq.class/Journal])
-   [?block :block/refs ?ref-page]],
-  :id "q271"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 755,
-  :query [:find ?page ?tag :where [?page :block/tags ?tag]],
-  :id "q272"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db.cljs",
-  :line 787,
-  :query
-  [:find
-   ?e
-   ?a
-   :in
-   $
-   ?v
-   :where
-   [?c :logseq.property.class/enable-bidirectional? ?c-enable?]
-   [(true? ?c-enable?)]
-   [?ea :logseq.property/classes ?c]
-   [?ea :db/ident ?a]
-   [?e ?a ?v]],
-  :id "q273"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 33,
-  :query [:find [?e ...] :in $ ?eid % :where (alias ?eid ?e)],
-  :id "q274"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/common/initial_data.cljs",
-  :line 112,
-  :query [:find [?c ...] :in $ ?id % :where (parent ?id ?c)],
-  :id "q275"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/common/view.cljs",
-  :line 303,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   %
-   ?prop
-   :where
-   (has-property-or-object-property? ?b ?prop)],
-  :id "q276"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/frontend/class.cljs",
-  :line 140,
-  :query [:find [?c ...] :in $ ?p % :where (class-extends ?p ?c)],
-  :id "q277"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/frontend/db_ident.cljc",
-  :line 4,
-  :query
-  [:find
-   [?ident ...]
-   :in
-   $
-   ?ident-name
-   :where
-   [?b :db/ident ?ident]
-   [(str ?ident) ?str-ident]
-   [(clojure.string/starts-with? ?str-ident ?ident-name)]],
-  :id "q278"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?db-ident ...]
-   :where
-   [?p :db/ident ?db-ident]
-   [?p :block/tags :logseq.class/Property]
-   (not [?p :logseq.property/built-in?])],
-  :id "q279"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 668,
-  :query
-  [:find
-   [?class ...]
-   :where
-   [?class :block/tags :logseq.class/Tag]
-   (not [?class :logseq.property/built-in?])],
-  :id "q280"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 769,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:file/path
-      :file/content
-      :file/created-at
-      :file/last-modified-at])
-    ...]
-   :where
-   [?b :file/path]],
-  :id "q281"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 777,
-  :query
-  [:find [(pull ?b [:db/ident :kv/value]) ...] :where [?b :kv/value]],
-  :id "q282"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/db/sqlite/export.cljs",
-  :line 785,
-  :query
-  [:find
-   [(pull
-     ?b
-     [:block/uuid
-      :block/created-at
-      #:logseq.property.history{:block [:block/uuid]}
-      #:logseq.property.history{:property [:db/ident]}
-      #:logseq.property.history{:ref-value [:db/ident :block/uuid]}
-      :logseq.property.history/scalar-value])
-    ...]
-   :where
-   [?b :logseq.property.history/block]],
-  :id "q283"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q284"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 233,
-  :query
-  [:find
-   [?uuid ...]
-   :in
-   $
-   ?name
-   :where
-   [?b :block/uuid ?uuid]
-   [?b :block/tags :logseq.class/Tag]
-   [?b :block/name ?name]],
-  :id "q285"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 1864,
-  :query [:find (pull ?b [*]) :in $ ?p % :where (has-property ?b ?p)],
-  :id "q286"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   (pull ?b [:db/id :db/ident])
-   :where
-   [?b :block/tags :logseq.class/Tag]],
-  :id "q287"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/graph_parser/exporter.cljs",
-  :line 2337,
-  :query
-  [:find
-   ?t
-   ?prop
-   :in
-   $
-   ?user-classes
-   :where
-   [?b :block/tags ?t]
-   [?t :db/ident ?class]
-   [(contains? ?user-classes ?class)]
-   [?b ?prop _]
-   [?prop-e :db/ident ?prop]
-   [?prop-e :block/tags :logseq.class/Property]],
-  :id "q288"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/op/construct.cljc",
-  :line 307,
-  :query
-  [:find
-   ?ident
-   .
-   :in
-   $
-   ?title
-   :where
-   [?e :block/title ?title]
-   [?e :block/tags :logseq.class/Property]
-   [?e :db/ident ?ident]],
-  :id "q289"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/page.cljs",
-  :line 203,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?attribute
-   ?parent-name
-   ?child-name
-   :where
-   [?b ?attribute ?p]
-   [?b :block/name ?child-name]
-   [?p :block/name ?parent-name]],
-  :id "q290"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/property.cljs",
-  :line 311,
-  :query
-  [:find
-   [?v ...]
-   :in
-   $
-   ?title
-   :where
-   [?v :block/title ?title]
-   [?v :block/tags :logseq.class/Tag]],
-  :id "q291"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/property.cljs",
-  :line 311,
-  :query
-  [:find
-   [?v ...]
-   :in
-   $
-   ?property-id
-   ?raw-value
-   :where
-   [?b ?property-id ?v]
-   (or
-    [?v :block/title ?raw-value]
-    [?v :logseq.property/value ?raw-value])],
-  :id "q292"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/property.cljs",
-  :line 407,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?property-id
-   ?value-id
-   :where
-   [?e ?property-id ?value-id]],
-  :id "q293"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/recycle.cljs",
-  :line 250,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?cutoff
-   :where
-   [?e :logseq.property/deleted-at ?deleted-at]
-   [(<= ?deleted-at ?cutoff)]],
-  :id "q294"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/validate.cljs",
-  :line 38,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(missing? $ ?b :logseq.property/built-in?)]
-   [(not= ?b ?eid)]],
-  :id "q295"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/validate.cljs",
-  :line 38,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(not= ?b ?eid)]
-   [?b :block/parent ?bp]
-   [?eid :block/parent ?ep]
-   [(= ?bp ?ep)]],
-  :id "q296"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/outliner/validate.cljs",
-  :line 38,
-  :query
-  [:find
-   [?b ...]
-   :in
-   $
-   ?eid
-   ?title
-   [?tag-id ...]
-   :where
-   [?b :block/title ?title]
-   [?b :block/tags ?tag-id]
-   [(not= ?b ?eid)]],
-  :id "q297"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 7,
-  :query
-  [:find
-   ?p
-   :in
-   $
-   %
-   :where
-   (property ?p :logseq.property/publishing-public? true)
-   [?p :block/name]],
-  :id "q298"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 32,
-  :query
-  [:find
-   ?p
-   :in
-   $
-   %
-   :where
-   (property ?p :logseq.property/publishing-public? false)
-   [?p :block/name]],
-  :id "q299"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 43,
-  :query
-  [:find
-   ?e
-   :in
-   $
-   ?pages
-   %
-   :where
-   [?page :block/name]
-   [(contains? ?pages ?page)]
-   (alias ?page ?e)],
-  :id "q300"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 57,
-  :query
-  [:find
-   [(pull ?b [:block/uuid :logseq.property.asset/type]) ...]
-   :where
-   [?b :block/tags :logseq.class/Asset]],
-  :id "q301"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 85,
-  :query
-  [:find
-   ?p
-   :in
-   $
-   [?node ...]
-   :where
-   [?p :db/ident ?a]
-   [?node ?a ?v]
-   [(missing? $ ?a :logseq.property/built-in?)]],
-  :id "q302"}
- {:file
-  "scripts/.nbb/.cache/efd6d718d3797f7758ea0eabec3477e7ee9ff4cf/nbb-deps/logseq/publishing/db.cljs",
-  :line 98,
-  :query
-  [:find
-   ?pv
-   :in
-   $
-   [?node ...]
-   :where
-   [?p :db/ident ?a]
-   [?p :db/valueType :db.type/ref]
-   [?node ?a ?pv]
-   [(missing? $ ?p :logseq.property/built-in?)]],
-  :id "q303"}
+  :id "q132"}
  {:file
   "scripts/src/logseq/tasks/db_graph/create_graph_with_schema_org.cljs",
   :line 339,
   :query [:find [?name ...] :where [?b :block/name ?name]],
-  :id "q304"}
+  :id "q133"}
  {:file "src/main/frontend/common/graph_view.cljs",
   :line 944,
   :query
@@ -3215,15 +1288,11 @@
    [(untuple ?pages) [?page ...]]
    [?block :block/page ?page]
    [?block :block/refs ?ref-page]],
-  :id "q305"}
+  :id "q134"}
  {:file "src/main/frontend/components/recycle.cljs",
   :line 24,
   :query [:find [?e ...] :where [?e :logseq.property/deleted-at]],
-  :id "q306"}
- {:file "src/main/frontend/components/recycle.cljs",
-  :line 33,
-  :query [:find [?e ...] :where [?e :logseq.property/deleted-at]],
-  :id "q307"}
+  :id "q135"}
  {:file "src/main/frontend/db/async.cljs",
   :line 21,
   :query
@@ -3231,7 +1300,7 @@
    [(pull ?file [:file/path :file/last-modified-at]) ...]
    :where
    [?file :file/path ?path]],
-  :id "q308"}
+  :id "q136"}
  {:file "src/main/frontend/db/async.cljs",
   :line 226,
   :query
@@ -3252,7 +1321,7 @@
    [?status :db/ident ?status-ident]
    [(not= ?status-ident :logseq.property/status.done)]
    [(not= ?status-ident :logseq.property/status.canceled)]],
-  :id "q309"}
+  :id "q137"}
  {:file "src/main/frontend/db/async.cljs",
   :line 257,
   :query
@@ -3263,7 +1332,7 @@
    [?class-id ...]
    :where
    [?b :block/tags ?class-id]],
-  :id "q310"}
+  :id "q138"}
  {:file "src/main/frontend/db/async.cljs",
   :line 268,
   :query
@@ -3276,7 +1345,7 @@
    :where
    [?b :logseq.property/view-for ?class-id]
    [?b :logseq.property.view/feature-type ?view-feature-type]],
-  :id "q311"}
+  :id "q139"}
  {:file "src/main/frontend/db/async.cljs",
   :line 279,
   :query
@@ -3287,7 +1356,7 @@
    ?checksum
    :where
    [?b :logseq.property.asset/checksum ?checksum]],
-  :id "q312"}
+  :id "q140"}
  {:file "src/main/frontend/db/async.cljs",
   :line 291,
   :query
@@ -3298,7 +1367,7 @@
    ?block-id
    :where
    [?b :logseq.property.history/block ?block-id]],
-  :id "q313"}
+  :id "q141"}
  {:file "src/main/frontend/db/model.cljs",
   :line 60,
   :query
@@ -3316,11 +1385,11 @@
    (has-property ?b :logseq.property/heading)
    [?b :block/title ?content]
    [(?content-matches ?content ?route-name ?b)]],
-  :id "q314"}
+  :id "q142"}
  {:file "src/main/frontend/db/model.cljs",
   :line 434,
   :query [:find [(pull ?b [*]) ...] :where [?b :block/uuid]],
-  :id "q315"}
+  :id "q143"}
  {:file "src/main/frontend/db/query_dsl.cljs",
   :line 295,
   :query
@@ -3332,11 +1401,11 @@
    :where
    [?b :block/tags :logseq.class/Property]
    [?b :block/title ?title]],
-  :id "q316"}
+  :id "q144"}
  {:file "src/main/frontend/db/query_dsl.cljs",
   :line 677,
   :query [:find (pull ?p [*]) :in $ % :where],
-  :id "q317"}
+  :id "q145"}
  {:file "src/main/frontend/extensions/fsrs.cljs",
   :line 85,
   :query
@@ -3354,7 +1423,7 @@
     (and [?b :logseq.property.fsrs/due ?due] [(>= ?now-inst-ms ?due)])
     [(missing? $ ?b :logseq.property.fsrs/due)])
    [?b :block/uuid]],
-  :id "q318"}
+  :id "q146"}
  {:file "src/main/frontend/extensions/fsrs.cljs",
   :line 507,
   :query
@@ -3363,12 +1432,12 @@
    :where
    [?b :block/tags :logseq.class/Card]
    [?b :block/uuid]],
-  :id "q319"}
+  :id "q147"}
  {:file "src/main/frontend/worker/db/migrate.cljs",
   :line 37,
   :query
   [:find [?e ...] :in $ ?property-key :where [?e ?property-key ?v]],
-  :id "q320"}
+  :id "q148"}
  {:file "src/main/frontend/worker/db/migrate.cljs",
   :line 76,
   :query
@@ -3377,7 +1446,7 @@
    :where
    [?comments-area :block/tags :logseq.class/Comments]
    [?comment :block/parent ?comments-area]],
-  :id "q321"}
+  :id "q149"}
  {:file "src/main/frontend/worker/db/migrate.cljs",
   :line 86,
   :query
@@ -3387,18 +1456,18 @@
    :where
    [?comments-area-id :block/tags :logseq.class/Comments]
    [?comments-area-id :block/parent ?parent-id]],
-  :id "q322"}
+  :id "q150"}
  {:file "src/main/frontend/worker/db/validate.cljs",
   :line 216,
   :query [:find ?b ?v :in $ ?p :where [?b ?p ?v]],
-  :id "q323"}
+  :id "q151"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 29,
   :query
   {:find [[(list 'pull '?e selector) '...]],
    :in '[$ ?name],
    :where '[[?e :block/name ?name]]},
-  :id "q324"}
+  :id "q152"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 73,
   :query
@@ -3408,7 +1477,7 @@
    '[[?e :block/name ?name]
      [?e :block/tags ?t]
      [?t :db/ident :logseq.class/Tag]]},
-  :id "q325"}
+  :id "q153"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 86,
   :query
@@ -3418,7 +1487,7 @@
    '[[?e :block/name ?name]
      [?e :block/tags ?t]
      [?t :db/ident :logseq.class/Property]]},
-  :id "q326"}
+  :id "q154"}
  {:file "src/main/logseq/cli/command/graph.cljs",
   :line 96,
   :query
@@ -3430,7 +1499,7 @@
    [(namespace ?ident) ?ns]
    [(= "logseq.kv" ?ns)]
    [?e :kv/value ?value]],
-  :id "q327"}
+  :id "q155"}
  {:file "src/main/logseq/cli/command/query.cljs",
   :line 28,
   :query
@@ -3463,7 +1532,7 @@
      [(* ?recent-days 86400000) ?recent-days-ms]
      [(- ?now-ms ?recent-days-ms) ?days-ago]
      [(>= ?updated-at ?days-ago)]))],
-  :id "q328"}
+  :id "q156"}
  {:file "src/main/logseq/cli/command/query.cljs",
   :line 28,
   :query
@@ -3479,7 +1548,7 @@
    [(* ?recent-days 86400000) ?recent-days-ms]
    [(- ?now-ms ?recent-days-ms) ?days-ago]
    [(>= ?updated-at ?days-ago)]],
-  :id "q329"}
+  :id "q157"}
  {:file "src/main/logseq/cli/command/query.cljs",
   :line 28,
   :query
@@ -3488,7 +1557,7 @@
    :where
    [?property :db/ident :logseq.property/status]
    [?value :block/closed-value-property ?property]],
-  :id "q330"}
+  :id "q158"}
  {:file "src/main/logseq/cli/command/query.cljs",
   :line 28,
   :query
@@ -3497,7 +1566,7 @@
    :where
    [?property :db/ident :logseq.property/priority]
    [?value :block/closed-value-property ?property]],
-  :id "q331"}
+  :id "q159"}
  {:file "src/main/logseq/cli/command/search.cljs",
   :line 45,
   :query
@@ -3518,7 +1587,7 @@
    [(clojure.string/lower-case ?title) ?title-lower]
    [(clojure.string/lower-case ?query) ?query-lower]
    [(clojure.string/includes? ?title-lower ?query-lower)]],
-  :id "q332"}
+  :id "q160"}
  {:file "src/main/logseq/cli/command/search.cljs",
   :line 59,
   :query
@@ -3535,7 +1604,7 @@
    [(clojure.string/lower-case ?name) ?name-lower]
    [(clojure.string/lower-case ?query) ?query-lower]
    [(clojure.string/includes? ?name-lower ?query-lower)]],
-  :id "q333"}
+  :id "q161"}
  {:file "src/main/logseq/cli/command/search.cljs",
   :line 68,
   :query
@@ -3550,7 +1619,7 @@
    [(clojure.string/lower-case ?title) ?title-lower]
    [(clojure.string/lower-case ?query) ?query-lower]
    [(clojure.string/includes? ?title-lower ?query-lower)]],
-  :id "q334"}
+  :id "q162"}
  {:file "src/main/logseq/cli/command/search.cljs",
   :line 78,
   :query
@@ -3565,7 +1634,7 @@
    [(clojure.string/lower-case ?title) ?title-lower]
    [(clojure.string/lower-case ?query) ?query-lower]
    [(clojure.string/includes? ?title-lower ?query-lower)]],
-  :id "q335"}
+  :id "q163"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 592,
   :query
@@ -3577,7 +1646,7 @@
    [(namespace ?a) ?ns]
    [(= "user.property" ?ns)]
    [(get-else $ ?e :logseq.property/type :default) ?type]],
-  :id "q336"}
+  :id "q164"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 592,
   :query
@@ -3590,11 +1659,11 @@
    :where
    [?e :db/ident ?a]
    [(get-else $ ?e :logseq.property/type :default) ?type]],
-  :id "q337"}
+  :id "q165"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 592,
   :query [:find ?b ?a ?v :in $ [?b ...] [?a ...] :where [?b ?a ?v]],
-  :id "q338"}
+  :id "q166"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 668,
   :query
@@ -3605,7 +1674,7 @@
    '?page-id
    :where
    ['?b :block/page '?page-id]],
-  :id "q339"}
+  :id "q167"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 711,
   :query
@@ -3616,7 +1685,7 @@
    '?parent-id
    :where
    ['?child :block/parent '?parent-id]],
-  :id "q340"}
+  :id "q168"}
  {:file "src/main/logseq/cli/command/task_status.cljs",
   :line 3,
   :query
@@ -3626,7 +1695,7 @@
    [?property :db/ident :logseq.property/status]
    [?value :block/closed-value-property ?property]
    [?value :db/ident ?status-ident]],
-  :id "q341"}
+  :id "q169"}
  {:file "src/test/frontend/common/graph_view_test.cljs",
   :line 76,
   :query
@@ -3634,7 +1703,7 @@
    (pull ?p [:block/uuid])
    :where
    [?p :block/title "Plain Page"]],
-  :id "q342"}
+  :id "q170"}
  {:file "src/test/frontend/common/graph_view_test.cljs",
   :line 89,
   :query
@@ -3642,31 +1711,19 @@
    (pull ?p [:block/uuid])
    :where
    [?p :block/title "Tagged Page"]],
-  :id "q343"}
+  :id "q171"}
  {:file "src/test/frontend/components/query_test.cljs",
   :line 10,
   :query [:find ?b],
-  :id "q344"}
- {:file "src/test/frontend/components/query_test.cljs",
-  :line 10,
-  :query [:find ?b],
-  :id "q345"}
- {:file "src/test/frontend/components/query_test.cljs",
-  :line 10,
-  :query [:find ?b],
-  :id "q346"}
- {:file "src/test/frontend/components/query_test.cljs",
-  :line 10,
-  :query [:find ?b],
-  :id "q347"}
+  :id "q172"}
  {:file "src/test/frontend/db/model_test.cljs",
   :line 182,
   :query [:find ?e :where [?e :block/journal-day 20240102]],
-  :id "q348"}
+  :id "q173"}
  {:file "src/test/frontend/db/model_test.cljs",
   :line 213,
   :query [:find (pull ?b [*]) :where [?b :block/title "parent"]],
-  :id "q349"}
+  :id "q174"}
  {:file "src/test/frontend/db/property_values_test.cljs",
   :line 84,
   :query
@@ -3677,11 +1734,7 @@
    ?property-ident
    :where
    [?v :logseq.property/created-from-property ?property-ident]],
-  :id "q350"}
- {:file "src/test/frontend/db/query_dsl_test.cljs",
-  :line 701,
-  :query [:find (pull ?b [*]) :where [?b :block/name]],
-  :id "q351"}
+  :id "q175"}
  {:file "src/test/frontend/db/query_react_test.cljs",
   :line 16,
   :query
@@ -3698,7 +1751,7 @@
    [(missing? $ ?b :logseq.property/built-in?)]
    [(>= ?timestamp ?start)]
    [(<= ?timestamp ?end)]],
-  :id "q352"}
+  :id "q176"}
  {:file "src/test/frontend/db/query_react_test.cljs",
   :line 31,
   :query
@@ -3713,7 +1766,7 @@
    [?bp :block/name ?current-page]
    [?b :block/refs ?t]
    [?t :block/name ?tag-name]],
-  :id "q353"}
+  :id "q177"}
  {:file "src/test/frontend/db/query_react_test.cljs",
   :line 42,
   :query
@@ -3724,56 +1777,52 @@
    %
    :where
    [?b :block/title "block with empty rules input"]],
-  :id "q354"}
+  :id "q178"}
  {:file "src/test/frontend/handler/route_test.cljs",
   :line 11,
   :query [:find (pull ?b [:block/uuid]) :where [?b :block/title "B1"]],
-  :id "q355"}
+  :id "q179"}
  {:file "src/test/frontend/handler/route_test.cljs",
   :line 11,
   :query
   [:find (pull ?b [:block/uuid]) :where [?b :block/title "Header 2"]],
-  :id "q356"}
+  :id "q180"}
  {:file "src/test/frontend/handler/route_test.cljs",
   :line 11,
   :query [:find (pull ?b [:block/uuid]) :where [?b :block/title "b2"]],
-  :id "q357"}
+  :id "q181"}
  {:file "src/test/frontend/test/generators.cljs",
   :line 5,
   :query [:find ?block-uuid],
-  :id "q358"}
+  :id "q182"}
  {:file "src/test/frontend/test/generators.cljs",
   :line 26,
   :query [:find ?parent-uuid],
-  :id "q359"}
+  :id "q183"}
  {:file "src/test/frontend/util/datalog_test.cljs",
   :line 4,
   :query [:find ?b :in $ ?query % :where (block-content ?b ?query)],
-  :id "q360"}
+  :id "q184"}
  {:file "src/test/frontend/util/datalog_test.cljs",
   :line 4,
   :query [:find ?b :in $ ?query :where (block-content ?b ?query)],
-  :id "q361"}
+  :id "q185"}
  {:file "src/test/frontend/util/datalog_test.cljs",
   :line 4,
   :query [:find ?b :where (block-content ?b ?query) :in $ ?query %],
-  :id "q362"}
+  :id "q186"}
  {:file "src/test/frontend/util/datalog_test.cljs",
   :line 4,
   :query [:find ?b :where (block-content ?b ?query) :in $ ?query],
-  :id "q363"}
+  :id "q187"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
   :line 657,
   :query [:find [?e ...] :where [?e :block/uuid] [?e :block/page]],
-  :id "q364"}
+  :id "q188"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
   :line 696,
   :query [:find [?e ...] :where [?e :block/uuid]],
-  :id "q365"}
- {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
-  :line 720,
-  :query [:find [?e ...] :where [?e :block/uuid]],
-  :id "q366"}
+  :id "q189"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
   :line 742,
   :query
@@ -3785,7 +1834,7 @@
    :where
    [?e :block/title ?title]
    [?e :block/tags :logseq.class/Property]],
-  :id "q367"}
+  :id "q190"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
   :line 763,
   :query
@@ -3794,27 +1843,19 @@
    :where
    [?e :block/tags :logseq.class/Tag]
    [?e :block/uuid]],
-  :id "q368"}
+  :id "q191"}
  {:file "src/test/frontend/worker/migrate_test.cljs",
   :line 7,
   :query [:find [?e ...] :in $ ?attr :where [?e ?attr]],
-  :id "q369"}
+  :id "q192"}
  {:file "src/test/logseq/cli/command/query_test.cljs",
   :line 12,
   :query [:find ?e :in $ ?title :where [?e :block/title ?title]],
-  :id "q370"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 78,
-  :query [:find ?e :in $ ?title :where [?e :block/title ?title]],
-  :id "q371"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 78,
-  :query [:find ?e :in $ ?title :where [?e :block/title ?title]],
-  :id "q372"}
+  :id "q193"}
  {:file "src/test/logseq/cli/command/query_test.cljs",
   :line 78,
   :query [:find ?e],
-  :id "q373"}
+  :id "q194"}
  {:file "src/test/logseq/cli/command/query_test.cljs",
   :line 78,
   :query
@@ -3827,7 +1868,7 @@
    ?recent-days
    :where
    [?e :block/title ?title]],
-  :id "q374"}
+  :id "q195"}
  {:file "src/test/logseq/cli/command/query_test.cljs",
   :line 78,
   :query
@@ -3839,51 +1880,12 @@
    ?search-title
    :where
    [?e :block/title ?title]],
-  :id "q375"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 78,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?search-status
-   ?search-title
-   ?recent-days
-   :where
-   [?e :block/title ?title]],
-  :id "q376"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 165,
-  :query
-  [:find
-   [(pull ?value [:db/id :db/ident :block/order]) ...]
-   :where
-   [?property :db/ident :logseq.property/status]
-   [?value :block/closed-value-property ?property]],
-  :id "q377"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 165,
-  :query
-  [:find
-   [(pull ?value [:db/id :db/ident :block/order]) ...]
-   :where
-   [?property :db/ident :logseq.property/priority]
-   [?value :block/closed-value-property ?property]],
-  :id "q378"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 192,
-  :query [:find ?e],
-  :id "q379"}
- {:file "src/test/logseq/cli/command/query_test.cljs",
-  :line 192,
-  :query [:find ?e],
-  :id "q380"}
+  :id "q196"}
  {:file "src/test/logseq/cli/commands_test.cljs",
   :line 4465,
   :query
   [:find (pull ?b [*]) :in $ ?status % :where (task ?b ?status)],
-  :id "q381"}
+  :id "q197"}
  {:file "src/test/logseq/cli/common/db_worker_test.cljs",
   :line 114,
   :query
@@ -3895,23 +1897,11 @@
    :where
    [?e :block/title ?title]
    [?e :logseq.property/hide? true]],
-  :id "q382"}
+  :id "q198"}
  {:file "src/test/logseq/cli/common/db_worker_test.cljs",
   :line 114,
   :query [:find [?e ...] :in $ ?title :where [?e :block/title ?title]],
-  :id "q383"}
- {:file "src/test/logseq/cli/common/db_worker_test.cljs",
-  :line 114,
-  :query [:find [?e ...] :in $ ?title :where [?e :block/title ?title]],
-  :id "q384"}
- {:file "src/test/logseq/cli/common/db_worker_test.cljs",
-  :line 167,
-  :query [:find [?e ...] :in $ ?title :where [?e :block/title ?title]],
-  :id "q385"}
- {:file "src/test/logseq/cli/common/db_worker_test.cljs",
-  :line 167,
-  :query [:find [?e ...] :in $ ?title :where [?e :block/title ?title]],
-  :id "q386"}
+  :id "q199"}
  {:file "src/test/logseq/cli/common/db_worker_test.cljs",
   :line 167,
   :query
@@ -3923,23 +1913,7 @@
    :where
    [?e :block/title ?title]
    [?e :block/page]],
-  :id "q387"}
- {:file "src/test/logseq/cli/common/db_worker_test.cljs",
-  :line 264,
-  :query [:find [?e ...] :in $ ?title :where [?e :block/title ?title]],
-  :id "q388"}
- {:file "src/test/logseq/cli/common/db_worker_test.cljs",
-  :line 272,
-  :query
-  [:find
-   [?e ...]
-   :in
-   $
-   ?title
-   :where
-   [?e :block/title ?title]
-   [?e :block/page]],
-  :id "q389"}
+  :id "q200"}
  {:file "src/test/logseq/cli/common/db_worker_test.cljs",
   :line 287,
   :query
@@ -3953,7 +1927,7 @@
    [?e :block/name ?block-name]
    [?e :block/tags ?class]
    [?class :db/ident ?class-ident]],
-  :id "q390"}
+  :id "q201"}
  {:file "src/test/logseq/db/frontend/comments_class_test.cljs",
   :line 5,
   :query
@@ -3961,4 +1935,4 @@
    (pull ?b [:db/id :block/title #:block{:tags [:db/ident]}])
    :where
    [?b :block/title "thread"]],
-  :id "q391"}]
+  :id "q202"}]

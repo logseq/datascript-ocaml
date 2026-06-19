@@ -232,6 +232,13 @@ let test_query_namespace__test_query_result_helpers () =
     "query_results_equivalent compares resolved values"
     true
     (Query.query_results_equivalent result_resolution_context (Result_value (Keyword "known-ident")) (Result_entity 42));
+  assert_equal_bool
+    "query_results_equivalent compares keyword attr values with attrs"
+    true
+    (Query.query_results_equivalent
+       result_resolution_context
+       (Result_value (Keyword "user.property/foo"))
+       (Result_attr "user.property/foo"));
   assert_equal_query_option
     "bind_var adds unbound vars"
     (Some [ "e", Result_entity 42 ])
@@ -336,6 +343,17 @@ let test_query_namespace__test_query_matching_helpers () =
     "match_pattern_clause matches datoms"
     (Some [ "v", Result_value (String "Ivan"); "e", Result_entity 1 ])
     (Query.match_pattern_clause match_context [] (QVar "e") (QAttr "name") (QVar "v") name_datom);
+  let dynamic_attr_datom = datom ~e:2 ~a:"user.property/foo" ~v:(String "bar") () in
+  assert_equal_query_option
+    "match_pattern_clause matches attr vars bound to keyword values"
+    (Some [ "prop", Result_value (Keyword "user.property/foo") ])
+    (Query.match_pattern_clause
+       match_context
+       [ "prop", Result_value (Keyword "user.property/foo") ]
+       (QEntity 2)
+       (QVar "prop")
+       (QValue (String "bar"))
+       dynamic_attr_datom);
   assert_equal_query_option
     "match_pattern_tx_clause matches tx terms"
     (Some [ "tx", Result_entity 7; "v", Result_value (String "Ivan"); "e", Result_entity 1 ])

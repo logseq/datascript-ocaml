@@ -162,11 +162,24 @@ let json_member key = function
      | _ -> invalid_arg ("query input field must be a string: " ^ key))
   | _ -> invalid_arg "query input line must be a JSON object"
 
-let run_query db_path id query =
+let json_optional_string_member key = function
+  | `Assoc fields ->
+    (match List.assoc_opt key fields with
+     | Some (`String value) -> Some value
+     | Some _ -> invalid_arg ("query input field must be a string: " ^ key)
+     | None -> None)
+  | _ -> invalid_arg "query input line must be a JSON object"
+
+let input_rules_of_string rules =
+  Arg_rules (Parser.parse_rules (read_edn rules))
+
+let run_query db id query rules =
   try
-    let value = Storage.query_logseq_graph ~read_only:true db_path query |> edn_query_output in
+    let inputs = Option.map (fun rules -> [ input_rules_of_string rules ]) rules in
+    let value = q_return_map_string ?inputs db query |> edn_query_output in
     print_endline
-      (json_obj [ "id", json_string id; "status", json_string "ok"; "value", json_string value ])
+      (json_obj [ "id", json_string id; "status", json_string "ok"; "value", json_string value ]);
+    flush stdout
   with
   | exn ->
     print_endline
@@ -174,9 +187,12 @@ let run_query db_path id query =
          [ "id", json_string id
          ; "status", json_string "error"
          ; "message", json_string (exception_message exn)
-         ])
+         ]);
+    flush stdout
 
 let run_queries db_path queries_path =
+  let schema, datoms = load_graph_data db_path in
+  let db = init_db ~schema datoms in
   let channel = open_in queries_path in
   Fun.protect
     ~finally:(fun () -> close_in channel)
@@ -186,7 +202,11 @@ let run_queries db_path queries_path =
           let line = input_line channel in
           if String.trim line <> "" then
             let json = Yojson.Safe.from_string line in
-            run_query db_path (json_member "id" json) (json_member "query" json)
+            run_query
+              db
+              (json_member "id" json)
+              (json_member "query" json)
+              (json_optional_string_member "rules" json)
         done
       with
       | End_of_file -> ())

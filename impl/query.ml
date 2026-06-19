@@ -400,16 +400,27 @@ let resolved_query_result context = function
   | Result_db _ -> None
   | result -> Some result
 
+let malformed_lookup_ref_message value =
+  "Lookup ref should contain 2 elements: " ^ Built_ins.print_query_value ~readably:true value
+
 let lookup_ref_entity_id_of_value context = function
   | List [ Keyword attr; value ] | List [ String attr; value ]
   | Vector [ Keyword attr; value ] | Vector [ String attr; value ] ->
     context.lookup_ref_entity_id attr value
   | _ -> None
 
+let lookup_ref_entity_id_of_entity_value context = function
+  | List [ Keyword attr; value ] | List [ String attr; value ]
+  | Vector [ Keyword attr; value ] | Vector [ String attr; value ] ->
+    context.lookup_ref_entity_id attr value
+  | (List ((Keyword _ | String _) :: _) | Vector ((Keyword _ | String _) :: _)) as value ->
+    invalid_arg (malformed_lookup_ref_message value)
+  | _ -> None
+
 let query_result_entity_id context result =
   match result with
   | Result_value value ->
-    (match lookup_ref_entity_id_of_value context value with
+    (match lookup_ref_entity_id_of_entity_value context value with
      | Some entity_id -> Some entity_id
      | None ->
        entity_id_of_resolved_query_result
@@ -424,15 +435,26 @@ let query_results_equivalent context left right =
   match left, right with
   | Result_db left_db, Result_db right_db -> left_db == right_db
   | Result_db _, _ | _, Result_db _ -> false
+  | Result_attr left, Result_value (Keyword right)
+  | Result_value (Keyword right), Result_attr left ->
+    left = right
   | _ ->
     left = right
     ||
-    match query_result_entity_id context left, query_result_entity_id context right with
-    | Some left_id, Some right_id -> left_id = right_id
-    | _ ->
-      (match resolved_query_result context left, resolved_query_result context right with
-       | Some left, Some right -> left = right
-       | _ -> false)
+    let left_resolved = resolved_query_result context left in
+    let right_resolved = resolved_query_result context right in
+    let is_entity_candidate = function
+      | Some (Result_entity _) | Some (Result_value (Int _ | Ref _)) -> true
+      | _ -> false
+    in
+    if is_entity_candidate left_resolved || is_entity_candidate right_resolved then
+      match query_result_entity_id context left, query_result_entity_id context right with
+      | Some left_id, Some right_id -> left_id = right_id
+      | _ -> false
+    else
+      match left_resolved, right_resolved with
+      | Some left, Some right -> left = right
+      | _ -> false
 
 let bind_var context name value bindings =
   match List.assoc_opt name bindings with
@@ -570,20 +592,25 @@ let bound_pattern_term bindings = function
      | Some (Result_db _ | Result_pull _) | None -> term)
   | term -> term
 
+let bound_attr_pattern_term bindings term =
+  match bound_pattern_term bindings term with
+  | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
+  | term -> term
+
 let match_query_source_pattern context _default_db source bindings terms =
   match source with
   | Db_source source_db ->
     (match terms with
      | [ e_term; a_term; v_term ] ->
        let index_e_term = bound_pattern_term bindings e_term in
-       let index_a_term = bound_pattern_term bindings a_term in
+       let index_a_term = bound_attr_pattern_term bindings a_term in
        let index_v_term = bound_pattern_term bindings v_term in
        context.pattern_datoms source_db index_e_term index_a_term index_v_term None
        |> Seq.filter_map (fun datom -> context.match_data_pattern source_db bindings e_term a_term v_term datom)
        |> List.of_seq
      | [ e_term; a_term; v_term; tx_term ] ->
        let index_e_term = bound_pattern_term bindings e_term in
-       let index_a_term = bound_pattern_term bindings a_term in
+       let index_a_term = bound_attr_pattern_term bindings a_term in
        let index_v_term = bound_pattern_term bindings v_term in
        let index_tx_term = bound_pattern_term bindings tx_term in
        context.pattern_datoms source_db index_e_term index_a_term index_v_term (Some index_tx_term)
@@ -592,7 +619,7 @@ let match_query_source_pattern context _default_db source bindings terms =
        |> List.of_seq
      | [ e_term; a_term; v_term; tx_term; op_term ] ->
        let index_e_term = bound_pattern_term bindings e_term in
-       let index_a_term = bound_pattern_term bindings a_term in
+       let index_a_term = bound_attr_pattern_term bindings a_term in
        let index_v_term = bound_pattern_term bindings v_term in
        let index_tx_term = bound_pattern_term bindings tx_term in
        context.pattern_datoms source_db index_e_term index_a_term index_v_term (Some index_tx_term)

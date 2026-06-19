@@ -389,6 +389,15 @@ let query_symbol_name symbol =
   else
     invalid_arg ("expected query variable symbol: " ^ symbol)
 
+let cannot_parse_find_message =
+  "Cannot parse :find, expected: (find-rel | find-coll | find-tuple | find-scalar)"
+
+let find_query_symbol_name symbol =
+  if String.length symbol > 1 && symbol.[0] = '?' then
+    String.sub symbol 1 (String.length symbol - 1)
+  else
+    invalid_arg cannot_parse_find_message
+
 let query_callable_name symbol =
   if String.length symbol > 1 && symbol.[0] = '?' then query_symbol_name symbol else symbol
 
@@ -917,6 +926,16 @@ let parse_flat_value_function symbol args output_vars =
   | "identity", [ term ] -> GroundTermTuple (parse_pattern_term term, output_vars)
   | _ -> DynamicFunction (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
 
+let parse_collection_value_function symbol args output_var =
+  match symbol, args with
+  | "identity", [ term ] -> GroundTermCollection (parse_pattern_term term, output_var)
+  | _ -> DynamicFunctionCollection (query_callable_name symbol, List.map parse_pattern_term args, output_var)
+
+let parse_relation_value_function symbol args output_vars =
+  match symbol, args with
+  | "identity", [ term ] -> GroundTermRelation (parse_pattern_term term, output_vars)
+  | _ -> DynamicFunctionRelation (query_callable_name symbol, List.map parse_pattern_term args, output_vars)
+
 let ground_values_of_form = function
   | QueryFormVector values | QueryFormList values -> List.map query_value_of_form values
   | _ -> invalid_arg "ground tuple output requires a vector or list value"
@@ -1079,7 +1098,7 @@ let parse_find_form context ?default_pull_db ?pull_db_for_source form =
   let default_pull_db = Option.value default_pull_db ~default:(context.empty_db ()) in
   let pull_db_for_source = Option.value pull_db_for_source ~default:(fun _ -> context.empty_db ()) in
   match form with
-  | QueryFormSymbol symbol -> Find_var (query_symbol_name symbol)
+  | QueryFormSymbol symbol -> Find_var (find_query_symbol_name symbol)
   | form ->
     (match query_form_sequence form with
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol var; QueryFormSymbol pattern_var ]
@@ -1677,7 +1696,12 @@ let rec parse_pattern_clause context = function
         | QueryFormVector (QueryFormSymbol symbol :: args))
       ; (QueryFormVector _ | QueryFormList _ as output)
       ] ->
-    parse_flat_value_function symbol args (parse_output_vars output)
+    (match parse_collection_output_var output with
+     | Some output_var -> parse_collection_value_function symbol args output_var
+     | None ->
+       (match parse_relation_output_vars output with
+        | Some output_vars -> parse_relation_value_function symbol args output_vars
+        | None -> parse_flat_value_function symbol args (parse_output_vars output)))
   | (QueryFormVector (QueryFormSymbol rule_name :: args)
     | QueryFormList (QueryFormSymbol rule_name :: args))
     when is_plain_rule_symbol rule_name ->

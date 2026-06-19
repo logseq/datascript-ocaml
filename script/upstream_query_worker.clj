@@ -51,10 +51,12 @@
 
 (defn -main [graph-path query-path]
   (let [db (load-graph-file graph-path)
-        query (edn/read-string (slurp query-path))]
+        payload (edn/read-string (slurp query-path))
+        query (if (map? payload) (:query payload) payload)
+        rules (:rules payload)]
     (prn
      (try
-       (result-ok (d/q query db))
+       (result-ok (if rules (d/q query db rules) (d/q query db)))
        (catch Throwable t
          (result-error t))))
     (shutdown-agents)))

@@ -931,11 +931,18 @@ let parse_logseq_query_with_schema ?(read_only = false) db_path query_string =
   in
   schema, return, return_map, query
 
-let query_logseq_graph ?(read_only = false) db_path query_string =
+let query_logseq_graph ?(read_only = false) ?inputs db_path query_string =
   let schema, _, _, query = parse_logseq_query_with_schema ~read_only db_path query_string in
-  let graph_datoms = datoms_of_logseq_graph_for_attrs ~read_only db_path (query_attrs query) in
+  let has_rules_input =
+    match inputs with
+    | Some inputs -> List.exists (function Arg_rules _ -> true | _ -> false) inputs
+    | None -> false
+  in
+  let graph_datoms =
+    datoms_of_logseq_graph_for_attrs ~read_only db_path (if has_rules_input then [] else query_attrs query)
+  in
   let db = init_db ~schema graph_datoms in
-  q_return_map_string db query_string
+  q_return_map_string ?inputs db query_string
 
 let delete_sql addresses =
   match addresses with

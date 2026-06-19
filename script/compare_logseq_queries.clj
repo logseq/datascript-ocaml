@@ -47,7 +47,89 @@
          (or (nil? in)
              (= '[$] in)
              (= ['$] in)
-             (= ["$"] in)))))
+             (= ["$"] in)
+             (= '[$ %] in)
+             (= ['$ '%] in)
+             (= ["$" "%"] in)))))
+
+(defn nbb-cache-file? [file]
+  (and (string? file)
+       (or (str/starts-with? file ".nbb/.cache/")
+           (str/includes? file "/.nbb/.cache/"))))
+
+(defn distinct-by [f coll]
+  (let [seen (volatile! #{})]
+    (filter
+      (fn [x]
+        (let [k (f x)]
+          (when-not (contains? @seen k)
+            (vswap! seen conj k)
+            true)))
+      coll)))
+
+(defn rule-names [rules]
+  (->> rules
+       (keep (fn [rule]
+               (when (seq? (first rule))
+                 (symbol (name (first (first rule)))))))
+       set))
+
+(defn rule-name [rule]
+  (when (seq? (first rule))
+    (symbol (name (first (first rule))))))
+
+(defn rules-by-name [rules]
+  (->> rules
+       (group-by rule-name)
+       (remove (comp nil? first))
+       (into {})))
+
+(defn form-rule-calls [names form]
+  (->> (tree-seq coll? seq form)
+       (keep (fn [x]
+               (when (and (seq? x) (symbol? (first x)))
+                 (let [name (symbol (name (first x)))]
+                   (when (contains? names name) name)))))
+       set))
+
+(defn query-uses-rule? [rules query]
+  (let [names (rule-names rules)]
+    (boolean
+     (seq (form-rule-calls names query)))))
+
+(defn rule-closure [rules query]
+  (let [by-name (rules-by-name rules)
+        names (set (keys by-name))]
+    (loop [pending (seq (form-rule-calls names query))
+           seen #{}]
+      (if-not (seq pending)
+        (->> seen (mapcat by-name) vec)
+        (let [name (first pending)
+              clauses (get by-name name)
+              deps (->> clauses (mapcat #(form-rule-calls names (rest %))) set)
+              next-deps (remove seen deps)]
+          (recur (concat (rest pending) next-deps) (conj seen name)))))))
+
+(defn query-with-rules-input [query rules]
+  (if (and (nil? (input-decls query)) (query-uses-rule? rules query) (vector? query))
+    (into query [:in '$ '%])
+    query))
+
+(defn entry-with-runtime-inputs [runtime-inputs entry]
+  (let [rules (:rules runtime-inputs)
+        query (query-with-rules-input (:query entry) rules)
+        in (input-decls query)
+        selected-rules (when (seq rules) (rule-closure rules query))]
+    (cond-> (assoc entry :query query)
+      (and (seq selected-rules) (sequential? in) (some #(= (str %) "%") in))
+      (assoc :rules selected-rules))))
+
+(defn query-corpus [runtime-inputs entries]
+  (->> entries
+       (remove #(nbb-cache-file? (:file %)))
+       (map #(entry-with-runtime-inputs runtime-inputs %))
+       (distinct-by :query)
+       vec))
 
 (defn normalize [value]
   (cond
@@ -153,6 +235,9 @@
       (.waitFor process)
       ::timeout)))
 
+(defn elapsed-ms-since [started-ns]
+  (long (Math/ceil (/ (double (- (System/nanoTime) started-ns)) 1000000.0))))
+
 (defn write-edn-file [path value]
   (spit path (pr-str value)))
 
@@ -164,21 +249,25 @@
    "clojure.main"
    "script/upstream_query_worker.clj"])
 
-(defn run-upstream-query-process [graph-path {:keys [id query]} timeout-ms]
+(defn run-upstream-query-process [graph-path {:keys [id query] :as entry} timeout-ms]
   (let [base (str "tmp/logseq_upstream_query." (System/currentTimeMillis) "." id)
         query-path (str base ".edn")
         out-path (str base ".out.edn")
         err-path (str base ".err")]
-    (write-edn-file query-path query)
-    (let [process (-> (ProcessBuilder. ^java.util.List (vec (concat (upstream-worker-command) [graph-path query-path])))
+    (write-edn-file query-path (cond-> {:query query} (:rules entry) (assoc :rules (:rules entry))))
+    (let [started-ns (System/nanoTime)
+          process (-> (ProcessBuilder. ^java.util.List (vec (concat (upstream-worker-command) [graph-path query-path])))
                       (.redirectOutput (io/file out-path))
                       (.redirectError (io/file err-path))
                       (.start))
-          exit (wait-for-process process timeout-ms)]
-      (case exit
-        ::timeout (timeout-result timeout-ms)
-        0 (canonicalize-result query (edn/read-string (slurp out-path)))
-        (process-error-result exit err-path)))))
+          exit (wait-for-process process timeout-ms)
+          result (case exit
+                   ::timeout (timeout-result timeout-ms)
+                   0 (canonicalize-result query (edn/read-string (slurp out-path)))
+                   (process-error-result exit err-path))]
+      {:result result
+       :elapsed-ms (elapsed-ms-since started-ns)
+       :timeout-ms timeout-ms})))
 
 (defn run-upstream [runner sqlite-path entries]
   (.mkdirs (io/file "tmp"))
@@ -196,7 +285,9 @@
         (let [n (inc idx)
               id (:id entry)]
           (log-progress "upstream" n "/" total id)
-          (recur n rest (assoc results id (run-upstream-query-process graph-path entry timeout-ms))))))))
+          (let [result (run-upstream-query-process graph-path entry timeout-ms)]
+            (log-progress "upstream" id "elapsed-ms" (:elapsed-ms result))
+            (recur n rest (assoc results id result))))))))
 
 (defn json-escape [s]
   (-> s
@@ -206,12 +297,19 @@
       (str/replace "\r" "\\r")
       (str/replace "\t" "\\t")))
 
+(defn query-json-line [{:keys [id query rules]}]
+  (str "{\"id\":\"" (json-escape id) "\",\"query\":\""
+       (json-escape (pr-str query)) "\""
+       (if rules
+         (str ",\"rules\":\"" (json-escape (pr-str rules)) "\"")
+         "")
+       "}"))
+
 (defn write-query-jsonl [path entries]
   (spit path
         (with-out-str
-          (doseq [{:keys [id query]} entries]
-            (println (str "{\"id\":\"" (json-escape id) "\",\"query\":\""
-                          (json-escape (pr-str query)) "\"}"))))))
+          (doseq [entry entries]
+            (println (query-json-line entry))))))
 
 (defn parse-ocaml-line [line]
   (let [{:keys [id status value message]} (json/parse-string line true)]
@@ -219,10 +317,8 @@
           "ok" {:status :ok :value (normalize (edn/read-string value))}
           "error" {:status :error :message message})]))
 
-(defn write-one-query-jsonl [path {:keys [id query]}]
-  (spit path
-        (str "{\"id\":\"" (json-escape id) "\",\"query\":\""
-             (json-escape (pr-str query)) "\"}\n")))
+(defn write-one-query-jsonl [path {:keys [id query rules]}]
+  (spit path (str (query-json-line {:id id :query query :rules rules}) "\n")))
 
 (defn run-ocaml-query-process [runner sqlite-path {:keys [id] :as entry} timeout-ms]
   (let [base (str "tmp/logseq_ocaml_query." (System/currentTimeMillis) "." id)
@@ -230,31 +326,115 @@
         out-path (str base ".out.jsonl")
         err-path (str base ".err")]
     (write-one-query-jsonl query-path entry)
-    (let [process (-> (ProcessBuilder. [runner "run" sqlite-path query-path])
+    (let [started-ns (System/nanoTime)
+          process (-> (ProcessBuilder. [runner "run" sqlite-path query-path])
                       (.redirectOutput (io/file out-path))
                       (.redirectError (io/file err-path))
                       (.start))
-          exit (wait-for-process process timeout-ms)]
-      (case exit
-        ::timeout (timeout-result timeout-ms)
-        0 (let [[_ result] (parse-ocaml-line (first (str/split-lines (slurp out-path))))]
-            (canonicalize-result (:query entry) result))
-        (process-error-result exit err-path)))))
+          exit (wait-for-process process timeout-ms)
+          result (case exit
+                   ::timeout (timeout-result timeout-ms)
+                   0 (let [[_ result] (parse-ocaml-line (first (str/split-lines (slurp out-path))))]
+                       (canonicalize-result (:query entry) result))
+                   (process-error-result exit err-path))]
+      {:result result
+       :elapsed-ms (elapsed-ms-since started-ns)
+       :timeout-ms timeout-ms})))
 
-(defn run-ocaml [runner sqlite-path entries]
+(defn ocaml-timeout-ms [upstream-info default-timeout-ms margin-ms]
+  (if-let [elapsed-ms (:elapsed-ms upstream-info)]
+    (+ elapsed-ms margin-ms)
+    default-timeout-ms))
+
+(defn current-entry-timeout [entries idx upstream default-timeout-ms margin-ms]
+  (if-let [entry (nth entries idx nil)]
+    (ocaml-timeout-ms (get upstream (:id entry)) default-timeout-ms margin-ms)
+    default-timeout-ms))
+
+(defn batch-process-error-results [entries start-idx exit err-path default-timeout-ms margin-ms upstream]
+  (let [result (process-error-result exit err-path)]
+    (into {}
+          (for [{:keys [id]} (subvec entries start-idx)]
+            [id {:result result
+                 :elapsed-ms 0
+                 :timeout-ms (ocaml-timeout-ms (get upstream id) default-timeout-ms margin-ms)}]))))
+
+(defn run-ocaml-batch-process [runner sqlite-path entries upstream default-timeout-ms margin-ms]
+  (let [base (str "tmp/logseq_ocaml_batch." (System/currentTimeMillis))
+        query-path (str base ".jsonl")
+        err-path (str base ".err")
+        total (count entries)]
+    (write-query-jsonl query-path entries)
+    (let [process (-> (ProcessBuilder. [runner "run" sqlite-path query-path])
+                      (.redirectError (java.lang.ProcessBuilder$Redirect/to (io/file err-path)))
+                      (.start))
+          reader (java.io.BufferedReader. (java.io.InputStreamReader. (.getInputStream process)))]
+      (loop [idx 0
+             query-start-ns (System/nanoTime)
+             results {}]
+        (cond
+          (= idx total)
+          (do
+            (.waitFor process)
+            results)
+
+          (.ready reader)
+          (let [line (.readLine reader)
+                now-ns (System/nanoTime)]
+            (if (nil? line)
+              (if (.isAlive process)
+                (do
+                  (Thread/sleep 10)
+                  (recur idx query-start-ns results))
+                (merge results
+                       (batch-process-error-results
+                         entries idx (.exitValue process) err-path default-timeout-ms margin-ms upstream)))
+              (let [[id result] (parse-ocaml-line line)
+                    entry (nth entries idx)
+                    expected-id (:id entry)
+                    timeout-ms (ocaml-timeout-ms (get upstream expected-id) default-timeout-ms margin-ms)
+                    elapsed-ms (long (Math/ceil (/ (double (- now-ns query-start-ns)) 1000000.0)))
+                    result (canonicalize-result (:query entry) result)]
+                (when-not (= id expected-id)
+                  (throw (ex-info "OCaml batch returned query ids out of order"
+                                  {:expected expected-id :actual id})))
+                (log-progress "ocaml" id "elapsed-ms" elapsed-ms)
+                (recur (inc idx)
+                       (System/nanoTime)
+                       (assoc results id {:result result
+                                          :elapsed-ms elapsed-ms
+                                          :timeout-ms timeout-ms})))))
+
+          (not (.isAlive process))
+          (merge results
+                 (batch-process-error-results
+                   entries idx (.exitValue process) err-path default-timeout-ms margin-ms upstream))
+
+          :else
+          (let [timeout-ms (current-entry-timeout entries idx upstream default-timeout-ms margin-ms)
+                elapsed-ms (elapsed-ms-since query-start-ns)]
+            (if (> elapsed-ms timeout-ms)
+              (let [entry (nth entries idx)
+                    id (:id entry)]
+                (.destroyForcibly process)
+                (.waitFor process)
+                (assoc results id {:result (timeout-result timeout-ms)
+                                   :elapsed-ms elapsed-ms
+                                   :timeout-ms timeout-ms}))
+              (do
+                (Thread/sleep 10)
+                (recur idx query-start-ns results)))))))))
+
+(defn run-ocaml [runner sqlite-path entries upstream]
   (let [runnable-count (count entries)
-        timeout-ms (env-long "LOGSEQ_QUERY_TIMEOUT_MS" 60000)]
+        default-timeout-ms (env-long "LOGSEQ_QUERY_TIMEOUT_MS" 60000)
+        margin-ms (env-long "LOGSEQ_OCAML_TIMEOUT_MARGIN_MS" 1000)]
     (.mkdirs (io/file "tmp"))
     (log-progress "ocaml running query batch" runnable-count "queries")
-    (loop [idx 0
-           [entry & rest] entries
-           results {}]
-      (if-not entry
-        results
-        (let [n (inc idx)
-              id (:id entry)]
-          (log-progress "ocaml" n "/" runnable-count id)
-          (recur n rest (assoc results id (run-ocaml-query-process runner sqlite-path entry timeout-ms))))))))
+    (doseq [[idx {:keys [id]}] (map-indexed vector entries)]
+      (log-progress "ocaml" (inc idx) "/" runnable-count id "timeout-ms"
+                    (ocaml-timeout-ms (get upstream id) default-timeout-ms margin-ms)))
+    (run-ocaml-batch-process runner sqlite-path (vec entries) upstream default-timeout-ms margin-ms)))
 
 (defn mismatch? [left right]
   (not= left right))
@@ -264,11 +444,15 @@
         skipped (- (count entries) (count runnable))
         mismatches (->> batch-entries
                         (keep (fn [{:keys [id file line query]}]
-                                (let [u (get upstream id)
-                                      o (get ocaml id)]
+                                (let [u-info (get upstream id)
+                                      o-info (get ocaml id)
+                                      u (:result u-info)
+                                      o (:result o-info)]
                                   (when (mismatch? u o)
                                     {:id id :file file :line line :query query
-                                     :upstream u :ocaml o}))))
+                                     :upstream u :ocaml o
+                                     :upstream-info u-info
+                                     :ocaml-info o-info}))))
                         vec)]
     (spit out-path
           (with-out-str
@@ -284,10 +468,13 @@
             (println)
             (if (empty? mismatches)
               (println "No upstream/OCaml result differences were found for runnable queries.")
-              (doseq [{:keys [id file line query upstream ocaml]} mismatches]
+              (doseq [{:keys [id file line query upstream ocaml upstream-info ocaml-info]} mismatches]
                 (println "##" id)
                 (println)
                 (println "- Source:" (str file ":" line))
+                (println "- Upstream elapsed ms:" (:elapsed-ms upstream-info))
+                (println "- OCaml elapsed ms:" (:elapsed-ms ocaml-info))
+                (println "- OCaml timeout ms:" (:timeout-ms ocaml-info))
                 (println)
                 (println "```clojure")
                 (pprint/pprint query)
@@ -319,20 +506,25 @@
         (throw (ex-info "expected non-negative integer" {:value value})))
       parsed)))
 
-(defn -main [& [queries-path sqlite-path runner report-path batch-start-arg batch-size-arg]]
+(defn -main [& [queries-path sqlite-path runner report-path batch-start-arg batch-size-arg runtime-inputs-path]]
   (let [queries-path (or queries-path "logseq_queries.edn")
         sqlite-path (or sqlite-path "lambda.sqlite")
         runner (or runner "_build/default/examples/logseq_query_runner.exe")
         report-path (or report-path "logseq_query_diff_report.md")
         batch-start (parse-nonnegative-int batch-start-arg 0)
         batch-size (parse-nonnegative-int batch-size-arg 20)
-        entries (edn/read-string (slurp queries-path))
+        runtime-inputs (if (and runtime-inputs-path (.exists (io/file runtime-inputs-path)))
+                         (edn/read-string (slurp runtime-inputs-path))
+                         (if (.exists (io/file "logseq_runtime_inputs.edn"))
+                           (edn/read-string (slurp "logseq_runtime_inputs.edn"))
+                           {}))
+        entries (query-corpus runtime-inputs (edn/read-string (slurp queries-path)))
         runnable (vec (filter #(runnable-query? (:query %)) entries))
         batch-entries (->> runnable (drop batch-start) (take batch-size) vec)
         _ (log-progress "loaded" (count entries) "queries from" queries-path)
         _ (log-progress "selected runnable batch" batch-start batch-size "=>" (count batch-entries) "queries")
         upstream (run-upstream runner sqlite-path batch-entries)
-        ocaml (run-ocaml runner sqlite-path batch-entries)
+        ocaml (run-ocaml runner sqlite-path batch-entries upstream)
         _ (log-progress "writing report" report-path)
         summary (report-markdown entries batch-entries batch-start batch-size upstream ocaml report-path)]
     (binding [*out* *err*]

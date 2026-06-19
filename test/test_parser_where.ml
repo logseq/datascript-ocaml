@@ -161,6 +161,10 @@ let test_parser_where__value_function_helper_batch () =
     (GroundTermTuple (QVar "x", [ "out"; "_" ]))
     (Parser.parse_flat_value_function "identity" [ sym "?x" ] [ "out"; "_" ]);
   assert_equal
+    "parse_clause parses identity collection output"
+    (GroundTermCollection (QVar "x", "out"))
+    (Parser.parse_clause (vec [ list [ sym "identity"; sym "?x" ]; vec [ sym "?out"; sym "..." ] ]));
+  assert_equal
     "ground_values_of_form parses tuple ground values"
     [ String "a"; Int 1 ]
     (Parser.ground_values_of_form (vec [ str "a"; int 1 ]));

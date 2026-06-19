@@ -21,6 +21,8 @@ module Make (Context : sig
   val rule_invocation_binding : db -> bindings -> query_rule -> query_term list -> bindings option
   val rule_invocation_callables : Query.query_callables -> bindings -> query_rule -> query_term list -> Query.query_callables
   val propagate_rule_binding : db -> bindings -> bindings -> query_rule -> query_term list -> bindings option
+  val query_result_entity_id : db -> query_result -> entity_id option
+  val is_ref_attr : db -> attr -> bool
   val normalize_value : value -> value
 end) = struct
   open Context
@@ -123,6 +125,7 @@ end) = struct
   type relation =
     { attrs : string list
     ; rows : query_result list list
+    ; lookup_vars : (string * db) list
     }
 
   let unique_vars terms =
@@ -233,12 +236,51 @@ end) = struct
       Some (fast_comparison_scan db source_db e attr value_var predicate threshold)
     | _ -> None
 
+  let relation_lookup_vars source_db terms =
+    let add_var vars = function
+      | QVar var -> if List.mem_assoc var vars then vars else (var, source_db) :: vars
+      | _ -> vars
+    in
+    let ref_attr_for_value = function
+      | QAttr attr ->
+        is_ref_attr source_db attr
+        || (query_evaluator_context.is_reverse_ref attr
+            && is_ref_attr source_db (query_evaluator_context.reverse_ref attr))
+      | _ -> false
+    in
+    match terms with
+    | [ e_term; a_term; v_term ] ->
+      let vars = add_var [] e_term in
+      let vars = if ref_attr_for_value a_term then add_var vars v_term else vars in
+      List.rev vars
+    | [ e_term; a_term; v_term; tx_term ]
+    | [ e_term; a_term; v_term; tx_term; _ ] ->
+      let vars = add_var [] e_term |> fun vars -> add_var vars tx_term in
+      let vars = if ref_attr_for_value a_term then add_var vars v_term else vars in
+      List.rev vars
+    | _ -> []
+
+  let relation_lookup_vars_of_source source terms =
+    match source with
+    | Relation_source _ -> []
+    | Db_source source_db -> relation_lookup_vars source_db terms
+
+  let attr_of_query_result = function
+    | Result_attr attr | Result_value (Keyword attr | String attr | Symbol attr) -> Some attr
+    | _ -> None
+
+  let bound_attr_values bindings var =
+    bindings
+    |> List.filter_map (fun binding -> Option.bind (List.assoc_opt var binding) attr_of_query_result)
+    |> List.sort_uniq compare
+
   let relation_of_pattern db source terms =
     match source with
     | Relation_source _ -> None
     | Db_source source_db ->
       let source_context = query_source_context db in
       let attrs = unique_vars terms in
+      let lookup_vars = relation_lookup_vars source_db terms in
       let can_direct =
         direct_pattern_terms terms
         &&
@@ -290,11 +332,92 @@ end) = struct
             |> List.of_seq
           | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
       in
-      Some { attrs; rows }
+      Some { attrs; rows; lookup_vars }
 
-  let relation_key attrs common row =
+  let relation_of_pattern_with_bound_attrs db source bindings terms =
+    match source, terms with
+    | Relation_source _, _ -> None
+    | Db_source source_db, ([ _; QVar attr_var; _ ] | [ _; QVar attr_var; _; _ ] | [ _; QVar attr_var; _; _; _ ]) ->
+      let attr_values = bound_attr_values bindings attr_var in
+      if attr_values = [] then
+        None
+      else
+        let source_context = query_source_context db in
+        let attrs = unique_vars terms in
+        let lookup_vars = relation_lookup_vars source_db terms in
+        let indexed_terms attr =
+          match terms with
+          | [ e_term; _; v_term ] -> [ e_term; QAttr attr; v_term ]
+          | [ e_term; _; v_term; tx_term ] -> [ e_term; QAttr attr; v_term; tx_term ]
+          | [ e_term; _; v_term; tx_term; op_term ] -> [ e_term; QAttr attr; v_term; tx_term; op_term ]
+          | _ -> terms
+        in
+        let rows =
+          attr_values
+          |> List.concat_map (fun attr ->
+            match indexed_terms attr, terms with
+            | [ index_e; index_a; index_v ], [ e_term; a_term; v_term ] ->
+              source_context.pattern_datoms source_db index_e index_a index_v None
+              |> Seq.filter_map (fun datom ->
+                let* binding = source_context.match_data_pattern source_db [] e_term a_term v_term datom in
+                binding_row attrs binding)
+              |> List.of_seq
+            | [ index_e; index_a; index_v; index_tx ], [ e_term; a_term; v_term; tx_term ] ->
+              source_context.pattern_datoms source_db index_e index_a index_v (Some index_tx)
+              |> Seq.filter_map (fun datom ->
+                let* binding =
+                  source_context.match_data_pattern_tx source_db [] e_term a_term v_term tx_term datom
+                in
+                binding_row attrs binding)
+              |> List.of_seq
+            | [ index_e; index_a; index_v; index_tx; _ ], [ e_term; a_term; v_term; tx_term; op_term ] ->
+              source_context.pattern_datoms source_db index_e index_a index_v (Some index_tx)
+              |> Seq.filter_map (fun datom ->
+                let* binding =
+                  source_context.match_data_pattern_tx_op
+                    source_db
+                    []
+                    e_term
+                    a_term
+                    v_term
+                    tx_term
+                    op_term
+                    datom
+                in
+                binding_row attrs binding)
+              |> List.of_seq
+            | _ -> [])
+        in
+        Some { attrs; rows; lookup_vars }
+    | _ -> None
+
+  let relation_join_key_value = function
+    | Result_attr attr -> Result_value (Keyword attr)
+    | result -> result
+
+  let relation_join_lookup_context left right attr =
+    match List.assoc_opt attr right.lookup_vars with
+    | Some db -> Some db
+    | None -> List.assoc_opt attr left.lookup_vars
+
+  let relation_join_key_value_for_lookup db result =
+    match result with
+    | Result_value (List _ | Vector _) ->
+      (match query_result_entity_id db result with
+       | Some entity_id -> Result_entity entity_id
+       | None -> relation_join_key_value result)
+    | Result_value (Int entity_id | Ref entity_id) -> Result_entity entity_id
+    | _ -> relation_join_key_value result
+
+  let relation_key lookup_contexts attrs common row =
     let binding = row_binding attrs row in
-    List.map (fun attr -> List.assoc attr binding) common
+    List.map
+      (fun attr ->
+        let value = List.assoc attr binding in
+        match List.assoc_opt attr lookup_contexts with
+        | Some db -> relation_join_key_value_for_lookup db value
+        | None -> relation_join_key_value value)
+      common
 
   let append_relation_rows left_attrs right_attrs left_row right_row =
     let right_binding = row_binding right_attrs right_row in
@@ -309,6 +432,13 @@ end) = struct
     let common = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
     let right_only = List.filter (fun attr -> not (List.mem attr left.attrs)) right.attrs in
     let attrs = left.attrs @ right_only in
+    let lookup_vars =
+      List.fold_left
+        (fun lookup_vars ((var, _) as lookup_var) ->
+          if List.mem_assoc var lookup_vars then lookup_vars else lookup_var :: lookup_vars)
+        left.lookup_vars
+        right.lookup_vars
+    in
     if common = [] then
       { attrs
       ; rows =
@@ -318,19 +448,25 @@ end) = struct
                 (fun right_row -> append_relation_rows left.attrs right.attrs left_row right_row)
                 right.rows)
             left.rows
+      ; lookup_vars
       }
     else
+      let lookup_contexts =
+        common
+        |> List.filter_map (fun attr ->
+          Option.map (fun db -> attr, db) (relation_join_lookup_context left right attr))
+      in
       let grouped = Hashtbl.create (List.length left.rows) in
       List.iter
         (fun row ->
-          let key = relation_key left.attrs common row in
+          let key = relation_key lookup_contexts left.attrs common row in
           let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
           Hashtbl.replace grouped key (row :: rows))
         left.rows;
       let rows =
         right.rows
         |> List.concat_map (fun right_row ->
-          let key = relation_key right.attrs common right_row in
+          let key = relation_key lookup_contexts right.attrs common right_row in
           match Hashtbl.find_opt grouped key with
           | None -> []
           | Some left_rows ->
@@ -338,7 +474,7 @@ end) = struct
               (fun left_row -> append_relation_rows left.attrs right.attrs left_row right_row)
               left_rows)
       in
-      { attrs; rows }
+      { attrs; rows; lookup_vars }
 
   let value_of_relation_term db relation row term =
     let binding = row_binding relation.attrs row in
@@ -368,7 +504,137 @@ end) = struct
   let relation_bindings relation =
     List.map (row_binding relation.attrs) relation.rows
 
-  let eval_relation_clauses db sources default_source bindings clauses =
+  let relation_of_bindings bindings =
+    match bindings with
+    | [] -> Some { attrs = []; rows = []; lookup_vars = [] }
+    | first :: _ ->
+      let attrs = first |> List.map fst |> List.sort_uniq compare in
+      let row_of_binding binding =
+        let binding_attrs = binding |> List.map fst |> List.sort_uniq compare in
+        if binding_attrs <> attrs then
+          None
+        else
+          Some (List.map (fun attr -> List.assoc attr binding) attrs)
+      in
+      let rows = List.filter_map row_of_binding bindings in
+      if List.length rows = List.length bindings then Some { attrs; rows; lookup_vars = [] } else None
+
+  let representative_binding = function
+    | binding :: _ -> binding
+    | [] -> []
+
+  let bound_pattern_term bindings = function
+    | QVar name as term ->
+      (match List.assoc_opt name bindings with
+       | Some (Result_entity entity_id) -> QEntity entity_id
+       | Some (Result_value value) -> QValue value
+       | Some (Result_attr attr) -> QAttr attr
+       | Some (Result_db _ | Result_pull _) | None -> term)
+    | term -> term
+
+  let bound_attr_pattern_term bindings term =
+    match bound_pattern_term bindings term with
+    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
+    | term -> term
+
+  let relation_prefix_clause = function
+    | Pattern _ | PatternTx _ | PatternTxOp _
+    | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _
+    | ComparisonPredicate _ ->
+      true
+    | _ -> false
+
+  let split_relation_prefix clauses =
+    let rec split prefix = function
+      | clause :: rest when relation_prefix_clause clause -> split (clause :: prefix) rest
+      | rest -> List.rev prefix, rest
+    in
+    split [] clauses
+
+  let relation_prefix_has_multiple_clauses = function
+    | _ :: _ :: _ -> true
+    | _ -> false
+
+  let relation_prefix_uses_bound_lookup_key db sources default_source bindings clauses =
+    let binding_vars =
+      bindings
+      |> List.concat_map (List.map fst)
+      |> List.sort_uniq compare
+    in
+    let has_bound_lookup_var lookup_vars =
+      List.exists (fun (var, _) -> List.mem var binding_vars) lookup_vars
+    in
+    let clause_lookup_vars = function
+      | Pattern (e_term, a_term, v_term) ->
+        relation_lookup_vars_of_source default_source [ e_term; a_term; v_term ]
+      | PatternTx (e_term, a_term, v_term, tx_term) ->
+        relation_lookup_vars_of_source default_source [ e_term; a_term; v_term; tx_term ]
+      | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) ->
+        relation_lookup_vars_of_source default_source [ e_term; a_term; v_term; tx_term; op_term ]
+      | SourcePattern (source_name, e_term, a_term, v_term) ->
+        relation_lookup_vars_of_source (source db sources source_name) [ e_term; a_term; v_term ]
+      | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) ->
+        relation_lookup_vars_of_source
+          (source db sources source_name)
+          [ e_term; a_term; v_term; tx_term ]
+      | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) ->
+        relation_lookup_vars_of_source
+          (source db sources source_name)
+          [ e_term; a_term; v_term; tx_term; op_term ]
+      | ComparisonPredicate _ -> []
+      | _ -> []
+    in
+    List.exists (fun clause -> clause_lookup_vars clause |> has_bound_lookup_var) clauses
+
+  let relation_prefix_uses_bound_attr_key bindings clauses =
+    let binding_vars =
+      bindings
+      |> List.concat_map (List.map fst)
+      |> List.sort_uniq compare
+    in
+    let attr_var_is_bound = function
+      | QVar var -> List.mem var binding_vars
+      | _ -> false
+    in
+    List.exists
+      (function
+        | Pattern (_, a_term, _)
+        | PatternTx (_, a_term, _, _)
+        | PatternTxOp (_, a_term, _, _, _)
+        | SourcePattern (_, _, a_term, _)
+        | SourcePatternTx (_, _, a_term, _, _)
+        | SourcePatternTxOp (_, _, a_term, _, _, _) ->
+          attr_var_is_bound a_term
+        | _ -> false)
+      clauses
+
+  let eval_relation_clauses ?(allow_initial_bindings = false) db sources default_source bindings clauses =
+    let bound_relation_pattern_terms = function
+      | Some binding, [ e_term; a_term; v_term ] ->
+        [ bound_pattern_term binding e_term
+        ; bound_attr_pattern_term binding a_term
+        ; bound_pattern_term binding v_term
+        ]
+      | Some binding, [ e_term; a_term; v_term; tx_term ] ->
+        [ bound_pattern_term binding e_term
+        ; bound_attr_pattern_term binding a_term
+        ; bound_pattern_term binding v_term
+        ; bound_pattern_term binding tx_term
+        ]
+      | Some binding, [ e_term; a_term; v_term; tx_term; op_term ] ->
+        [ bound_pattern_term binding e_term
+        ; bound_attr_pattern_term binding a_term
+        ; bound_pattern_term binding v_term
+        ; bound_pattern_term binding tx_term
+        ; bound_pattern_term binding op_term
+        ]
+      | _ -> []
+    in
+    let relation_terms single_binding terms =
+      match bound_relation_pattern_terms (single_binding, terms) with
+      | [] -> terms
+      | terms -> terms
+    in
     match bindings with
     | [ [] ] ->
       let rec apply relation = function
@@ -404,7 +670,103 @@ end) = struct
       in
       (match eval_fast_index_clauses db default_source clauses with
        | Some bindings -> Some bindings
-       | None -> apply { attrs = []; rows = [ [] ] } clauses)
+       | None -> apply { attrs = []; rows = [ [] ]; lookup_vars = [] } clauses)
+    | _ when allow_initial_bindings ->
+      let single_binding =
+        match bindings with
+        | [ binding ] -> Some binding
+        | _ -> None
+      in
+      let rec apply relation = function
+        | [] -> Some (relation_bindings relation)
+        | Pattern (e_term, a_term, v_term) :: rest ->
+          let* next =
+            match single_binding with
+            | Some _ -> relation_of_pattern db default_source (relation_terms single_binding [ e_term; a_term; v_term ])
+            | None ->
+              (match relation_of_pattern_with_bound_attrs db default_source bindings [ e_term; a_term; v_term ] with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term ])
+          in
+          apply (hash_join relation next) rest
+        | PatternTx (e_term, a_term, v_term, tx_term) :: rest ->
+          let* next =
+            match single_binding with
+            | Some _ ->
+              relation_of_pattern
+                db
+                default_source
+                (relation_terms single_binding [ e_term; a_term; v_term; tx_term ])
+            | None ->
+              (match
+                 relation_of_pattern_with_bound_attrs db default_source bindings [ e_term; a_term; v_term; tx_term ]
+               with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term ])
+          in
+          apply (hash_join relation next) rest
+        | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) :: rest ->
+          let* next =
+            match single_binding with
+            | Some _ ->
+              relation_of_pattern
+                db
+                default_source
+                (relation_terms single_binding [ e_term; a_term; v_term; tx_term; op_term ])
+            | None ->
+              (match
+                 relation_of_pattern_with_bound_attrs
+                   db
+                   default_source
+                   bindings
+                   [ e_term; a_term; v_term; tx_term; op_term ]
+               with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term; op_term ])
+          in
+          apply (hash_join relation next) rest
+        | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
+          let source = source db sources source_name in
+          let* next =
+            match single_binding with
+            | Some _ -> relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term ])
+            | None ->
+              (match relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term ] with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db source [ e_term; a_term; v_term ])
+          in
+          apply (hash_join relation next) rest
+        | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
+          let source = source db sources source_name in
+          let* next =
+            match single_binding with
+            | Some _ -> relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term; tx_term ])
+            | None ->
+              (match relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term; tx_term ] with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db source [ e_term; a_term; v_term; tx_term ])
+          in
+          apply (hash_join relation next) rest
+        | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) :: rest ->
+          let source = source db sources source_name in
+          let* next =
+            match single_binding with
+            | Some _ ->
+              relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term; tx_term; op_term ])
+            | None ->
+              (match
+                 relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term; tx_term; op_term ]
+               with
+               | Some relation -> Some relation
+               | None -> relation_of_pattern db source [ e_term; a_term; v_term; tx_term; op_term ])
+          in
+          apply (hash_join relation next) rest
+        | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
+          apply (filter_relation_comparison db relation predicate left_term right_term) rest
+        | _ -> None
+      in
+      let* initial_relation = relation_of_bindings bindings in
+      apply initial_relation clauses
     | _ -> None
   
   let merge_projected_binding db vars outer_binding inner_binding =
@@ -432,14 +794,235 @@ end) = struct
     match active_rules, query_callables_empty callables, rules, eval_relation_clauses db sources default_source bindings clauses with
     | [], true, [], Some bindings -> bindings
     | _ ->
-      List.fold_left
-        (fun bindings clause ->
-          List.concat_map
-            (fun binding ->
-               eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-            bindings)
+      let relation_prefix, rest = split_relation_prefix clauses in
+      (match
+         query_callables_empty callables, bindings, clauses, relation_prefix, rest
+       with
+       | true, _ :: _ :: _, (Rule (name, terms) :: rest), _, _ when active_rules <> [] ->
+         (match
+            eval_nonrecursive_rule_for_bindings
+              ~active_rules
+              ~callables
+              ~default_source
+              db
+              sources
+              rules
+              bindings
+              name
+              terms
+          with
+          | Some rule_bindings ->
+            eval_clauses
+              ~active_rules
+              ~callables
+              ~default_source
+              db
+              sources
+              rules
+              rule_bindings
+              rest
+          | None ->
+            List.fold_left
+              (fun bindings clause ->
+                List.concat_map
+                  (fun binding ->
+                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+                  bindings)
+              bindings
+               clauses)
+       | true, _ :: _ :: _, (Or branches :: rest), _, _ when active_rules <> [] ->
+         ensure_or_branch_vars_match (representative_binding bindings) branches;
+         let branch_bindings =
+           branches
+           |> List.concat_map (fun branch ->
+             eval_clauses ~active_rules ~callables ~default_source db sources rules bindings branch)
+         in
+         eval_clauses ~active_rules ~callables ~default_source db sources rules branch_bindings rest
+       | true, _ :: _ :: _, (SourceOr (source_name, branches) :: rest), _, _ when active_rules <> [] ->
+         let clause_db = source_db db sources source_name in
+         let sources = sources_with_root_default db sources in
+         ensure_or_branch_vars_match (representative_binding bindings) branches;
+         let branch_bindings =
+           branches
+           |> List.concat_map (fun branch ->
+             eval_clauses
+               ~active_rules
+               ~callables
+               ~default_source:(Db_source clause_db)
+               clause_db
+               sources
+               rules
+               bindings
+               branch)
+         in
+         eval_clauses ~active_rules ~callables ~default_source db sources rules branch_bindings rest
+       | true, [ [] ], _, _ :: _, _ when active_rules <> [] ->
+         (match eval_relation_clauses db sources default_source bindings relation_prefix with
+          | Some prefix_bindings ->
+            eval_clauses
+              ~active_rules
+              ~callables
+              ~default_source
+              db
+              sources
+              rules
+              prefix_bindings
+              rest
+          | None ->
+            List.fold_left
+              (fun bindings clause ->
+                List.concat_map
+                  (fun binding ->
+                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+                  bindings)
+              bindings
+              clauses)
+       | true, _ :: _, _, _ :: _, _
+         when active_rules <> []
+              && ((match bindings with
+                   | [ _ ] -> relation_prefix_has_multiple_clauses relation_prefix
+                   | _ -> false)
+                  || relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
+                  || relation_prefix_uses_bound_attr_key bindings relation_prefix) ->
+         (match
+            eval_relation_clauses
+              ~allow_initial_bindings:true
+              db
+              sources
+              default_source
+              bindings
+              relation_prefix
+          with
+          | Some prefix_bindings ->
+            eval_clauses
+              ~active_rules
+              ~callables
+              ~default_source
+              db
+              sources
+              rules
+              prefix_bindings
+              rest
+          | None ->
+            List.fold_left
+              (fun bindings clause ->
+                List.concat_map
+                  (fun binding ->
+                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+                  bindings)
+              bindings
+              clauses)
+       | _ ->
+         List.fold_left
+           (fun bindings clause ->
+             List.concat_map
+               (fun binding ->
+                  eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+               bindings)
+           bindings
+           clauses)
+  
+  and rule_binding_extends db initial_binding rule_binding =
+    List.for_all
+      (fun (var, value) ->
+        match List.assoc_opt var rule_binding with
+        | None -> false
+        | Some bound -> Option.is_some (bind_var db var value [ var, bound ]))
+      initial_binding
+  
+  and rule_is_recursive rule =
+    List.exists (Query.clause_calls_rule rule.rule_name) rule.rule_body
+
+  and binding_key vars binding =
+    let rec collect acc = function
+      | [] -> Some (List.rev acc)
+      | var :: rest ->
+        (match List.assoc_opt var binding with
+         | Some value -> collect (relation_join_key_value value :: acc) rest
+         | None -> None)
+    in
+    collect [] vars
+  
+  and grouped_rule_pairs pairs =
+    match pairs with
+    | [] -> [], None
+    | (_, first_rule_binding) :: _ ->
+      let vars = first_rule_binding |> List.map fst |> List.sort_uniq compare in
+      if vars = [] then
+        vars, None
+      else
+        let grouped = Hashtbl.create (List.length pairs) in
+        pairs
+        |> List.iter (fun ((_, initial_rule_binding) as pair) ->
+          match binding_key vars initial_rule_binding with
+          | None -> ()
+          | Some key ->
+            let pairs = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
+            Hashtbl.replace grouped key (pair :: pairs));
+        vars, Some grouped
+  
+  and matching_rule_pairs vars grouped pairs rule_binding =
+    match grouped with
+    | None -> pairs
+    | Some grouped ->
+      (match binding_key vars rule_binding with
+       | None -> []
+       | Some key -> Option.value (Hashtbl.find_opt grouped key) ~default:[])
+  
+  and eval_nonrecursive_rule_for_bindings
+      ~active_rules
+      ~callables
+      ~default_source
+      db
+      sources
+      rules
+      bindings
+      name
+      terms =
+    let candidates = Query.matching_rules_exn rules name (List.length terms) in
+    if List.exists rule_is_recursive candidates then
+      None
+    else
+      let keys =
         bindings
-        clauses
+        |> List.map (fun binding -> rule_call_key db "" name binding terms)
+        |> List.sort_uniq compare
+      in
+      let results =
+        candidates
+        |> List.concat_map (fun rule ->
+          let pairs =
+            bindings
+            |> List.filter_map (fun outer_binding ->
+              match rule_invocation_binding db outer_binding rule terms with
+              | None -> None
+              | Some rule_binding -> Some (outer_binding, rule_binding))
+          in
+          match pairs with
+          | [] -> []
+          | _ ->
+            let rule_bindings = List.map snd pairs in
+            let grouped_vars, grouped_pairs = grouped_rule_pairs pairs in
+            eval_clauses
+              ~active_rules:(keys @ active_rules)
+              ~callables
+              ~default_source
+              db
+              sources
+              rules
+              rule_bindings
+              rule.rule_body
+            |> fun rule_results ->
+            rule_results
+            |> List.concat_map (fun rule_binding ->
+              matching_rule_pairs grouped_vars grouped_pairs pairs rule_binding
+              |> List.filter_map (fun (outer_binding, initial_rule_binding) ->
+                if rule_binding_extends db initial_rule_binding rule_binding then
+                  propagate_rule_binding db outer_binding rule_binding rule terms
+                else
+                  None)))
+      in
+      Some results
   
   and query_clause_string clause =
     Query.query_clause_string ~value_to_string:edn_string_of_value clause

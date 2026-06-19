@@ -644,9 +644,10 @@ let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
 let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
   Query.match_reverse_pattern_clause (query_match_context db) bindings e_term reverse_attr v_term datom
 
-let query_entity_id_term = function
+let query_entity_id_term db = function
   | QEntity entity_id -> Some entity_id
   | QValue (Int entity_id) -> Some entity_id
+  | QValue value -> Query.query_result_entity_id (query_result_context db) (Result_value value)
   | _ -> None
 
 let query_value_term = function
@@ -665,7 +666,7 @@ let query_value_uses_avet = function
   | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ | Ref_to _ -> true
 
 let pattern_datoms db e_term a_term v_term tx_term =
-  let e = query_entity_id_term e_term in
+  let e = query_entity_id_term db e_term in
   let v = query_value_term v_term in
   let tx = query_tx_term tx_term in
   match a_term, v with
@@ -800,6 +801,8 @@ module Query_where_impl = Query_where.Make (struct
   let rule_invocation_binding = rule_invocation_binding
   let rule_invocation_callables = rule_invocation_callables
   let propagate_rule_binding = propagate_rule_binding
+  let query_result_entity_id = query_result_entity_id
+  let is_ref_attr = is_ref_attr
   let normalize_value = normalize_value
 end)
 

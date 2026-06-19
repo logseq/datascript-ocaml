@@ -23,10 +23,25 @@
       (cons form nested)
       nested)))
 
+(defn nbb-cache-path? [path]
+  (or (str/starts-with? path ".nbb/.cache/")
+      (str/includes? path "/.nbb/.cache/")))
+
+(defn distinct-by [f coll]
+  (let [seen (volatile! #{})]
+    (filter
+      (fn [x]
+        (let [k (f x)]
+          (when-not (contains? @seen k)
+            (vswap! seen conj k)
+            true)))
+      coll)))
+
 (defn source-files [root]
   (->> (file-seq (io/file root))
        (filter #(.isFile ^java.io.File %))
        (filter #(re-find #"\.clj[sc]?$" (.getName ^java.io.File %)))
+       (remove #(nbb-cache-path? (.getPath ^java.io.File %)))
        (remove #(str/includes? (.getPath ^java.io.File %) "/node_modules/"))
        (remove #(str/includes? (.getPath ^java.io.File %) "/target/"))
        (remove #(str/includes? (.getPath ^java.io.File %) "/tmp/"))
@@ -70,6 +85,7 @@
         entries (->> (source-files root)
                      (mapcat #(extract-from-file root %))
                      (remove :read-error)
+                     (distinct-by :query)
                      (map-indexed (fn [idx entry] (assoc entry :id (str "q" (inc idx)))))
                      vec)]
     (spit out (with-out-str (pprint/pprint entries)))

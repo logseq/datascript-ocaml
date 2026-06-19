@@ -5272,6 +5272,16 @@ let test_parse_query_ground_and_value_metadata_functions () =
     ; [ Result_value (Keyword "i") ]
     ]
     (q (empty_db ()) (parse_query collection_ground_query));
+  assert_equal_query
+    "parse_query parses identity collection outputs"
+    [ [ Result_value (Keyword "a") ]
+    ; [ Result_value (Keyword "e") ]
+    ; [ Result_value (Keyword "i") ]
+    ]
+    (q_string
+       (empty_db ())
+       "[:find ?vowel
+         :where [(identity [:a :e :i]) [?vowel ...]]]");
   let relation_ground_query =
     QueryFormVector
       [ QueryFormKeyword "find"
@@ -5316,6 +5326,31 @@ let test_parse_query_ground_and_value_metadata_functions () =
                    ; QueryFormSymbol "?keyword"
                    ]
                ])))
+
+let test_q_rule_inputs_bind_identity_collection_outputs () =
+  let rules =
+    Parser.parse_rules
+      (QueryFormVector
+         [ QueryFormVector
+             [ QueryFormVector [ QueryFormSymbol "tag-value"; QueryFormSymbol "?tags"; QueryFormSymbol "?tag" ]
+             ; QueryFormVector
+                 [ QueryFormList [ QueryFormSymbol "identity"; QueryFormSymbol "?tags" ]
+                 ; QueryFormVector [ QueryFormSymbol "?tag"; QueryFormSymbol "..." ]
+                 ]
+             ]
+         ])
+  in
+  assert_equal_query_set
+    "q_string binds identity collection outputs inside runtime rules"
+    [ [ Result_value (Keyword "user.class/Person") ]
+    ; [ Result_value (String "Person") ]
+    ]
+    (q_string
+       ~inputs:[ Arg_rules rules ]
+       (empty_db ())
+       "[:find ?tag
+         :in $ %
+         :where (tag-value [:user.class/Person \"Person\"] ?tag)]")
 
 let test_parse_query_aggregate_find_expressions () =
   let db =
@@ -6939,7 +6974,17 @@ let test_parse_query_find_helper_parser () =
           ]));
   assert_raises_invalid_arg
     "parse_find rejects invalid forms"
-    (fun () -> ignore (parse_find (QueryFormKeyword "find")))
+    (fun () -> ignore (parse_find (QueryFormKeyword "find")));
+  assert_raises_invalid_arg_message
+    "parse_query reports malformed map-form find like upstream"
+    "Cannot parse :find, expected: (find-rel | find-coll | find-tuple | find-scalar)"
+    (fun () ->
+       ignore
+         (parse_query
+            (QueryFormMap
+               [ QueryFormKeyword "find", QueryFormSymbol "find-elements"
+               ; QueryFormKeyword "where", QueryFormVector []
+               ])))
 
 let test_parse_query_or_join_required_vars () =
   let db =
@@ -8547,6 +8592,119 @@ let test_q_parsed_rule_inputs_interact_with_function_bindings () =
        "[:find ?n ?x
          :where [(identity [3 4]) [?n ?x]]
                 [(identity [1 2]) [?n ?x]]]");
+  let dynamic_attr_db =
+    init_db
+      [ datom ~e:1 ~a:"db/ident" ~v:(Keyword "user.property/foo") ()
+      ; datom ~e:2 ~a:"user.property/foo" ~v:(String "bar") ()
+      ]
+  in
+  assert_equal_query
+    "q_string reads keyword ident values"
+    [ [ Result_value (Keyword "user.property/foo") ] ]
+    (q_string dynamic_attr_db "[:find ?prop :where [?prop-e :db/ident ?prop]]");
+  assert_equal_query
+    "q_string matches attribute variables supplied as keyword inputs"
+    [ [ Result_entity 2 ] ]
+    (q_string
+       ~inputs:[ Arg_scalar (Result_value (Keyword "user.property/foo")) ]
+       dynamic_attr_db
+       "[:find ?b
+         :in $ ?prop
+         :where [?b ?prop \"bar\"]]");
+  assert_equal_query
+    "q_string matches attribute variables bound from keyword ident values"
+    [ [ Result_entity 2 ] ]
+    (q_string
+       dynamic_attr_db
+       "[:find ?b
+         :where [?prop-e :db/ident ?prop]
+                [?b ?prop \"bar\"]]");
+  let ref_property_rules =
+    [ { rule_name = "ref-property"
+      ; rule_params = [ "b"; "val" ]
+      ; rule_body =
+          [ Pattern (QVar "b", QAttr "user.property/foo", QVar "pv")
+          ; Rule ("ref->val", [ QVar "pv"; QVar "val" ])
+          ]
+      }
+    ; { rule_name = "ref->val"
+      ; rule_params = [ "pv"; "val" ]
+      ; rule_body =
+          [ Pattern (QVar "pv", QAttr "block/title", QVar "val") ]
+      }
+    ]
+  in
+  let ref_property_db =
+    init_db
+      ~schema:[ "user.property/foo", ref_attr ]
+      [ datom ~e:1 ~a:"db/ident" ~v:(Keyword "user.property/foo") ()
+      ; datom ~e:2 ~a:"block/title" ~v:(String "Page1") ()
+      ; datom
+          ~e:2
+          ~a:"user.property/foo"
+          ~v:(Vector [ Keyword "block/title"; Keyword "logseq.property/status"; Keyword "block/tags" ])
+          ()
+      ]
+  in
+  assert_raises_invalid_arg_message
+    "q_string reports malformed lookup refs encountered through rule entity matching"
+    "Lookup ref should contain 2 elements: [:block/title :logseq.property/status :block/tags]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_rules ref_property_rules ]
+            ref_property_db
+            "[:find [?b ...]
+              :in $ %
+              :where (ref-property ?b \"bar\")
+                     [?b :block/title \"Page1\"]]"));
+  let dynamic_ref_property_rules =
+    [ { rule_name = "ref-property-value"
+      ; rule_params = [ "b"; "prop-e"; "val" ]
+      ; rule_body =
+          [ Pattern (QVar "prop-e", QAttr "db/ident", QVar "prop")
+          ; Pattern (QVar "b", QVar "prop", QVar "pv")
+          ; Rule ("ref->val", [ QVar "pv"; QVar "val" ])
+          ]
+      }
+    ; { rule_name = "ref-property"
+      ; rule_params = [ "b"; "prop"; "val" ]
+      ; rule_body =
+          [ Pattern (QVar "prop-e", QAttr "db/ident", QVar "prop")
+          ; Rule ("ref-property-value", [ QVar "b"; QVar "prop-e"; QVar "val" ])
+          ]
+      }
+    ; { rule_name = "ref->val"
+      ; rule_params = [ "pv"; "val" ]
+      ; rule_body = [ Pattern (QVar "pv", QAttr "block/title", QVar "val") ]
+      }
+    ]
+  in
+  let dynamic_ref_property_db =
+    init_db
+      [ datom ~e:1 ~a:"db/ident" ~v:(Keyword "logseq.property.table/ordered-columns") ()
+      ; datom ~e:4 ~a:"db/ident" ~v:(Keyword "user.property/other") ()
+      ; datom ~e:2 ~a:"block/title" ~v:(String "Page1") ()
+      ; datom
+          ~e:3
+          ~a:"logseq.property.table/ordered-columns"
+          ~v:(Vector [ Keyword "block/title"; Keyword "logseq.property/status"; Keyword "block/tags" ])
+          ()
+      ; datom ~e:3 ~a:"user.property/other" ~v:(String "ignored") ()
+      ]
+  in
+  assert_raises_invalid_arg_message
+    "q_string reports malformed lookup refs reached through relation-joined nested dynamic property rules"
+    "Lookup ref should contain 2 elements: [:block/title :logseq.property/status :block/tags]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_rules dynamic_ref_property_rules ]
+            dynamic_ref_property_db
+            "[:find [?p ...]
+              :in $ %
+              :where (ref-property ?b ?p \"bar\")
+                     [?b :block/title \"Page1\"]]"));
   let db =
     empty_db ()
     |> db_with
@@ -17064,6 +17222,7 @@ let () =
   test_parse_query_string_build_replace_regex_and_split ();
   test_parse_query_collection_constructors ();
   test_parse_query_ground_and_value_metadata_functions ();
+  test_q_rule_inputs_bind_identity_collection_outputs ();
   test_parse_query_aggregate_find_expressions ();
   test_parse_query_extended_aggregate_find_expressions ();
   test_parse_query_not_and_not_join_clauses ();
