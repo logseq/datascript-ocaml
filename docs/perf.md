@@ -199,8 +199,8 @@ The DB tracks `max_datom_e`, which allows existing-fact and cardinality scans to
 skip checks for facts whose entity id is greater than every existing datom entity
 id.
 
-The DB also keeps a lightweight `unique_index` so unique conflict checks do not
-need to scan all datoms.
+Unique conflict checks use the `AVET` index, matching upstream DataScript's
+unique validation path.
 
 ## Semantics Constraints
 

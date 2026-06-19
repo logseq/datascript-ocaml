@@ -151,13 +151,6 @@ let compare_datom index left right =
       ; compare left.e right.e
       ; compare left.tx right.tx
       ]
-  | Vaet ->
-    first_nonzero
-      [ compare_value left.v right.v
-      ; compare left.a right.a
-      ; compare left.e right.e
-      ; compare left.tx right.tx
-      ]
 
 let rec normalize_value = function
   | List values -> List (List.map normalize_value values)

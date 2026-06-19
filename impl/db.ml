@@ -67,10 +67,6 @@ let normalize_datom_for_schema schema d =
   else
     d
 
-let datom_has_ref_value = function
-  | { v = Ref _; _ } -> true
-  | _ -> false
-
 let empty_index index =
   PSet.empty_by (Util.compare_datom index)
 
@@ -85,33 +81,16 @@ let build_avet_index schema datoms =
   |> List.filter (fun d -> Schema.schema_attr_is_avet_accessible schema d.a)
   |> build_index Avet
 
-let build_vaet_index datoms =
-  datoms
-  |> List.filter datom_has_ref_value
-  |> build_index Vaet
-
-let build_unique_index schema datoms =
-  datoms
-  |> List.filter_map (fun d ->
-    if d.a = "db/ident" || Option.fold ~none:false ~some:(fun attr -> Option.is_some attr.unique) (List.assoc_opt d.a schema) then
-      Some (d.a, d.v, d.e)
-    else
-      None)
-
 let set_indexes_from_datoms db datoms =
   let eavt_index = build_index Eavt datoms in
   let aevt_index = build_index Aevt datoms in
   let avet_index = build_avet_index db.schema datoms in
-  let vaet_index = build_vaet_index datoms in
   let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 datoms in
-  let unique_index = build_unique_index db.schema datoms in
   { db with
     eavt_index
   ; aevt_index
   ; avet_index
-  ; vaet_index
   ; max_datom_e
-  ; unique_index
   }
 
 let eavt_datoms db =
@@ -129,7 +108,6 @@ let add_datoms_to_index include_datom datoms index_set =
 
 let refresh_indexes_with_added_datoms db added_datoms =
   let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) db.max_datom_e added_datoms in
-  let unique_index = build_unique_index db.schema added_datoms @ db.unique_index in
   { db with
     eavt_index = add_datoms_to_index (fun _ -> true) added_datoms db.eavt_index
   ; aevt_index = add_datoms_to_index (fun _ -> true) added_datoms db.aevt_index
@@ -138,9 +116,7 @@ let refresh_indexes_with_added_datoms db added_datoms =
         (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
         added_datoms
         db.avet_index
-  ; vaet_index = add_datoms_to_index datom_has_ref_value added_datoms db.vaet_index
   ; max_datom_e
-  ; unique_index
   }
 
 let with_datoms db datoms =
@@ -153,11 +129,9 @@ let empty_db context ?(schema = []) ?storage () =
   ; eavt_index = empty_index Eavt
   ; aevt_index = empty_index Aevt
   ; avet_index = empty_index Avet
-  ; vaet_index = empty_index Vaet
   ; max_eid = 0
   ; max_datom_e = 0
   ; max_tx = tx0
-  ; unique_index = []
   ; filter_pred = None
   ; storage_ref = storage
   ; tx_fns = []
@@ -177,11 +151,9 @@ let init_db context ?(schema = []) ?storage datoms =
   ; eavt_index = empty_index Eavt
   ; aevt_index = empty_index Aevt
   ; avet_index = empty_index Avet
-  ; vaet_index = empty_index Vaet
   ; max_eid
   ; max_datom_e = 0
   ; max_tx
-  ; unique_index = []
   ; filter_pred = None
   ; storage_ref = storage
   ; tx_fns = []
@@ -242,7 +214,6 @@ let stored_index db = function
   | Eavt -> db.eavt_index
   | Aevt -> db.aevt_index
   | Avet -> db.avet_index
-  | Vaet -> db.vaet_index
 
 let raw_index_datoms_list db index =
   stored_index db index |> PSet.to_list
@@ -290,7 +261,6 @@ let index_order = function
   | Eavt -> [ `E; `A; `V; `Tx ]
   | Aevt -> [ `A; `E; `V; `Tx ]
   | Avet -> [ `A; `V; `E; `Tx ]
-  | Vaet -> [ `V; `A; `E; `Tx ]
 
 let slice_cmp context index from_bound from_fields to_bound to_fields left right =
   if right == from_bound then
@@ -336,17 +306,6 @@ let exact_prefix_bound index e a v tx =
      | Some a, Some v, Some e, None ->
        Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
      | Some a, Some v, Some e, Some tx ->
-       Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
-     | _ -> None)
-  | Vaet ->
-    (match v, a, e, tx with
-     | Some v, None, None, None ->
-       Some (bound_datom ~v (), fields ~v:true ())
-     | Some v, Some a, None, None ->
-       Some (bound_datom ~a ~v (), fields ~a:true ~v:true ())
-     | Some v, Some a, Some e, None ->
-       Some (bound_datom ~e ~a ~v (), fields ~e:true ~a:true ~v:true ())
-     | Some v, Some a, Some e, Some tx ->
        Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
      | _ -> None)
 
@@ -464,13 +423,6 @@ let compare_datom_to_bound context index d e a v tx =
     context.first_nonzero
       [ compare_optional d.a a
       ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
-  | Vaet ->
-    context.first_nonzero
-      [ compare_optional_with context.compare_value d.v v
-      ; compare_optional d.a a
       ; compare_optional d.e e
       ; compare_optional d.tx tx
       ]

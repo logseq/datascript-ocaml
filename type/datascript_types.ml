@@ -119,11 +119,9 @@ and db =
   ; eavt_index : datom Persistent_sorted_set.t
   ; aevt_index : datom Persistent_sorted_set.t
   ; avet_index : datom Persistent_sorted_set.t
-  ; vaet_index : datom Persistent_sorted_set.t
   ; max_eid : entity_id
   ; max_datom_e : entity_id
   ; max_tx : tx
-  ; unique_index : (attr * value * entity_id) list
   ; filter_pred : (datom -> bool) option
   ; storage_ref : storage option
   ; tx_fns : (entity_id * (db -> value list -> tx_op list)) list
@@ -484,7 +482,6 @@ type index =
   | Eavt
   | Aevt
   | Avet
-  | Vaet
 
 type tx_meta = (attr * value) list
 

@@ -324,6 +324,22 @@ let ref_attr_for_value_resolution db attr =
 let resolve_value_for_attr db attr datoms tx max_eid tempids value =
   Transact_impl.resolve_value_for_attr transact_resolve_context db attr datoms tx max_eid tempids value
 
+module Db_access_impl = Db_access.Make (struct
+  let is_ref_attr = is_ref_attr
+  let is_unique = is_unique
+  let is_indexed = is_indexed
+  let entid = entid
+  let ident_attr = ident_attr
+  let lookup_ref_entity_id ?strict_missing db attr value = lookup_ref_entity_id ?strict_missing db attr value
+  let normalize_value = normalize_value
+  let unresolved_entity_ref_message = unresolved_entity_ref_message
+  let ref_attr_for_value_resolution = ref_attr_for_value_resolution
+  let entity_ref_of_ref_attr_value = entity_ref_of_ref_attr_value
+  let compare_value = compare_value
+  let first_nonzero = first_nonzero
+  let validate_entity_id = validate_entity_id
+end)
+
 let schema_fields = Schema.schema_fields
 
 let schema_from_transaction_datoms = Schema.schema_from_transaction_datoms
@@ -353,6 +369,10 @@ let transact_apply_context : Transact_impl.apply_context =
   ; add_active_datom_with_report
   ; validate_explicit_upsert_target
   ; entity_unique_identity
+  ; existing_unique_entity =
+      (fun db attr value ->
+        Db_access_impl.find_datom db Avet ~a:attr ~v:value ()
+        |> Option.map (fun d -> d.e))
   ; value_equal
   ; normalize_entity_attr_value
   ; tuple_direct_write_matches_sources
@@ -419,22 +439,6 @@ let tempid ?part ?value () =
     Temp_id (string_of_int !last_tempid)
 
 let resolve_tempid ?db:_ tempids tempid = List.assoc_opt tempid tempids
-
-module Db_access_impl = Db_access.Make (struct
-  let is_ref_attr = is_ref_attr
-  let is_unique = is_unique
-  let is_indexed = is_indexed
-  let entid = entid
-  let ident_attr = ident_attr
-  let lookup_ref_entity_id ?strict_missing db attr value = lookup_ref_entity_id ?strict_missing db attr value
-  let normalize_value = normalize_value
-  let unresolved_entity_ref_message = unresolved_entity_ref_message
-  let ref_attr_for_value_resolution = ref_attr_for_value_resolution
-  let entity_ref_of_ref_attr_value = entity_ref_of_ref_attr_value
-  let compare_value = compare_value
-  let first_nonzero = first_nonzero
-  let validate_entity_id = validate_entity_id
-end)
 
 let entid_ref = Db_access_impl.entid_ref
 let datoms = Db_access_impl.datoms

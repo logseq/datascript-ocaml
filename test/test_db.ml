@@ -177,8 +177,7 @@ let test_db__test_indexes_use_persistent_sorted_set () =
   in
   assert_uses_persistent_sorted_set db.eavt_index;
   assert_uses_persistent_sorted_set db.aevt_index;
-  assert_uses_persistent_sorted_set db.avet_index;
-  assert_uses_persistent_sorted_set db.vaet_index
+  assert_uses_persistent_sorted_set db.avet_index
 
 let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
   let db =

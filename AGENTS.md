@@ -1,0 +1,5 @@
+- Code and comments should be written in English.
+- Solve root causes, not workarounds.
+- Prefer simple implementations over complex ones.
+- All observable behavior should match upstream DataScript.
+- Implementation details should match upstream DataScript unless a divergence is explicitly requested and documented.

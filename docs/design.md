@@ -26,12 +26,9 @@ The OCaml port follows that model with:
 - `eavt_index : datom Persistent_sorted_set.t`
 - `aevt_index : datom Persistent_sorted_set.t`
 - `avet_index : datom Persistent_sorted_set.t`
-- `vaet_index : datom Persistent_sorted_set.t`
 
-`VAET` is explicit in the OCaml port because the public API exposes it directly
-for reverse-reference style access. Upstream derives reverse-reference behavior
-from indexed ref attrs; the OCaml port keeps a dedicated value-attribute-entity
-index for that public surface.
+There is no separate `VAET` index. Ref attributes are included in `AVET`,
+matching upstream DataScript.
 
 The DB does not keep a separate active `datoms` list. The active fact set is the
 `EAVT` persistent sorted set, matching upstream DataScript's DB shape. Code that
@@ -61,10 +58,8 @@ with `Persistent_sorted_set.add`. This gives the same structural-sharing model
 as upstream `set/conj`: the old DB keeps the old root, and the new DB points to
 updated roots that share unchanged tree structure.
 
-The port still computes `unique_index` and transaction reports separately:
+The port computes transaction reports separately:
 
-- `unique_index` is an auxiliary lookup cache for uniqueness checks, not one of
-  DataScript's ordered datom indexes.
 - transaction reports preserve `db_before`, `db_after`, and `tx_data` values as
   immutable snapshots.
 
@@ -77,7 +72,6 @@ The OCaml datom comparators mirror upstream:
 | `Eavt` | entity, attribute, value, tx |
 | `Aevt` | attribute, entity, value, tx |
 | `Avet` | attribute, value, entity, tx |
-| `Vaet` | value, attribute, entity, tx |
 
 The value comparator is DataScript-aware. Numeric values compare numerically, so
 `Int 1` and `Float 1.0` are comparator-equal for index bounds. Exact AVET
@@ -118,7 +112,7 @@ This is required for behavior such as:
 - `datoms db Eavt ~e ~a`
 - `datoms db Avet ~a ~v`
 - `seek_datoms db Avet ~a ~v`
-- `rseek_datoms db Vaet ~v ~a`
+- `rseek_datoms db Avet ~a ~v`
 - `index_range db attr ?start ?stop`
 
 The actual datoms stored in the persistent sorted sets are always normal
@@ -157,8 +151,7 @@ paths, so access reflects the DB value produced by that transaction.
 
 Not every value near the DB should become an ordered persistent index.
 
-- `unique_index` remains a lightweight uniqueness helper. It is not an
-  upstream PSS index and does not provide ordered public access.
+- uniqueness checks use `AVET`, matching upstream DataScript.
 - transaction-local datom lists are temporary staging values, not DB fields.
 - query rows, pull results, transaction reports, schema data, and storage
   payloads remain plain OCaml values.
@@ -180,7 +173,7 @@ Important tests covering this design:
 - `test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds`
 - `test_datoms_returns_lazy_sequence`
 - `test_datoms_slices_before_filtered_predicate`
-- `test_vaet_index_returns_ref_datoms_by_value`
+- `test_avet_index_returns_ref_datoms_by_attr_and_value`
 - `test_incremental_writes_keep_public_datoms_indexes_correct`
 - `test_seek_datoms_scans_forward_from_index_tuple`
 - `test_rseek_datoms_scans_backward_from_index_tuple`
@@ -196,7 +189,7 @@ DataScript checkout configured with `UPSTREAM_DATASCRIPT_REPO` and
 
 ## Maintenance Rules
 
-- Keep `eavt/aevt/avet/vaet` backed by `Persistent_sorted_set.t`.
+- Keep `eavt/aevt/avet` backed by `Persistent_sorted_set.t`.
 - Use the index comparator for all index membership, bounds, and slices.
 - Preserve old DB values after every transaction.
 - Apply filtered DB predicates after index slicing.

@@ -62,6 +62,7 @@ type apply_context =
   ; add_active_datom_with_report : ?allow_tuple:bool -> db -> tx -> datom list -> datom -> datom list * datom list
   ; validate_explicit_upsert_target : db -> datom list -> entity_id -> (attr * tx_value) list -> unit
   ; entity_unique_identity : db -> datom list -> (attr * tx_value) list -> entity_id option
+  ; existing_unique_entity : db -> attr -> value -> entity_id option
   ; value_equal : value -> value -> bool
   ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
   ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool

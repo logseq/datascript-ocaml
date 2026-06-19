@@ -355,7 +355,7 @@ let test_find_datom_returns_first_index_match () =
   if find_datom db Eavt ~e:42 () <> None then
     failwith "find_datom should return None when no datom matches"
 
-let test_vaet_index_returns_ref_datoms_by_value () =
+let test_avet_index_returns_ref_datoms_by_attr_and_value () =
   let db =
     empty_db ~schema:[ "friend", ref_many; "spouse", ref_attr; "name", indexed ] ()
     |> db_with
@@ -381,25 +381,29 @@ let test_vaet_index_returns_ref_datoms_by_value () =
          ]
   in
   assert_equal_triples
-    "VAET indexes only ref values in value-attribute-entity order"
-    [ 2, "friend", Ref 1
-    ; 3, "friend", Ref 1
-    ; 3, "friend", Ref 2
+    "AVET supports upstream ref attr/value filtering"
+    [ 2, "friend", Ref 1; 3, "friend", Ref 1 ]
+    (datoms db Avet ~a:"friend" ~v:(Ref 1) ());
+  assert_equal_triples
+    "AVET seek starts from the requested ref attr/value tuple"
+    [ 3, "friend", Ref 2
+    ; 1, "name", String "Ivan"
+    ; 3, "name", String "Oleg"
+    ; 2, "name", String "Petr"
     ; 3, "spouse", Ref 2
     ]
-    (datoms db Vaet ());
+    (seek_datoms db Avet ~a:"friend" ~v:(Ref 2) ());
   assert_equal_triples
-    "VAET supports target ref filtering"
-    [ 2, "friend", Ref 1; 3, "friend", Ref 1 ]
-    (datoms db Vaet ~v:(Ref 1) ());
-  assert_equal_triples
-    "VAET seek starts from the requested ref tuple"
-    [ 3, "friend", Ref 2; 3, "spouse", Ref 2 ]
-    (seek_datoms db Vaet ~v:(Ref 2) ());
-  assert_equal_triples
-    "VAET reverse seek walks backward from the requested ref tuple"
-    [ 3, "spouse", Ref 2; 3, "friend", Ref 2; 3, "friend", Ref 1; 2, "friend", Ref 1 ]
-    (rseek_datoms db Vaet ~v:(Ref 2) ~a:"spouse" ())
+    "AVET reverse seek walks backward from the requested ref attr/value tuple"
+    [ 3, "spouse", Ref 2
+    ; 2, "name", String "Petr"
+    ; 3, "name", String "Oleg"
+    ; 1, "name", String "Ivan"
+    ; 3, "friend", Ref 2
+    ; 3, "friend", Ref 1
+    ; 2, "friend", Ref 1
+    ]
+    (rseek_datoms db Avet ~a:"spouse" ~v:(Ref 2) ())
 
 let test_incremental_writes_keep_public_datoms_indexes_correct () =
   let person id name age friend =
@@ -443,9 +447,9 @@ let test_incremental_writes_keep_public_datoms_indexes_correct () =
     [ 1, "name", String "Ivan"; 3, "name", String "Ivan" ]
     (datoms db Avet ~a:"name" ~v:(String "Ivan") ());
   assert_equal_triples
-    "incremental VAET ref slice remains correct"
+    "incremental AVET ref slice remains correct"
     [ 2, "friend", Ref 1; 3, "friend", Ref 1 ]
-    (datoms db Vaet ~v:(Ref 1) ())
+    (datoms db Avet ~a:"friend" ~v:(Ref 1) ())
 
 let test_index_range_returns_avet_values_between_bounds () =
   let db =
@@ -16977,7 +16981,7 @@ let () =
   test_raw_datom_counts_tx_in_max_tx ();
   test_transact__test_with_datoms ();
   test_find_datom_returns_first_index_match ();
-  test_vaet_index_returns_ref_datoms_by_value ();
+  test_avet_index_returns_ref_datoms_by_attr_and_value ();
   test_incremental_writes_keep_public_datoms_indexes_correct ();
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
