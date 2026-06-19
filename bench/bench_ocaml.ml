@@ -162,6 +162,14 @@ let people size =
 let build_db size =
   db_with (people size) (empty_db ~schema ())
 
+let build_storage_db size =
+  let storage = memory_storage () in
+  let db = db_with (people size) (empty_db ~schema ~storage ()) in
+  store db;
+  match restore storage with
+  | Some db -> db
+  | None -> failwith "storage-backed benchmark db should restore"
+
 let add_one_by_one size =
   List.fold_left
     (fun db entity -> db_with [ entity ] db)
@@ -180,6 +188,8 @@ let main () =
   let db = lazy (build_db config.size) in
   bench config "add-all" (fun () -> consume_db (build_db config.size));
   bench config "add-one-by-one" (fun () -> consume_db (add_one_by_one config.size));
+  bench config "storage-roundtrip" (fun () ->
+    consume_db (build_storage_db config.size));
   bench config "datoms-name" (fun () -> consume_int (seq_length (datoms (Lazy.force db) Aevt ~a:"name" ())));
   bench config "query-name-age" (fun () ->
     consume_rows (q_string (Lazy.force db) "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]"));
