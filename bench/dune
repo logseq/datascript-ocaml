@@ -1,12 +1,25 @@
 (executable
  (name bench_ocaml)
+ (modules bench_ocaml)
  (modes exe js)
  (libraries datascript unix))
 
+(library
+ (name memory_bench_common)
+ (modules memory_scenario)
+ (libraries datascript))
+
 (executable
  (name memory_ocaml)
+ (modules memory_ocaml)
  (modes exe)
- (libraries datascript unix))
+ (libraries memory_bench_common unix))
+
+(executable
+ (name memory_ocaml_js)
+ (modules memory_ocaml_js)
+ (modes js)
+ (libraries memory_bench_common js_of_ocaml))
 
 (rule
  (alias bench)
@@ -14,6 +27,7 @@
   bench_ocaml.exe
   bench_ocaml.bc.js
   memory_ocaml.exe
+  memory_ocaml_js.bc.js
   bench_upstream.js
   memory_upstream.js
   ../script/benchmark_vs_cljs.sh)

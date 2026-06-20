@@ -5,7 +5,7 @@ const datascriptPath =
   process.env.UPSTREAM_DATASCRIPT_JS || `${process.cwd()}/_deps/datascript/release-js/datascript.js`;
 const d = require(datascriptPath);
 
-const defaultConfig = { size: 5000, txSize: 500 };
+const defaultConfig = { size: 1000, txSize: 20 };
 
 function parseArgs(argv) {
   const config = { ...defaultConfig };

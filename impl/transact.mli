@@ -63,6 +63,7 @@ type apply_context =
   ; validate_explicit_upsert_target : db -> datom list -> entity_id -> (attr * tx_value) list -> unit
   ; entity_unique_identity : db -> datom list -> (attr * tx_value) list -> entity_id option
   ; existing_unique_entity : db -> attr -> value -> entity_id option
+  ; existing_entity_attr_datoms : db -> entity_id -> attr -> datom list
   ; value_equal : value -> value -> bool
   ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
   ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool

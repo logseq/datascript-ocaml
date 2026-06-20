@@ -316,6 +316,7 @@ type apply_context =
   ; validate_explicit_upsert_target : db -> datom list -> entity_id -> (attr * tx_value) list -> unit
   ; entity_unique_identity : db -> datom list -> (attr * tx_value) list -> entity_id option
   ; existing_unique_entity : db -> attr -> value -> entity_id option
+  ; existing_entity_attr_datoms : db -> entity_id -> attr -> datom list
   ; value_equal : value -> value -> bool
   ; normalize_entity_attr_value : db -> entity_id -> attr -> value -> entity_id * attr * value
   ; tuple_direct_write_matches_sources : db -> datom list -> datom -> bool
@@ -1017,14 +1018,6 @@ let apply_tx context tx_ops db =
     let entity_is_new d =
       d.e > db.max_datom_e
     in
-    let existing_fact d =
-      (not (entity_is_new d)) && List.exists (context.same_fact d) (initial_datoms_list ())
-    in
-    let existing_cardinality_one_value d =
-      (not (entity_is_new d))
-      && context.resolve_context.cardinality db d.a = One
-      && List.exists (fun existing -> existing.e = d.e && existing.a = d.a) (initial_datoms_list ())
-    in
     let existing_unique_conflict d =
       unique_attr d.a
       &&
@@ -1033,9 +1026,33 @@ let apply_tx context tx_ops db =
       | None -> false
     in
     let conflicts_with_existing facts =
-      List.exists
-        (fun d -> existing_fact d || existing_cardinality_one_value d || existing_unique_conflict d)
-        facts
+      List.exists existing_unique_conflict facts
+    in
+    let retraction_datom d =
+      { d with tx; added = false }
+    in
+    let compare_eavt_datom left right =
+      compare
+        (left.e, left.a, left.v, left.tx)
+        (right.e, right.a, right.v, right.tx)
+    in
+    let existing_attr_datoms d =
+      if entity_is_new d then [] else context.existing_entity_attr_datoms db d.e d.a
+    in
+    let tx_data_for_fact d =
+      let d = { d with v = context.resolve_context.normalize_value d.v } in
+      let existing = existing_attr_datoms d in
+      let same_fact_exists = List.exists (context.same_fact d) existing in
+      match context.resolve_context.cardinality db d.a with
+      | Many -> if same_fact_exists then [] else [ d ]
+      | One ->
+        if same_fact_exists then
+          []
+        else
+          (existing
+           |> List.sort compare_eavt_datom
+           |> List.map retraction_datom)
+          @ [ d ]
     in
     if not (List.for_all supported_entity tx_ops) then
       None
@@ -1077,17 +1094,14 @@ let apply_tx context tx_ops db =
          if duplicate_fact facts || duplicate_unique facts || conflicts_with_existing facts then
            None
          else
-           let facts =
-             facts
-             |> List.map (fun d -> { d with v = context.resolve_context.normalize_value d.v })
-           in
+           let tx_data = List.concat_map tx_data_for_fact facts in
            let max_eid =
              List.fold_left
                (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
                max_eid
                facts
            in
-           Some (facts, max_eid, [], [], facts))
+           Some (tx_data, max_eid, [], [], tx_data))
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
@@ -1098,7 +1112,7 @@ let apply_tx context tx_ops db =
       state
       tx_ops
   in
-  let datoms, max_eid, tempids, entity_tempids, tx_data, fast_added_datoms =
+  let datoms, max_eid, tempids, entity_tempids, tx_data, fast_tx_data =
     match try_apply_bulk_explicit_entities () with
     | Some (datoms, max_eid, tempids, entity_tempids, tx_data) ->
       datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
@@ -1111,7 +1125,7 @@ let apply_tx context tx_ops db =
   let tempids = ensure_current_tx_tempid tempids tx in
   validate_tempid_usage tempids entity_tempids;
   let schema =
-    match fast_added_datoms with
+    match fast_tx_data with
     | Some _ -> db.schema
     | None ->
       context.schema_from_transaction_datoms
@@ -1130,10 +1144,10 @@ let apply_tx context tx_ops db =
     ; tx_fns = !current_tx_fns
     }
   in
-  ( (match fast_added_datoms with
-     | Some added_datoms ->
+  ( (match fast_tx_data with
+     | Some tx_data ->
        db_after
-       |> fun db -> context.refresh_db_indexes_with_added_datoms db added_datoms
+       |> fun db -> context.refresh_db_indexes_with_tx_data db tx_data
        |> context.refresh_db_identity
      | None ->
        db_after

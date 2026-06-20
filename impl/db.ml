@@ -153,8 +153,27 @@ let refresh_indexes_with_added_datoms db added_datoms =
   }
 
 let find_active_datom_by_fact db datom =
-  eavt_datoms db
-  |> List.find_opt (fun active -> active.e = datom.e && active.a = datom.a && value_equal active.v datom.v)
+  let bound = { datom with tx = tx0; added = true } in
+  let compare_to_fact left right =
+    Util.first_nonzero
+      [ compare left.e right.e
+      ; compare left.a right.a
+      ; Util.compare_value left.v right.v
+      ]
+  in
+  let cmp left right =
+    if right == bound then
+      compare_to_fact left right
+    else
+      Util.compare_datom Eavt left right
+  in
+  let duplicate_matches =
+    Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity datom.e) ~default:[]
+    |> List.filter (fun active -> active.a = datom.a && value_equal active.v datom.v)
+  in
+  match PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index @ duplicate_matches with
+  | [] -> None
+  | matches -> Some (matches |> List.sort (Util.compare_datom Eavt) |> List.hd)
 
 let add_datom_to_indexes db datom =
   { db with

@@ -367,6 +367,10 @@ let transact_apply_context : Transact_impl.apply_context =
       (fun db attr value ->
         Db_access_impl.find_datom db Avet ~a:attr ~v:value ()
         |> Option.map (fun d -> d.e))
+  ; existing_entity_attr_datoms =
+      (fun db entity_id attr ->
+        Db_access_impl.datoms db Eavt ~e:entity_id ~a:attr ()
+        |> List.of_seq)
   ; value_equal
   ; normalize_entity_attr_value
   ; tuple_direct_write_matches_sources
@@ -1234,6 +1238,30 @@ module Query = struct
       |> List.rev
       |> List.sort_uniq compare
 
+  let planned_entity_value_comparison db find_vars e_var match_attr match_value value_attr value_var predicate threshold =
+    match entity_value_row_builder find_vars e_var value_var with
+    | None -> []
+    | Some row ->
+      let matched_entities =
+        datoms_by_attr_value db match_attr match_value
+        |> List.map (fun datom -> datom.e)
+        |> List.sort_uniq compare
+      in
+      matched_entities
+      |> List.fold_left
+           (fun rows entity_id ->
+             datoms_list db Eavt ~e:entity_id ~a:value_attr ()
+             |> List.fold_left
+                  (fun rows datom ->
+                    if Built_ins.matches_comparison_predicate predicate (compare_value datom.v threshold) then
+                      row datom.e datom.v :: rows
+                    else
+                      rows)
+                  rows)
+           []
+      |> List.rev
+      |> List.sort_uniq compare
+
   let planned_child_by_parent_ref db find_var parent_var match_attr match_value child_var child_attr child_parent_var =
     if find_var = child_var && parent_var = child_parent_var then (
       let parent_ids =
@@ -1765,6 +1793,20 @@ module Query = struct
               entity_value
               entity_ref_attr)
        | _ -> None)
+    | Some find_vars, false,
+      [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
+      ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
+      ; ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
+      ]
+      when e1 = e2 && e1 <> value_var && compared_var = value_var ->
+      Some (planned_entity_value_comparison db find_vars e1 match_attr match_value value_attr value_var predicate threshold)
+    | Some find_vars, false,
+      [ Pattern (QVar e2, QAttr value_attr, QVar value_var)
+      ; Pattern (QVar e1, QAttr match_attr, QValue match_value)
+      ; ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
+      ]
+      when e1 = e2 && e1 <> value_var && compared_var = value_var ->
+      Some (planned_entity_value_comparison db find_vars e1 match_attr match_value value_attr value_var predicate threshold)
     | Some find_vars, false,
       [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
       ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
