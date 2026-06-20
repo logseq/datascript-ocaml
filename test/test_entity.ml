@@ -280,10 +280,73 @@ let test_entity__test_entity_hash () =
   assert_bool "different db values should produce different entity_hash values" (entity_hash e1 <> entity_hash (entity_or_fail db2));
   assert_bool "later db values should produce different entity_hash values" (entity_hash e1 <> entity_hash (entity_or_fail db3))
 
+let test_entity__test_entity_attr_lookup_is_lazy () =
+  let db =
+    empty_db ~schema:[ "friend", ref_attr ] ()
+    |> db_with
+         (Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan") ] }
+          :: List.init 5000 (fun index ->
+            Add (Entity_id (index + 2), "friend", Ref 1)))
+  in
+  let all_datoms_calls = ref 0 in
+  let schema_attr db attr = List.assoc_opt attr db.schema in
+  let cardinality db attr =
+    match schema_attr db attr with
+    | Some spec -> spec.cardinality
+    | None -> One
+  in
+  let is_ref_attr db attr =
+    match schema_attr db attr with
+    | Some { value_type = Some RefType; _ } -> true
+    | _ -> false
+  in
+  let is_component db attr =
+    match schema_attr db attr with
+    | Some { is_component = true; _ } -> true
+    | _ -> false
+  in
+  let entity_id_of_ref db = function
+    | Entity_id entity_id ->
+      if datoms db Eavt ~e:entity_id () = [] then None else Some entity_id
+    | _ -> None
+  in
+  let context : Entity.context =
+    { datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+    ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+    ; all_datoms =
+        (fun db ->
+          incr all_datoms_calls;
+          datoms db Eavt ())
+    ; compare_value = Util.compare_value
+    ; cardinality
+    ; is_ref_attr
+    ; is_component
+    ; reverse_ref
+    ; is_reverse_ref
+    ; entity_id_of_ref
+    }
+  in
+  let entity =
+    match Entity.entity context db (Entity_id 1) with
+    | Some entity -> entity
+    | None -> failwith "expected entity"
+  in
+  assert_equal_int "constructing an entity should not scan all datoms" 0 !all_datoms_calls;
+  assert_equal_tx_value
+    "forward attr lookup should not materialize reverse attrs"
+    (Some (One_value (String "Ivan")))
+    (Entity.entity_attr context entity "name");
+  assert_equal_int "forward attr lookup should still avoid all datoms" 0 !all_datoms_calls;
+  ignore (Entity.entity_attr context entity "_friend");
+  assert_equal_int "reverse attr lookup should use AVET instead of all datoms" 0 !all_datoms_calls;
+  ignore (Entity.entity_attrs entity);
+  assert_equal_int "full entity materialization may scan all datoms once" 1 !all_datoms_calls
+
 let () =
   test_entity__test_entity ();
   test_entity__test_entity_refs ();
   test_entity__test_missing_refs ();
   test_entity__test_entity_misses ();
   test_entity__test_entity_equality ();
-  test_entity__test_entity_hash ()
+  test_entity__test_entity_hash ();
+  test_entity__test_entity_attr_lookup_is_lazy ()

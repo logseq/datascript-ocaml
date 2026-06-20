@@ -145,6 +145,7 @@ end
 module Entity : sig
   type context =
     { datoms_by_entity : db -> entity_id -> datom list
+    ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
     ; all_datoms : db -> datom list
     ; compare_value : value -> value -> int
     ; cardinality : db -> attr -> cardinality
@@ -158,6 +159,7 @@ module Entity : sig
   val entity : context -> db -> entity_ref -> entity option
   val entity_attr_raw : entity -> attr -> tx_value option
   val entity_attr : context -> entity -> attr -> tx_value option
+  val entity_attrs : entity -> (attr * tx_value) list
   val entity_db : entity -> db
   val is_entity : entity -> bool
   val entity_equal : entity -> entity -> bool
@@ -443,6 +445,7 @@ val tempid : ?part:string -> ?value:int -> unit -> entity_ref
 val resolve_tempid : ?db:db -> (string * entity_id) list -> string -> entity_id option
 val entity : db -> entity_ref -> entity option
 val entity_attr : entity -> attr -> tx_value option
+val entity_attrs : entity -> (attr * tx_value) list
 val entity_db : entity -> db
 val is_entity : entity -> bool
 val entity_equal : entity -> entity -> bool

@@ -3,12 +3,19 @@
  (modes exe js)
  (libraries datascript unix))
 
+(executable
+ (name memory_ocaml)
+ (modes exe)
+ (libraries datascript unix))
+
 (rule
  (alias bench)
  (deps
   bench_ocaml.exe
   bench_ocaml.bc.js
+  memory_ocaml.exe
   bench_upstream.js
+  memory_upstream.js
   ../script/benchmark_vs_cljs.sh)
  (action
   (setenv

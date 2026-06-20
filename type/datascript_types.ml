@@ -149,6 +149,8 @@ type entity =
   { id : entity_id
   ; db : db
   ; attrs : (attr * tx_value) list
+  ; lookup_attr : attr -> tx_value option
+  ; materialize_attrs : unit -> (attr * tx_value) list
   }
 
 type pulled_entity =

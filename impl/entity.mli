@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom list
+  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
   ; all_datoms : db -> datom list
   ; compare_value : value -> value -> int
   ; cardinality : db -> attr -> cardinality
@@ -15,6 +16,7 @@ type context =
 val entity : context -> db -> entity_ref -> entity option
 val entity_attr_raw : entity -> attr -> tx_value option
 val entity_attr : context -> entity -> attr -> tx_value option
+val entity_attrs : entity -> (attr * tx_value) list
 val entity_db : entity -> db
 val is_entity : entity -> bool
 val entity_equal : entity -> entity -> bool

@@ -479,6 +479,7 @@ let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
 let entity_context =
   { Entity.datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
   ; all_datoms = (fun db -> datoms_list db Eavt ())
   ; compare_value
   ; cardinality
@@ -497,6 +498,8 @@ let entity_attr_raw = Entity.entity_attr_raw
 let entity_attr entity attr =
   Entity.entity_attr entity_context entity attr
 
+let entity_attrs = Entity.entity_attrs
+
 let entity_db = Entity.entity_db
 
 let is_entity = Entity.is_entity
@@ -514,6 +517,7 @@ let pull_api_context : Pull_api_impl.context =
   { compare_value
   ; entity
   ; entity_attr_raw
+  ; entity_attrs
   ; datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
   ; cardinality

@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom list
+  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
   ; all_datoms : db -> datom list
   ; compare_value : value -> value -> int
   ; cardinality : db -> attr -> cardinality
@@ -74,17 +75,72 @@ let group_entity_attrs context db entity_id =
     @ group_reverse_entity_attrs context db entity_id
     |> List.sort (fun (left, _) (right, _) -> compare left right)
 
+let sorted_forward_entity_attrs context db entity_id =
+  group_forward_entity_attrs context db entity_id
+  |> List.sort (fun (left, _) (right, _) -> compare left right)
+
+let forward_entity_attr context db entity_id attr =
+  context.datoms_by_entity db entity_id
+  |> List.filter_map (fun d -> if d.a = attr then Some d.v else None)
+  |> entity_visible_attr_values context db attr
+  |> function
+  | [] -> None
+  | values -> Some (tx_value_of_attr_values context db attr values)
+
+let reverse_entity_attr context db entity_id attr =
+  let forward_attr = context.reverse_ref attr in
+  let values =
+    context.datoms_by_avet_ref db forward_attr entity_id
+    |> List.map (fun d -> Ref d.e)
+    |> List.sort context.compare_value
+  in
+  match values with
+  | [] -> None
+  | value :: _ when context.is_component db forward_attr -> Some (One_value value)
+  | values -> Some (Many_values values)
+
+let lazy_entity context db entity_id =
+  let materialized = lazy (group_entity_attrs context db entity_id) in
+  { id = entity_id
+  ; db
+  ; attrs = []
+  ; lookup_attr =
+      (fun attr ->
+        if context.is_reverse_ref attr then
+          reverse_entity_attr context db entity_id attr
+        else
+          forward_entity_attr context db entity_id attr)
+  ; materialize_attrs = (fun () -> Lazy.force materialized)
+  }
+
+let materialized_entity context db entity_id attrs =
+  { id = entity_id
+  ; db
+  ; attrs
+  ; lookup_attr =
+      (fun attr ->
+        match List.assoc_opt attr attrs with
+        | Some value -> Some value
+        | None ->
+          if context.is_reverse_ref attr then
+            reverse_entity_attr context db entity_id attr
+          else
+            None)
+  ; materialize_attrs = (fun () -> attrs)
+  }
+
 let entity context db entity_ref =
   match context.entity_id_of_ref db entity_ref with
   | None -> None
   | Some entity_id ->
-    (match group_entity_attrs context db entity_id with
-     | [] -> None
-     | attrs -> Some { id = entity_id; db; attrs })
+    if entity_has_forward_attrs context db entity_id then
+      Some (lazy_entity context db entity_id)
+    else
+      None
 
 let entity_attr_raw (entity : entity) = function
   | "db/id" -> Some (One_value (Int entity.id))
-  | attr -> List.assoc_opt attr entity.attrs
+  | attr -> entity.lookup_attr attr
 
 let rec materialized_tx_entity context db visited entity_id =
   if List.mem entity_id visited then
@@ -93,7 +149,7 @@ let rec materialized_tx_entity context db visited entity_id =
     match entity context db (Entity_id entity_id) with
     | None -> None
     | Some entity ->
-      let attrs = List.filter (fun (attr, _) -> not (context.is_reverse_ref attr)) entity.attrs in
+      let attrs = sorted_forward_entity_attrs context db entity.id in
       Some { db_id = Some (Entity_id entity_id); attrs }
 
 and materialize_ref_values context db visited = function
@@ -119,6 +175,8 @@ let entity_attr context (entity : entity) attr =
 
 let entity_db (entity : entity) = entity.db
 
+let entity_attrs (entity : entity) = entity.materialize_attrs ()
+
 let is_entity (_ : entity) = true
 
 let entity_equal (left : entity) (right : entity) =
@@ -130,10 +188,10 @@ let entity_hash (entity : entity) =
 let touch context ent =
   let rec touch_entity visited (entity : entity) =
     let attrs =
-      entity.attrs
+      entity.materialize_attrs ()
       |> List.map (fun (attr, tx_value) -> attr, touch_attr_value entity.db visited attr tx_value)
     in
-    { entity with attrs }
+    materialized_entity context entity.db entity.id attrs
   and touch_attr_value db visited attr tx_value =
     let component_attr = if context.is_reverse_ref attr then context.reverse_ref attr else attr in
     if not (context.is_component db component_attr) then
@@ -161,8 +219,10 @@ let touch context ent =
       match entity context db (Entity_id entity_id) with
       | None -> None
       | Some entity ->
-        let touched = touch_entity (entity_id :: visited) entity in
-        let attrs = List.filter (fun (attr, _) -> not (context.is_reverse_ref attr)) touched.attrs in
-        Some { db_id = Some (Entity_id touched.id); attrs }
+        let attrs =
+          sorted_forward_entity_attrs context db entity.id
+          |> List.map (fun (attr, tx_value) -> attr, touch_attr_value entity.db (entity_id :: visited) attr tx_value)
+        in
+        Some { db_id = Some (Entity_id entity.id); attrs }
   in
   touch_entity [ ent.id ] ent

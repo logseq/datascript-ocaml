@@ -4,6 +4,7 @@ type context =
   { compare_value : value -> value -> int
   ; entity : db -> entity_ref -> entity option
   ; entity_attr_raw : entity -> attr -> tx_value option
+  ; entity_attrs : entity -> (attr * tx_value) list
   ; datoms_by_entity : db -> entity_id -> datom list
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
   ; cardinality : db -> attr -> cardinality
@@ -154,7 +155,13 @@ let forward_entity context db entity_id attrs =
         | Many_values [] -> None
         | value -> Some (attr, value))
     in
-    Some { id = entity_id; db; attrs }
+    Some
+      { id = entity_id
+      ; db
+      ; attrs
+      ; lookup_attr = (fun attr -> List.assoc_opt attr attrs)
+      ; materialize_attrs = (fun () -> attrs)
+      }
 
 let dedupe_pulled_attrs attrs =
   attrs
@@ -205,7 +212,7 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitWildcard entity.id);
     let shadowed_attrs = wildcard_shadowed_attrs context context_selector in
     (pull_key_of_attr "db/id", Pulled_scalar (Int entity.id))
-    :: (entity.attrs
+    :: (context.entity_attrs entity
         |> List.filter (fun (attr, _) ->
           (not (context.is_reverse_ref attr)) && not (List.mem attr shadowed_attrs))
         |> List.map (fun (attr, value) ->
