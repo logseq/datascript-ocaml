@@ -17,6 +17,9 @@ let heap_bytes () =
 let report runtime scenario =
   Scenario.report runtime scenario (rss_bytes ()) (heap_bytes ())
 
+let settle_heap () =
+  Gc.full_major ()
+
 let main () =
   let config = Scenario.parse_args () in
   let runtime =
@@ -25,10 +28,11 @@ let main () =
     | None -> "ocaml-native"
   in
   let db = Scenario.build_db config.size in
+  settle_heap ();
   report runtime "initial-open";
   let db = Scenario.run_scenario config db in
+  settle_heap ();
   report runtime "after-transact-query";
-  Gc.full_major ();
   Gc.compact ();
   report runtime "after-gc";
   Scenario.finish db

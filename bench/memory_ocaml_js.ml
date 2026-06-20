@@ -30,6 +30,10 @@ let maybe_gc () =
 let report runtime scenario =
   Scenario.report runtime scenario (rss_bytes ()) (heap_bytes ())
 
+let settle_heap () =
+  Gc.full_major ();
+  maybe_gc ()
+
 let trace_enabled () =
   match Sys.getenv_opt "MEM_BENCH_TRACE" with
   | Some "1" | Some "true" -> true
@@ -47,11 +51,12 @@ let main () =
     | None -> "js_of_ocaml"
   in
   let db = Scenario.build_db config.size in
+  settle_heap ();
   report runtime "initial-open";
   let db = Scenario.run_scenario ~probe:trace config db in
+  settle_heap ();
   report runtime "after-transact-query";
-  Gc.full_major ();
-  maybe_gc ();
+  settle_heap ();
   report runtime "after-gc";
   Scenario.finish db
 

@@ -166,8 +166,10 @@ function main() {
   const config = parseArgs(process.argv.slice(2));
   const runtime = process.env.MEMORY_RUNTIME_LABEL || "upstream-cljs-js";
   let db = buildDb(config.size);
+  forceGc();
   report(runtime, "initial-open");
   db = runScenario(config, db);
+  forceGc();
   report(runtime, "after-transact-query");
   forceGc();
   report(runtime, "after-gc");
