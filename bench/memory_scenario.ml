@@ -148,6 +148,52 @@ let run_scenario ?probe config db =
 let report runtime scenario rss_bytes heap_bytes =
   Printf.printf "%s\t%s\t%d\t%d\n%!" runtime scenario rss_bytes heap_bytes
 
+let ref_attrs =
+  [ "friend"; "mentor"; "team" ]
+
+let canonical_value attr = function
+  | Int value when List.mem attr ref_attrs -> "ref:" ^ string_of_int value
+  | Int value -> "int:" ^ string_of_int value
+  | Ref entity_id -> "ref:" ^ string_of_int entity_id
+  | String value -> "string:" ^ value
+  | Bool value -> "bool:" ^ string_of_bool value
+  | Keyword value -> "keyword:" ^ value
+  | Symbol value -> "symbol:" ^ value
+  | Float value -> "float:" ^ string_of_float value
+  | Nil -> "nil"
+  | Uuid value -> "uuid:" ^ value
+  | Instant value -> "instant:" ^ string_of_int value
+  | Regex value -> "regex:" ^ value
+  | TxRef -> "tx-ref"
+  | Ref_to _ -> "ref-to"
+  | List _ | Vector _ | Set _ | Map _ | Tuple _ -> "compound"
+
+let canonical_datom_line datom =
+  Printf.sprintf
+    "datom\t%d\t%s\t%s"
+    datom.e
+    datom.a
+    (canonical_value datom.a datom.v)
+
+let write_final_data path db =
+  let lines =
+    datoms db Eavt ()
+    |> List.of_seq
+    |> List.map canonical_datom_line
+    |> List.sort String.compare
+  in
+  let channel = open_out path in
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () ->
+      List.iter (fun line -> output_string channel line; output_char channel '\n') lines)
+
+let maybe_write_final_data db =
+  match Sys.getenv_opt "MEMORY_VERIFY_FILE" with
+  | None -> ()
+  | Some path -> write_final_data path db
+
 let finish db =
+  maybe_write_final_data db;
   consume_int db.max_eid;
   Printf.eprintf "blackhole=%d\n%!" !blackhole

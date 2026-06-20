@@ -26,19 +26,49 @@ ocaml_output="$(mktemp)"
 ocaml_js_output="$(mktemp)"
 upstream_output="$(mktemp)"
 combined_output="$(mktemp)"
-trap 'rm -f "$ocaml_output" "$ocaml_js_output" "$upstream_output" "$combined_output"' EXIT
+ocaml_verify="$(mktemp)"
+ocaml_js_verify="$(mktemp)"
+upstream_verify="$(mktemp)"
+trap 'rm -f "$ocaml_output" "$ocaml_js_output" "$upstream_output" "$combined_output" "$ocaml_verify" "$ocaml_js_verify" "$upstream_verify"' EXIT
 
 echo "size=$size"
 echo "tx_size=$tx_size"
 echo "upstream=$upstream_datascript_js"
 echo
 
-env MEMORY_RUNTIME_LABEL="ocaml-native" "$ocaml_native" "${args[@]}" > "$ocaml_output"
-env MEMORY_RUNTIME_LABEL="js_of_ocaml" node --expose-gc "$ocaml_js" "${args[@]}" > "$ocaml_js_output"
+env MEMORY_RUNTIME_LABEL="ocaml-native" MEMORY_VERIFY_FILE="$ocaml_verify" \
+  "$ocaml_native" "${args[@]}" > "$ocaml_output"
+env MEMORY_RUNTIME_LABEL="js_of_ocaml" MEMORY_VERIFY_FILE="$ocaml_js_verify" \
+  node --expose-gc "$ocaml_js" "${args[@]}" > "$ocaml_js_output"
 env UPSTREAM_DATASCRIPT_JS="$upstream_datascript_js" MEMORY_RUNTIME_LABEL="upstream-cljs-js" \
+  MEMORY_VERIFY_FILE="$upstream_verify" \
   node --expose-gc "$repo_root/bench/memory_upstream.js" "${args[@]}" > "$upstream_output"
 
 cat "$ocaml_output" "$ocaml_js_output" "$upstream_output" > "$combined_output"
+
+verify_final_data() {
+  local runtime="$1"
+  local actual="$2"
+  local diff_output
+  diff_output="$(mktemp)"
+  if diff -u "$upstream_verify" "$actual" > "$diff_output"; then
+    local lines
+    local sha
+    lines="$(wc -l < "$actual" | tr -d ' ')"
+    sha="$(shasum -a 256 "$actual" | awk '{print $1}')"
+    printf 'final-data\t%s\tPASS\tlines=%s\tsha256=%s\n' "$runtime" "$lines" "$sha"
+    rm -f "$diff_output"
+  else
+    echo "final-data	$runtime	FAIL"
+    cat "$diff_output"
+    rm -f "$diff_output"
+    return 1
+  fi
+}
+
+verify_final_data "ocaml-native" "$ocaml_verify"
+verify_final_data "js_of_ocaml" "$ocaml_js_verify"
+echo
 
 echo -e "runtime\tscenario\trss_mb\theap_mb\trss_bytes\theap_bytes"
 awk -F '\t' '

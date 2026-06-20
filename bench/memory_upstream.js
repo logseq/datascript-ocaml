@@ -51,6 +51,7 @@ const schema = {
 
 const names = ["Ivan", "Petr", "Sergey", "Oleg", "Yuri", "Dmitry", "Fedor", "Denis"];
 const statuses = ["todo", "doing", "done", "blocked"];
+const refAttrs = new Set(["friend", "mentor", "team"]);
 
 function person(size, i) {
   const friend = i === size ? 1 : i + 1;
@@ -122,6 +123,45 @@ function forceGc() {
   }
 }
 
+function datomField(datom, name, index) {
+  if (Array.isArray(datom)) return datom[index];
+  if (Object.prototype.hasOwnProperty.call(datom, name)) return datom[name];
+  const keywordName = `:${name}`;
+  if (Object.prototype.hasOwnProperty.call(datom, keywordName)) return datom[keywordName];
+  return datom[name];
+}
+
+function attrName(attr) {
+  return typeof attr === "string" && attr.startsWith(":") ? attr.slice(1) : String(attr);
+}
+
+function canonicalValue(attr, value) {
+  if (value === null || value === undefined) return "nil";
+  if (typeof value === "number") {
+    return refAttrs.has(attr) ? `ref:${value}` : `int:${value}`;
+  }
+  if (typeof value === "string") {
+    return value.startsWith(":") ? `keyword:${value.slice(1)}` : `string:${value}`;
+  }
+  if (typeof value === "boolean") return `bool:${value}`;
+  return `compound:${JSON.stringify(value)}`;
+}
+
+function canonicalDatomLine(datom) {
+  const entityId = datomField(datom, "e", 0);
+  const attr = attrName(datomField(datom, "a", 1));
+  const value = datomField(datom, "v", 2);
+  return `datom\t${entityId}\t${attr}\t${canonicalValue(attr, value)}`;
+}
+
+function writeFinalData(db) {
+  const path = process.env.MEMORY_VERIFY_FILE;
+  if (!path) return;
+  const fs = require("fs");
+  const lines = d.datoms(db, ":eavt").map(canonicalDatomLine).sort();
+  fs.writeFileSync(path, `${lines.join("\n")}\n`);
+}
+
 function main() {
   const config = parseArgs(process.argv.slice(2));
   const runtime = process.env.MEMORY_RUNTIME_LABEL || "upstream-cljs-js";
@@ -131,6 +171,7 @@ function main() {
   report(runtime, "after-transact-query");
   forceGc();
   report(runtime, "after-gc");
+  writeFinalData(db);
   consumeInt(d.datoms(db, ":eavt").length);
   console.error(`blackhole=${blackhole}`);
 }
