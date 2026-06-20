@@ -9,6 +9,7 @@ depends: [
   "dune" {>= "3.17"}
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
+  "js_of_ocaml" {with-test}
   "js_of_ocaml-compiler" {with-test}
   "yojson" {with-test}
 ]

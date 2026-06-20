@@ -67,3 +67,13 @@ jobs:
           UPSTREAM_DATASCRIPT_REPO: ${{ github.workspace }}/_ci/datascript
           UPSTREAM_DATASCRIPT_JS: ${{ github.workspace }}/_ci/datascript/release-js/datascript.js
         run: opam exec -- dune runtest
+
+      - name: Run memory benchmark
+        env:
+          UPSTREAM_DATASCRIPT_JS: ${{ github.workspace }}/_ci/datascript/release-js/datascript.js
+        run: opam exec -- script/memory_benchmark_vs_cljs.sh
+
+      - name: Run benchmark comparison
+        env:
+          UPSTREAM_DATASCRIPT_JS: ${{ github.workspace }}/_ci/datascript/release-js/datascript.js
+        run: opam exec -- script/benchmark_vs_cljs.sh
