@@ -69,6 +69,7 @@ type apply_context =
   ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
   ; refresh_db_indexes : db -> db
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
+  ; refresh_db_indexes_with_tx_data : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 

@@ -322,6 +322,7 @@ type apply_context =
   ; refresh_tuple_attrs_for_source : db -> tx -> datom list -> entity_id -> attr -> datom list -> datom list * datom list
   ; refresh_db_indexes : db -> db
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
+  ; refresh_db_indexes_with_tx_data : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 
@@ -1136,7 +1137,11 @@ let apply_tx context tx_ops db =
        |> context.refresh_db_identity
      | None ->
        db_after
-       |> fun db -> context.with_db_datoms db datoms
+       |> (fun db ->
+         if List.exists tx_op_affects_schema tx_ops then
+           context.with_db_datoms db datoms
+         else
+           context.refresh_db_indexes_with_tx_data db tx_data)
        |> context.refresh_db_identity)
   , tempids
   , tx_data

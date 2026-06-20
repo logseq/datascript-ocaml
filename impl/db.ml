@@ -152,6 +152,40 @@ let refresh_indexes_with_added_datoms db added_datoms =
   ; max_datom_e
   }
 
+let find_active_datom_by_fact db datom =
+  eavt_datoms db
+  |> List.find_opt (fun active -> active.e = datom.e && active.a = datom.a && value_equal active.v datom.v)
+
+let add_datom_to_indexes db datom =
+  { db with
+    eavt_index = PSet.add datom db.eavt_index
+  ; aevt_index = PSet.add datom db.aevt_index
+  ; avet_index =
+      if Schema.schema_attr_is_avet_accessible db.schema datom.a then
+        PSet.add datom db.avet_index
+      else
+        db.avet_index
+  ; max_datom_e = max db.max_datom_e datom.e
+  }
+
+let remove_datom_from_indexes db datom =
+  match find_active_datom_by_fact db datom with
+  | None -> db
+  | Some active ->
+    { db with
+      eavt_index = PSet.remove active db.eavt_index
+    ; aevt_index = PSet.remove active db.aevt_index
+    ; avet_index = PSet.remove active db.avet_index
+    }
+
+let refresh_indexes_with_tx_data db tx_data =
+  List.fold_left
+    (fun db datom ->
+      if datom.added then add_datom_to_indexes db datom
+      else remove_datom_from_indexes db datom)
+    db
+    tx_data
+
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
 

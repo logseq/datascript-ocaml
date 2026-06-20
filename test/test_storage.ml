@@ -10,6 +10,9 @@ let datoms db index ?e ?a ?v ?tx () =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d, got %d" label expected actual
 
+let assert_int_at_most label limit actual =
+  if actual > limit then failf "%s: expected at most %d, got %d" label limit actual
+
 let assert_upstream_storage_addresses label addresses =
   if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
     failf "%s: storage should not use OCaml snapshot address names" label;
@@ -53,6 +56,24 @@ let small_db ?storage () =
        ; Add (Entity_id 2, "name", String "Oleg")
        ; Add (Entity_id 3, "name", String "Petr")
        ]
+
+let large_db ?storage () =
+  empty_db ?storage ()
+  |> db_with
+       (List.init 1000 (fun index ->
+          let entity_id = index + 1 in
+          Add (Entity_id entity_id, "str", String (string_of_int entity_id))))
+
+let counting_storage () =
+  let storage = memory_storage () in
+  let writes = ref [] in
+  let storage_store entries =
+    writes := !writes @ List.map fst entries;
+    storage.storage_store entries
+  in
+  { storage with storage_store }, writes
+
+let reset_writes writes = writes := []
 
 let test_storage__test_basics () =
   let storage = memory_storage () in
@@ -143,6 +164,48 @@ let test_storage__test_restored_db_addresses () =
     | None -> failwith "restore should read stored db"
   in
   assert_upstream_storage_addresses "addresses should include restored db live nodes" (addresses [ restored ])
+
+let test_storage__test_restored_incremental_store_reuses_index_nodes () =
+  let storage, writes = counting_storage () in
+  let db = large_db () in
+  store ~storage db;
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored large db"
+  in
+  reset_writes writes;
+  store ~storage restored;
+  assert_int_at_most
+    "storing an unchanged restored db should not rewrite index nodes"
+    2
+    (List.length !writes);
+  reset_writes writes;
+  let db_after =
+    db_with [ Add (Entity_id 1001, "str", String "1001") ] restored
+  in
+  store ~storage db_after;
+  assert_int_at_most
+    "storing an incrementally changed restored db should write only changed index paths"
+    8
+    (List.length !writes);
+  assert_equal_triples
+    "incremental stored db remains restorable"
+    [ 1001, "str", String "1001" ]
+    (datoms db_after Eavt ~e:1001 ());
+  reset_writes writes;
+  let db_after_replacement =
+    db_with [ Add (Entity_id 1, "str", String "changed") ] restored
+  in
+  store ~storage db_after_replacement;
+  assert_int_at_most
+    "storing a cardinality-one replacement should write only changed index paths"
+    16
+    (List.length !writes);
+  assert_equal_triples
+    "replacement stored db remains restorable"
+    [ 1, "str", String "changed" ]
+    (datoms db_after_replacement Eavt ~e:1 ())
 
 let test_storage__test_conn () =
   let storage = memory_storage () in
@@ -238,5 +301,6 @@ let () =
   test_storage__test_file_storage ();
   test_storage__test_gc ();
   test_storage__test_restored_db_addresses ();
+  test_storage__test_restored_incremental_store_reuses_index_nodes ();
   test_storage__test_conn ();
   test_storage__test_db_with_tail ()

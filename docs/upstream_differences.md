@@ -144,9 +144,9 @@ option maps:
 - `init_db : ?schema:schema -> ?storage:storage -> datom list -> db`
 - `create_conn : ?schema:schema -> ?storage:storage -> unit -> conn`
 
-`Storage.settings` currently returns fixed values for `"branching-factor"` and
-`"ref-type"`. That is compatible with many call sites, but it is not exact
-upstream behavior for custom options.
+`Storage.settings` returns the active index settings for `"branching-factor"`
+and `"ref-type"`, but the public constructors still do not expose the full
+upstream option map.
 
 ### DataScript: Storage Wire Format Is Different
 
@@ -223,8 +223,9 @@ through restore.
 ### Persistent Sorted Set: Settings And Storage Shape Differ
 
 Upstream settings include at least `:branching-factor` and `:ref-type`
-(`:strong`, `:soft`, `:weak`). The OCaml PSS settings type currently contains
-only `branching_factor`.
+(`:strong`, `:soft`, `:weak`). The OCaml PSS settings type models both fields;
+OCaml treats `Soft` as reclaimable like `Weak` because OCaml does not expose JVM
+soft-reference pressure heuristics.
 
 The storage APIs also differ. Upstream `store` returns a root address and works
 with Clojure/JVM or CLJS storage protocols. OCaml `store` returns

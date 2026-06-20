@@ -51,6 +51,7 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
+let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
 
 let with_db_datoms = Db_impl.with_datoms
 
@@ -372,6 +373,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; refresh_tuple_attrs_for_source
   ; refresh_db_indexes
   ; refresh_db_indexes_with_added_datoms
+  ; refresh_db_indexes_with_tx_data
   ; refresh_db_identity
   }
 

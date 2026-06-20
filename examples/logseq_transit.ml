@@ -198,3 +198,32 @@ and read reader = function
 
 let of_string text =
   Yojson.Safe.from_string text |> read { cache = [||] }
+
+let escape_string text =
+  if String.length text > 0 then
+    match text.[0] with
+    | '~' | '^' | '`' -> "~" ^ text
+    | _ -> text
+  else
+    text
+
+let rec write = function
+  | Null -> `String "~_"
+  | Bool value -> `Bool value
+  | String value -> `String (escape_string value)
+  | Int value -> `Int value
+  | Int64 value when value >= Int64.of_int min_int && value <= Int64.of_int max_int ->
+    `Int (Int64.to_int value)
+  | Int64 value -> `String ("~i" ^ Int64.to_string value)
+  | Float value -> `Float value
+  | Keyword value -> `String ("~:" ^ value)
+  | Symbol value -> `String ("~$" ^ value)
+  | Array values -> `List (List.map write values)
+  | Map entries ->
+    `List (`String "^ " :: List.concat_map (fun (key, value) -> [ write key; write value ]) entries)
+  | Set values -> `List [ `String "~#set"; `List (List.map write values) ]
+  | List values -> `List [ `String "~#list"; `List (List.map write values) ]
+  | Tagged (tag, value) -> `List [ `String ("~#" ^ tag); write value ]
+
+let to_string value =
+  Yojson.Safe.to_string (write value)

@@ -136,20 +136,48 @@ let buffered_node_storage pending_entries =
   ; accessed = (fun _address -> ())
   }
 
-let restoring_node_storage storage =
+let normalize_stored_datom schema datom =
+  let schema_attr = Schema.schema_attr_by_name schema datom.a in
+  match schema_attr, datom.v with
+  | Some { value_type = Some RefType; _ }, Int entity_id -> { datom with v = Ref entity_id }
+  | Some { value_type = Some TupleType; _ }, Vector values ->
+    { datom with v = Tuple (List.map (fun value -> Some value) values) }
+  | Some { value_type = Some TupleType; _ }, List values ->
+    { datom with v = Tuple (List.map (fun value -> Some value) values) }
+  | _ -> datom
+
+let normalize_stored_datoms schema =
+  List.map (normalize_stored_datom schema)
+
+let normalize_stored_node schema = function
+  | PSet.Leaf datoms -> PSet.Leaf (normalize_stored_datoms schema datoms)
+  | PSet.Branch (keys, child_addresses) ->
+    PSet.Branch (normalize_stored_datoms schema keys, child_addresses)
+
+let normalize_stored_tail schema =
+  List.map (normalize_stored_datoms schema)
+
+let restoring_node_storage ?schema storage =
   { PSet.store_node =
-      (fun _node ->
-        invalid_arg "restored storage nodes cannot be stored through a restore adapter")
+      (fun node ->
+        let address = next_storage_address () in
+        storage.storage_store [ address, Storage_node node ];
+        address)
   ; restore_node =
       (fun address ->
         match storage.storage_restore address with
-        | Some (Storage_node node) -> Some node
+        | Some (Storage_node node) ->
+          Some
+            (match schema with
+             | None -> node
+             | Some schema -> normalize_stored_node schema node)
         | Some _ -> invalid_arg ("storage node address does not contain a node: " ^ address)
         | None -> None)
   ; accessed = (fun _address -> ())
   }
 
 let root_of_stored_indexes db eavt_address aevt_address avet_address =
+  let settings = PSet.settings db.eavt_index in
   { storage_schema = db.schema
   ; storage_max_eid = db.max_eid
   ; storage_max_tx = db.max_tx
@@ -158,7 +186,13 @@ let root_of_stored_indexes db eavt_address aevt_address avet_address =
   ; storage_avet = avet_address
   ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
-  ; storage_branching_factor = (PSet.settings db.eavt_index).branching_factor
+  ; storage_branching_factor = settings.branching_factor
+  ; storage_ref_type = settings.ref_type
+  }
+
+let settings_of_root root =
+  { PSet.branching_factor = root.storage_branching_factor
+  ; ref_type = root.storage_ref_type
   }
 
 let storage_backed_index node_storage index index_set =
@@ -168,8 +202,11 @@ let storage_backed_index node_storage index index_set =
   PSet.of_sorted_array_by ~settings ~storage:node_storage ~cmp items
 
 let store_index node_storage index index_set =
-  let storage_backed = storage_backed_index node_storage index index_set in
-  fst (PSet.store storage_backed)
+  match PSet.store index_set with
+  | address, _ -> address
+  | exception Invalid_argument message when String.equal message "store requires a storage-backed set" ->
+    let storage_backed = storage_backed_index node_storage index index_set in
+    fst (PSet.store storage_backed)
 
 let store_to_storage db storage =
   let pending_entries = ref [] in
@@ -202,14 +239,16 @@ let restore_root_snapshot storage =
   match storage.storage_restore root_address with
   | Some (Storage_root root) ->
     note_storage_root root;
-    let settings = { PSet.branching_factor = root.storage_branching_factor } in
-    let node_storage = restoring_node_storage storage in
+    let schema = Schema.validate_schema root.storage_schema in
+    let settings = settings_of_root root in
+    let node_storage = restoring_node_storage ~schema storage in
     (match PSet.restore ~cmp:(Util.compare_datom Eavt) ~settings node_storage root.storage_eavt with
      | Some eavt ->
        Some
          { serializable_schema = root.storage_schema
          ; serializable_datoms =
-             PSet.to_list eavt @ root.storage_duplicate_datoms |> List.sort (Util.compare_datom Eavt)
+             PSet.to_list eavt @ normalize_stored_datoms schema root.storage_duplicate_datoms
+             |> List.sort (Util.compare_datom Eavt)
          ; serializable_max_eid = root.storage_max_eid
          ; serializable_max_tx = root.storage_max_tx
          }
@@ -246,15 +285,15 @@ let restore context storage =
   | None -> None
   | Some (Storage_root root) ->
     note_storage_root root;
-    let settings = { PSet.branching_factor = root.storage_branching_factor } in
-    let node_storage = restoring_node_storage storage in
+    let schema = Schema.validate_schema root.storage_schema in
+    let settings = settings_of_root root in
+    let node_storage = restoring_node_storage ~schema storage in
     let restore_index index address =
       match PSet.restore ~cmp:(Util.compare_datom index) ~settings node_storage address with
       | Some index -> index
       | None -> invalid_arg ("storage root points at a missing index: " ^ address)
     in
-    let schema = Schema.validate_schema root.storage_schema in
-    let duplicate_datoms = root.storage_duplicate_datoms in
+    let duplicate_datoms = normalize_stored_datoms schema root.storage_duplicate_datoms in
     let duplicate_eavt_by_entity =
       let table = Hashtbl.create 1024 in
       List.iter
@@ -286,7 +325,7 @@ let restore context storage =
       ; tx_fns = []
       }
     in
-    Some (context.db_with_tail db (restore_tail_groups storage))
+    Some (context.db_with_tail db (normalize_stored_tail schema (restore_tail_groups storage)))
   | Some (Storage_tail _) -> invalid_arg "storage root does not contain root metadata"
   | Some (Storage_node _) -> invalid_arg "storage root does not contain root metadata"
 
@@ -320,9 +359,15 @@ let addresses dbs =
     | Some storage -> storage_root_addresses storage)
   |> List.sort_uniq compare
 
+let ref_type_keyword = function
+  | PSet.Strong -> "strong"
+  | PSet.Soft -> "soft"
+  | PSet.Weak -> "weak"
+
 let settings (db : db) =
-  [ "branching-factor", Int 512
-  ; "ref-type", Keyword "soft"
+  let index_settings = PSet.settings db.eavt_index in
+  [ "branching-factor", Int index_settings.branching_factor
+  ; "ref-type", Keyword (ref_type_keyword index_settings.ref_type)
   ; "storage", Bool (Option.is_some db.storage_ref)
   ]
 

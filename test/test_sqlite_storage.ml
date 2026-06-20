@@ -1,6 +1,7 @@
 open Datascript
 
 module Sqlite_storage = Logseq_sqlite_storage
+module Transit = Logseq_sqlite_storage__Logseq_transit
 
 let failf fmt = Printf.ksprintf failwith fmt
 
@@ -49,8 +50,81 @@ let select_single_string db_path sql =
           check_sql db sql rc;
           None))
 
+let select_single_int db_path sql =
+  with_sqlite db_path (fun db ->
+    let stmt = Sqlite3.prepare db sql in
+    Fun.protect
+      ~finally:(fun () -> check_sql db sql (Sqlite3.finalize stmt))
+      (fun () ->
+        match Sqlite3.step stmt with
+        | Sqlite3.Rc.ROW -> Sqlite3.column_int stmt 0
+        | Sqlite3.Rc.DONE -> 0
+        | rc ->
+          check_sql db sql rc;
+          0))
+
 let sql_quote text =
   "'" ^ String.concat "''" (String.split_on_char '\'' text) ^ "'"
+
+let ocaml_payload_prefix = "ocaml-marshal-hex:"
+
+let starts_with prefix text =
+  let prefix_len = String.length prefix in
+  String.length text >= prefix_len && String.sub text 0 prefix_len = prefix
+
+let assert_not_ocaml_marshal label content =
+  if starts_with ocaml_payload_prefix content then
+    failf "%s: SQLite content must be Transit, not OCaml marshal" label
+
+let transit_of_sqlite_content label content =
+  assert_not_ocaml_marshal label content;
+  match Transit.of_string content with
+  | value -> value
+  | exception Transit.Decode_error message ->
+    failf "%s: SQLite content is not decodable Transit: %s" label message
+  | exception Yojson.Json_error message ->
+    failf "%s: SQLite content is not JSON Transit: %s" label message
+
+let transit_key = function
+  | Transit.Keyword value | Transit.String value -> Some value
+  | _ -> None
+
+let transit_int = function
+  | Transit.Int value -> Some value
+  | Transit.Int64 value ->
+    if value >= Int64.of_int min_int && value <= Int64.of_int max_int then
+      Some (Int64.to_int value)
+    else
+      None
+  | _ -> None
+
+let transit_lookup key = function
+  | Transit.Map entries ->
+    List.find_map
+      (fun (entry_key, value) ->
+        match transit_key entry_key with
+        | Some entry_key when entry_key = key -> Some value
+        | _ -> None)
+      entries
+  | _ -> None
+
+let expect_transit_map label = function
+  | Transit.Map entries -> entries
+  | _ -> failf "%s: expected a Transit map" label
+
+let expect_transit_array label = function
+  | Transit.Array values -> values
+  | _ -> failf "%s: expected a Transit array" label
+
+let expect_transit_int label value =
+  match transit_int value with
+  | Some value -> value
+  | None -> failf "%s: expected a Transit integer" label
+
+let assert_transit_has_key label key value =
+  match transit_lookup key value with
+  | Some _ -> ()
+  | None -> failf "%s: missing Transit key :%s" label key
 
 let json_quote text =
   let buffer = Buffer.create (String.length text + 2) in
@@ -224,6 +298,149 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
         let names = datoms restored Avet ~a:"name" () in
         if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
+
+let test_sqlite_storage_raw_layout_after_transact () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite raw storage layout test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let schema =
+        [ "name", unique_identity
+        ; "age", indexed
+        ; "aka", many
+        ; "friend", ref_attr
+        ; "tag", many
+        ]
+      in
+      let conn = create_conn ~schema ~storage () in
+      ignore
+        (transact_conn
+           conn
+           ([ Add (Entity_id 1, "name", String "Ivan")
+            ; Add (Entity_id 1, "age", Int 15)
+            ; Add (Entity_id 1, "aka", String "Devil")
+            ; Add (Entity_id 1, "aka", String "Tupen")
+            ; Add (Entity_id 1, "friend", Ref 2)
+            ; Add (Entity_id 2, "name", String "Petr")
+            ; Add (Entity_id 2, "age", Int 37)
+            ]
+            @ List.init 40 (fun index ->
+              Add (Entity_id 1, "tag", String ("tag-" ^ string_of_int index)))));
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 2, "aka", String "Czar")
+           ; Add (Entity_id 3, "name", String "Nikolai")
+           ; Add (Entity_id 1, "tag", String "tail-tag")
+           ]);
+      assert_equal_int
+        "SQLite kvs should contain root and tail rows"
+        1
+        (select_single_int db_path "select count(*) from kvs where addr = 0;");
+      assert_equal_int
+        "SQLite kvs should contain transaction tail row"
+        1
+        (select_single_int db_path "select count(*) from kvs where addr = 1;");
+      if select_single_int db_path "select count(*) from kvs where addresses is not null;" <= 0 then
+        failwith "SQLite storage nodes should expose branch addresses in the Logseq addresses JSON column";
+      assert_equal_int
+        "SQLite storage should not write OCaml marshal payloads"
+        0
+        (select_single_int
+           db_path
+           ("select count(*) from kvs where content like " ^ sql_quote (ocaml_payload_prefix ^ "%") ^ ";"));
+      let root_content =
+        Option.value
+          ~default:""
+          (select_single_string db_path "select content from kvs where addr = 0;")
+      in
+      let tail_content =
+        Option.value
+          ~default:""
+          (select_single_string db_path "select content from kvs where addr = 1;")
+      in
+      let root = transit_of_sqlite_content "root row" root_content in
+      List.iter
+        (fun key -> assert_transit_has_key "SQLite root Transit metadata" key root)
+        [ "schema"
+        ; "max-eid"
+        ; "max-tx"
+        ; "eavt"
+        ; "aevt"
+        ; "avet"
+        ; "max-addr"
+        ; "branching-factor"
+        ; "ref-type"
+        ];
+      ignore (expect_transit_map "SQLite root row" root);
+      let schema_value =
+        match transit_lookup "schema" root with
+        | Some schema -> schema
+        | None -> failwith "SQLite root Transit metadata should include :schema"
+      in
+      List.iter
+        (fun attr -> assert_transit_has_key "SQLite root Transit schema" attr schema_value)
+        [ "name"; "age"; "aka"; "friend"; "tag" ];
+      let eavt_address =
+        expect_transit_int
+          "SQLite root :eavt"
+          (Option.value ~default:Transit.Null (transit_lookup "eavt" root))
+      in
+      let aevt_address =
+        expect_transit_int
+          "SQLite root :aevt"
+          (Option.value ~default:Transit.Null (transit_lookup "aevt" root))
+      in
+      let avet_address =
+        expect_transit_int
+          "SQLite root :avet"
+          (Option.value ~default:Transit.Null (transit_lookup "avet" root))
+      in
+      if eavt_address = aevt_address || eavt_address = avet_address || aevt_address = avet_address then
+        failwith "SQLite root row should point at three distinct index roots";
+      List.iter
+        (fun (label, address) ->
+          match
+            select_single_string
+              db_path
+              ("select content from kvs where addr = " ^ string_of_int address ^ ";")
+          with
+          | Some content ->
+            let node = transit_of_sqlite_content (label ^ " index root row") content in
+            assert_transit_has_key (label ^ " index root row") "keys" node
+          | None -> failf "%s index root address is missing from SQLite: %d" label address)
+        [ "EAVT", eavt_address; "AEVT", aevt_address; "AVET", avet_address ];
+      let tail = transit_of_sqlite_content "tail row" tail_content in
+      let tail_groups = expect_transit_array "SQLite tail row" tail in
+      let has_fact e a v =
+        List.exists
+          (List.exists
+             (function
+               | Transit.Array [ entity; attr; value; _tx ] ->
+                 Some e = transit_int entity && transit_key attr = Some a && value = v
+               | _ -> false))
+          (List.map (expect_transit_array "SQLite tail transaction group") tail_groups)
+      in
+      assert_equal_int "SQLite tail should contain one transaction group" 1 (List.length tail_groups);
+      if not (has_fact 2 "aka" (Transit.String "Czar")) then
+        failwith "SQLite tail should contain Petr aka datom";
+      if not (has_fact 3 "name" (Transit.String "Nikolai")) then
+        failwith "SQLite tail should contain Nikolai name datom";
+      if not (has_fact 1 "tag" (Transit.String "tail-tag")) then
+        failwith "SQLite tail should contain the latest tag datom";
+      match restore_conn (Sqlite_storage.storage db_path) with
+      | None -> failwith "SQLite storage should restore raw-layout test db"
+      | Some restored ->
+        assert_equal_query
+          "SQLite restored db should replay raw tail data"
+          [ [ Result_value (String "Petr") ] ]
+          (q_string
+             (conn_db restored)
+             "[:find ?friend-name
+               :where [?e :name \"Ivan\"]
+                      [?e :friend ?friend]
+                      [?friend :name ?friend-name]]"))
 
 let test_sqlite_storage_does_not_require_sqlite3_binary () =
   with_temp_db (fun db_path ->
@@ -2247,6 +2464,7 @@ let test_all_existing_logseq_graph_datoms_support_query_and_transact () =
 let () =
   Random.self_init ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
+  test_sqlite_storage_raw_layout_after_transact ();
   test_sqlite_storage_does_not_require_sqlite3_binary ();
   test_sqlite_storage_store_and_delete_are_separate ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
