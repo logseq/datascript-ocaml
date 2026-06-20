@@ -28,6 +28,7 @@ jobs:
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          dune-cache: true
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -52,15 +53,28 @@ jobs:
       - name: Install OCaml dependencies
         run: opam install . --deps-only --with-test -y
 
+      - name: Cache upstream DataScript
+        id: cache-upstream-datascript
+        uses: actions/cache@v4
+        with:
+          path: _ci/datascript
+          key: datascript-upstream-${{ runner.os }}-${{ env.DATASCRIPT_UPSTREAM_COMMIT }}
+
       - name: Checkout upstream DataScript
+        if: steps.cache-upstream-datascript.outputs.cache-hit != 'true'
         run: |
           git clone "$DATASCRIPT_UPSTREAM_REPO" _ci/datascript
           git -C _ci/datascript checkout "$DATASCRIPT_UPSTREAM_COMMIT"
-          test "$(git -C _ci/datascript rev-parse HEAD)" = "$DATASCRIPT_UPSTREAM_COMMIT"
 
       - name: Build upstream DataScript JS bundle
+        if: steps.cache-upstream-datascript.outputs.cache-hit != 'true'
         working-directory: _ci/datascript
         run: lein with-profile test cljsbuild once release
+
+      - name: Verify upstream DataScript cache
+        run: |
+          test "$(git -C _ci/datascript rev-parse HEAD)" = "$DATASCRIPT_UPSTREAM_COMMIT"
+          test -f _ci/datascript/release-js/datascript.js
 
       - name: Run tests
         env:
