@@ -361,7 +361,6 @@ let addresses dbs =
 
 let ref_type_keyword = function
   | PSet.Strong -> "strong"
-  | PSet.Soft -> "soft"
   | PSet.Weak -> "weak"
 
 let settings (db : db) =
