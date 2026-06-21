@@ -209,7 +209,6 @@ let transit_of_value_type = function
 
 let transit_of_ref_type = function
   | PSet.Strong -> Logseq_transit.Keyword "strong"
-  | PSet.Soft -> Logseq_transit.Keyword "soft"
   | PSet.Weak -> Logseq_transit.Keyword "weak"
 
 let transit_of_tuple_attrs attrs =
@@ -376,7 +375,6 @@ let schema_of_transit = function
   | _ -> []
 
 let ref_type_of_transit = function
-  | Logseq_transit.Keyword "soft" -> PSet.Soft
   | Logseq_transit.Keyword "weak" -> PSet.Weak
   | Logseq_transit.Keyword "strong" | _ -> PSet.Strong
 
