@@ -92,8 +92,7 @@ let schema_of_json = function
   | `Assoc entries -> List.map (fun (attr, spec) -> attr_name attr, schema_attr_of_json spec) entries
   | json -> failf "schema must be an object: %s" (Json.to_string json)
 
-let rec value_of_json json =
-  match json with
+let rec value_of_json = function
   | `Null -> Nil
   | `Bool value -> Bool value
   | `Int value -> Int value
@@ -103,7 +102,8 @@ let rec value_of_json json =
   | `String value -> String value
   | `List values -> Vector (List.map value_of_json values)
   | `Assoc entries -> Map (List.map (fun (key, value) -> String key, value_of_json value) entries)
-  | `Tuple _ | `Variant _ -> failf "unsupported value: %s" (Json.to_string json)
+  | json -> failf "unsupported value: %s" (Json.to_string json)
+[@@warning "-11"]
 
 let entity_ref_of_json = function
   | `Int entity_id -> Entity_id entity_id
