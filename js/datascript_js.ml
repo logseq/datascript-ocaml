@@ -119,6 +119,32 @@ let rec value_of_json = function
   | `Tuple values -> Vector (List.map value_of_json values)
   | `Variant _ -> invalid_arg "unsupported JavaScript value"
 
+let schema_attr_for_db db attr =
+  Option.bind db (fun db ->
+    match List.assoc_opt attr (schema db) with
+    | Some attr_schema -> Some attr_schema
+    | None -> List.assoc_opt (":" ^ attr) (schema db))
+
+let schema_attr_is_many db attr =
+  match schema_attr_for_db db attr with
+  | Some { cardinality = Many; _ } -> true
+  | Some _ | None -> false
+
+let schema_attr_is_ref db attr =
+  match schema_attr_for_db db attr with
+  | Some { value_type = Some RefType; _ } -> true
+  | Some _ | None -> false
+
+let value_of_json_for_attr ?db attr json =
+  match value_of_json json with
+  | Int entity_id when schema_attr_is_ref db attr -> Ref entity_id
+  | value -> value
+
+let tx_value_of_json_for_attr ?db attr = function
+  | `List values when schema_attr_is_many db attr ->
+    Many_values (List.map (value_of_json_for_attr ?db attr) values)
+  | json -> One_value (value_of_json_for_attr ?db attr json)
+
 let entity_ref_of_json = function
   | `Int entity_id when entity_id < 0 -> Temp_id (string_of_int entity_id)
   | `Int entity_id -> Entity_id entity_id
@@ -154,31 +180,34 @@ let datom_of_json = function
     datom ~tx ~added ~e:(int_field "e") ~a:(attr_name (string_field "a")) ~v:(value_of_json (Option.get (assoc_opt "v" entries))) ()
   | json -> invalid_arg ("unsupported datom: " ^ Json.to_string json)
 
-let tx_entity_of_assoc entries =
+let tx_entity_of_assoc ?db entries =
   let db_id = Option.map entity_ref_of_json (assoc_any [ ":db/id"; "db/id" ] entries) in
   let attrs =
     entries
     |> List.filter_map (fun (key, value) ->
       match key with
       | ":db/id" | "db/id" -> None
-      | key -> Some (attr_name key, One_value (value_of_json value)))
+      | key ->
+        let attr = attr_name key in
+        Some (attr, tx_value_of_json_for_attr ?db attr value))
   in
   Entity { db_id; attrs }
 
-let tx_op_of_json = function
-  | `Assoc entries -> tx_entity_of_assoc entries
+let tx_op_of_json ?db = function
+  | `Assoc entries -> tx_entity_of_assoc ?db entries
   | `List (`String op :: e :: `String a :: rest) ->
+    let attr = attr_name a in
     (match attr_name op, rest with
-     | "db/add", [ v ] -> Add (entity_ref_of_json e, attr_name a, value_of_json v)
-     | "db/retract", [ v ] -> Retract (entity_ref_of_json e, attr_name a, Some (value_of_json v))
-     | "db/retract", [] -> Retract (entity_ref_of_json e, attr_name a, None)
+     | "db/add", [ v ] -> Add (entity_ref_of_json e, attr, value_of_json_for_attr ?db attr v)
+     | "db/retract", [ v ] -> Retract (entity_ref_of_json e, attr, Some (value_of_json_for_attr ?db attr v))
+     | "db/retract", [] -> Retract (entity_ref_of_json e, attr, None)
      | _ -> invalid_arg ("unsupported transaction op: " ^ attr_name op))
   | `List [ `String op; e ] when attr_name op = "db.fn/retractEntity" ->
     RetractEntity (entity_ref_of_json e)
   | json -> invalid_arg ("unsupported transaction data: " ^ Json.to_string json)
 
-let tx_ops_of_json = function
-  | `List values -> List.map tx_op_of_json values
+let tx_ops_of_json ?db = function
+  | `List values -> List.map (tx_op_of_json ?db) values
   | json -> invalid_arg ("transaction data must be a JavaScript array: " ^ Json.to_string json)
 
 let datoms_of_json = function
@@ -308,7 +337,8 @@ let () =
         ; ( "db_with"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db entities ->
-                 Js.Unsafe.inject (db_with (tx_ops_of_json (json_of_js entities)) (db_handle db)))) )
+                 let db = db_handle db in
+                 Js.Unsafe.inject (db_with (tx_ops_of_json ~db (json_of_js entities)) db))) )
         ; ( "create_conn"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun schema ->
@@ -322,7 +352,9 @@ let () =
         ; ( "transact"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun conn entities ->
-                 let report = transact_conn (conn_handle conn) (tx_ops_of_json (json_of_js entities)) in
+                 let conn = conn_handle conn in
+                 let db_before = db conn in
+                 let report = transact_conn conn (tx_ops_of_json ~db:db_before (json_of_js entities)) in
                  tx_report_object report)) )
         ; ( "reset_conn"
           , Js.Unsafe.inject

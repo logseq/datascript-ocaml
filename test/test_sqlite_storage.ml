@@ -172,6 +172,12 @@ let assert_equal label expected actual =
 let assert_equal_int label expected actual =
   if expected <> actual then failf "%s: expected %d, got %d" label expected actual
 
+let assert_raises_invalid_arg label f =
+  match f () with
+  | exception Invalid_argument _ -> ()
+  | exception exn -> failf "%s: expected Invalid_argument, got %s" label (Printexc.to_string exn)
+  | _ -> failf "%s: expected Invalid_argument" label
+
 let assert_equal_query label expected actual =
   if expected <> actual then
     failf "%s: unexpected query result" label
@@ -269,6 +275,332 @@ let tuple_unique_identity attrs =
 let assert_equal_tx_flags label expected actual =
   let values = List.map (fun datom -> datom.e, datom.a, datom.v, datom.added) actual in
   if expected <> values then failf "%s: unexpected tx flags" label
+
+type sqlite_size =
+  { sqlite_rows : int
+  ; sqlite_content_bytes : int
+  ; sqlite_addresses_bytes : int
+  ; sqlite_file_bytes : int
+  }
+
+let sqlite_size db_path =
+  { sqlite_rows = select_single_int db_path "select count(*) from kvs;"
+  ; sqlite_content_bytes = select_single_int db_path "select coalesce(sum(length(content)), 0) from kvs;"
+  ; sqlite_addresses_bytes =
+      select_single_int db_path "select coalesce(sum(length(addresses)), 0) from kvs;"
+  ; sqlite_file_bytes = (Unix.stat db_path).st_size
+  }
+
+let assert_equal_sqlite_size label expected actual =
+  if expected <> actual then
+    failf
+      "%s: expected sqlite size rows=%d content=%d addresses=%d file=%d, got rows=%d content=%d addresses=%d file=%d"
+      label
+      expected.sqlite_rows
+      expected.sqlite_content_bytes
+      expected.sqlite_addresses_bytes
+      expected.sqlite_file_bytes
+      actual.sqlite_rows
+      actual.sqlite_content_bytes
+      actual.sqlite_addresses_bytes
+      actual.sqlite_file_bytes
+
+let comparable_datoms db =
+  datoms db Eavt ()
+  |> List.map (fun datom -> datom.e, datom.a, datom.v, datom.tx, datom.added)
+
+let assert_equal_final_datoms label expected actual =
+  if expected <> actual then failf "%s: final datoms differ" label
+
+let random_choice state values =
+  values.(Random.State.int state (Array.length values))
+
+let random_graph_schema =
+  [ "block/uuid", unique_identity
+  ; "block/name", indexed
+  ; "block/title", indexed
+  ; "block/page", ref_attr
+  ; "block/parent", ref_attr
+  ; "block/refs", ref_many
+  ; "block/tags", ref_many
+  ; "db/ident", unique_identity
+  ; "property/type", indexed
+  ; "property/public?", indexed
+  ; "property/default-value", indexed
+  ; "property/status", indexed
+  ; "property/priority", indexed
+  ; "property/estimate", indexed
+  ; "property/reviewer", ref_attr
+  ; "property/labels", many
+  ]
+
+let page_id state =
+  1 + Random.State.int state 20
+
+let property_id state =
+  100 + Random.State.int state 16
+
+let block_id state =
+  1_000 + Random.State.int state 500
+
+let label_value state =
+  String ("label-" ^ string_of_int (Random.State.int state 24))
+
+let block_title prefix id revision =
+  Printf.sprintf "%s block %d rev %d" prefix id revision
+
+let block_name title =
+  String.lowercase_ascii title
+  |> String.map (function ' ' -> '-' | ch -> ch)
+
+let create_page_tx page =
+  let title = "Page " ^ string_of_int page in
+  [ Entity
+      { db_id = Some (Entity_id page)
+      ; attrs =
+          [ "block/uuid", One_value (String ("page-" ^ string_of_int page))
+          ; "block/name", One_value (String (block_name title))
+          ; "block/title", One_value (String title)
+          ]
+      }
+  ]
+
+let create_property_tx property =
+  [ Entity
+      { db_id = Some (Entity_id property)
+      ; attrs =
+          [ "db/ident", One_value (Keyword ("property/generated-" ^ string_of_int property))
+          ; "property/type", One_value (Keyword "default")
+          ; "property/public?", One_value (Bool true)
+          ; "property/default-value", One_value (String "")
+          ; "block/title", One_value (String ("Generated property " ^ string_of_int property))
+          ]
+      }
+  ]
+
+let create_block_tx state revision =
+  let block = block_id state in
+  let title = block_title "Created" block revision in
+  let page = page_id state in
+  let parent = if Random.State.bool state then page else block_id state in
+  [ Entity
+      { db_id = Some (Entity_id block)
+      ; attrs =
+          [ "block/uuid", One_value (String ("block-" ^ string_of_int block))
+          ; "block/name", One_value (String (block_name title))
+          ; "block/title", One_value (String title)
+          ; "block/page", One_value (Ref page)
+          ; "block/parent", One_value (Ref parent)
+          ; ( "block/refs"
+            , Many_values
+                [ Ref (page_id state)
+                ; Ref (property_id state)
+                ] )
+          ; "block/tags", Many_values [ Ref (property_id state) ]
+          ; "property/status", One_value (Keyword (random_choice state [| "todo"; "doing"; "done" |]))
+          ; "property/priority", One_value (Int (1 + Random.State.int state 5))
+          ; "property/labels", Many_values [ label_value state ]
+          ]
+      }
+  ]
+
+let update_block_tx state revision =
+  let block = block_id state in
+  let title = block_title "Updated" block revision in
+  match Random.State.int state 7 with
+  | 0 ->
+    [ Add (Entity_id block, "block/title", String title)
+    ; Add (Entity_id block, "block/name", String (block_name title))
+    ]
+  | 1 ->
+    [ Add (Entity_id block, "block/page", Ref (page_id state))
+    ; Add (Entity_id block, "block/parent", Ref (block_id state))
+    ]
+  | 2 ->
+    [ Add (Entity_id block, "block/refs", Ref (page_id state))
+    ; Add (Entity_id block, "block/tags", Ref (property_id state))
+    ]
+  | 3 ->
+    [ Retract (Entity_id block, "block/refs", Some (Ref (page_id state)))
+    ; Retract (Entity_id block, "block/tags", Some (Ref (property_id state)))
+    ]
+  | 4 ->
+    [ Add (Entity_id block, "property/status", Keyword (random_choice state [| "todo"; "doing"; "done"; "blocked" |]))
+    ; Add (Entity_id block, "property/priority", Int (1 + Random.State.int state 5))
+    ; Add (Entity_id block, "property/estimate", Int (Random.State.int state 21))
+    ]
+  | 5 ->
+    [ Add (Entity_id block, "property/reviewer", Ref (block_id state))
+    ; Add (Entity_id block, "property/labels", label_value state)
+    ]
+  | _ ->
+    [ RetractAttr (Entity_id block, "property/status")
+    ; Retract (Entity_id block, "property/labels", Some (label_value state))
+    ]
+
+let update_property_tx state =
+  let property = property_id state in
+  match Random.State.int state 4 with
+  | 0 -> create_property_tx property
+  | 1 ->
+    [ Add (Entity_id property, "property/type", Keyword (random_choice state [| "default"; "number"; "date"; "checkbox" |]))
+    ; Add (Entity_id property, "property/public?", Bool (Random.State.bool state))
+    ]
+  | 2 ->
+    [ Add (Entity_id property, "property/default-value", String ("default-" ^ string_of_int (Random.State.int state 128))) ]
+  | _ -> [ RetractEntity (Entity_id property) ]
+
+let delete_block_tx state =
+  match Random.State.int state 3 with
+  | 0 -> [ RetractEntity (Entity_id (block_id state)) ]
+  | 1 ->
+    let block = block_id state in
+    [ RetractAttr (Entity_id block, "block/parent")
+    ; RetractAttr (Entity_id block, "block/page")
+    ]
+  | _ ->
+    let block = block_id state in
+    [ RetractAttr (Entity_id block, "property/priority")
+    ; RetractAttr (Entity_id block, "property/estimate")
+    ; RetractAttr (Entity_id block, "property/reviewer")
+    ]
+
+let random_graph_tx state index =
+  match Random.State.int state 10 with
+  | 0 -> create_page_tx (page_id state)
+  | 1 -> update_property_tx state
+  | 2 | 3 -> create_block_tx state index
+  | 4 -> delete_block_tx state
+  | _ -> update_block_tx state index
+
+let bootstrap_graph_txs =
+  List.init 20 (fun index -> create_page_tx (index + 1))
+  @ List.init 16 (fun index -> create_property_tx (100 + index))
+
+let random_graph_tx_batch_size = 20
+
+let rec take count values =
+  match count, values with
+  | 0, _ | _, [] -> []
+  | count, value :: rest -> value :: take (count - 1) rest
+
+let rec drop count values =
+  match count, values with
+  | 0, values | _, ([] as values) -> values
+  | count, _ :: rest -> drop (count - 1) rest
+
+let chunk size values =
+  let rec loop chunks values =
+    match values with
+    | [] -> List.rev chunks
+    | _ ->
+      let chunk = take size values in
+      loop (chunk :: chunks) (drop (List.length chunk) values)
+  in
+  loop [] values
+
+let random_graph_txs seed op_count =
+  let state = Random.State.make [| seed; op_count |] in
+  let rec collect index count ops =
+    if count >= op_count then
+      take op_count (List.rev ops)
+    else
+      let next_ops = random_graph_tx state index in
+      collect (index + 1) (count + List.length next_ops) (List.rev_append next_ops ops)
+  in
+  collect 0 0 [] |> chunk random_graph_tx_batch_size
+
+let apply_txs conn txs =
+  List.iter (fun tx -> ignore (transact_conn conn tx)) txs
+
+let sqlite_property_db db_path txs =
+  let storage = Sqlite_storage.storage db_path in
+  let conn = create_conn ~schema:random_graph_schema ~storage () in
+  apply_txs conn txs;
+  match restore storage with
+  | Some db -> db
+  | None -> failwith "SQLite property test should restore final db"
+
+let memory_property_db txs =
+  let conn = create_conn ~schema:random_graph_schema () in
+  apply_txs conn txs;
+  conn_db conn
+
+let test_sqlite_storage_random_property_txs () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite random property transaction test: sqlite3 is not available"
+  else
+    List.iter
+      (fun tx_count ->
+        let txs = bootstrap_graph_txs @ random_graph_txs 0x5eed tx_count in
+        with_temp_db (fun left_path ->
+          with_temp_db (fun right_path ->
+            let expected = comparable_datoms (memory_property_db txs) in
+            let left = sqlite_property_db left_path txs in
+            let right = sqlite_property_db right_path txs in
+            let left_size = sqlite_size left_path in
+            assert_equal_final_datoms
+              (Printf.sprintf "SQLite property final datoms for %d txs" tx_count)
+              expected
+              (comparable_datoms left);
+            assert_equal_final_datoms
+              (Printf.sprintf "SQLite repeated property final datoms for %d txs" tx_count)
+              expected
+              (comparable_datoms right);
+            assert_equal_sqlite_size
+              (Printf.sprintf "SQLite property storage size for %d txs" tx_count)
+              left_size
+              (sqlite_size right_path))))
+      [ 1_000 ]
+
+let test_sqlite_storage_validates_db_attribute_transactions () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite db attribute validation test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let conn = create_conn ~storage:(Sqlite_storage.storage db_path) () in
+      assert_raises_invalid_arg
+        "SQLite schema transaction with valueType requires db/ident"
+        (fun () ->
+          ignore
+            (transact_conn
+               conn
+               [ Entity
+                   { db_id = Some (Entity_id 1)
+                   ; attrs =
+                       [ "db/valueType", One_value (Keyword "db.type/ref")
+                       ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+                       ]
+                   }
+               ]));
+      assert_raises_invalid_arg
+        "SQLite schema transaction with valueType requires db/cardinality"
+        (fun () ->
+          ignore
+            (transact_conn
+               conn
+               [ Entity
+                   { db_id = Some (Entity_id 2)
+                   ; attrs =
+                       [ "db/ident", One_value (Keyword "friend")
+                       ; "db/valueType", One_value (Keyword "db.type/ref")
+                       ]
+                   }
+               ]));
+      assert_raises_invalid_arg
+        "SQLite schema transaction cannot install db namespace attrs"
+        (fun () ->
+          ignore
+            (transact_conn
+               conn
+               [ Entity
+                   { db_id = Some (Entity_id 3)
+                   ; attrs =
+                       [ "db/ident", One_value (Keyword "db/user")
+                       ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+                       ]
+                   }
+               ])))
 
 let test_sqlite_storage_round_trips_ocaml_payloads () =
   if not (sqlite3_available ()) then
@@ -2463,6 +2795,8 @@ let test_all_existing_logseq_graph_datoms_support_query_and_transact () =
 
 let () =
   Random.self_init ();
+  test_sqlite_storage_validates_db_attribute_transactions ();
+  test_sqlite_storage_random_property_txs ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
   test_sqlite_storage_raw_layout_after_transact ();
   test_sqlite_storage_does_not_require_sqlite3_binary ();

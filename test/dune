@@ -123,6 +123,26 @@
  (modules test_sqlite_storage)
  (libraries datascript logseq_sqlite_storage unix sqlite3))
 
+(executable
+ (name sqlite_cross_runtime_native)
+ (modules sqlite_cross_runtime_native)
+ (libraries datascript unix sqlite3 yojson))
+
+(rule
+ (alias runtest)
+ (deps
+  sqlite_cross_runtime_native.exe
+  sqlite_cross_runtime_parity.js
+  ../js/datascript_js.bc.js)
+ (action
+  (run
+   node
+   --no-warnings
+   --experimental-sqlite
+   %{dep:sqlite_cross_runtime_parity.js}
+   %{dep:sqlite_cross_runtime_native.exe}
+   %{dep:../js/datascript_js.bc.js})))
+
 (test
  (name test_logseq_query_parity)
  (modules test_logseq_query_parity)

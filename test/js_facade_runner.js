@@ -54,3 +54,20 @@ const conn = d.create_conn(schema);
 const report = d.transact(conn, [{ ":db/id": -1, name: "Petr" }]);
 assert(d.db(conn) === report.db_after, "transact should update the connection");
 assert(d.resolve_tempid(report.tempids, -1) === 1, "resolve_tempid should read tempid map");
+
+const refConn = d.create_conn({
+  friend: { ":db/valueType": ":db.type/ref" },
+  team: { ":db/valueType": ":db.type/ref", ":db/cardinality": ":db.cardinality/many" },
+});
+d.transact(refConn, [
+  [":db/add", 1, "friend", 2],
+  { ":db/id": 1, team: [2, 3] },
+]);
+assert(
+  JSON.stringify(d.q("[:find ?friend ?team :where [1 :friend ?friend] [1 :team ?team]]", d.db(refConn))) ===
+    JSON.stringify([
+      [2, 2],
+      [2, 3],
+    ]),
+  "JS facade should parse schema ref values and cardinality-many entity arrays",
+);
