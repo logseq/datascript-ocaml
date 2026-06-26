@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 "use strict";
 
-const datascriptPath =
-  process.env.UPSTREAM_DATASCRIPT_JS || `${process.cwd()}/_deps/datascript/release-js/datascript.js`;
+const datascriptPath = process.env.UPSTREAM_DATASCRIPT_JS;
+
+if (!datascriptPath) {
+  console.error("Set UPSTREAM_DATASCRIPT_JS to the upstream DataScript JS bundle.");
+  process.exit(2);
+}
+
 const d = require(datascriptPath);
 
 const defaultConfig = { size: 200, warmupMs: 200, sampleMs: 500, samples: 5 };

@@ -4,12 +4,13 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 size="${MEM_BENCH_SIZE:-1000}"
 tx_size="${MEM_BENCH_TX_SIZE:-20}"
-upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-$repo_root/_deps/datascript/release-js/datascript.js}"
+upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-}"
 ocaml_native="${MEM_BENCH_OCAML_NATIVE:-$repo_root/_build/default/bench/memory_ocaml.exe}"
 ocaml_js="${MEM_BENCH_OCAML_JS:-$repo_root/_build/default/bench/memory_ocaml_js.bc.js}"
 
-if [ ! -f "$upstream_datascript_js" ] && [ -f "$repo_root/../datascript/release-js/datascript.js" ]; then
-  upstream_datascript_js="$repo_root/../datascript/release-js/datascript.js"
+if [ -z "$upstream_datascript_js" ]; then
+  echo "Set UPSTREAM_DATASCRIPT_JS to the upstream DataScript JS bundle." >&2
+  exit 2
 fi
 
 if [ ! -f "$upstream_datascript_js" ]; then

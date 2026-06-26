@@ -80,8 +80,11 @@
         :read-error (.getMessage t)}])))
 
 (defn -main [& [root out]]
-  (let [root (or root "../logseq")
-        out (or out "logseq_queries.edn")
+  (when-not root
+    (binding [*out* *err*]
+      (println "Usage: clojure -M script/extract_logseq_queries.clj LOGSEQ_ROOT [OUT]"))
+    (System/exit 2))
+  (let [out (or out "logseq_queries.edn")
         entries (->> (source-files root)
                      (mapcat #(extract-from-file root %))
                      (remove :read-error)

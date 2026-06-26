@@ -52,8 +52,11 @@
        vec))
 
 (defn -main [& [logseq-root out]]
-  (let [logseq-root (or logseq-root "../logseq")
-        out (or out "logseq_runtime_inputs.edn")
+  (when-not logseq-root
+    (binding [*out* *err*]
+      (println "Usage: clojure -M script/extract_logseq_runtime_inputs.clj LOGSEQ_ROOT [OUT]"))
+    (System/exit 2))
+  (let [out (or out "logseq_runtime_inputs.edn")
         rules-file (io/file logseq-root "deps/db/src/logseq/db/frontend/rules.cljc")
         forms (read-file-forms rules-file)
         base-rules (merge-rules-form {} (def-form forms 'rules))

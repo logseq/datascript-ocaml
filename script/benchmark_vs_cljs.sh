@@ -6,9 +6,14 @@ size="${BENCH_SIZE:-1000}"
 warmup_ms="${BENCH_WARMUP_MS:-200}"
 sample_ms="${BENCH_SAMPLE_MS:-500}"
 samples="${BENCH_SAMPLES:-5}"
-upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-$repo_root/_deps/datascript/release-js/datascript.js}"
+upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-}"
 ocaml_native="${BENCH_OCAML_NATIVE:-$repo_root/_build/default/bench/bench_ocaml.exe}"
 ocaml_js="${BENCH_OCAML_JS:-$repo_root/_build/default/bench/bench_ocaml.bc.js}"
+
+if [ -z "$upstream_datascript_js" ]; then
+  echo "Set UPSTREAM_DATASCRIPT_JS to the upstream DataScript JS bundle." >&2
+  exit 2
+fi
 
 if [ ! -f "$upstream_datascript_js" ]; then
   echo "Upstream DataScript JS bundle not found: $upstream_datascript_js" >&2

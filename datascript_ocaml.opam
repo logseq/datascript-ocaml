@@ -9,12 +9,14 @@ depends: [
   "dune" {>= "3.17"}
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
+  "melange"
+  "melange-transit"
   "js_of_ocaml" {with-test}
   "js_of_ocaml-compiler" {with-test}
   "yojson" {with-test}
 ]
 pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git"]
+  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#074401d81ca22b9d44c725d7f171a67d69765a31"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]

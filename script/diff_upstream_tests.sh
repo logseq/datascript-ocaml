@@ -2,12 +2,17 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-upstream_dir="${UPSTREAM_TEST_DIR:-$repo_root/_deps/datascript/test/datascript/test}"
+upstream_dir="${UPSTREAM_TEST_DIR:-}"
 alias_file="${UPSTREAM_TEST_ALIASES:-$repo_root/test/upstream_test_aliases.tsv}"
 strict="${UPSTREAM_TEST_DIFF_STRICT:-0}"
 
 if [ "${1:-}" = "--strict" ]; then
   strict=1
+fi
+
+if [ -z "$upstream_dir" ]; then
+  echo "Set UPSTREAM_TEST_DIR to the upstream DataScript test directory." >&2
+  exit 2
 fi
 
 if [ ! -d "$upstream_dir" ]; then

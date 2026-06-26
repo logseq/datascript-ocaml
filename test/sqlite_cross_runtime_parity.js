@@ -9,7 +9,14 @@ const { DatabaseSync } = require("node:sqlite");
 
 const nativeExe = path.resolve(process.argv[2]);
 const jsOfOcamlPath = path.resolve(process.argv[3]);
-const upstreamPath = path.resolve(process.env.UPSTREAM_DATASCRIPT_JS || process.argv[4] || "../datascript/release-js/datascript.js");
+const upstreamInput = process.env.UPSTREAM_DATASCRIPT_JS || process.argv[4];
+
+if (!upstreamInput) {
+  console.error("Set UPSTREAM_DATASCRIPT_JS or pass the upstream DataScript bundle path.");
+  process.exit(2);
+}
+
+const upstreamPath = path.resolve(upstreamInput);
 
 const actionCount = 1000;
 const batchSize = 20;

@@ -646,7 +646,7 @@ let squuid ?msec () =
   let msec =
     match msec with
     | Some msec -> msec
-    | None -> int_of_float (Unix.gettimeofday () *. 1000.0)
+    | None -> int_of_float (Sys.time () *. 1000.0)
   in
   let seconds = msec / 1000 in
   let r1 = Random.bits () land 0xffff in

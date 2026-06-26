@@ -52,7 +52,7 @@ let ensure_storage_dir dir =
     if not (Sys.is_directory dir) then
       invalid_arg ("storage path is not a directory: " ^ dir)
   end
-  else Unix.mkdir dir 0o755
+  else Sys.mkdir dir 0o755
 
 let hex_digit value =
   Char.chr (if value < 10 then Char.code '0' + value else Char.code 'a' + value - 10)
