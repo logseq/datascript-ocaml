@@ -1,6 +1,6 @@
 module Ds = Datascript_types
 module PSet = Persistent_sorted_set
-module Transit = Transit.Json
+module Transit = Transit_melange.Transit.Json
 
 open Ds
 
@@ -338,5 +338,5 @@ let payload_of_transit = function
   | (Transit.Array _ | Transit.List _) as tail -> Storage_tail (storage_tail_of_transit tail)
   | _ -> invalid_arg "unknown storage payload"
 
-let encode payload = payload |> payload_to_transit |> Transit.to_string
+let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit

@@ -1,6 +1,7 @@
 open Datascript
 
 module PSet = Persistent_sorted_set
+module Transit = Transit_native.Transit.Json
 
 type content_format =
   | Ocaml_marshal
@@ -146,24 +147,24 @@ let storage_address_of_sqlite_addr = function
   | address -> string_of_int address
 
 let string_of_transit_key = function
-  | Logseq_transit.Keyword value | Logseq_transit.String value -> Some value
+  | Transit.Keyword value | Transit.String value -> Some value
   | _ -> None
 
 let keyword_of_transit = function
-  | Logseq_transit.Keyword value -> Some value
+  | Transit.Keyword value -> Some value
   | _ -> None
 
 let bool_of_transit = function
-  | Logseq_transit.Bool value -> Some value
+  | Transit.Bool value -> Some value
   | _ -> None
 
 let string_of_transit = function
-  | Logseq_transit.String value -> Some value
+  | Transit.String value -> Some value
   | _ -> None
 
 let int_of_transit_value = function
-  | Logseq_transit.Int value -> Some value
-  | Logseq_transit.Int64 value ->
+  | Transit.Int value -> Some value
+  | Transit.Int64 value ->
     if value >= Int64.of_int min_int && value <= Int64.of_int max_int then
       Some (Int64.to_int value)
     else
@@ -191,108 +192,108 @@ let logseq_schema_default_attr =
   }
 
 let transit_of_cardinality = function
-  | One -> Logseq_transit.Keyword "db.cardinality/one"
-  | Many -> Logseq_transit.Keyword "db.cardinality/many"
+  | One -> Transit.Keyword "db.cardinality/one"
+  | Many -> Transit.Keyword "db.cardinality/many"
 
 let transit_of_unique = function
-  | Value -> Logseq_transit.Keyword "db.unique/value"
-  | Identity -> Logseq_transit.Keyword "db.unique/identity"
+  | Value -> Transit.Keyword "db.unique/value"
+  | Identity -> Transit.Keyword "db.unique/identity"
 
 let transit_of_value_type = function
-  | RefType -> Logseq_transit.Keyword "db.type/ref"
-  | StringType -> Logseq_transit.Keyword "db.type/string"
-  | KeywordType -> Logseq_transit.Keyword "db.type/keyword"
-  | NumberType -> Logseq_transit.Keyword "db.type/number"
-  | UuidType -> Logseq_transit.Keyword "db.type/uuid"
-  | InstantType -> Logseq_transit.Keyword "db.type/instant"
-  | TupleType -> Logseq_transit.Keyword "db.type/tuple"
+  | RefType -> Transit.Keyword "db.type/ref"
+  | StringType -> Transit.Keyword "db.type/string"
+  | KeywordType -> Transit.Keyword "db.type/keyword"
+  | NumberType -> Transit.Keyword "db.type/number"
+  | UuidType -> Transit.Keyword "db.type/uuid"
+  | InstantType -> Transit.Keyword "db.type/instant"
+  | TupleType -> Transit.Keyword "db.type/tuple"
 
 let transit_of_ref_type = function
-  | PSet.Strong -> Logseq_transit.Keyword "strong"
-  | PSet.Weak -> Logseq_transit.Keyword "weak"
+  | PSet.Strong -> Transit.Keyword "strong"
+  | PSet.Weak -> Transit.Keyword "weak"
 
 let transit_of_tuple_attrs attrs =
-  Logseq_transit.Array (List.map (fun attr -> Logseq_transit.Keyword attr) attrs)
+  Transit.Array (List.map (fun attr -> Transit.Keyword attr) attrs)
 
 let transit_of_tuple_types types =
-  Logseq_transit.Array (List.map transit_of_value_type types)
+  Transit.Array (List.map transit_of_value_type types)
 
 let schema_attr_to_transit attr =
   let entries = ref [] in
-  let add key value = entries := (Logseq_transit.Keyword key, value) :: !entries in
+  let add key value = entries := (Transit.Keyword key, value) :: !entries in
   if attr.cardinality <> One then add "db/cardinality" (transit_of_cardinality attr.cardinality);
   Option.iter (fun unique -> add "db/unique" (transit_of_unique unique)) attr.unique;
-  if attr.indexed then add "db/index" (Logseq_transit.Bool true);
-  if attr.is_component then add "db/isComponent" (Logseq_transit.Bool true);
-  if attr.no_history then add "db/noHistory" (Logseq_transit.Bool true);
-  Option.iter (fun doc -> add "db/doc" (Logseq_transit.String doc)) attr.doc;
+  if attr.indexed then add "db/index" (Transit.Bool true);
+  if attr.is_component then add "db/isComponent" (Transit.Bool true);
+  if attr.no_history then add "db/noHistory" (Transit.Bool true);
+  Option.iter (fun doc -> add "db/doc" (Transit.String doc)) attr.doc;
   Option.iter (fun value_type -> add "db/valueType" (transit_of_value_type value_type)) attr.value_type;
   Option.iter (fun attrs -> add "db/tupleAttrs" (transit_of_tuple_attrs attrs)) attr.tuple_attrs;
   Option.iter (fun types -> add "db/tupleTypes" (transit_of_tuple_types types)) attr.tuple_types;
-  Logseq_transit.Map (List.rev !entries)
+  Transit.Map (List.rev !entries)
 
 let schema_to_transit schema =
-  Logseq_transit.Map
+  Transit.Map
     (schema
      |> List.map (fun (attr, schema_attr) ->
-       Logseq_transit.Keyword attr, schema_attr_to_transit schema_attr))
+       Transit.Keyword attr, schema_attr_to_transit schema_attr))
 
 let rec value_to_transit = function
-  | Nil -> Logseq_transit.Null
-  | Int value -> Logseq_transit.Int value
-  | Float value -> Logseq_transit.Float value
-  | String value -> Logseq_transit.String value
-  | Symbol value -> Logseq_transit.Symbol value
-  | Bool value -> Logseq_transit.Bool value
-  | Keyword value -> Logseq_transit.Keyword value
-  | Uuid value -> Logseq_transit.Tagged ("u", Logseq_transit.String value)
-  | Instant value -> Logseq_transit.Tagged ("m", Logseq_transit.Int value)
-  | Regex value -> Logseq_transit.Tagged ("regex", Logseq_transit.String value)
-  | Ref entity_id -> Logseq_transit.Int entity_id
-  | List values -> Logseq_transit.List (List.map value_to_transit values)
-  | Vector values -> Logseq_transit.Array (List.map value_to_transit values)
+  | Nil -> Transit.Null
+  | Int value -> Transit.Int value
+  | Float value -> Transit.Float value
+  | String value -> Transit.String value
+  | Symbol value -> Transit.Symbol value
+  | Bool value -> Transit.Bool value
+  | Keyword value -> Transit.Keyword value
+  | Uuid value -> Transit.Tagged ("u", Transit.String value)
+  | Instant value -> Transit.Tagged ("m", Transit.Int value)
+  | Regex value -> Transit.Tagged ("regex", Transit.String value)
+  | Ref entity_id -> Transit.Int entity_id
+  | List values -> Transit.List (List.map value_to_transit values)
+  | Vector values -> Transit.Array (List.map value_to_transit values)
   | Map entries ->
-    Logseq_transit.Map
+    Transit.Map
       (entries |> List.map (fun (key, value) -> value_to_transit key, value_to_transit value))
-  | Set values -> Logseq_transit.Set (List.map value_to_transit values)
+  | Set values -> Transit.Set (List.map value_to_transit values)
   | Tuple values ->
-    Logseq_transit.Array
-      (values |> List.map (function None -> Logseq_transit.Null | Some value -> value_to_transit value))
-  | TxRef -> Logseq_transit.Keyword "db/current-tx"
+    Transit.Array
+      (values |> List.map (function None -> Transit.Null | Some value -> value_to_transit value))
+  | TxRef -> Transit.Keyword "db/current-tx"
   | Ref_to _ -> invalid_arg "storage payload cannot contain unresolved refs"
 
 let datom_to_transit datom =
   let tx = if datom.added then datom.tx else -datom.tx in
-  Logseq_transit.Array
-    [ Logseq_transit.Int datom.e
-    ; Logseq_transit.Keyword datom.a
+  Transit.Array
+    [ Transit.Int datom.e
+    ; Transit.Keyword datom.a
     ; value_to_transit datom.v
-    ; Logseq_transit.Int tx
+    ; Transit.Int tx
     ]
 
 let storage_root_to_transit root =
-  Logseq_transit.Map
-    [ Logseq_transit.Keyword "schema", schema_to_transit root.storage_schema
-    ; Logseq_transit.Keyword "max-eid", Logseq_transit.Int root.storage_max_eid
-    ; Logseq_transit.Keyword "max-tx", Logseq_transit.Int root.storage_max_tx
-    ; Logseq_transit.Keyword "eavt", Logseq_transit.Int (sqlite_addr_of_storage_address root.storage_eavt)
-    ; Logseq_transit.Keyword "aevt", Logseq_transit.Int (sqlite_addr_of_storage_address root.storage_aevt)
-    ; Logseq_transit.Keyword "avet", Logseq_transit.Int (sqlite_addr_of_storage_address root.storage_avet)
-    ; Logseq_transit.Keyword "max-addr", Logseq_transit.Int root.storage_max_addr
-    ; Logseq_transit.Keyword "branching-factor", Logseq_transit.Int root.storage_branching_factor
-    ; Logseq_transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type
+  Transit.Map
+    [ Transit.Keyword "schema", schema_to_transit root.storage_schema
+    ; Transit.Keyword "max-eid", Transit.Int root.storage_max_eid
+    ; Transit.Keyword "max-tx", Transit.Int root.storage_max_tx
+    ; Transit.Keyword "eavt", Transit.Int (sqlite_addr_of_storage_address root.storage_eavt)
+    ; Transit.Keyword "aevt", Transit.Int (sqlite_addr_of_storage_address root.storage_aevt)
+    ; Transit.Keyword "avet", Transit.Int (sqlite_addr_of_storage_address root.storage_avet)
+    ; Transit.Keyword "max-addr", Transit.Int root.storage_max_addr
+    ; Transit.Keyword "branching-factor", Transit.Int root.storage_branching_factor
+    ; Transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type
     ]
 
 let storage_node_to_transit = function
   | PSet.Leaf datoms ->
-    Logseq_transit.Map [ Logseq_transit.Keyword "keys", Logseq_transit.Array (List.map datom_to_transit datoms) ]
+    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit datoms) ]
   | PSet.Branch (keys, _child_addresses) ->
-    Logseq_transit.Map [ Logseq_transit.Keyword "keys", Logseq_transit.Array (List.map datom_to_transit keys) ]
+    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit keys) ]
 
 let storage_tail_to_transit groups =
-  Logseq_transit.Array
+  Transit.Array
     (groups
-     |> List.map (fun group -> Logseq_transit.Array (List.map datom_to_transit group)))
+     |> List.map (fun group -> Transit.Array (List.map datom_to_transit group)))
 
 let payload_to_transit = function
   | Storage_root root -> storage_root_to_transit root
@@ -310,41 +311,41 @@ let json_addresses_of_payload = function
   | Storage_root _ | Storage_node (PSet.Leaf _) | Storage_tail _ -> None
 
 let payload_to_content payload =
-  payload |> payload_to_transit |> Logseq_transit.to_string
+  payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 
 let cardinality_of_transit = function
-  | Logseq_transit.Keyword "db.cardinality/many" -> Many
-  | Logseq_transit.Keyword "db.cardinality/one" -> One
+  | Transit.Keyword "db.cardinality/many" -> Many
+  | Transit.Keyword "db.cardinality/one" -> One
   | _ -> One
 
 let unique_of_transit = function
-  | Logseq_transit.Keyword "db.unique/value" -> Some Value
-  | Logseq_transit.Keyword "db.unique/identity" -> Some Identity
+  | Transit.Keyword "db.unique/value" -> Some Value
+  | Transit.Keyword "db.unique/identity" -> Some Identity
   | _ -> None
 
 let value_type_of_transit = function
-  | Logseq_transit.Keyword "db.type/ref" -> Some RefType
-  | Logseq_transit.Keyword "db.type/string" -> Some StringType
-  | Logseq_transit.Keyword "db.type/keyword" -> Some KeywordType
-  | Logseq_transit.Keyword "db.type/number" -> Some NumberType
-  | Logseq_transit.Keyword "db.type/uuid" -> Some UuidType
-  | Logseq_transit.Keyword "db.type/instant" -> Some InstantType
-  | Logseq_transit.Keyword "db.type/tuple" -> Some TupleType
+  | Transit.Keyword "db.type/ref" -> Some RefType
+  | Transit.Keyword "db.type/string" -> Some StringType
+  | Transit.Keyword "db.type/keyword" -> Some KeywordType
+  | Transit.Keyword "db.type/number" -> Some NumberType
+  | Transit.Keyword "db.type/uuid" -> Some UuidType
+  | Transit.Keyword "db.type/instant" -> Some InstantType
+  | Transit.Keyword "db.type/tuple" -> Some TupleType
   | _ -> None
 
 let tuple_attrs_of_transit = function
-  | Logseq_transit.Array values | Logseq_transit.List values ->
+  | Transit.Array values | Transit.List values ->
     Some (List.filter_map keyword_of_transit values)
   | _ -> None
 
 let tuple_types_of_transit = function
-  | Logseq_transit.Array values | Logseq_transit.List values ->
+  | Transit.Array values | Transit.List values ->
     let types = List.filter_map value_type_of_transit values in
     if List.length types = List.length values then Some types else None
   | _ -> None
 
 let schema_attr_of_transit = function
-  | Logseq_transit.Map props ->
+  | Transit.Map props ->
     List.fold_left
       (fun schema (key, value) ->
         match keyword_of_transit key with
@@ -366,7 +367,7 @@ let schema_attr_of_transit = function
   | _ -> logseq_schema_default_attr
 
 let schema_of_transit = function
-  | Logseq_transit.Map entries ->
+  | Transit.Map entries ->
     entries
     |> List.filter_map (fun (attr, schema_attr) ->
       match keyword_of_transit attr with
@@ -375,8 +376,8 @@ let schema_of_transit = function
   | _ -> []
 
 let ref_type_of_transit = function
-  | Logseq_transit.Keyword "weak" -> PSet.Weak
-  | Logseq_transit.Keyword "strong" | _ -> PSet.Strong
+  | Transit.Keyword "weak" -> PSet.Weak
+  | Transit.Keyword "strong" | _ -> PSet.Strong
 
 let int_of_transit label value =
   match int_of_transit_value value with
@@ -384,32 +385,38 @@ let int_of_transit label value =
   | None -> invalid_arg (label ^ " must be a Transit integer")
 
 let rec value_of_transit = function
-  | Logseq_transit.Null -> Nil
-  | Logseq_transit.Bool value -> Bool value
-  | Logseq_transit.String value -> String value
-  | Logseq_transit.Int value -> Int value
-  | Logseq_transit.Int64 value ->
+  | Transit.Null -> Nil
+  | Transit.Bool value -> Bool value
+  | Transit.String value -> String value
+  | Transit.Int value -> Int value
+  | Transit.Int64 value ->
     if value >= Int64.of_int min_int && value <= Int64.of_int max_int then
       Int (Int64.to_int value)
     else
       Instant (Int64.to_int value)
-  | Logseq_transit.Float value -> Float value
-  | Logseq_transit.Keyword value -> Keyword value
-  | Logseq_transit.Symbol value -> Symbol value
-  | Logseq_transit.Array values -> Vector (List.map value_of_transit values)
-  | Logseq_transit.Map entries ->
+  | Transit.Float value -> Float value
+  | Transit.Binary value -> String value
+  | Transit.Big_decimal value -> Float (float_of_string value)
+  | Transit.Big_int value -> Transit.Int64 (Int64.of_string value) |> value_of_transit
+  | Transit.Date value -> Instant (Int64.to_int value)
+  | Transit.Uuid value -> Uuid value
+  | Transit.Uri value -> String value
+  | Transit.Keyword value -> Keyword value
+  | Transit.Symbol value -> Symbol value
+  | Transit.Array values -> Vector (List.map value_of_transit values)
+  | Transit.Map entries ->
     Map (entries |> List.map (fun (key, value) -> value_of_transit key, value_of_transit value))
-  | Logseq_transit.Set values -> Set (List.map value_of_transit values)
-  | Logseq_transit.List values -> List (List.map value_of_transit values)
-  | Logseq_transit.Tagged ("u", Logseq_transit.String value) -> Uuid value
-  | Logseq_transit.Tagged ("m", Logseq_transit.Int value) -> Instant value
-  | Logseq_transit.Tagged ("m", Logseq_transit.Int64 value) -> Instant (Int64.to_int value)
-  | Logseq_transit.Tagged ("regex", Logseq_transit.String value) -> Regex value
-  | Logseq_transit.Tagged (tag, value) ->
+  | Transit.Set values -> Set (List.map value_of_transit values)
+  | Transit.List values -> List (List.map value_of_transit values)
+  | Transit.Tagged ("u", Transit.String value) -> Uuid value
+  | Transit.Tagged ("m", Transit.Int value) -> Instant value
+  | Transit.Tagged ("m", Transit.Int64 value) -> Instant (Int64.to_int value)
+  | Transit.Tagged ("regex", Transit.String value) -> Regex value
+  | Transit.Tagged (tag, value) ->
     Vector [ String tag; value_of_transit value ]
 
 let datom_of_transit = function
-  | Logseq_transit.Array [ entity; attr; value; tx ] ->
+  | Transit.Array [ entity; attr; value; tx ] ->
     let e = int_of_transit "datom entity" entity in
     let a =
       match keyword_of_transit attr with
@@ -421,7 +428,7 @@ let datom_of_transit = function
   | _ -> invalid_arg "storage datom must be [e a v tx]"
 
 let datoms_of_transit = function
-  | Logseq_transit.Array datoms | Logseq_transit.List datoms -> List.map datom_of_transit datoms
+  | Transit.Array datoms | Transit.List datoms -> List.map datom_of_transit datoms
   | _ -> invalid_arg "storage node :keys must be a datom array"
 
 let addresses_of_json = function
@@ -468,19 +475,19 @@ let storage_node_of_transit addresses entries =
   | child_addresses -> PSet.Branch (keys, child_addresses)
 
 let storage_tail_of_transit = function
-  | Logseq_transit.Array groups | Logseq_transit.List groups ->
+  | Transit.Array groups | Transit.List groups ->
     groups |> List.map datoms_of_transit
   | _ -> invalid_arg "storage tail must be a Transit array"
 
 let payload_of_transit ?addresses = function
-  | Logseq_transit.Map entries ->
+  | Transit.Map entries ->
     if Option.is_some (lookup_transit_key "schema" entries) then
       Some (Storage_root (storage_root_of_transit entries))
     else if Option.is_some (lookup_transit_key "keys" entries) then
       Some (Storage_node (storage_node_of_transit addresses entries))
     else
       None
-  | (Logseq_transit.Array _ | Logseq_transit.List _) as tail ->
+  | (Transit.Array _ | Transit.List _) as tail ->
     Some (Storage_tail (storage_tail_of_transit tail))
   | _ -> None
 
@@ -494,7 +501,7 @@ let payload_of_content ?addresses content =
     in
     Some (Marshal.from_string (hex_decode encoded) 0 : storage_payload)
   else
-    payload_of_transit ?addresses (Logseq_transit.of_string content)
+    payload_of_transit ?addresses (Transit.of_string content)
 
 let create_kvs_table db_path =
   exec_sql db_path (kvs_schema ^ ";")
@@ -555,8 +562,8 @@ let decode_root_metadata content =
   match content_format content with
   | Logseq_transit ->
     (try
-       match Logseq_transit.of_string content with
-       | Logseq_transit.Map entries ->
+       match Transit.of_string content with
+       | Transit.Map entries ->
          let root_keys =
            entries
            |> List.filter_map (fun (key, _) -> string_of_transit_key key)
@@ -569,7 +576,7 @@ let decode_root_metadata content =
          root_keys, root_index_addresses
        | _ -> decode_shallow_root_metadata content
      with
-     | Logseq_transit.Decode_error _ | Yojson.Json_error _ -> decode_shallow_root_metadata content)
+     | Transit.Decode_error _ | Yojson.Json_error _ -> decode_shallow_root_metadata content)
   | Ocaml_marshal | Empty | Unknown -> [], []
 
 let inspect ?(read_only = false) db_path =
@@ -627,27 +634,27 @@ let graph_db_paths graphs_dir =
     |> List.sort String.compare
 
 let logseq_cardinality_of_transit = function
-  | Logseq_transit.Keyword "db.cardinality/many" -> Many
-  | Logseq_transit.Keyword "db.cardinality/one" -> One
+  | Transit.Keyword "db.cardinality/many" -> Many
+  | Transit.Keyword "db.cardinality/one" -> One
   | _ -> One
 
 let logseq_unique_of_transit = function
-  | Logseq_transit.Keyword "db.unique/value" -> Some Value
-  | Logseq_transit.Keyword "db.unique/identity" -> Some Identity
+  | Transit.Keyword "db.unique/value" -> Some Value
+  | Transit.Keyword "db.unique/identity" -> Some Identity
   | _ -> None
 
 let logseq_value_type_of_transit = function
-  | Logseq_transit.Keyword "db.type/ref" -> Some RefType
-  | Logseq_transit.Keyword "db.type/tuple" -> Some TupleType
-  | Logseq_transit.Keyword "db.type/string" -> Some StringType
-  | Logseq_transit.Keyword "db.type/keyword" -> Some KeywordType
-  | Logseq_transit.Keyword "db.type/number" -> Some NumberType
-  | Logseq_transit.Keyword "db.type/uuid" -> Some UuidType
-  | Logseq_transit.Keyword "db.type/instant" -> Some InstantType
+  | Transit.Keyword "db.type/ref" -> Some RefType
+  | Transit.Keyword "db.type/tuple" -> Some TupleType
+  | Transit.Keyword "db.type/string" -> Some StringType
+  | Transit.Keyword "db.type/keyword" -> Some KeywordType
+  | Transit.Keyword "db.type/number" -> Some NumberType
+  | Transit.Keyword "db.type/uuid" -> Some UuidType
+  | Transit.Keyword "db.type/instant" -> Some InstantType
   | _ -> None
 
 let logseq_schema_attr_of_transit = function
-  | Logseq_transit.Map props ->
+  | Transit.Map props ->
     List.fold_left
       (fun schema (key, value) ->
         match keyword_of_transit key with
@@ -831,20 +838,20 @@ let logseq_root_content ?(read_only = false) db_path =
   | None -> invalid_arg "Logseq graph has no root metadata row"
 
 let logseq_root_entries ?(read_only = false) db_path =
-  match Logseq_transit.of_string (logseq_root_content ~read_only db_path) with
-  | Logseq_transit.Map entries -> entries
+  match Transit.of_string (logseq_root_content ~read_only db_path) with
+  | Transit.Map entries -> entries
   | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
 
 let schema_of_logseq_graph ?(read_only = false) db_path =
   let content = logseq_root_content ~read_only db_path in
   try
     let root_entries =
-      match Logseq_transit.of_string content with
-      | Logseq_transit.Map entries -> entries
+      match Transit.of_string content with
+      | Transit.Map entries -> entries
       | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
     in
     match lookup_transit_key "schema" root_entries with
-    | Some (Logseq_transit.Map entries) ->
+    | Some (Transit.Map entries) ->
       entries
       |> List.filter_map (fun (attr, schema) ->
         match keyword_of_transit attr with
@@ -853,7 +860,7 @@ let schema_of_logseq_graph ?(read_only = false) db_path =
     | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
     | None -> invalid_arg "Logseq graph root metadata has no :schema"
   with
-  | Logseq_transit.Decode_error _ | Yojson.Json_error _ ->
+  | Transit.Decode_error _ | Yojson.Json_error _ ->
     (match shallow_schema_of_root_content content with
      | Some schema -> schema
      | None -> invalid_arg "Logseq graph root metadata has no decodable :schema")

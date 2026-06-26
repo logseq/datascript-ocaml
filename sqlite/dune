@@ -7,4 +7,4 @@
   (names datascript_sqlite_stubs))
  (c_library_flags
   (:standard -lsqlite3))
- (libraries datascript persistent_sorted_set_ocaml))
+ (libraries datascript persistent_sorted_set_ocaml melange-transit.native))

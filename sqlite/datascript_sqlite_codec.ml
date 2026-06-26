@@ -1,6 +1,6 @@
 module Ds = Datascript
 module PSet = Persistent_sorted_set
-module Transit = Datascript_sqlite_transit
+module Transit = Transit_native.Transit.Json
 
 open Ds
 
@@ -213,6 +213,12 @@ let rec value_of_transit = function
       then Int (Int64.to_int value)
       else Instant (Int64.to_int value)
   | Float value -> Float value
+  | Binary value -> String value
+  | Big_decimal value -> Float (float_of_string value)
+  | Big_int value -> Transit.Int64 (Int64.of_string value) |> value_of_transit
+  | Date value -> Instant (Int64.to_int value)
+  | Uuid value -> Uuid value
+  | Uri value -> String value
   | Keyword value -> Keyword value
   | Symbol value -> Symbol value
   | Array values -> Vector (List.map value_of_transit values)
@@ -332,5 +338,5 @@ let payload_of_transit = function
   | (Transit.Array _ | Transit.List _) as tail -> Storage_tail (storage_tail_of_transit tail)
   | _ -> invalid_arg "unknown storage payload"
 
-let encode payload = payload |> payload_to_transit |> Transit.to_string
+let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit

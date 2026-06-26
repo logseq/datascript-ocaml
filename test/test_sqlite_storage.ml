@@ -1,7 +1,7 @@
 open Datascript
 
 module Sqlite_storage = Logseq_sqlite_storage
-module Transit = Logseq_sqlite_storage__Logseq_transit
+module Transit = Transit_native.Transit.Json
 
 let failf fmt = Printf.ksprintf failwith fmt
 
