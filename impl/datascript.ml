@@ -854,7 +854,7 @@ let entid_ref = Db_access_impl.entid_ref
 let datoms = Db_access_impl.datoms
 let datoms_ref = Db_access_impl.datoms_ref
 let datoms_list db index ?e ?a ?v ?tx () =
-  datoms db index ?e ?a ?v ?tx () |> List.of_seq
+  Db_access_impl.datoms_list db index ?e ?a ?v ?tx ()
 
 let find_datom = Db_access_impl.find_datom
 let find_datom_ref = Db_access_impl.find_datom_ref
@@ -1101,6 +1101,8 @@ let pattern_datoms db e_term a_term v_term tx_term =
     datoms db Aevt ~a:(reverse_ref attr) ?tx ()
   | QAttr attr, Some value when query_value_uses_avet value && query_attr_uses_avet db attr ->
     datoms db Avet ?e ~a:attr ~v:value ?tx ()
+  | QAttr attr, Some value ->
+    datoms db Aevt ?e ~a:attr ~v:value ?tx ()
   | QAttr attr, _ ->
     datoms db Aevt ?e ~a:attr ?tx ()
   | _ -> datoms db Eavt ?e ?v ?tx ()
@@ -1234,6 +1236,7 @@ module Query_where_impl = Query_where.Make (struct
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses
+let eval_relation_rows = Query_where_impl.eval_relation_rows
 
 let parser_query_context : Parser_impl.query_context =
   { empty_db = (fun () -> empty_db ())
@@ -1381,6 +1384,7 @@ module Query_api_impl = Query_api.Make (struct
   let validate_rule_arities = validate_rule_arities
   let initial_query_context = initial_query_context
   let eval_clauses = eval_clauses
+  let eval_relation_rows = eval_relation_rows
   let has_aggregates = has_aggregates
   let aggregate_rows = aggregate_rows
   let aggregate_rows_with = aggregate_rows_with
@@ -1462,6 +1466,7 @@ module Query = struct
     }
 
   let empty_query_callables = Query_impl.empty_query_callables
+  let ( let* ) = Option.bind
 
   let query_has_runtime_features query =
     let default_inputs =
@@ -1471,9 +1476,24 @@ module Query = struct
     in
     (not default_inputs) || query.with_vars <> [] || query.rules <> []
 
+  let query_callables_empty (callables : Query_impl.query_callables) =
+    callables.callable_predicates = []
+    && callables.callable_functions = []
+    && callables.callable_aggregates = []
+    && callables.callable_aliases = []
+
   let find_var_names = function
     | [ Find_var left; Find_var right ] -> Some [ left; right ]
     | _ -> None
+
+  let find_plain_vars find =
+    let rec collect acc = function
+      | [] -> Some (List.rev acc)
+      | Find_var var :: rest -> collect (var :: acc) rest
+      | (Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ | Find_aggregate _) :: _ ->
+        None
+    in
+    collect [] find
 
   let entity_value_row entity_id value =
     let entity_result = Result_entity entity_id
@@ -1498,6 +1518,25 @@ module Query = struct
       Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
     | _ -> resolve_query_value db value
 
+  let values_compare_equal_fast left right =
+    match left, right with
+    | Nil, Nil -> true
+    | Int left, Int right
+    | Ref left, Ref right
+    | Int left, Ref right
+    | Ref left, Int right ->
+      left = right
+    | String left, String right
+    | Symbol left, Symbol right
+    | Keyword left, Keyword right
+    | Uuid left, Uuid right
+    | Regex left, Regex right ->
+      left = right
+    | Bool left, Bool right -> left = right
+    | Instant left, Instant right -> left = right
+    | TxRef, TxRef -> true
+    | _ -> compare_value left right = 0
+
   let datoms_by_attr_value db attr value =
     match resolve_query_value_for_attr db attr value with
     | None -> []
@@ -1514,10 +1553,10 @@ module Query = struct
         | _ -> None
       in
       let datom_value_matches datom =
-        compare_value datom.v value = 0
+        values_compare_equal_fast datom.v value
         ||
         match ident_entity_value with
-        | Some entity_value -> compare_value datom.v entity_value = 0
+        | Some entity_value -> values_compare_equal_fast datom.v entity_value
         | None -> false
       in
       if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
@@ -1648,10 +1687,30 @@ module Query = struct
     | None -> []
     | Some row ->
       if db.duplicate_datoms = [] && cardinality db match_attr = One && cardinality db value_attr = One then
-        datoms_by_attr_value db match_attr match_value
-        |> List.filter_map (fun match_datom ->
-          find_datom db Eavt ~e:match_datom.e ~a:value_attr ()
-          |> Option.map (fun value_datom -> row value_datom.e value_datom.v))
+        let matched_datoms = datoms_by_attr_value db match_attr match_value in
+        let value_datoms = datoms_list db Aevt ~a:value_attr () in
+        if List.length value_datoms <= List.length matched_datoms * 8 then (
+          let matched_entities = Bytes.make (db.max_datom_e + 1) '\000' in
+          List.iter
+            (fun datom ->
+              if datom.e >= 0 && datom.e < Bytes.length matched_entities then
+                Bytes.set matched_entities datom.e '\001')
+            matched_datoms;
+          value_datoms
+          |> List.filter_map (fun value_datom ->
+            if
+              value_datom.e >= 0
+              && value_datom.e < Bytes.length matched_entities
+              && Bytes.get matched_entities value_datom.e = '\001'
+            then
+              Some (row value_datom.e value_datom.v)
+            else
+              None))
+        else
+          matched_datoms
+          |> List.filter_map (fun match_datom ->
+            find_datom db Eavt ~e:match_datom.e ~a:value_attr ()
+            |> Option.map (fun value_datom -> row value_datom.e value_datom.v))
       else
         let matched_entities =
           datoms_by_attr_value db match_attr match_value
@@ -2018,6 +2077,215 @@ module Query = struct
           None)
       |> List.of_seq
 
+  let planned_entity_pattern_chain db find_vars clauses =
+    let pattern = function
+      | Pattern (QVar e_var, QAttr attr, value_term) -> Some (e_var, attr, value_term)
+      | _ -> None
+    in
+    let* patterns =
+      clauses
+      |> List.fold_left
+           (fun acc clause ->
+             match acc, pattern clause with
+             | Some patterns, Some pattern -> Some (pattern :: patterns)
+             | _ -> None)
+           (Some [])
+      |> Option.map List.rev
+    in
+    match patterns with
+    | [] -> None
+    | (e_var, _, _) :: _ ->
+      if not (List.for_all (fun (candidate, _, _) -> candidate = e_var) patterns) then
+        None
+      else
+        let value_var_patterns, constant_patterns =
+          patterns
+          |> List.fold_left
+               (fun (value_vars, constants) (_, attr, value_term) ->
+                 match value_term with
+                 | QVar value_var when value_var <> e_var -> ((value_var, attr) :: value_vars, constants)
+                 | QValue value -> (value_vars, (attr, value) :: constants)
+                 | QWildcard -> (value_vars, constants)
+                 | QVar _ | QEntity _ | QAttr _ | QIdent _ | QLookupRef _ | QSource _ -> (value_vars, constants))
+               ([], [])
+        in
+        if
+          constant_patterns = []
+          || db.duplicate_datoms <> []
+          || List.exists (fun (_, attr) -> cardinality db attr <> One) value_var_patterns
+        then
+          None
+        else
+          let constant_datoms =
+            constant_patterns
+            |> List.map (fun (attr, value) -> attr, value, datoms_by_attr_value db attr value)
+          in
+          let entity_sets datoms_by_constant =
+            datoms_by_constant
+            |> List.map (fun (_, _, datoms) ->
+              let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+              List.iter
+                (fun datom ->
+                  if datom.e >= 0 && datom.e < Bytes.length entities then
+                    Bytes.set entities datom.e '\001')
+                datoms;
+              entities)
+          in
+          let constant_matches constant_sets entity_id =
+            List.for_all
+              (fun entities ->
+                entity_id >= 0
+                && entity_id < Bytes.length entities
+                && Bytes.get entities entity_id = '\001')
+              constant_sets
+          in
+          let value_for entity_id attr =
+            find_datom db Eavt ~e:entity_id ~a:attr ()
+            |> Option.map (fun datom -> Query_impl.result_of_ref (Result_value datom.v))
+          in
+          let row_from_values entity_id values =
+            find_vars
+            |> List.fold_left
+                 (fun row var ->
+                   match row with
+                   | None -> None
+                   | Some row ->
+                     if var = e_var then
+                       Some (Result_entity entity_id :: row)
+                     else
+                       (match List.assoc_opt var values with
+                        | Some value -> Some (value :: row)
+                        | None -> None))
+                 (Some [])
+            |> Option.map List.rev
+          in
+          let row_from_binding binding =
+            find_vars
+            |> List.fold_left
+                 (fun row var ->
+                   match row with
+                   | None -> None
+                   | Some row ->
+                     (match List.assoc_opt var binding with
+                      | Some value -> Some (value :: row)
+                      | None -> None))
+                 (Some [])
+            |> Option.map List.rev
+          in
+          let dedupe_rows rows =
+            if List.mem e_var find_vars then rows else List.sort_uniq compare rows
+          in
+          let duplicate_value_var =
+            let seen = Hashtbl.create (List.length value_var_patterns) in
+            List.exists
+              (fun (value_var, _) ->
+                if Hashtbl.mem seen value_var then true
+                else (
+                  Hashtbl.add seen value_var ();
+                  false ))
+              value_var_patterns
+          in
+          if duplicate_value_var then
+            None
+          else if value_var_patterns <> [] then
+            let candidate_datoms, other_constant_datoms =
+              constant_datoms
+              |> List.sort (fun (_, _, left) (_, _, right) -> compare (List.length left) (List.length right))
+              |> function
+                | (_, _, candidate_datoms) :: rest -> candidate_datoms, rest
+                | [] -> [], []
+            in
+            let constant_sets = entity_sets other_constant_datoms in
+            let single_value_row =
+              match value_var_patterns with
+              | [ value_var, _ ] -> entity_value_row_builder find_vars e_var value_var
+              | _ -> None
+            in
+            let rows_from_entity entity_id =
+              match value_var_patterns with
+              | [ value_var, attr ] ->
+                (match single_value_row, value_for entity_id attr with
+                 | Some row, Some (Result_value value) -> Some (row entity_id value)
+                 | Some row, Some (Result_entity ref_entity_id) -> Some (row entity_id (Ref ref_entity_id))
+                 | _ ->
+                   let* value = value_for entity_id attr in
+                   row_from_values entity_id [ value_var, value ])
+              | _ ->
+                let* values =
+                  value_var_patterns
+                  |> List.fold_left
+                       (fun values (value_var, attr) ->
+                         match values with
+                         | None -> None
+                         | Some values ->
+                           (match value_for entity_id attr with
+                            | Some value -> Some ((value_var, value) :: values)
+                            | None -> None))
+                       (Some [])
+                in
+                row_from_values entity_id values
+            in
+            let rows_from_value_scan scan_value_var scan_datoms remaining_value_vars =
+              let constant_sets = entity_sets constant_datoms in
+              scan_datoms
+              |> List.filter_map (fun scan_datom ->
+                if not (constant_matches constant_sets scan_datom.e) then
+                  None
+                else
+                  match single_value_row, remaining_value_vars with
+                  | Some row, [] -> Some (row scan_datom.e scan_datom.v)
+                  | _ ->
+                    let scan_value = Query_impl.result_of_ref (Result_value scan_datom.v) in
+                    let* values =
+                      remaining_value_vars
+                      |> List.fold_left
+                           (fun values (value_var, attr) ->
+                             match values with
+                             | None -> None
+                             | Some values ->
+                               (match value_for scan_datom.e attr with
+                                | Some value -> Some ((value_var, value) :: values)
+                                | None -> None))
+                           (Some [ scan_value_var, scan_value ])
+                    in
+                    row_from_values scan_datom.e values)
+            in
+            (match value_var_patterns with
+             | (scan_value_var, scan_attr) :: remaining_value_vars ->
+               let scan_datoms = datoms_list db Aevt ~a:scan_attr () in
+               if List.length scan_datoms <= List.length candidate_datoms * 8 then
+                 rows_from_value_scan scan_value_var scan_datoms remaining_value_vars
+               else
+                 candidate_datoms
+                 |> List.filter_map (fun datom ->
+                   if constant_matches constant_sets datom.e then rows_from_entity datom.e else None)
+             | _ ->
+               candidate_datoms
+               |> List.filter_map (fun datom ->
+                 if constant_matches constant_sets datom.e then rows_from_entity datom.e else None))
+            |> dedupe_rows
+            |> fun rows -> Some rows
+          else
+            let candidate_datoms, other_constant_datoms =
+              constant_datoms
+              |> List.sort (fun (_, _, left) (_, _, right) -> compare (List.length left) (List.length right))
+              |> function
+                | (_, _, candidate_datoms) :: rest -> candidate_datoms, rest
+                | [] -> [], []
+            in
+            let constant_sets = entity_sets other_constant_datoms in
+            let row_for entity_id =
+              if not (constant_matches constant_sets entity_id) then
+                None
+              else
+                let binding = [ e_var, Result_entity entity_id ] in
+                row_from_binding binding
+            in
+            candidate_datoms
+            |> List.filter_map (fun datom -> row_for datom.e)
+            |> dedupe_rows
+            |> fun rows -> Some rows
+
   let planned_simple_query db query =
     match find_var_names query.find, query_has_runtime_features query, query.where with
     | _, _,
@@ -2296,10 +2564,57 @@ module Query = struct
       ]
       when compared_var = value_var && e <> value_var ->
       Some (planned_comparison_scan db find_vars e attr value_var predicate threshold)
+    | _, false, where ->
+      (match find_plain_vars query.find with
+       | Some find_vars -> planned_entity_pattern_chain db find_vars where
+       | None -> None)
     | _ -> None
 
+  let bound_input_value input_bindings var =
+    match input_bindings with
+    | [ binding ] ->
+      (match List.assoc_opt var binding with
+       | Some (Result_value value) -> Some value
+       | _ -> None)
+    | _ -> None
+
+  let planned_simple_query_with_inputs db query inputs =
+    let callables, input_bindings, input_rules = initial_query_context db query inputs in
+    if
+      (not (query_callables_empty callables))
+      || input_rules <> []
+      || query.with_vars <> []
+      || query.rules <> []
+    then
+      None
+    else
+      match find_plain_vars query.find, query.where with
+      | Some find_vars,
+        [ Pattern (QVar e, QAttr attr, QVar value_var)
+        ; ComparisonPredicate (predicate, QVar compared_var, QVar threshold_var)
+        ]
+        when compared_var = value_var && e <> value_var ->
+        bound_input_value input_bindings threshold_var
+        |> Option.map (fun threshold -> planned_comparison_scan db find_vars e attr value_var predicate threshold)
+      | Some find_vars,
+        [ ComparisonPredicate (predicate, QVar compared_var, QVar threshold_var)
+        ; Pattern (QVar e, QAttr attr, QVar value_var)
+        ]
+        when compared_var = value_var && e <> value_var ->
+        bound_input_value input_bindings threshold_var
+        |> Option.map (fun threshold -> planned_comparison_scan db find_vars e attr value_var predicate threshold)
+      | _ -> None
+
   let q ?inputs db query =
-    match planned_simple_query db query with
+    let planned =
+      match planned_simple_query db query with
+      | Some _ as planned -> planned
+      | None ->
+        (match inputs with
+         | Some inputs -> planned_simple_query_with_inputs db query inputs
+         | None -> None)
+    in
+    match planned with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
 

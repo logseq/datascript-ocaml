@@ -44,6 +44,7 @@ let person i =
         ; "name", One_value (String names.((i - 1) mod Array.length names))
         ; "age", One_value (Int ((i * 37) mod 100))
         ; "salary", One_value (Int ((i * 7919) mod 100_000))
+        ; "sex", One_value (Keyword (if i mod 2 = 0 then "male" else "female"))
         ; "alias", Many_values [ String ("alias-" ^ string_of_int (i mod 10)); String ("tag-" ^ string_of_int (i mod 17)) ]
         ]
     }

@@ -139,25 +139,52 @@ let schema =
 
 let names = [| "Ivan"; "Petr"; "Sergey"; "Oleg"; "Yuri"; "Dmitry"; "Fedor"; "Denis" |]
 let last_names = [| "Ivanov"; "Petrov"; "Sidorov"; "Kovalev"; "Kuznetsov"; "Voronoi" |]
+let aliases =
+  [| "A. C. Q. W."
+   ; "A. J. Finn"
+   ; "A.A. Fair"
+   ; "Aapeli"
+   ; "Aaron Wolfe"
+   ; "Abigail Van Buren"
+   ; "Jeanne Phillips"
+   ; "Abram Tertz"
+   ; "Abu Nuwas"
+   ; "Acton Bell"
+   ; "Adunis"
+  |]
 
-let person size i =
-  let friend = if i = size then 1 else i + 1 in
+type rng = { mutable state : int32 }
+
+let rng seed = { state = Int32.of_int seed }
+
+let next_int rng bound =
+  rng.state <- Int32.add (Int32.mul rng.state 1_664_525l) 1_013_904_223l;
+  Int32.(to_int (rem (logand (shift_right_logical rng.state 1) 0x3fffffffl) (of_int bound)))
+
+let rand_nth rng values =
+  values.(next_int rng (Array.length values))
+
+let random_man rng i =
+  let name = rand_nth rng names in
+  let last_name = rand_nth rng last_names in
+  let alias_count = next_int rng 10 in
+  let alias_values = List.init alias_count (fun _ -> String (rand_nth rng aliases)) in
   Entity
-    { db_id = Some (Entity_id i)
+    { db_id = Some (Temp_id (string_of_int i))
     ; attrs =
-        [ "id", One_value (Int i)
-        ; "name", One_value (String names.((i - 1) mod Array.length names))
-        ; "last-name", One_value (String last_names.((i - 1) mod Array.length last_names))
-        ; "age", One_value (Int ((i * 37) mod 100))
-        ; "salary", One_value (Int ((i * 7919) mod 100_000))
-        ; "sex", One_value (Keyword (if i mod 2 = 0 then "male" else "female"))
-        ; "friend", One_value (Ref friend)
-        ; "alias", Many_values [ String ("alias-" ^ string_of_int (i mod 10)); String ("tag-" ^ string_of_int (i mod 17)) ]
+        [ "name", One_value (String name)
+        ; "last-name", One_value (String last_name)
+        ; "full-name", One_value (String (name ^ " " ^ last_name))
+        ; "alias", Many_values alias_values
+        ; "sex", One_value (Keyword (if next_int rng 2 = 0 then "male" else "female"))
+        ; "age", One_value (Int (next_int rng 100))
+        ; "salary", One_value (Int (next_int rng 100_000))
         ]
     }
 
 let people size =
-  List.init size (fun index -> person size (index + 1))
+  let rng = rng 1 in
+  List.init size (fun index -> random_man rng (index + 1))
 
 let build_db size =
   db_with (people size) (empty_db ~schema ())
@@ -177,18 +204,18 @@ let add_one_by_one size =
     (people size)
 
 let add_one_datom_per_tx size =
+  let single_datom_attrs = [ "name"; "last-name"; "sex"; "age"; "salary" ] in
   let add_entity db entity =
     match entity with
     | Entity { db_id = Some entity_ref; attrs; _ } ->
       List.fold_left
         (fun db (attr, value) ->
-          let tx =
+          if List.mem attr single_datom_attrs then
             match value with
-            | One_value value -> [ Add (entity_ref, attr, value) ]
-            | Many_values values -> List.map (fun value -> Add (entity_ref, attr, value)) values
-            | One_entity _ | Many_entities _ -> [ entity ]
-          in
-          db_with tx db)
+            | One_value value -> db_with [ Add (entity_ref, attr, value) ] db
+            | Many_values _ | One_entity _ | Many_entities _ -> db
+          else
+            db)
         db
         attrs
     | _ -> db_with [ entity ] db

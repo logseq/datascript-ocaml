@@ -385,8 +385,27 @@ let apply_filter_pred db seq =
 
 let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual = expected) maybe
 
+let values_compare_equal context actual expected =
+  match actual, expected with
+  | Nil, Nil -> true
+  | Int actual, Int expected
+  | Ref actual, Ref expected
+  | Int actual, Ref expected
+  | Ref actual, Int expected ->
+    actual = expected
+  | String actual, String expected
+  | Symbol actual, Symbol expected
+  | Keyword actual, Keyword expected
+  | Uuid actual, Uuid expected
+  | Regex actual, Regex expected ->
+    actual = expected
+  | Bool actual, Bool expected -> actual = expected
+  | Instant actual, Instant expected -> actual = expected
+  | TxRef, TxRef -> true
+  | _ -> context.compare_value actual expected = 0
+
 let matches_value context maybe expected =
-  Option.fold ~none:true ~some:(fun actual -> context.compare_value actual expected = 0) maybe
+  Option.fold ~none:true ~some:(fun actual -> values_compare_equal context actual expected) maybe
 
 type bound_fields =
   { bound_e : bool
@@ -499,6 +518,20 @@ let exact_prefix_datoms context db index e a v tx =
        let duplicates = duplicate_exact_prefix_datoms db index e |> exact_sorted_slice cmp bound in
        Some (merge_sorted_datom_seqs (Util.compare_datom index) indexed (List.to_seq duplicates)))
 
+let exact_prefix_datoms_list context db index e a v tx =
+  match exact_prefix_bound index e a v tx with
+  | None -> None
+  | Some (bound, bound_fields) ->
+    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    (match db.duplicate_datoms with
+     | [] ->
+       Some
+         (PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index)
+          |> PSet.seq_to_list)
+     | _ ->
+       exact_prefix_datoms context db index e a v tx
+       |> Option.map List.of_seq)
+
 let lower_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
@@ -594,7 +627,12 @@ let datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
-    match exact_prefix_datoms context db index e a v tx with
+    let prefix_v, prefix_tx =
+      match index, e, a, v with
+      | Aevt, None, Some _, Some _ -> None, None
+      | _ -> v, tx
+    in
+    match exact_prefix_datoms context db index e a prefix_v prefix_tx with
     | Some datoms -> datoms, true
     | None -> index_datoms_seq db index, false
   in
@@ -611,6 +649,38 @@ let datoms context db index ?e ?a ?v ?tx () =
       |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
   apply_filter_pred db datoms
+
+let apply_filter_pred_list db datoms =
+  match db.filter_pred with
+  | None -> datoms
+  | Some pred -> List.filter pred datoms
+
+let datoms_list context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  let v = resolved_value_option_for_optional_attr context db a v in
+  let datoms, exact =
+    let prefix_v, prefix_tx =
+      match index, e, a, v with
+      | Aevt, None, Some _, Some _ -> None, None
+      | _ -> v, tx
+    in
+    match exact_prefix_datoms_list context db index e a prefix_v prefix_tx with
+    | Some datoms -> datoms, true
+    | None -> raw_index_datoms_list db index, false
+  in
+  let exact_attr_prefix =
+    match index, e, a, v, tx with
+    | Aevt, None, Some _, None, None -> exact
+    | _ -> false
+  in
+  let datoms =
+    if exact_attr_prefix || (e, a, v, tx) = (None, None, None, None) then
+      datoms
+    else
+      datoms
+      |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
+  in
+  apply_filter_pred_list db datoms
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in

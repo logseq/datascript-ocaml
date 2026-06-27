@@ -17,6 +17,13 @@ module Make (Context : sig
     bindings list ->
     query_clause list ->
     bindings list
+  val eval_relation_rows :
+    db ->
+    (string * query_source) list ->
+    query_rule list ->
+    bindings list ->
+    query_clause list ->
+    (string list * query_result list list) option
   val has_aggregates : find_spec list -> bool
   val aggregate_rows : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> query_result list list
   val aggregate_rows_with : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> string list -> query_result list list
@@ -29,6 +36,8 @@ module Make (Context : sig
 end) = struct
   open Context
 
+  let ( let* ) = Option.bind
+
   let rule_names = Query.rule_names
   let resolve_dynamic_rule_clause = Query.resolve_dynamic_rule_clause
   let resolve_dynamic_rule = Query.resolve_dynamic_rule
@@ -37,6 +46,43 @@ end) = struct
     let rules = validate_rule_arities (query.rules @ input_rules) in
     let names = rule_names rules in
     List.map (resolve_dynamic_rule names) rules, List.map (resolve_dynamic_rule_clause names) query.where
+
+  let query_callables_empty (callables : Query.query_callables) =
+    callables.callable_predicates = []
+    && callables.callable_functions = []
+    && callables.callable_aggregates = []
+    && callables.callable_aliases = []
+
+  let find_var_names = function
+    | [] -> Some []
+    | find ->
+      let rec collect acc = function
+        | [] -> Some (List.rev acc)
+        | Find_var var :: rest -> collect (var :: acc) rest
+        | (Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ | Find_aggregate _) :: _ ->
+          None
+      in
+      collect [] find
+
+  let relation_rows_for_find attrs rows find =
+    let* find_vars = find_var_names find in
+    let* indexes =
+      find_vars
+      |> List.fold_left
+           (fun indexes var ->
+             match indexes with
+             | None -> None
+             | Some indexes ->
+               (match List.find_index (( = ) var) attrs with
+                | Some index -> Some (index :: indexes)
+                | None -> None))
+           (Some [])
+      |> Option.map List.rev
+    in
+    rows
+    |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
+    |> List.sort_uniq compare
+    |> fun rows -> Some rows
 
   let dedupe_bindings_for_find bindings find =
     let vars = Query.grouping_vars_of_find find in
@@ -53,19 +99,41 @@ end) = struct
   let q_sources_raw ?(inputs = []) db sources query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
     let rules, where = query_rules_and_where query input_rules in
-    let bindings = eval_clauses ~callables db sources rules input_bindings where in
-    if has_aggregates query.find then
+    if
+      (not (has_aggregates query.find))
+      && query.with_vars = []
+      && query_callables_empty callables
+    then
+      match eval_relation_rows db sources rules input_bindings where with
+      | Some (attrs, rows) ->
+        (match relation_rows_for_find attrs rows query.find with
+         | Some rows -> rows
+         | None ->
+           let bindings = eval_clauses ~callables db sources rules input_bindings where in
+           bindings
+           |> fun bindings -> dedupe_bindings_for_find bindings query.find
+           |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
+           |> List.sort_uniq compare)
+      | None ->
+        let bindings = eval_clauses ~callables db sources rules input_bindings where in
+        bindings
+        |> fun bindings -> dedupe_bindings_for_find bindings query.find
+        |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
+        |> List.sort_uniq compare
+    else (
+      let bindings = eval_clauses ~callables db sources rules input_bindings where in
+      if has_aggregates query.find then
       if query.with_vars = [] then
         aggregate_rows ~callables db sources bindings query.find
       else
         aggregate_rows_with ~callables db sources bindings query.find query.with_vars
-    else if query.with_vars <> [] then
+      else if query.with_vars <> [] then
       non_aggregate_rows_with db sources bindings query.find query.with_vars
-    else
+      else
       bindings
       |> fun bindings -> dedupe_bindings_for_find bindings query.find
       |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-      |> List.sort_uniq compare
+      |> List.sort_uniq compare)
   
   let q_with_raw ?(inputs = []) db with_vars query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in

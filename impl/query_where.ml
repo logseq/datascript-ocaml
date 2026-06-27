@@ -148,19 +148,12 @@ end) = struct
     in
     collect [] attrs
 
-  let row_binding attrs row =
-    List.combine attrs row
-
   let direct_pattern_term = function
     | QVar _ | QEntity _ | QAttr _ | QValue _ | QWildcard -> true
     | QIdent _ | QLookupRef _ | QSource _ -> false
 
   let direct_pattern_terms terms =
     List.for_all direct_pattern_term terms
-    &&
-    (match terms with
-     | [ _; _; QValue _ ] | [ _; _; QValue _; _ ] | [ _; _; QValue _; _; _ ] -> false
-     | _ -> true)
     &&
     let vars = unique_vars terms in
     List.length vars = List.length (List.filter_map (function QVar var -> Some var | _ -> None) terms)
@@ -174,6 +167,24 @@ end) = struct
     | 4 -> Query.result_of_datom_op datom
     | _ -> invalid_arg "invalid datom pattern position"
 
+  let row_value row index =
+    match index, row with
+    | 0, value :: _ -> value
+    | 1, _ :: value :: _ -> value
+    | 2, _ :: _ :: value :: _ -> value
+    | 3, _ :: _ :: _ :: value :: _ -> value
+    | _ ->
+      let rec loop current = function
+        | [] -> invalid_arg "relation row is missing a value"
+        | value :: _ when current = index -> value
+        | _ :: rest -> loop (current + 1) rest
+      in
+      loop 0 row
+
+  let row_values row = row
+
+  let row_binding attrs row = List.combine attrs row
+
   let direct_pattern_row attrs terms datom =
     attrs
     |> List.map (fun attr ->
@@ -183,64 +194,6 @@ end) = struct
         | _ :: rest -> find (index + 1) rest
       in
       find 0 terms)
-
-  let direct_entity_value_binding e_var entity_id value_var value =
-    [ value_var, Query.result_of_ref (Result_value value); e_var, Result_entity entity_id ]
-
-  let fast_entity_value_join db source_db e_var match_attr match_value value_attr value_var =
-    let source_context = query_source_context db in
-    let entity_ids = Bytes.make (source_db.max_datom_e + 1) '\000' in
-    source_context.pattern_datoms source_db (QVar e_var) (QAttr match_attr) (QValue match_value) None
-    |> Seq.filter (fun datom -> query_evaluator_context.compare_value datom.v match_value = 0)
-    |> Seq.iter (fun match_datom ->
-      if match_datom.e >= 0 && match_datom.e < Bytes.length entity_ids then
-        Bytes.set entity_ids match_datom.e '\001');
-    source_context.pattern_datoms source_db (QVar e_var) (QAttr value_attr) (QVar value_var) None
-    |> Seq.filter_map (fun datom ->
-      if datom.e >= 0 && datom.e < Bytes.length entity_ids && Bytes.get entity_ids datom.e = '\001'
-      then Some (direct_entity_value_binding e_var datom.e value_var datom.v)
-      else None)
-    |> List.of_seq
-
-  let fast_comparison_scan db source_db e_var attr value_var predicate threshold =
-    let source_context = query_source_context db in
-    source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) (QVar value_var) None
-    |> Seq.filter_map (fun datom ->
-      if
-        Built_ins.matches_comparison_predicate
-          predicate
-          (query_evaluator_context.compare_value datom.v threshold)
-      then Some (direct_entity_value_binding e_var datom.e value_var datom.v)
-      else None)
-    |> List.of_seq
-
-  let eval_fast_index_clauses db source clauses =
-    match source, clauses with
-    | Db_source source_db,
-      [ Pattern (QVar e1, QAttr match_attr, QValue match_value)
-      ; Pattern (QVar e2, QAttr value_attr, QVar value_var)
-      ]
-      when e1 = e2 && e1 <> value_var ->
-      Some (fast_entity_value_join db source_db e1 match_attr match_value value_attr value_var)
-    | Db_source source_db,
-      [ Pattern (QVar e2, QAttr value_attr, QVar value_var)
-      ; Pattern (QVar e1, QAttr match_attr, QValue match_value)
-      ]
-      when e1 = e2 && e1 <> value_var ->
-      Some (fast_entity_value_join db source_db e1 match_attr match_value value_attr value_var)
-    | Db_source source_db,
-      [ Pattern (QVar e, QAttr attr, QVar value_var)
-      ; ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
-      ]
-      when compared_var = value_var && e <> value_var ->
-      Some (fast_comparison_scan db source_db e attr value_var predicate threshold)
-    | Db_source source_db,
-      [ ComparisonPredicate (predicate, QVar compared_var, QValue threshold)
-      ; Pattern (QVar e, QAttr attr, QVar value_var)
-      ]
-      when compared_var = value_var && e <> value_var ->
-      Some (fast_comparison_scan db source_db e attr value_var predicate threshold)
-    | _ -> None
 
   let relation_lookup_vars source_db terms =
     let add_var vars = function
@@ -408,31 +361,43 @@ end) = struct
 
   let relation_join_key_value_for_lookup db result =
     match result with
-    | Result_value (List _ | Vector _) ->
+    | Result_value (List _ | Vector _ | Ref_to _) ->
       (match query_result_entity_id db result with
        | Some entity_id -> Result_entity entity_id
        | None -> relation_join_key_value result)
     | Result_value (Int entity_id | Ref entity_id) -> Result_entity entity_id
     | _ -> relation_join_key_value result
 
-  let relation_key lookup_contexts attrs common row =
-    let binding = row_binding attrs row in
+  let relation_attr_index attrs attr =
+    let rec loop index = function
+      | [] -> invalid_arg ("relation attr is missing: " ^ attr)
+      | candidate :: _ when candidate = attr -> index
+      | _ :: rest -> loop (index + 1) rest
+    in
+    loop 0 attrs
+
+  let relation_key lookup_contexts indexes row =
     List.map
-      (fun attr ->
-        let value = List.assoc attr binding in
+      (fun (attr, index) ->
+        let value = row_value row index in
         match List.assoc_opt attr lookup_contexts with
         | Some db -> relation_join_key_value_for_lookup db value
         | None -> relation_join_key_value value)
-      common
+      indexes
 
-  let append_relation_rows left_attrs right_attrs left_row right_row =
-    let right_binding = row_binding right_attrs right_row in
-    let extra_right_values =
-      right_attrs
-      |> List.filter_map (fun attr ->
-        if List.mem attr left_attrs then None else Some (List.assoc attr right_binding))
-    in
-    left_row @ extra_right_values
+  let append_relation_rows right_only_indexes left_row right_row =
+    match right_only_indexes, left_row with
+    | [], _ -> left_row
+    | [ index ], [] -> [ row_value right_row index ]
+    | [ index ], [ left0 ] -> [ left0; row_value right_row index ]
+    | [ index ], [ left0; left1 ] -> [ left0; left1; row_value right_row index ]
+    | [ index ], [ left0; left1; left2 ] -> [ left0; left1; left2; row_value right_row index ]
+    | _ ->
+      let extra_right_values =
+        right_only_indexes
+        |> List.map (fun index -> row_value right_row index)
+      in
+      left_row @ extra_right_values
 
   let hash_join left right =
     let common = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
@@ -445,13 +410,17 @@ end) = struct
         left.lookup_vars
         right.lookup_vars
     in
-    if common = [] then
+    if left.attrs = [] && left.rows = [ [] ] then
+      { right with lookup_vars }
+    else if right.attrs = [] && right.rows = [ [] ] then
+      { left with lookup_vars }
+    else if common = [] then
       { attrs
       ; rows =
           List.concat_map
             (fun left_row ->
               List.map
-                (fun right_row -> append_relation_rows left.attrs right.attrs left_row right_row)
+                (fun right_row -> left_row @ right_row)
                 right.rows)
             left.rows
       ; lookup_vars
@@ -462,23 +431,134 @@ end) = struct
         |> List.filter_map (fun attr ->
           Option.map (fun db -> attr, db) (relation_join_lookup_context left right attr))
       in
-      let grouped = Hashtbl.create (List.length left.rows) in
-      List.iter
-        (fun row ->
-          let key = relation_key lookup_contexts left.attrs common row in
-          let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
-          Hashtbl.replace grouped key (row :: rows))
-        left.rows;
+      let right_only_indexes = List.map (relation_attr_index right.attrs) right_only in
+      let key_value attr value =
+        match List.assoc_opt attr lookup_contexts with
+        | Some db -> relation_join_key_value_for_lookup db value
+        | None -> relation_join_key_value value
+      in
+      let repeat_row row count =
+        let rec loop acc remaining =
+          if remaining <= 0 then acc else loop (row :: acc) (remaining - 1)
+        in
+        loop [] count
+      in
+      let entity_key row index =
+        match row_value row index with
+        | Result_entity entity_id -> Some entity_id
+        | _ -> None
+      in
       let rows =
-        right.rows
-        |> List.concat_map (fun right_row ->
-          let key = relation_key lookup_contexts right.attrs common right_row in
-          match Hashtbl.find_opt grouped key with
-          | None -> []
-          | Some left_rows ->
-            List.map
-              (fun left_row -> append_relation_rows left.attrs right.attrs left_row right_row)
-              left_rows)
+        match right_only, common with
+        | [], [ attr ] ->
+          let left_index = relation_attr_index left.attrs attr in
+          let right_index = relation_attr_index right.attrs attr in
+          if
+            List.for_all (fun row -> Option.is_some (entity_key row left_index)) left.rows
+            && List.for_all (fun row -> Option.is_some (entity_key row right_index)) right.rows
+          then (
+            let counts = Hashtbl.create (List.length right.rows) in
+            List.iter
+              (fun row ->
+                let key = Option.get (entity_key row right_index) in
+                let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
+                Hashtbl.replace counts key (count + 1))
+              right.rows;
+            left.rows
+            |> List.concat_map (fun left_row ->
+              let key = Option.get (entity_key left_row left_index) in
+              match Hashtbl.find_opt counts key with
+              | None -> []
+              | Some count -> repeat_row left_row count))
+          else (
+            let counts = Hashtbl.create (List.length right.rows) in
+            List.iter
+              (fun row ->
+                let key = key_value attr (row_value row right_index) in
+                let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
+                Hashtbl.replace counts key (count + 1))
+              right.rows;
+            left.rows
+            |> List.concat_map (fun left_row ->
+              let key = key_value attr (row_value left_row left_index) in
+              match Hashtbl.find_opt counts key with
+              | None -> []
+              | Some count -> repeat_row left_row count))
+        | [], _ ->
+          let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
+          let counts = Hashtbl.create (List.length right.rows) in
+          List.iter
+            (fun row ->
+              let key = relation_key lookup_contexts right_common_indexes row in
+              let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
+              Hashtbl.replace counts key (count + 1))
+            right.rows;
+          let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
+          left.rows
+          |> List.concat_map (fun left_row ->
+            let key = relation_key lookup_contexts left_common_indexes left_row in
+            match Hashtbl.find_opt counts key with
+            | None -> []
+            | Some count -> repeat_row left_row count)
+        | _, [ attr ] ->
+          let left_index = relation_attr_index left.attrs attr in
+          let right_index = relation_attr_index right.attrs attr in
+          if
+            List.for_all (fun row -> Option.is_some (entity_key row left_index)) left.rows
+            && List.for_all (fun row -> Option.is_some (entity_key row right_index)) right.rows
+          then (
+            let grouped = Hashtbl.create (List.length left.rows) in
+            List.iter
+              (fun row ->
+                let key = Option.get (entity_key row left_index) in
+                let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
+                Hashtbl.replace grouped key (row :: rows))
+              left.rows;
+            right.rows
+            |> List.concat_map (fun right_row ->
+              let key = Option.get (entity_key right_row right_index) in
+              match Hashtbl.find_opt grouped key with
+              | None -> []
+              | Some left_rows ->
+                List.map
+                  (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
+                  left_rows))
+          else (
+            let grouped = Hashtbl.create (List.length left.rows) in
+            List.iter
+              (fun row ->
+                let key = key_value attr (row_value row left_index) in
+                let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
+                Hashtbl.replace grouped key (row :: rows))
+              left.rows;
+            right.rows
+            |> List.concat_map (fun right_row ->
+              let key = key_value attr (row_value right_row right_index) in
+              match Hashtbl.find_opt grouped key with
+              | None -> []
+              | Some left_rows ->
+                List.map
+                  (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
+                  left_rows))
+        | _, _ ->
+          let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
+          let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
+          let grouped = Hashtbl.create (List.length left.rows) in
+          List.iter
+            (fun row ->
+              let key = relation_key lookup_contexts left_common_indexes row in
+              let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
+              Hashtbl.replace grouped key (row :: rows))
+            left.rows;
+          right.rows
+          |> List.concat_map (fun right_row ->
+            let key = relation_key lookup_contexts right_common_indexes right_row in
+            match Hashtbl.find_opt grouped key with
+            | None -> []
+            | Some left_rows ->
+              List.map
+                (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
+                left_rows)
       in
       { attrs; rows; lookup_vars }
 
@@ -487,6 +567,16 @@ end) = struct
     match eval_query_term db binding term with
     | Some result -> Query_eval.value_of_query_result result
     | None -> None
+
+  let relation_term_value_getter relation = function
+    | QVar var ->
+      (match List.find_index (( = ) var) relation.attrs with
+       | Some index -> Some (fun row -> Query_eval.value_of_query_result (row_value row index))
+       | None -> None)
+    | QValue value -> Some (fun _ -> Some value)
+    | QEntity entity_id -> Some (fun _ -> Query_eval.value_of_query_result (Result_entity entity_id))
+    | QAttr attr -> Some (fun _ -> Query_eval.value_of_query_result (Result_attr attr))
+    | QWildcard | QIdent _ | QLookupRef _ | QSource _ -> None
 
   let relation_comparison_matches db relation row predicate left_term right_term =
     match
@@ -500,12 +590,27 @@ end) = struct
     | _ -> false
 
   let filter_relation_comparison db relation predicate left_term right_term =
-    { relation with
-      rows =
-        List.filter
-          (fun row -> relation_comparison_matches db relation row predicate left_term right_term)
-          relation.rows
-    }
+    match relation_term_value_getter relation left_term, relation_term_value_getter relation right_term with
+    | Some left_value, Some right_value ->
+      { relation with
+        rows =
+          List.filter
+            (fun row ->
+              match left_value row, right_value row with
+              | Some left, Some right ->
+                Built_ins.matches_comparison_predicate
+                  predicate
+                  (query_evaluator_context.compare_value left right)
+              | _ -> false)
+            relation.rows
+      }
+    | _ ->
+      { relation with
+        rows =
+          List.filter
+            (fun row -> relation_comparison_matches db relation row predicate left_term right_term)
+            relation.rows
+      }
 
   let relation_bindings relation =
     List.map (row_binding relation.attrs) relation.rows
@@ -524,6 +629,15 @@ end) = struct
       in
       let rows = List.filter_map row_of_binding bindings in
       if List.length rows = List.length bindings then Some { attrs; rows; lookup_vars = [] } else None
+
+  let merge_binding db left right =
+    List.fold_left
+      (fun acc (var, value) ->
+        match acc with
+        | None -> None
+        | Some binding -> bind_var db var value binding)
+      (Some left)
+      right
 
   let representative_binding = function
     | binding :: _ -> binding
@@ -556,6 +670,16 @@ end) = struct
       | rest -> List.rev prefix, rest
     in
     split [] clauses
+
+  let relation_only_clauses clauses =
+    List.for_all relation_prefix_clause clauses
+
+  let relation_has_comparison clauses =
+    List.exists
+      (function
+        | ComparisonPredicate _ -> true
+        | _ -> false)
+      clauses
 
   let relation_prefix_has_multiple_clauses = function
     | _ :: _ :: _ -> true
@@ -614,6 +738,49 @@ end) = struct
         | _ -> false)
       clauses
 
+  let eval_relation_from_empty db sources default_source clauses =
+    let rec apply relation = function
+      | [] -> Some relation
+      | _ when relation.rows = [] -> Some { relation with rows = [] }
+      | Pattern (e_term, a_term, v_term) :: rest ->
+        let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
+        apply (hash_join relation next) rest
+      | PatternTx (e_term, a_term, v_term, tx_term) :: rest ->
+        let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term ] in
+        apply (hash_join relation next) rest
+      | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) :: rest ->
+        let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term; op_term ] in
+        apply (hash_join relation next) rest
+      | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
+        let* next = relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ] in
+        apply (hash_join relation next) rest
+      | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
+        let* next =
+          relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term; tx_term ]
+        in
+        apply (hash_join relation next) rest
+      | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) :: rest ->
+        let* next =
+          relation_of_pattern
+            db
+            (source db sources source_name)
+            [ e_term; a_term; v_term; tx_term; op_term ]
+        in
+        apply (hash_join relation next) rest
+      | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
+        apply (filter_relation_comparison db relation predicate left_term right_term) rest
+      | _ -> None
+    in
+    apply { attrs = []; rows = [ [] ]; lookup_vars = [] } clauses
+
+  let eval_relation_rows db sources rules bindings clauses =
+    let default_source = source db sources "$" in
+    match rules, bindings, relation_only_clauses clauses with
+    | [], [ [] ], true ->
+      eval_relation_from_empty db sources default_source clauses
+      |> Option.map (fun relation -> relation.attrs, relation.rows)
+    | _ -> None
+
   let eval_relation_clauses ?(allow_initial_bindings = false) db sources default_source bindings clauses =
     let bound_relation_pattern_terms = function
       | Some binding, [ e_term; a_term; v_term ] ->
@@ -643,40 +810,8 @@ end) = struct
     in
     match bindings with
     | [ [] ] ->
-      let rec apply relation = function
-        | [] -> Some (relation_bindings relation)
-        | Pattern (e_term, a_term, v_term) :: rest ->
-          let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
-          apply (hash_join relation next) rest
-        | PatternTx (e_term, a_term, v_term, tx_term) :: rest ->
-          let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term ] in
-          apply (hash_join relation next) rest
-        | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) :: rest ->
-          let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term; op_term ] in
-          apply (hash_join relation next) rest
-        | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
-          let* next = relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ] in
-          apply (hash_join relation next) rest
-        | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
-          let* next =
-            relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term; tx_term ]
-          in
-          apply (hash_join relation next) rest
-        | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) :: rest ->
-          let* next =
-            relation_of_pattern
-              db
-              (source db sources source_name)
-              [ e_term; a_term; v_term; tx_term; op_term ]
-          in
-          apply (hash_join relation next) rest
-        | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
-          apply (filter_relation_comparison db relation predicate left_term right_term) rest
-        | _ -> None
-      in
-      (match eval_fast_index_clauses db default_source clauses with
-       | Some bindings -> Some bindings
-       | None -> apply { attrs = []; rows = [ [] ]; lookup_vars = [] } clauses)
+      eval_relation_from_empty db sources default_source clauses
+      |> Option.map relation_bindings
     | _ when allow_initial_bindings ->
       let single_binding =
         match bindings with
@@ -685,6 +820,7 @@ end) = struct
       in
       let rec apply relation = function
         | [] -> Some (relation_bindings relation)
+        | _ when relation.rows = [] -> Some []
         | Pattern (e_term, a_term, v_term) :: rest ->
           let* next =
             match single_binding with
@@ -768,11 +904,23 @@ end) = struct
           in
           apply (hash_join relation next) rest
         | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
+          let left_term, right_term =
+            match single_binding with
+            | Some binding -> bound_pattern_term binding left_term, bound_pattern_term binding right_term
+            | None -> left_term, right_term
+          in
           apply (filter_relation_comparison db relation predicate left_term right_term) rest
         | _ -> None
       in
-      let* initial_relation = relation_of_bindings bindings in
-      apply initial_relation clauses
+      let* initial_relation =
+        match single_binding with
+        | Some _ -> Some { attrs = []; rows = [ [] ]; lookup_vars = [] }
+        | None -> relation_of_bindings bindings
+      in
+      let* bindings = apply initial_relation clauses in
+      (match single_binding with
+       | Some binding -> Some (List.filter_map (fun result -> merge_binding db result binding) bindings)
+       | None -> Some bindings)
     | _ -> None
   
   let merge_projected_binding db vars outer_binding inner_binding =
@@ -797,7 +945,25 @@ end) = struct
       bindings
       clauses =
     let default_source = Option.value default_source ~default:(source db sources "$") in
-    match active_rules, query_callables_empty callables, rules, eval_relation_clauses db sources default_source bindings clauses with
+    let relation_bindings =
+      match eval_relation_clauses db sources default_source bindings clauses with
+      | Some bindings -> Some bindings
+      | None
+        when active_rules = []
+             && query_callables_empty callables
+             && rules = []
+             && relation_only_clauses clauses
+             && relation_has_comparison clauses ->
+        eval_relation_clauses
+          ~allow_initial_bindings:true
+          db
+          sources
+          default_source
+          bindings
+          clauses
+      | None -> None
+    in
+    match active_rules, query_callables_empty callables, rules, relation_bindings with
     | [], true, [], Some bindings -> bindings
     | _ ->
       let relation_prefix, rest = split_relation_prefix clauses in

@@ -19,8 +19,18 @@ let rec entity_ref_equal left right =
 
 and value_equal left right =
   match left, right with
+  | Nil, Nil -> true
+  | Int left, Int right -> left = right
   | Float left, Float right ->
     (classify_float left = FP_nan && classify_float right = FP_nan) || left = right
+  | String left, String right -> left = right
+  | Symbol left, Symbol right -> left = right
+  | Bool left, Bool right -> left = right
+  | Keyword left, Keyword right -> left = right
+  | Uuid left, Uuid right -> left = right
+  | Instant left, Instant right -> left = right
+  | Regex left, Regex right -> left = right
+  | Ref left, Ref right -> left = right
   | List left, List right -> list_equal_by value_equal left right
   | Vector left, Vector right -> list_equal_by value_equal left right
   | Set left, Set right -> list_equal_by value_equal left right
@@ -39,8 +49,9 @@ and value_equal left right =
          | None, Some _ | Some _, None -> false)
       left
       right
+  | TxRef, TxRef -> true
   | Ref_to left, Ref_to right -> entity_ref_equal left right
-  | _ -> left = right
+  | _ -> false
 
 let split_keyword keyword =
   match String.index_opt keyword '/' with

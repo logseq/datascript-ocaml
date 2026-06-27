@@ -4,6 +4,12 @@
  (modes exe js)
  (libraries datascript unix))
 
+(executable
+ (name query_profile)
+ (modules query_profile)
+ (modes exe js)
+ (libraries datascript unix))
+
 (library
  (name memory_bench_common)
  (modules memory_scenario)

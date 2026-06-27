@@ -101,26 +101,57 @@ const schema = {
 
 const names = ["Ivan", "Petr", "Sergey", "Oleg", "Yuri", "Dmitry", "Fedor", "Denis"];
 const lastNames = ["Ivanov", "Petrov", "Sidorov", "Kovalev", "Kuznetsov", "Voronoi"];
+const aliases = [
+  "A. C. Q. W.",
+  "A. J. Finn",
+  "A.A. Fair",
+  "Aapeli",
+  "Aaron Wolfe",
+  "Abigail Van Buren",
+  "Jeanne Phillips",
+  "Abram Tertz",
+  "Abu Nuwas",
+  "Acton Bell",
+  "Adunis",
+];
 
-function person(size, i) {
-  const friend = i === size ? 1 : i + 1;
+function makeRng(seed) {
+  let state = seed | 0;
+  return function nextInt(bound) {
+    state = (Math.imul(state, 1664525) + 1013904223) | 0;
+    return ((state >>> 1) & 0x3fffffff) % bound;
+  };
+}
+
+function randNth(nextInt, values) {
+  return values[nextInt(values.length)];
+}
+
+function randomMan(nextInt, i) {
+  const name = randNth(nextInt, names);
+  const lastName = randNth(nextInt, lastNames);
+  const aliasCount = nextInt(10);
+  const aliasValues = [];
+  for (let index = 0; index < aliasCount; index += 1) {
+    aliasValues.push(randNth(nextInt, aliases));
+  }
   return {
-    ":db/id": i,
-    id: i,
-    name: names[(i - 1) % names.length],
-    "last-name": lastNames[(i - 1) % lastNames.length],
-    age: (i * 37) % 100,
-    salary: (i * 7919) % 100000,
-    sex: i % 2 === 0 ? ":male" : ":female",
-    friend,
-    alias: [`alias-${i % 10}`, `tag-${i % 17}`],
+    ":db/id": String(i),
+    name,
+    "last-name": lastName,
+    "full-name": `${name} ${lastName}`,
+    alias: aliasValues,
+    sex: nextInt(2) === 0 ? ":male" : ":female",
+    age: nextInt(100),
+    salary: nextInt(100000),
   };
 }
 
 function people(size) {
+  const nextInt = makeRng(1);
   const result = [];
   for (let i = 1; i <= size; i += 1) {
-    result.push(person(size, i));
+    result.push(randomMan(nextInt, i));
   }
   return result;
 }
@@ -139,14 +170,11 @@ function addOneByOne(size) {
 
 function addOneDatomPerTx(size) {
   let db = d.empty_db(schema);
+  const attrs = ["name", "last-name", "sex", "age", "salary"];
   for (const entity of people(size)) {
     const id = entity[":db/id"];
-    for (const [attr, value] of Object.entries(entity)) {
-      if (attr === ":db/id") continue;
-      const values = Array.isArray(value) ? value : [value];
-      for (const item of values) {
-        db = d.db_with(db, [[":db/add", id, attr, item]]);
-      }
+    for (const attr of attrs) {
+      db = d.db_with(db, [[":db/add", id, attr, entity[attr]]]);
     }
   }
   return db;
