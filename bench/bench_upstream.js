@@ -111,7 +111,7 @@ function person(size, i) {
     "last-name": lastNames[(i - 1) % lastNames.length],
     age: (i * 37) % 100,
     salary: (i * 7919) % 100000,
-    sex: i % 2 === 0 ? "male" : "female",
+    sex: i % 2 === 0 ? ":male" : ":female",
     friend,
     alias: [`alias-${i % 10}`, `tag-${i % 17}`],
   };
@@ -137,6 +137,21 @@ function addOneByOne(size) {
   return db;
 }
 
+function addOneDatomPerTx(size) {
+  let db = d.empty_db(schema);
+  for (const entity of people(size)) {
+    const id = entity[":db/id"];
+    for (const [attr, value] of Object.entries(entity)) {
+      if (attr === ":db/id") continue;
+      const values = Array.isArray(value) ? value : [value];
+      for (const item of values) {
+        db = d.db_with(db, [[":db/add", id, attr, item]]);
+      }
+    }
+  }
+  return db;
+}
+
 function main() {
   const config = parseArgs(process.argv.slice(2));
   console.log("runtime\tupstream-cljs-js");
@@ -147,14 +162,30 @@ function main() {
     return cachedDb;
   };
 
+  bench(config, "add-1", () => consumeDb(addOneDatomPerTx(config.size)));
+  bench(config, "add-5", () => consumeDb(addOneByOne(config.size)));
   bench(config, "add-all", () => consumeDb(buildDb(config.size)));
-  bench(config, "add-one-by-one", () => consumeDb(addOneByOne(config.size)));
   bench(config, "datoms-name", () => consumeInt(d.datoms(db(), ":aevt", "name").length));
-  bench(config, "query-name-age", () =>
+  bench(config, "q1", () =>
+    consumeRows(d.q('[:find ?e :where [?e "name" "Ivan"]]', db()))
+  );
+  bench(config, "q2", () =>
     consumeRows(d.q('[:find ?e ?a :where [?e "name" "Ivan"] [?e "age" ?a]]', db()))
   );
-  bench(config, "query-salary-pred", () =>
+  bench(config, "q3", () =>
+    consumeRows(d.q('[:find ?e ?a :where [?e "name" "Ivan"] [?e "age" ?a] [?e "sex" :male]]', db()))
+  );
+  bench(config, "q4", () =>
+    consumeRows(d.q('[:find ?e ?l ?a :where [?e "name" "Ivan"] [?e "last-name" ?l] [?e "age" ?a] [?e "sex" :male]]', db()))
+  );
+  bench(config, "q5-shortcircuit", () =>
+    consumeRows(d.q('[:find ?e ?n ?l ?a ?s ?al :in $ ?n ?a :where [?e "name" ?n] [?e "age" ?a] [?e "last-name" ?l] [?e "sex" ?s] [?e "alias" ?al]]', db(), "Anastasia", 35))
+  );
+  bench(config, "qpred1", () =>
     consumeRows(d.q('[:find ?e ?s :where [?e "salary" ?s] [(> ?s 50000)]]', db()))
+  );
+  bench(config, "qpred2", () =>
+    consumeRows(d.q('[:find ?e ?s :in $ ?min_s :where [?e "salary" ?s] [(> ?s ?min_s)]]', db(), 50000))
   );
   bench(config, "pull-one", () =>
     consumePull(d.pull(db(), '["name" "age" {"friend" ["name" "age"]}]', 1))

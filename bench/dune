@@ -48,3 +48,11 @@
    BENCH_SKIP_BUILD
    1
    (run bash %{dep:../script/benchmark_vs_cljs.sh}))))
+
+(rule
+ (alias runtest)
+ (deps
+  bench_ocaml.exe
+  bench_output_test.sh)
+ (action
+  (run bash %{dep:bench_output_test.sh} %{dep:bench_ocaml.exe})))

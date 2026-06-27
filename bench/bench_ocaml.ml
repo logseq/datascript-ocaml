@@ -150,7 +150,7 @@ let person size i =
         ; "last-name", One_value (String last_names.((i - 1) mod Array.length last_names))
         ; "age", One_value (Int ((i * 37) mod 100))
         ; "salary", One_value (Int ((i * 7919) mod 100_000))
-        ; "sex", One_value (String (if i mod 2 = 0 then "male" else "female"))
+        ; "sex", One_value (Keyword (if i mod 2 = 0 then "male" else "female"))
         ; "friend", One_value (Ref friend)
         ; "alias", Many_values [ String ("alias-" ^ string_of_int (i mod 10)); String ("tag-" ^ string_of_int (i mod 17)) ]
         ]
@@ -176,6 +176,25 @@ let add_one_by_one size =
     (empty_db ~schema ())
     (people size)
 
+let add_one_datom_per_tx size =
+  let add_entity db entity =
+    match entity with
+    | Entity { db_id = Some entity_ref; attrs; _ } ->
+      List.fold_left
+        (fun db (attr, value) ->
+          let tx =
+            match value with
+            | One_value value -> [ Add (entity_ref, attr, value) ]
+            | Many_values values -> List.map (fun value -> Add (entity_ref, attr, value)) values
+            | One_entity _ | Many_entities _ -> [ entity ]
+          in
+          db_with tx db)
+        db
+        attrs
+    | _ -> db_with [ entity ] db
+  in
+  List.fold_left add_entity (empty_db ~schema ()) (people size)
+
 let main () =
   let config = parse_args () in
   let runtime_label =
@@ -186,15 +205,34 @@ let main () =
   Printf.printf "runtime\t%s\n" runtime_label;
   Printf.printf "size\t%d\n" config.size;
   let db = lazy (build_db config.size) in
+  bench config "add-1" (fun () -> consume_db (add_one_datom_per_tx config.size));
+  bench config "add-5" (fun () -> consume_db (add_one_by_one config.size));
   bench config "add-all" (fun () -> consume_db (build_db config.size));
-  bench config "add-one-by-one" (fun () -> consume_db (add_one_by_one config.size));
   bench config "storage-roundtrip" (fun () ->
     consume_db (build_storage_db config.size));
   bench config "datoms-name" (fun () -> consume_int (seq_length (datoms (Lazy.force db) Aevt ~a:"name" ())));
-  bench config "query-name-age" (fun () ->
+  bench config "q1" (fun () ->
+    consume_rows (q_string (Lazy.force db) "[:find ?e :where [?e :name \"Ivan\"]]"));
+  bench config "q2" (fun () ->
     consume_rows (q_string (Lazy.force db) "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]"));
-  bench config "query-salary-pred" (fun () ->
+  bench config "q3" (fun () ->
+    consume_rows (q_string (Lazy.force db) "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]"));
+  bench config "q4" (fun () ->
+    consume_rows (q_string (Lazy.force db) "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]"));
+  bench config "q5-shortcircuit" (fun () ->
+    consume_rows
+      (q_string
+         ~inputs:[ Arg_scalar (Result_value (String "Anastasia")); Arg_scalar (Result_value (Int 35)) ]
+         (Lazy.force db)
+         "[:find ?e ?n ?l ?a ?s ?al :in $ ?n ?a :where [?e :name ?n] [?e :age ?a] [?e :last-name ?l] [?e :sex ?s] [?e :alias ?al]]"));
+  bench config "qpred1" (fun () ->
     consume_rows (q_string (Lazy.force db) "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"));
+  bench config "qpred2" (fun () ->
+    consume_rows
+      (q_string
+         ~inputs:[ Arg_scalar (Result_value (Int 50000)) ]
+         (Lazy.force db)
+         "[:find ?e ?s :in $ ?min-s :where [?e :salary ?s] [(> ?s ?min-s)]]"));
   bench config "pull-one" (fun () ->
     consume_pull (pull (Lazy.force db) [ Pull_attr "name"; Pull_attr "age"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ] (Entity_id 1)));
   Printf.eprintf "blackhole=%d\n%!" !blackhole
