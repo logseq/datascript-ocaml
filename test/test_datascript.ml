@@ -14177,7 +14177,25 @@ let test_transact__test_retract_fns () =
     |> db_with [ RetractEntity (Entity_id 2) ]
   in
   assert_equal_triples
-    "RetractEntity removes entity facts and incoming refs"
+    "RetractEntity without ref schema matches upstream and keeps untyped incoming refs"
+    [ 1, "friend", Ref 2; 1, "name", String "Ivan" ]
+    (datoms db Eavt ());
+  let db =
+    empty_db ~schema:[ "friend", ref_attr ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "name", One_value (String "Ivan")
+                 ; "friend", One_value (Ref 2)
+                 ]
+             }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr") ] }
+         ]
+    |> db_with [ RetractEntity (Entity_id 2) ]
+  in
+  assert_equal_triples
+    "RetractEntity removes incoming refs for ref attrs"
     [ 1, "name", String "Ivan" ]
     (datoms db Eavt ())
 

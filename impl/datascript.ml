@@ -29,6 +29,7 @@ module Serialize = Serialize
 module Storage = Storage
 module Util = Util
 module Upsert = Upsert
+module PSet = Persistent_sorted_set
 
 let validate_entity_id = Db_impl.validate_entity_id
 
@@ -52,8 +53,6 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
 let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
-
-let with_db_datoms = Db_impl.with_datoms
 
 let empty_db ?(schema = []) ?storage () =
   Db_impl.empty_db db_core_context ~schema ?storage ()
@@ -179,22 +178,9 @@ module Transact_datoms_impl = Transact_datoms.Make (struct
   let visible_datoms = visible_datoms
 end)
 
-let entity_attr_datoms = Transact_datoms_impl.entity_attr_datoms
-let current_attr_value = Transact_datoms_impl.current_attr_value
-let tuple_direct_write_matches_sources = Transact_datoms_impl.tuple_direct_write_matches_sources
-let add_active_datom_with_report = Transact_datoms_impl.add_active_datom_with_report
-let retract_active_datom_with_report = Transact_datoms_impl.retract_active_datom_with_report
-let retract_entity_with_report = Transact_datoms_impl.retract_entity_with_report
-let compare_and_set_matches = Transact_datoms_impl.compare_and_set_matches
-let refresh_tuple_attrs_for_source = Transact_datoms_impl.refresh_tuple_attrs_for_source
-let add_user_datom_with_report = Transact_datoms_impl.add_user_datom_with_report
-let retract_user_attr_with_report = Transact_datoms_impl.retract_user_attr_with_report
 let normalize_entity_attr_value = Transact_datoms_impl.normalize_entity_attr_value
-let add_entity_attr_value = Transact_datoms_impl.add_entity_attr_value
 let allocate_entity_id = Transact_datoms_impl.allocate_entity_id
-let coerce_tuple_lookup_value = Transact_datoms_impl.coerce_tuple_lookup_value
 let entid_in_datoms = Transact_datoms_impl.entid_in_datoms
-let entid = Transact_datoms_impl.entid
 
 let rec edn_string_of_value = function
   | Nil -> "nil"
@@ -231,34 +217,9 @@ and edn_string_of_entity_ref = function
   | Ident ident -> ":" ^ ident
   | Lookup_ref (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
 
-let cas_current_value_string db datoms e a =
-  match cardinality db a with
-  | Many ->
-    let values =
-      entity_attr_datoms datoms e a
-      |> List.map (fun d -> d.v)
-      |> List.sort compare_value
-      |> List.map edn_string_of_value
-    in
-    "(" ^ String.concat " " values ^ ")"
-  | One ->
-    current_attr_value datoms e a
-    |> Option.map edn_string_of_value
-    |> Option.value ~default:"nil"
-
 let cas_expected_value_string = function
   | None -> "nil"
   | Some value -> edn_string_of_value value
-
-let compare_and_set_failure_message db datoms e a expected =
-  ":db.fn/cas failed on datom ["
-  ^ string_of_int e
-  ^ " :"
-  ^ a
-  ^ " "
-  ^ cas_current_value_string db datoms e a
-  ^ "], expected "
-  ^ cas_expected_value_string expected
 
 let lookup_refs_context : Lookup_refs.context =
   { is_unique
@@ -267,12 +228,6 @@ let lookup_refs_context : Lookup_refs.context =
   ; value_to_string = edn_string_of_value
   }
 
-let lookup_ref_entity_id_in_datoms ?strict_missing db datoms attr value =
-  Lookup_refs.entity_id_in_datoms ?strict_missing lookup_refs_context db datoms attr value
-
-let lookup_ref_entity_id ?strict_missing db attr value =
-  Lookup_refs.entity_id ?strict_missing lookup_refs_context db attr value
-
 let unresolved_lookup_ref_message attr value =
   Lookup_refs.unresolved_message lookup_refs_context attr value
 
@@ -280,28 +235,117 @@ let unresolved_entity_ref_message = function
   | Lookup_ref (attr, value) -> unresolved_lookup_ref_message attr value
   | _ -> "lookup ref did not resolve"
 
-let upsert_context : Upsert.context =
-  { is_unique_identity
-  ; entid_in_datoms
-  ; value_to_string = edn_string_of_value
-  }
+let find_avet_exact db attr value =
+  let bound = datom ~e:0 ~a:attr ~v:value () in
+  let compare_prefix left right =
+    first_nonzero [ compare left.a right.a; compare_value left.v right.v ]
+  in
+  let cmp left right =
+    if right == bound then compare_prefix left right
+    else if left == bound then -compare_prefix right left
+    else Util.compare_datom Avet left right
+  in
+  match
+    PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
+    @ List.filter
+        (fun datom -> datom.a = attr && value_equal datom.v value)
+        db.duplicate_avet_datoms
+    |> List.sort (Util.compare_datom Avet)
+  with
+  | datom :: _ -> Some datom
+  | [] -> None
 
-let validate_explicit_upsert_target =
-  Upsert.validate_explicit_target upsert_context
+let find_eavt_exact db entity_id attr value =
+  let bound = datom ~e:entity_id ~a:attr ~v:value () in
+  let compare_prefix left right =
+    first_nonzero
+      [ compare left.e right.e
+      ; compare left.a right.a
+      ; compare_value left.v right.v
+      ]
+  in
+  let cmp left right =
+    if right == bound then compare_prefix left right
+    else if left == bound then -compare_prefix right left
+    else Util.compare_datom Eavt left right
+  in
+  match
+    PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+    @ List.filter
+        (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
+        (Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[])
+    |> List.sort (Util.compare_datom Eavt)
+  with
+  | datom :: _ -> Some datom
+  | [] -> None
 
-let entity_unique_identity =
-  Upsert.entity_unique_identity upsert_context
+let rec coerce_tuple_lookup_value_db db attr value =
+  match schema_attr db attr, value with
+  | Some { tuple_attrs = Some source_attrs; _ }, (List values | Vector values)
+    when List.length source_attrs = List.length values ->
+    let lookup_attr_name = function
+      | Keyword attr | String attr | Symbol attr -> Some attr
+      | _ -> None
+    in
+    let coerce_component source_attr value =
+      match value with
+      | Nil -> None
+      | Int entity_id when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+      | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
+        (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
+         | Some entity_id -> Some (Ref entity_id)
+         | None -> Some (normalize_value value))
+      | value -> Some (normalize_value value)
+    in
+    Tuple (List.map2 coerce_component source_attrs values)
+  | Some { tuple_attrs = Some source_attrs; _ }, Tuple values
+    when List.length source_attrs = List.length values ->
+    let lookup_attr_name = function
+      | Keyword attr | String attr | Symbol attr -> Some attr
+      | _ -> None
+    in
+    let coerce_component source_attr = function
+      | None -> None
+      | Some Nil -> None
+      | Some (Int entity_id) when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+      | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
+        (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
+         | Some entity_id -> Some (Ref entity_id)
+         | None -> Some (normalize_value lookup_ref))
+      | Some value -> Some (normalize_value value)
+    in
+    Tuple (List.map2 coerce_component source_attrs values)
+  | _ -> normalize_value value
+
+and entid_db db attr value =
+  let value = coerce_tuple_lookup_value_db db attr value in
+  if is_unique db attr then
+    find_avet_exact db attr value |> Option.map (fun datom -> datom.e)
+  else
+    None
+
+let lookup_ref_entity_id_db ?(strict_missing = false) db attr value =
+  if not (is_unique db attr) then
+    invalid_arg (Lookup_refs.non_unique_message lookup_refs_context attr value);
+  match entid_db db attr value with
+  | Some entity_id -> Some entity_id
+  | None ->
+    if strict_missing then
+      invalid_arg (unresolved_lookup_ref_message attr value)
+    else
+      None
+
+let entid = entid_db
 
 module Transact_impl = Transact
 
 let transact_resolve_context : Transact_impl.context =
   { validate_entity_id
-  ; entid_in_datoms
+  ; entid = entid_db
   ; ident_attr
   ; allocate_entity_id
-  ; lookup_ref_entity_id_in_datoms =
-      (fun ~strict_missing db datoms attr value ->
-        lookup_ref_entity_id_in_datoms ~strict_missing db datoms attr value)
+  ; lookup_ref_entity_id =
+      (fun ~strict_missing db attr value -> lookup_ref_entity_id_db ~strict_missing db attr value)
   ; unresolved_lookup_ref_message
   ; normalize_value
   ; is_ref_attr
@@ -322,9 +366,9 @@ module Db_access_impl = Db_access.Make (struct
   let is_ref_attr = is_ref_attr
   let is_unique = is_unique
   let is_indexed = is_indexed
-  let entid = entid
+  let entid = entid_db
   let ident_attr = ident_attr
-  let lookup_ref_entity_id ?strict_missing db attr value = lookup_ref_entity_id ?strict_missing db attr value
+  let lookup_ref_entity_id ?strict_missing db attr value = lookup_ref_entity_id_db ?strict_missing db attr value
   let normalize_value = normalize_value
   let unresolved_entity_ref_message = unresolved_entity_ref_message
   let ref_attr_for_value_resolution = ref_attr_for_value_resolution
@@ -333,6 +377,305 @@ module Db_access_impl = Db_access.Make (struct
   let first_nonzero = first_nonzero
   let validate_entity_id = validate_entity_id
 end)
+
+let entity_attr_datoms_db db e a =
+  Db_access_impl.datoms db Eavt ~e ~a () |> List.of_seq
+
+let current_attr_value_db db e a =
+  Db_access_impl.find_datom db Eavt ~e ~a () |> Option.map (fun datom -> datom.v)
+
+let value_option_equal left right =
+  match left, right with
+  | None, None -> true
+  | Some left, Some right -> value_equal left right
+  | None, Some _ | Some _, None -> false
+
+let tuple_direct_write_matches_sources_db schema_db db d =
+  match tuple_attrs schema_db d.a, d.v with
+  | Some source_attrs, Tuple values ->
+    List.length source_attrs = List.length values
+    && List.for_all Option.is_some values
+    && List.for_all2
+         (fun source_attr value ->
+           value_option_equal (current_attr_value_db db d.e source_attr) value)
+         source_attrs
+         values
+  | _ -> false
+
+let validate_datom_value db d =
+  if d.v = Nil then invalid_arg "Cannot store nil as a value";
+  let value_matches_type value value_type =
+    match value_type, value with
+    | RefType, Ref _ -> true
+    | TupleType, Tuple _ -> true
+    | StringType, String _ -> true
+    | KeywordType, Keyword _ -> true
+    | NumberType, (Int _ | Float _) -> true
+    | UuidType, Uuid _ -> true
+    | InstantType, Instant _ -> true
+    | _ -> false
+  in
+  let validate_tuple_types attr values types =
+    if List.length values <> List.length types then
+      invalid_arg ("tuple attribute value arity mismatch: " ^ attr);
+    List.iter2
+      (fun value value_type ->
+        match value with
+        | None -> ()
+        | Some value ->
+          if not (value_matches_type value value_type) then
+            invalid_arg ("tuple attribute element type mismatch: " ^ attr))
+      values
+      types
+  in
+  match schema_attr db d.a with
+  | Some { value_type = Some RefType; _ } ->
+    (match d.v with
+     | Ref _ -> ()
+     | _ -> invalid_arg "Expected number or lookup ref for entity id")
+  | Some { value_type = Some TupleType; tuple_types; _ } ->
+    (match d.v with
+     | Tuple values ->
+       (match tuple_types with
+        | Some types -> validate_tuple_types d.a values types
+        | None -> ())
+     | _ -> invalid_arg ("tuple attribute requires tuple value: " ^ d.a))
+  | Some { value_type = Some StringType; _ } ->
+    (match d.v with
+     | String _ -> ()
+     | _ -> invalid_arg ("string attribute requires string value: " ^ d.a))
+  | Some { value_type = Some KeywordType; _ } ->
+    (match d.v with
+     | Keyword _ -> ()
+     | _ -> invalid_arg ("keyword attribute requires keyword value: " ^ d.a))
+  | Some { value_type = Some NumberType; _ } ->
+    (match d.v with
+     | Int _ | Float _ -> ()
+     | _ -> invalid_arg ("number attribute requires numeric value: " ^ d.a))
+  | Some { value_type = Some UuidType; _ } ->
+    (match d.v with
+     | Uuid _ -> ()
+     | _ -> invalid_arg ("uuid attribute requires uuid value: " ^ d.a))
+  | Some { value_type = Some InstantType; _ } ->
+    (match d.v with
+     | Instant _ -> ()
+     | _ -> invalid_arg ("instant attribute requires instant value: " ^ d.a))
+  | _ -> ()
+
+let retraction_datom tx datom = { datom with tx; added = false }
+
+let compare_eavt_datom left right =
+  compare (left.e, left.a, left.v, left.tx) (right.e, right.a, right.v, right.tx)
+
+let sorted_retractions tx datoms =
+  datoms |> List.sort compare_eavt_datom |> List.map (retraction_datom tx)
+
+let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = true) schema_db tx db d =
+  let d = { d with v = normalize_value d.v } in
+  if is_tuple_attr schema_db d.a && not allow_tuple then
+    if tuple_direct_write_matches_sources_db schema_db db d then db, []
+    else invalid_arg "cannot modify tuple attributes directly"
+  else begin
+    if validate_value then validate_datom_value schema_db d;
+    (match find_avet_exact db d.a d.v with
+     | Some existing when is_unique schema_db d.a && existing.e <> d.e ->
+       invalid_arg "unique constraint"
+     | Some _ | None -> ());
+    let same_fact_exists =
+      find_eavt_exact db d.e d.a d.v |> Option.is_some
+    in
+    if same_fact_exists then
+      db, []
+    else
+      let tx_data =
+        match cardinality schema_db d.a with
+        | Many -> [ d ]
+        | One -> sorted_retractions tx (entity_attr_datoms_db db d.e d.a) @ [ d ]
+      in
+      refresh_db_indexes_with_tx_data db tx_data, tx_data
+  end
+
+let retract_active_datom_with_report_db tx db e a value =
+  let value = Option.map normalize_value value in
+  let removed =
+    match value with
+    | Some value ->
+      find_eavt_exact db e a value |> Option.to_list
+    | None -> entity_attr_datoms_db db e a
+  in
+  let tx_data = sorted_retractions tx removed in
+  refresh_db_indexes_with_tx_data db tx_data, tx_data
+
+let ref_value_id = function
+  | Ref entity_id -> Some entity_id
+  | _ -> None
+
+let rec component_entity_closure_db schema_db db seen e =
+  if List.mem e seen then
+    seen
+  else
+    let seen = e :: seen in
+    Db_access_impl.datoms db Eavt ~e ()
+    |> Seq.filter (fun datom -> is_component schema_db datom.a)
+    |> Seq.fold_left
+         (fun seen datom ->
+           match ref_value_id datom.v with
+           | Some child -> component_entity_closure_db schema_db db seen child
+           | None -> seen)
+         seen
+
+let ref_attrs db =
+  db.schema
+  |> List.filter_map (fun (attr, spec) ->
+    match spec.value_type with
+    | Some RefType -> Some attr
+    | _ -> None)
+
+let incoming_ref_datoms db ids =
+  ref_attrs db
+  |> List.concat_map (fun attr ->
+    ids
+    |> List.concat_map (fun entity_id ->
+      Db_access_impl.datoms db Avet ~a:attr ~v:(Ref entity_id) () |> List.of_seq))
+
+let unique_datoms datoms =
+  datoms |> List.sort_uniq (Util.compare_datom Eavt)
+
+let retract_entities_with_report_db tx db ids =
+  let entity_datoms =
+    ids
+    |> List.concat_map (fun entity_id ->
+      Db_access_impl.datoms db Eavt ~e:entity_id () |> List.of_seq)
+  in
+  let removed = unique_datoms (entity_datoms @ incoming_ref_datoms db ids) in
+  let tx_data = sorted_retractions tx removed in
+  refresh_db_indexes_with_tx_data db tx_data, tx_data
+
+let retract_entity_with_report_db schema_db tx db e =
+  let ids = component_entity_closure_db schema_db db [] e in
+  retract_entities_with_report_db tx db ids
+
+let component_child_closure_db schema_db db component_datoms =
+  List.fold_left
+    (fun ids datom ->
+      match ref_value_id datom.v with
+      | Some child -> component_entity_closure_db schema_db db ids child
+      | None -> ids)
+    []
+    component_datoms
+
+let rec retract_user_attr_with_report_db schema_db tx db e a value =
+  if is_tuple_attr schema_db a then invalid_arg "cannot modify tuple attributes directly";
+  let db, tx_data =
+    match value with
+    | Some value -> retract_active_datom_with_report_db tx db e a (Some value)
+    | None when is_component schema_db a ->
+      let attr_datoms = entity_attr_datoms_db db e a in
+      let child_ids = component_child_closure_db schema_db db attr_datoms in
+      let db, child_tx_data = retract_entities_with_report_db tx db child_ids in
+      let db, attr_tx_data = retract_active_datom_with_report_db tx db e a None in
+      db, child_tx_data @ attr_tx_data
+    | None -> retract_active_datom_with_report_db tx db e a None
+  in
+  refresh_tuple_attrs_for_source_db schema_db tx db e a tx_data
+
+and tuple_value_db db e source_attrs =
+  Tuple (List.map (current_attr_value_db db e) source_attrs)
+
+and refresh_tuple_attrs_for_source_db schema_db tx db e source_attr tx_data =
+  tuple_attrs_for_source schema_db source_attr
+  |> List.fold_left
+       (fun (db, tx_data) (tuple_attr, source_attrs) ->
+         let datom = datom ~tx ~e ~a:tuple_attr ~v:(tuple_value_db db e source_attrs) () in
+         let db, tuple_tx_data =
+           add_active_datom_with_report_db ~allow_tuple:true schema_db tx db datom
+         in
+         db, tx_data @ tuple_tx_data)
+       (db, tx_data)
+
+let add_user_datom_with_report_db schema_db tx db d =
+  let db, tx_data = add_active_datom_with_report_db schema_db tx db d in
+  refresh_tuple_attrs_for_source_db schema_db tx db d.e d.a tx_data
+
+let add_entity_attr_value_db schema_db tx db e attr value =
+  let e, attr, value = normalize_entity_attr_value schema_db e attr value in
+  add_user_datom_with_report_db schema_db tx db (datom ~tx ~e ~a:attr ~v:value ())
+
+let compare_and_set_matches_db db e a expected =
+  match cardinality db a, expected with
+  | Many, Some expected ->
+    entity_attr_datoms_db db e a |> List.exists (fun datom -> value_equal datom.v expected)
+  | Many, None -> entity_attr_datoms_db db e a = []
+  | One, Some expected ->
+    (match current_attr_value_db db e a with
+     | Some actual -> value_equal actual expected
+     | None -> false)
+  | One, None -> current_attr_value_db db e a = None
+
+let cas_current_value_string_db db e a =
+  match cardinality db a with
+  | Many ->
+    let values =
+      entity_attr_datoms_db db e a
+      |> List.map (fun d -> d.v)
+      |> List.sort compare_value
+      |> List.map edn_string_of_value
+    in
+    "(" ^ String.concat " " values ^ ")"
+  | One ->
+    current_attr_value_db db e a
+    |> Option.map edn_string_of_value
+    |> Option.value ~default:"nil"
+
+let compare_and_set_failure_message_db db e a expected =
+  ":db.fn/cas failed on datom ["
+  ^ string_of_int e
+  ^ " :"
+  ^ a
+  ^ " "
+  ^ cas_current_value_string_db db e a
+  ^ "], expected "
+  ^ cas_expected_value_string expected
+
+let upsert_context_for_db db : Upsert.context =
+  { is_unique_identity
+  ; entid_in_datoms = (fun _schema_db _datoms attr value -> entid_db db attr value)
+  ; value_to_string = edn_string_of_value
+  }
+
+let validate_explicit_upsert_target_db schema_db db entity_id attrs =
+  Upsert.validate_explicit_target (upsert_context_for_db db) schema_db [] entity_id attrs
+
+let entity_unique_identity_db schema_db db attrs =
+  Upsert.entity_unique_identity (upsert_context_for_db db) schema_db [] attrs
+
+let schema_datoms_for_tx db tx_data =
+  let schema_datom datom =
+    datom.a = "db/ident" || List.mem datom.a Schema.schema_fields
+  in
+  let same_fact left right =
+    left.e = right.e && left.a = right.a && value_equal left.v right.v
+  in
+  let append_unique datoms datom =
+    if List.exists (same_fact datom) datoms then datoms else datoms @ [ datom ]
+  in
+  let touched_schema_entities =
+    tx_data
+    |> List.filter_map (fun datom ->
+      if schema_datom datom then Some datom.e else None)
+    |> List.sort_uniq compare
+  in
+  let active_datoms =
+    touched_schema_entities
+    |> List.concat_map (fun entity_id ->
+      Db_access_impl.datoms db Eavt ~e:entity_id () |> List.of_seq)
+  in
+  let asserted_schema_datoms =
+    tx_data
+    |> List.filter (fun datom -> datom.added && schema_datom datom)
+    |> List.rev
+  in
+  List.fold_left append_unique [] (asserted_schema_datoms @ active_datoms)
 
 let schema_fields = Schema.schema_fields
 
@@ -344,38 +687,43 @@ let transact_apply_context : Transact_impl.apply_context =
   ; schema_from_transaction_datoms =
       (fun ~strict ~removed_attrs ~removed_fields ~ignored_schema_entities schema datoms ->
         schema_from_transaction_datoms ~strict ~removed_attrs ~removed_fields ~ignored_schema_entities schema datoms)
+  ; schema_datoms = schema_datoms_for_tx
   ; schema_fields
-  ; current_attr_value
-  ; add_entity_attr_value
+  ; current_attr_value = current_attr_value_db
+  ; add_entity_attr_value = add_entity_attr_value_db
   ; same_fact
-  ; add_user_datom_with_report
+  ; add_user_datom_with_report = add_user_datom_with_report_db
   ; is_tuple_attr
   ; tuple_attrs_for_source
   ; is_unique_identity
-  ; with_db_datoms
-  ; retract_user_attr_with_report
-  ; retract_active_datom_with_report
-  ; retract_entity_with_report
-  ; compare_and_set_matches
-  ; compare_and_set_failure_message
+  ; retract_user_attr_with_report = retract_user_attr_with_report_db
+  ; retract_active_datom_with_report = retract_active_datom_with_report_db
+  ; retract_entity_with_report = retract_entity_with_report_db
+  ; compare_and_set_matches = compare_and_set_matches_db
+  ; compare_and_set_failure_message = compare_and_set_failure_message_db
   ; datom
   ; normalize_datom_for_schema
-  ; add_active_datom_with_report
-  ; validate_explicit_upsert_target
-  ; entity_unique_identity
+  ; add_active_datom_with_report = add_active_datom_with_report_db
+  ; validate_explicit_upsert_target = validate_explicit_upsert_target_db
+  ; entity_unique_identity = entity_unique_identity_db
   ; existing_unique_entity =
       (fun db attr value ->
         Db_access_impl.find_datom db Avet ~a:attr ~v:value ()
         |> Option.map (fun d -> d.e))
+  ; existing_entity_datoms =
+      (fun db entity_id ->
+        Db_access_impl.datoms db Eavt ~e:entity_id ()
+        |> List.of_seq)
   ; existing_entity_attr_datoms =
       (fun db entity_id attr ->
         Db_access_impl.datoms db Eavt ~e:entity_id ~a:attr ()
         |> List.of_seq)
+  ; datoms_referencing_entity =
+      (fun db entity_id -> incoming_ref_datoms db [ entity_id ])
   ; value_equal
   ; normalize_entity_attr_value
-  ; tuple_direct_write_matches_sources
-  ; refresh_tuple_attrs_for_source
-  ; refresh_db_indexes
+  ; tuple_direct_write_matches_sources = tuple_direct_write_matches_sources_db
+  ; refresh_tuple_attrs_for_source = refresh_tuple_attrs_for_source_db
   ; refresh_db_indexes_with_added_datoms
   ; refresh_db_indexes_with_tx_data
   ; refresh_db_identity
@@ -388,9 +736,49 @@ let db_with tx_ops db =
   let db_after, _, _ = apply_tx tx_ops db in
   db_after
 
+let apply_tail_group db group =
+  List.iter
+    (fun datom ->
+      if datom.added && is_unique db datom.a then
+        match Db_access_impl.find_datom db Avet ~a:datom.a ~v:datom.v () with
+        | Some existing when existing.e <> datom.e ->
+          invalid_arg "tail group conflicts with an existing unique value"
+        | Some _ | None -> ())
+    group;
+  let group =
+    List.fold_left
+      (fun tx_data datom ->
+        if datom.added && cardinality db datom.a = One then
+          let existing =
+            Db_access_impl.datoms db Eavt ~e:datom.e ~a:datom.a ()
+            |> Seq.filter (fun existing -> not (value_equal existing.v datom.v))
+            |> Seq.map (fun existing ->
+              { existing with tx = datom.tx; added = false })
+            |> List.of_seq
+          in
+          List.rev_append existing (datom :: tx_data)
+        else
+          datom :: tx_data)
+      []
+      group
+    |> List.rev
+  in
+  let max_eid =
+    List.fold_left
+      (fun max_eid datom ->
+        let max_eid =
+          if datom.e <= max_allocatable_entity_id then max max_eid datom.e
+          else max_eid
+        in
+        max_eid_in_value max_eid datom.v)
+      db.max_eid
+      group
+  in
+  let db = refresh_db_indexes_with_tx_data db group in
+  { db with max_eid }
+
 let storage_tail_context : Storage.tail_context =
-  { apply_group = (fun db group -> db_with (List.map (fun datom -> Raw_datom datom) group) db)
-  }
+  { apply_group = apply_tail_group }
 
 let db_with_tail db tail =
   Storage.db_with_tail storage_tail_context db tail
@@ -495,8 +883,8 @@ let reset_conn ?(tx_meta = []) conn db =
 let reset_conn_bang ?tx_meta conn db = reset_conn ?tx_meta conn db
 
 module Entity_refs_impl = Entity_refs.Make (struct
-  let lookup_ref_entity_id db attr value = lookup_ref_entity_id db attr value
-  let entid = entid
+  let lookup_ref_entity_id db attr value = lookup_ref_entity_id_db db attr value
+  let entid = entid_db
   let ident_attr = ident_attr
   let normalize_value = normalize_value
 end)
@@ -580,7 +968,10 @@ let data_readers_context : Data_readers_impl.context =
   ; empty_db = (fun ?(schema = []) () -> empty_db ~schema ())
   ; max_eid_with_entity_id = Db_impl.max_eid_with_entity_id
   ; max_eid_in_value
-  ; resolve_value_for_attr
+  ; resolve_value_for_attr =
+      (fun db attr datoms tx max_eid tempids value ->
+        let datom_db = init_db ~schema:db.schema datoms in
+        resolve_value_for_attr db attr datom_db tx max_eid tempids value)
   ; init_db = (fun ?(schema = []) datoms -> init_db ~schema datoms)
   }
 
@@ -656,7 +1047,7 @@ let query_match_context db : Query.match_context =
   ; ident_entity_id = (fun ident -> entid db ident_attr (Keyword ident))
   ; unresolved_lookup_ref_message
   ; value_equal
-  ; coerce_tuple_lookup_value = (fun attr value -> coerce_tuple_lookup_value db (visible_datoms db) attr value)
+  ; coerce_tuple_lookup_value = (fun attr value -> coerce_tuple_lookup_value_db db attr value)
   }
 
 let query_result_entity_id db result =
@@ -1110,7 +1501,7 @@ module Query = struct
     | Some value ->
       let value =
         if is_tuple_attr db attr then
-          coerce_tuple_lookup_value db (visible_datoms db) attr value
+          coerce_tuple_lookup_value_db db attr value
         else
           normalize_value value
       in

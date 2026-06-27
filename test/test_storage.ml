@@ -73,6 +73,14 @@ let counting_storage () =
   in
   { storage with storage_store }, writes
 
+let restore_counting_storage storage =
+  let reads = ref [] in
+  let storage_restore address =
+    reads := address :: !reads;
+    storage.storage_restore address
+  in
+  { storage with storage_restore }, reads
+
 let reset_writes writes = writes := []
 
 let test_storage__test_basics () =
@@ -207,6 +215,84 @@ let test_storage__test_restored_incremental_store_reuses_index_nodes () =
     [ 1, "str", String "changed" ]
     (datoms db_after_replacement Eavt ~e:1 ())
 
+let test_storage__test_restore_is_lazy () =
+  let storage = memory_storage () in
+  large_db () |> store ~storage;
+  let address_count = List.length (storage_addresses storage) in
+  if address_count < 20 then
+    failf "large stored db should have many index nodes, got %d" address_count;
+  let counted_storage, reads = restore_counting_storage storage in
+  let restored =
+    match restore counted_storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored large db"
+  in
+  assert_int_at_most "restore should only read root and tail addresses" 2
+    (List.length !reads);
+  ignore (Seq.uncons (datoms_seq restored Eavt ()));
+  let reads_after_first_datom = List.length !reads in
+  if reads_after_first_datom <= 2 then
+    failwith "reading the first datom should load the first index path";
+  if reads_after_first_datom >= address_count then
+    failf
+      "reading the first datom should not restore every stored node: reads=%d addresses=%d"
+      reads_after_first_datom address_count
+
+let test_storage__test_restore_with_tail_is_lazy () =
+  let storage = memory_storage () in
+  large_db () |> store ~storage;
+  let address_count = List.length (storage_addresses storage) in
+  store_tail storage
+    [
+      [
+        datom ~tx:(tx0 + 2) ~e:1 ~a:"str" ~v:(String "1") ~added:false ();
+        datom ~tx:(tx0 + 2) ~e:1 ~a:"str" ~v:(String "changed") ();
+      ];
+    ];
+  let counted_storage, reads = restore_counting_storage storage in
+  let restored =
+    match restore counted_storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored large db with tail"
+  in
+  if List.length !reads >= address_count then
+    failf
+      "restore tail replay should not restore every stored node: reads=%d addresses=%d"
+      (List.length !reads) address_count;
+  assert_equal_triples
+    "tail replay should apply raw datoms"
+    [ 1, "str", String "changed" ]
+    (datoms restored Eavt ~e:1 ())
+
+let test_storage__test_transact_after_restore_uses_index_slices () =
+  let storage = memory_storage () in
+  large_db () |> store ~storage;
+  let baseline_storage, baseline_reads = restore_counting_storage storage in
+  let baseline =
+    match restore baseline_storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored large db for baseline"
+  in
+  ignore (Seq.uncons (datoms_seq baseline Eavt ~e:1 ()));
+  let slice_read_count = List.length !baseline_reads in
+  let counted_storage, reads = restore_counting_storage storage in
+  let restored =
+    match restore counted_storage with
+    | Some db -> db
+    | None -> failwith "restore should read stored large db"
+  in
+  let db_after =
+    db_with [ Retract (Entity_id 1, "str", Some (String "1")) ] restored
+  in
+  if List.length !reads > slice_read_count + 8 then
+    failf
+      "transact after restore should use bounded index slices: reads=%d slice_reads=%d"
+      (List.length !reads) slice_read_count;
+  assert_equal_triples
+    "restored db transaction should retract the targeted fact"
+    []
+    (datoms db_after Eavt ~e:1 ())
+
 let test_storage__test_conn () =
   let storage = memory_storage () in
   let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
@@ -302,5 +388,8 @@ let () =
   test_storage__test_gc ();
   test_storage__test_restored_db_addresses ();
   test_storage__test_restored_incremental_store_reuses_index_nodes ();
+  test_storage__test_restore_is_lazy ();
+  test_storage__test_restore_with_tail_is_lazy ();
+  test_storage__test_transact_after_restore_uses_index_slices ();
   test_storage__test_conn ();
   test_storage__test_db_with_tail ()
