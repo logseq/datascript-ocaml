@@ -124,6 +124,9 @@ let first_name_entity db =
 let count_name_datoms db =
   seq_length (datoms db Aevt ~a:"name" ())
 
+let query_name_age =
+  lazy (parse_query_string "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]")
+
 let first_seek_name_entity db =
   match Seq.uncons (seek_datoms db Avet ~a:"name" ~v:(String "Ivan") ()) with
   | Some (datom, _) -> datom.e
@@ -161,6 +164,24 @@ let test_seek_datoms_is_lazy_to_first_match () =
       first_elapsed
       count_elapsed
 
+let test_aevt_prefix_count_has_low_per_item_overhead () =
+  let db = build_db 10_000 in
+  let iterations = 200 in
+  let elapsed = time_repeated iterations (fun () -> count_name_datoms db) in
+  if elapsed > 0.180 then
+    failf
+      "counting an AEVT attr prefix should avoid comparator allocation overhead: elapsed=%.4fs"
+      elapsed
+
+let test_name_age_join_uses_indexed_plan () =
+  let db = build_db 1_000 in
+  let iterations = 200 in
+  let elapsed = time_repeated iterations (fun () -> q db (Lazy.force query_name_age) |> List.length) in
+  if elapsed > 0.120 then
+    failf
+      "name/age join should use bounded indexed lookups without full DB materialization: elapsed=%.4fs"
+      elapsed
+
 let test_tempid_unique_entity_add_uses_indexes () =
   let db = build_outliner_db 5000 in
   let id = "block-new" in
@@ -192,6 +213,8 @@ let () =
       , fun () -> test_incremental_explicit_entity_adds_stay_near_bulk_cost () )
     ; "AEVT prefix first match laziness", (fun () -> test_aevt_prefix_lookup_is_lazy_to_first_match ())
     ; "seek_datoms first match laziness", (fun () -> test_seek_datoms_is_lazy_to_first_match ())
+    ; "AEVT prefix count overhead", (fun () -> test_aevt_prefix_count_has_low_per_item_overhead ())
+    ; "name/age indexed join", (fun () -> test_name_age_join_uses_indexed_plan ())
     ; "tempid unique entity add uses indexes", (fun () -> test_tempid_unique_entity_add_uses_indexes ())
     ; ( "lookup-ref cardinality-one update uses indexes"
       , fun () -> test_lookup_ref_cardinality_one_update_uses_indexes () )

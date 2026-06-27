@@ -1108,7 +1108,12 @@ module Query = struct
     match resolve_query_value_for_attr db attr value with
     | None -> []
     | Some value ->
-      let value = coerce_tuple_lookup_value db (visible_datoms db) attr value in
+      let value =
+        if is_tuple_attr db attr then
+          coerce_tuple_lookup_value db (visible_datoms db) attr value
+        else
+          normalize_value value
+      in
       let ident_entity_value =
         match value, ref_attr_for_value_resolution db attr with
         | Keyword ident, None -> Option.map (fun entity_id -> Ref entity_id) (entid db ident_attr (Keyword ident))
@@ -1247,19 +1252,25 @@ module Query = struct
     match entity_value_row_builder find_vars e_var value_var with
     | None -> []
     | Some row ->
-      let matched_entities =
+      if db.duplicate_datoms = [] && cardinality db match_attr = One && cardinality db value_attr = One then
         datoms_by_attr_value db match_attr match_value
-        |> List.map (fun datom -> datom.e)
+        |> List.filter_map (fun match_datom ->
+          find_datom db Eavt ~e:match_datom.e ~a:value_attr ()
+          |> Option.map (fun value_datom -> row value_datom.e value_datom.v))
+      else
+        let matched_entities =
+          datoms_by_attr_value db match_attr match_value
+          |> List.map (fun datom -> datom.e)
+          |> List.sort_uniq compare
+        in
+        matched_entities
+        |> List.fold_left
+             (fun rows entity_id ->
+               datoms_list db Eavt ~e:entity_id ~a:value_attr ()
+               |> List.fold_left (fun rows datom -> row datom.e datom.v :: rows) rows)
+             []
+        |> List.rev
         |> List.sort_uniq compare
-      in
-      matched_entities
-      |> List.fold_left
-           (fun rows entity_id ->
-             datoms_list db Aevt ~e:entity_id ~a:value_attr ()
-             |> List.fold_left (fun rows datom -> row datom.e datom.v :: rows) rows)
-           []
-      |> List.rev
-      |> List.sort_uniq compare
 
   let planned_entity_value_comparison db find_vars e_var match_attr match_value value_attr value_var predicate threshold =
     match entity_value_row_builder find_vars e_var value_var with

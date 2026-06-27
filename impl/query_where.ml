@@ -189,11 +189,17 @@ end) = struct
 
   let fast_entity_value_join db source_db e_var match_attr match_value value_attr value_var =
     let source_context = query_source_context db in
+    let entity_ids = Bytes.make (source_db.max_datom_e + 1) '\000' in
     source_context.pattern_datoms source_db (QVar e_var) (QAttr match_attr) (QValue match_value) None
     |> Seq.filter (fun datom -> query_evaluator_context.compare_value datom.v match_value = 0)
-    |> Seq.flat_map (fun match_datom ->
-      source_context.pattern_datoms source_db (QEntity match_datom.e) (QAttr value_attr) (QVar value_var) None)
-    |> Seq.map (fun datom -> direct_entity_value_binding e_var datom.e value_var datom.v)
+    |> Seq.iter (fun match_datom ->
+      if match_datom.e >= 0 && match_datom.e < Bytes.length entity_ids then
+        Bytes.set entity_ids match_datom.e '\001');
+    source_context.pattern_datoms source_db (QVar e_var) (QAttr value_attr) (QVar value_var) None
+    |> Seq.filter_map (fun datom ->
+      if datom.e >= 0 && datom.e < Bytes.length entity_ids && Bytes.get entity_ids datom.e = '\001'
+      then Some (direct_entity_value_binding e_var datom.e value_var datom.v)
+      else None)
     |> List.of_seq
 
   let fast_comparison_scan db source_db e_var attr value_var predicate threshold =

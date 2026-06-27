@@ -398,26 +398,53 @@ type bound_fields =
 let bound_datom ?(e = 0) ?(a = "") ?(v = Nil) ?(tx = tx0) () =
   { e; a; v; tx; added = true }
 
-let compare_bound_fields context fields left right order =
-  let compare_field = function
-    | `E when fields.bound_e -> compare left.e right.e
-    | `A when fields.bound_a -> compare left.a right.a
-    | `V when fields.bound_v -> context.compare_value left.v right.v
-    | `Tx when fields.bound_tx -> compare left.tx right.tx
-    | _ -> 0
-  in
-  order |> List.map compare_field |> context.first_nonzero
+let first_nonzero4 first second third fourth =
+  if first <> 0 then first
+  else if second <> 0 then second
+  else if third <> 0 then third
+  else fourth
 
-let index_order = function
-  | Eavt -> [ `E; `A; `V; `Tx ]
-  | Aevt -> [ `A; `E; `V; `Tx ]
-  | Avet -> [ `A; `V; `E; `Tx ]
+let compare_bound_e fields left right =
+  if fields.bound_e then compare left.e right.e else 0
+
+let compare_bound_a fields left right =
+  if fields.bound_a then compare left.a right.a else 0
+
+let compare_bound_v context fields left right =
+  if fields.bound_v then context.compare_value left.v right.v else 0
+
+let compare_bound_tx fields left right =
+  if fields.bound_tx then compare left.tx right.tx else 0
+
+let compare_bound_fields context fields left right = function
+  | Eavt ->
+    first_nonzero4
+      (compare_bound_e fields left right)
+      (compare_bound_a fields left right)
+      (compare_bound_v context fields left right)
+      (compare_bound_tx fields left right)
+  | Aevt ->
+    first_nonzero4
+      (compare_bound_a fields left right)
+      (compare_bound_e fields left right)
+      (compare_bound_v context fields left right)
+      (compare_bound_tx fields left right)
+  | Avet ->
+    first_nonzero4
+      (compare_bound_a fields left right)
+      (compare_bound_v context fields left right)
+      (compare_bound_e fields left right)
+      (compare_bound_tx fields left right)
 
 let slice_cmp context index from_bound from_fields to_bound to_fields left right =
   if right == from_bound then
-    compare_bound_fields context from_fields left right (index_order index)
+    compare_bound_fields context from_fields left right index
+  else if left == from_bound then
+    -compare_bound_fields context from_fields right left index
   else if right == to_bound then
-    compare_bound_fields context to_fields left right (index_order index)
+    compare_bound_fields context to_fields left right index
+  else if left == to_bound then
+    -compare_bound_fields context to_fields right left index
   else
     Util.compare_datom index left right
 
@@ -566,13 +593,18 @@ let resolved_value_option_for_optional_attr context db attr =
 let datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
-  let datoms =
+  let datoms, exact =
     match exact_prefix_datoms context db index e a v tx with
-    | Some datoms -> datoms
-    | None -> index_datoms_seq db index
+    | Some datoms -> datoms, true
+    | None -> index_datoms_seq db index, false
+  in
+  let exact_attr_prefix =
+    match index, e, a, v, tx with
+    | Aevt, None, Some _, None, None -> exact
+    | _ -> false
   in
   let datoms =
-    if (e, a, v, tx) = (None, None, None, None) then
+    if exact_attr_prefix || (e, a, v, tx) = (None, None, None, None) then
       datoms
     else
       datoms
