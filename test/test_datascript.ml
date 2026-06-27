@@ -304,6 +304,42 @@ let test_datoms_slices_before_filtered_predicate () =
     if datom.a <> "name" then failf "expected first lazy datom for :name, got %s" datom.a
   | None -> failwith "expected one name datom"
 
+let test_wildcard_pull_plan_uses_entity_slices () =
+  let db =
+    init_db
+      [ datom ~e:1 ~a:"marker" ~v:(Bool true) ()
+      ; datom ~e:1 ~a:"name" ~v:(String "Ivan") ()
+      ; datom ~e:999 ~a:"unrelated" ~v:(String "should-not-be-read") ()
+      ]
+  in
+  let filtered =
+    filter db (fun _ datom ->
+      if datom.a = "unrelated" then
+        failwith "wildcard pull should read only matched entity slices";
+      true)
+  in
+  let query =
+    { find = [ Find_pull ("e", [ Pull_wildcard ]) ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules = []
+    ; where = [ Pattern (QVar "e", QAttr "marker", QWildcard) ]
+    }
+  in
+  assert_equal_query
+    "wildcard pull query plan should not materialize the full EAVT"
+    [ [ Result_pull
+          { pulled_id = 1
+          ; pulled_attrs =
+              [ Keyword "marker", Pulled_scalar (Bool true)
+              ; Keyword "name", Pulled_scalar (String "Ivan")
+              ; Keyword "db/id", Pulled_scalar (Int 1)
+              ]
+          }
+      ]
+    ]
+    (q filtered query)
+
 let test_raw_datom_counts_ref_values_in_max_eid () =
   let report =
     transact
@@ -8691,6 +8727,36 @@ let test_q_parsed_rule_inputs_interact_with_function_bindings () =
          (q_string
             ~inputs:[ Arg_rules ref_property_rules ]
             ref_property_db
+            "[:find [?b ...]
+              :in $ %
+              :where (ref-property ?b \"bar\")
+                     [?b :block/title \"Page1\"]]"));
+  let ref_property_filtered_db =
+    filter
+      (init_db
+         ~schema:[ "user.property/foo", ref_attr ]
+         [ datom ~e:1 ~a:"db/ident" ~v:(Keyword "user.property/foo") ()
+         ; datom ~e:2 ~a:"block/title" ~v:(String "Page1") ()
+         ; datom
+             ~e:2
+             ~a:"user.property/foo"
+             ~v:(Vector [ Keyword "block/title"; Keyword "logseq.property/status"; Keyword "block/tags" ])
+             ()
+         ; datom ~e:999 ~a:"unrelated" ~v:(String "should-not-be-read") ()
+         ])
+      (fun _ datom ->
+         if datom.a = "unrelated" then
+           failwith "malformed lookup scan should stop before unrelated datoms";
+         true)
+  in
+  assert_raises_invalid_arg_message
+    "q_string malformed lookup scan should not materialize the full EAVT"
+    "Lookup ref should contain 2 elements: [:block/title :logseq.property/status :block/tags]"
+    (fun () ->
+       ignore
+         (q_string
+            ~inputs:[ Arg_rules ref_property_rules ]
+            ref_property_filtered_db
             "[:find [?b ...]
               :in $ %
               :where (ref-property ?b \"bar\")
@@ -17215,6 +17281,7 @@ let () =
   test_init_db_preserves_raw_int_datoms_for_ref_attrs ();
   test_datoms_returns_lazy_sequence ();
   test_datoms_slices_before_filtered_predicate ();
+  test_wildcard_pull_plan_uses_entity_slices ();
   test_raw_datom_counts_ref_values_in_max_eid ();
   test_raw_datom_counts_tx_in_max_tx ();
   test_transact__test_with_datoms ();

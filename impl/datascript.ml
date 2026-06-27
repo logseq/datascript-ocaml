@@ -858,6 +858,9 @@ let datoms_list db index ?e ?a ?v ?tx () =
 
 let find_datom = Db_access_impl.find_datom
 let find_datom_ref = Db_access_impl.find_datom_ref
+let has_datom db index ?e ?a ?v ?tx () =
+  find_datom db index ?e ?a ?v ?tx () |> Option.is_some
+
 let seek_datoms = Db_access_impl.seek_datoms
 let seek_datoms_ref = Db_access_impl.seek_datoms_ref
 let rseek_datoms = Db_access_impl.rseek_datoms
@@ -1559,12 +1562,13 @@ module Query = struct
         Hashtbl.add groups_by_entity entity_id group;
         group
     in
-    datoms_list db Eavt ()
-    |> List.iter (fun datom ->
-      if Hashtbl.mem entity_set datom.e then
+    entity_ids
+    |> List.iter (fun entity_id ->
+      datoms db Eavt ~e:entity_id ()
+      |> Seq.iter (fun datom ->
         let group = group_for_entity datom.e in
         let values = Option.value (Hashtbl.find_opt group datom.a) ~default:[] in
-        Hashtbl.replace group datom.a ((datom.v, datom.tx) :: values));
+        Hashtbl.replace group datom.a ((datom.v, datom.tx) :: values)));
     let take limit values =
       let rec loop acc remaining = function
         | _ when remaining = 0 -> List.rev acc
@@ -1842,7 +1846,7 @@ module Query = struct
     if find_var = value_entity_var && value_entity_var = present_entity_var then
       datoms_by_attr_value db value_attr value
       |> List.filter_map (fun value_datom ->
-        if datoms_list db Aevt ~e:value_datom.e ~a:present_attr () = [] then
+        if not (has_datom db Aevt ~e:value_datom.e ~a:present_attr ()) then
           None
         else
           Some [ Result_entity value_datom.e ])
@@ -1893,8 +1897,8 @@ module Query = struct
 
   let planned_empty_page_ref_string db ref_name =
     let has_literal_ref =
-      datoms_list db Aevt ~a:"block/refs" ()
-      |> List.exists (fun datom -> compare_value datom.v (String ref_name) = 0)
+      datoms db Aevt ~a:"block/refs" ()
+      |> Seq.exists (fun datom -> compare_value datom.v (String ref_name) = 0)
     in
     if not has_literal_ref then
       Some []
@@ -1906,8 +1910,8 @@ module Query = struct
     | None -> Some []
     | Some property_entity ->
       let has_default =
-        datoms_list db Aevt ~e:property_entity ~a:"logseq.property/default-value" () <> []
-        || datoms_list db Aevt ~e:property_entity ~a:"logseq.property/scalar-default-value" () <> []
+        has_datom db Aevt ~e:property_entity ~a:"logseq.property/default-value" ()
+        || has_datom db Aevt ~e:property_entity ~a:"logseq.property/scalar-default-value" ()
       in
       if has_default then
         None
@@ -1935,8 +1939,9 @@ module Query = struct
 
   let planned_ref_property_malformed_lookup_error db =
     match
-      datoms_list db Eavt ()
-      |> List.find_opt (fun datom -> malformed_lookup_ref_like_value datom.v)
+      datoms db Eavt ()
+      |> Seq.find_map (fun datom ->
+        if malformed_lookup_ref_like_value datom.v then Some datom else None)
     with
     | Some datom -> invalid_arg (malformed_lookup_ref_message datom.v)
     | None -> None
