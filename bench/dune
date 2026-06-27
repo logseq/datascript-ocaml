@@ -21,6 +21,18 @@
  (modes js)
  (libraries memory_bench_common js_of_ocaml))
 
+(executable
+ (name persistent_sqlite)
+ (modules persistent_sqlite)
+ (modes exe)
+ (libraries datascript datascript_sqlite unix sqlite3))
+
+(executable
+ (name outliner_insert_ocaml)
+ (modules outliner_insert_ocaml)
+ (modes exe js)
+ (libraries datascript unix))
+
 (rule
  (alias bench)
  (deps

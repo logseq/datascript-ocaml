@@ -405,9 +405,32 @@ let restore_conn storage =
   let context : Conn.restore_context = { restore; restore_tail_groups } in
   Conn.restore context storage
 
-let transact ?(tx_meta = []) db tx_ops =
+let tx_meta_skips_store tx_meta =
+  List.exists
+    (function
+      | "skip-store?", Bool true -> true
+      | _ -> false)
+    tx_meta
+
+let persist_transact_tail ~tx_meta db tx_data =
+  if tx_data <> [] && not (tx_meta_skips_store tx_meta) then
+    match db.storage_ref with
+    | None -> ()
+    | Some storage ->
+      let tail = restore_tail_groups storage @ [ tx_data ] in
+      if storage_tail_datom_count tail > storage_tail_compaction_threshold then
+        store ~storage db
+      else
+        store_tail storage tail
+
+let transact_report ?(tx_meta = []) db tx_ops =
   let db_after, tempids, tx_data = apply_tx tx_ops db in
   { db_before = db; db_after; tx_data; tempids; tx_meta }
+
+let transact ?(tx_meta = []) db tx_ops =
+  let report = transact_report ~tx_meta db tx_ops in
+  persist_transact_tail ~tx_meta report.db_after report.tx_data;
+  report
 
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops
 
@@ -417,7 +440,7 @@ let transact_conn ?(tx_meta = []) conn tx_data =
     ; store_tail
     ; storage_tail_datom_count
     ; storage_tail_compaction_threshold
-    ; transact = (fun ~tx_meta db tx_data -> transact ~tx_meta db tx_data)
+    ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
     }
   in
   Conn.transact context ~tx_meta conn tx_data

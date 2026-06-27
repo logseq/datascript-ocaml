@@ -955,15 +955,25 @@ let apply_tx context tx_ops db =
       && not (context.is_tuple_attr db attr)
       && context.tuple_attrs_for_source db attr = []
     in
+    let simple_lookup_value = function
+      | Nil | Ref_to _ | TxRef | List _ | Vector _ | Map _ | Set _ | Tuple _ -> false
+      | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> true
+    in
+    let supported_ref_lookup = function
+      | Ref_to (Lookup_ref (lookup_attr, lookup_value)) ->
+        unique_attr lookup_attr && simple_lookup_value lookup_value
+      | _ -> false
+    in
     let supported_value attr value =
-      not (has_complex_ref_value value)
+      value <> Nil
       &&
       if context.resolve_context.is_ref_attr db attr then
         match value with
         | Ref _ | Int _ -> true
+        | value when supported_ref_lookup value -> true
         | _ -> false
       else
-        true
+        not (has_complex_ref_value value)
     in
     let supported_tx_value attr = function
       | One_value (List _ | Vector _ | Set _) when context.resolve_context.cardinality db attr = Many ->
@@ -973,10 +983,25 @@ let apply_tx context tx_ops db =
       | One_entity _ | Many_entities _ -> false
     in
     let supported_entity = function
-      | Entity { db_id = Some (Entity_id _); attrs } ->
+      | Entity { db_id = Some (Entity_id _ | Temp_id _); attrs } ->
         attrs <> []
         && List.for_all (fun (attr, tx_value) -> attr_is_supported attr && supported_tx_value attr tx_value) attrs
       | _ -> false
+    in
+    let supported_add = function
+      | Add (Lookup_ref (lookup_attr, lookup_value), attr, value) ->
+        unique_attr lookup_attr
+        && supported_value lookup_attr lookup_value
+        && attr_is_supported attr
+        && supported_value attr value
+      | Add (Temp_id tempid, attr, value) ->
+        not (is_current_tx_alias tempid)
+        && attr_is_supported attr
+        && supported_value attr value
+      | _ -> false
+    in
+    let supported_tx_op tx_op =
+      supported_entity tx_op || supported_add tx_op
     in
     let duplicate_cardinality_one attrs =
       let seen = Hashtbl.create (List.length attrs) in
@@ -1054,42 +1079,234 @@ let apply_tx context tx_ops db =
            |> List.map retraction_datom)
           @ [ d ]
     in
-    if not (List.for_all supported_entity tx_ops) then
+    let resolve_fast_value_for_attr attr value max_eid =
+      match value with
+      | Ref_to (Lookup_ref (lookup_attr, lookup_value)) when context.resolve_context.is_ref_attr db attr ->
+        let lookup_value, max_eid, _ =
+          resolve_value_for_attr context.resolve_context db lookup_attr [] tx max_eid [] lookup_value
+        in
+        (match context.existing_unique_entity db lookup_attr lookup_value with
+         | Some entity_id -> Ref entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
+         | None -> invalid_arg (context.resolve_context.unresolved_lookup_ref_message lookup_attr lookup_value))
+      | _ ->
+        let value, max_eid, _ =
+          resolve_value_for_attr context.resolve_context db attr [] tx max_eid [] value
+        in
+        value, max_eid
+    in
+    let resolve_fast_tx_value attr max_eid = function
+      | One_value value ->
+        let value, max_eid = resolve_fast_value_for_attr attr value max_eid in
+        One_value value, max_eid
+      | Many_values values ->
+        let values, max_eid =
+          values
+          |> List.fold_left
+               (fun (values, max_eid) value ->
+                 let value, max_eid = resolve_fast_value_for_attr attr value max_eid in
+                 value :: values, max_eid)
+               ([], max_eid)
+        in
+        Many_values (List.rev values), max_eid
+      | One_entity _ | Many_entities _ as tx_value -> tx_value, max_eid
+    in
+    let resolve_fast_attrs max_eid attrs =
+      attrs
+      |> List.fold_left
+           (fun (attrs, max_eid) (attr, tx_value) ->
+             let tx_value, max_eid = resolve_fast_tx_value attr max_eid tx_value in
+             (attr, tx_value) :: attrs, max_eid)
+           ([], max_eid)
+      |> fun (attrs, max_eid) -> List.rev attrs, max_eid
+    in
+    let facts_for_resolved_attrs entity_id resolved_attrs =
+      resolved_attrs
+      |> List.concat_map (fun (attr, tx_value) ->
+        match tx_value with
+        | One_value value -> [ context.datom ~tx ~e:entity_id ~a:attr ~v:value () ]
+        | Many_values values ->
+          List.map
+            (fun value -> context.datom ~tx ~e:entity_id ~a:attr ~v:value ())
+            values
+        | One_entity _ | Many_entities _ -> [])
+    in
+    let unique_identity_target resolved_attrs =
+      let targets =
+        resolved_attrs
+        |> List.concat_map (function
+          | attr, One_value value when context.is_unique_identity db attr ->
+            (match context.existing_unique_entity db attr value with
+             | Some entity_id -> [ attr, value, entity_id ]
+             | None -> [])
+          | attr, Many_values values when context.is_unique_identity db attr ->
+            values
+            |> List.filter_map (fun value ->
+              Option.map (fun entity_id -> attr, value, entity_id) (context.existing_unique_entity db attr value))
+          | _ -> [])
+      in
+      match targets with
+      | [] -> Some None
+      | (_, _, entity_id) :: rest ->
+        if List.for_all (fun (_, _, other_entity_id) -> other_entity_id = entity_id) rest then
+          Some (Some entity_id)
+        else
+          None
+    in
+    let has_unique_identity_attr attrs =
+      List.exists
+        (function
+          | attr, One_value _ | attr, Many_values _ -> context.is_unique_identity db attr
+          | _ -> false)
+        attrs
+    in
+    if not (List.for_all supported_tx_op tx_ops) then
       None
     else
-      let build_entity (facts_rev, max_eid) = function
+      let add_tempid_attr groups tempid attr value =
+        let rec loop = function
+          | [] -> [ tempid, [ attr, value ] ]
+          | (existing_tempid, attrs) :: rest when existing_tempid = tempid ->
+            (existing_tempid, attrs @ [ attr, value ]) :: rest
+          | group :: rest -> group :: loop rest
+        in
+        loop groups
+      in
+      let tempid_add_groups =
+        tx_ops
+        |> List.fold_left
+             (fun groups -> function
+               | Add (Temp_id tempid, attr, value) -> add_tempid_attr groups tempid attr value
+               | _ -> groups)
+             []
+      in
+      let resolve_tempid_add_attrs max_eid attrs =
+        attrs
+        |> List.map (fun (attr, value) -> attr, One_value value)
+        |> resolve_fast_attrs max_eid
+      in
+      let prepare_tempid_adds max_eid =
+        let rec loop max_eid tempids entity_tempids = function
+          | [] -> Some (max_eid, tempids, entity_tempids)
+          | (tempid, attrs) :: rest ->
+            let resolved_attrs, max_eid = resolve_tempid_add_attrs max_eid attrs in
+            if duplicate_cardinality_one resolved_attrs then
+              None
+            else
+              (match unique_identity_target resolved_attrs with
+               | None -> None
+               | Some target ->
+                 let existing_tempid = List.assoc_opt tempid tempids in
+                 let entity_id, max_eid =
+                   match target, existing_tempid with
+                   | Some target_e, Some old_e when old_e <> target_e ->
+                     invalid_arg
+                       ("Conflicting upsert: "
+                        ^ tempid
+                        ^ " resolves both to "
+                        ^ string_of_int old_e
+                        ^ " and "
+                        ^ string_of_int target_e)
+                   | Some entity_id, _ ->
+                     entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
+                   | None, Some entity_id -> entity_id, max_eid
+                   | None, None ->
+                     let entity_id = context.resolve_context.allocate_entity_id max_eid in
+                     entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
+                 in
+                 loop
+                   max_eid
+                   (remember_tempid tempids tempid entity_id)
+                   (mark_entity_tempid entity_tempids (Temp_id tempid))
+                   rest)
+        in
+        loop max_eid [] [] tempid_add_groups
+      in
+      let build_entity (facts_rev, max_eid, tempids, entity_tempids) = function
         | Entity { db_id = Some (Entity_id entity_id); attrs } ->
           if duplicate_cardinality_one attrs then
             None
           else
             let entity_id = context.resolve_context.validate_entity_id entity_id in
-            let resolved_attrs, max_eid, _ =
-              resolve_entity_attrs context.resolve_context db [] tx max_eid [] attrs
-            in
-            let entity_facts =
-              resolved_attrs
-              |> List.concat_map (fun (attr, tx_value) ->
-                match tx_value with
-                | One_value value -> [ context.datom ~tx ~e:entity_id ~a:attr ~v:value () ]
-                | Many_values values ->
-                  List.map
-                    (fun value -> context.datom ~tx ~e:entity_id ~a:attr ~v:value ())
-                    values
-                | One_entity _ | Many_entities _ -> [])
-            in
-            Some (List.rev_append entity_facts facts_rev, context.resolve_context.max_eid_with_entity_id max_eid entity_id)
+            let resolved_attrs, max_eid = resolve_fast_attrs max_eid attrs in
+            let entity_facts = facts_for_resolved_attrs entity_id resolved_attrs in
+            Some
+              ( List.rev_append entity_facts facts_rev
+              , context.resolve_context.max_eid_with_entity_id max_eid entity_id
+              , tempids
+              , entity_tempids )
+        | Entity { db_id = Some (Temp_id tempid); attrs } ->
+          if duplicate_cardinality_one attrs || not (has_unique_identity_attr attrs) then
+            None
+          else
+            let resolved_attrs, max_eid = resolve_fast_attrs max_eid attrs in
+            (match unique_identity_target resolved_attrs with
+             | None -> None
+             | Some target ->
+               let existing_tempid = List.assoc_opt tempid tempids in
+               let entity_id, max_eid =
+                 match target, existing_tempid with
+                 | Some target_e, Some old_e when old_e <> target_e ->
+                   invalid_arg
+                     ("Conflicting upsert: "
+                      ^ tempid
+                      ^ " resolves both to "
+                      ^ string_of_int old_e
+                      ^ " and "
+                      ^ string_of_int target_e)
+                 | Some entity_id, _ ->
+                   entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
+                 | None, Some entity_id -> entity_id, max_eid
+                 | None, None ->
+                   let entity_id = context.resolve_context.allocate_entity_id max_eid in
+                   entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
+               in
+               let entity_facts = facts_for_resolved_attrs entity_id resolved_attrs in
+               Some
+                 ( List.rev_append entity_facts facts_rev
+                 , max_eid
+                 , remember_tempid tempids tempid entity_id
+                 , mark_entity_tempid entity_tempids (Temp_id tempid) ))
         | _ -> None
       in
+      let build_add (facts_rev, max_eid, tempids, entity_tempids) = function
+	        | Add (Lookup_ref (lookup_attr, lookup_value), attr, value) ->
+	          let lookup_value, max_eid, _ =
+	            resolve_value_for_attr context.resolve_context db lookup_attr [] tx max_eid [] lookup_value
+          in
+          (match context.existing_unique_entity db lookup_attr lookup_value with
+           | None -> None
+           | Some entity_id ->
+             let value, max_eid = resolve_fast_value_for_attr attr value max_eid in
+             let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
+             Some (fact :: facts_rev, max_eid, tempids, entity_tempids))
+        | Add (Temp_id tempid, attr, value) ->
+          (match List.assoc_opt tempid tempids with
+           | None -> None
+           | Some entity_id ->
+             let value, max_eid = resolve_fast_value_for_attr attr value max_eid in
+             let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
+             Some (fact :: facts_rev, max_eid, tempids, entity_tempids))
+	        | _ -> None
+	      in
       let rec build state = function
         | [] -> Some state
         | tx_op :: rest ->
-          (match build_entity state tx_op with
+          let state =
+            match tx_op with
+            | Entity _ -> build_entity state tx_op
+            | Add _ -> build_add state tx_op
+            | _ -> None
+          in
+          (match state with
            | None -> None
            | Some state -> build state rest)
       in
-      (match build ([], initial_max_eid) tx_ops with
+      (match prepare_tempid_adds initial_max_eid with
        | None -> None
-       | Some (facts_rev, max_eid) ->
+       | Some (initial_max_eid, tempids, entity_tempids) ->
+      (match build ([], initial_max_eid, tempids, entity_tempids) tx_ops with
+       | None -> None
+       | Some (facts_rev, max_eid, tempids, entity_tempids) ->
          let facts = List.rev facts_rev in
          if duplicate_fact facts || duplicate_unique facts || conflicts_with_existing facts then
            None
@@ -1101,7 +1318,7 @@ let apply_tx context tx_ops db =
                max_eid
                facts
            in
-           Some (tx_data, max_eid, [], [], tx_data))
+           Some (tx_data, max_eid, tempids, entity_tempids, tx_data)))
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->

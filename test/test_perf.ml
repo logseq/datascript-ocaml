@@ -25,6 +25,15 @@ let schema =
   ; "alias", many
   ]
 
+let outliner_schema =
+  [ "block/id", unique_identity
+  ; "block/journal-day", indexed
+  ; "block/content", indexed
+  ; "block/order", indexed
+  ; "block/collapsed", indexed
+  ; "block/parent", { indexed with indexed = false; value_type = Some RefType }
+  ]
+
 let names = [| "Ivan"; "Petr"; "Sergey"; "Oleg"; "Yuri"; "Dmitry"; "Fedor"; "Denis" |]
 
 let person i =
@@ -41,6 +50,33 @@ let person i =
 
 let people size =
   List.init size (fun index -> person (index + 1))
+
+let outliner_block_datoms index =
+  let e = index + 1 in
+  [ datom ~e ~a:"block/id" ~v:(String (Printf.sprintf "block-%05d" e)) ()
+  ; datom ~e ~a:"block/journal-day" ~v:(String "2026-06-27") ()
+  ; datom ~e ~a:"block/content" ~v:(String (Printf.sprintf "Block %05d" e)) ()
+  ; datom ~e ~a:"block/order" ~v:(Float (float_of_int e)) ()
+  ; datom ~e ~a:"block/collapsed" ~v:(Bool false) ()
+  ]
+
+let build_outliner_db size =
+  init_db ~schema:outliner_schema (List.concat (List.init size outliner_block_datoms))
+
+let add_outliner_block ?parent_id id order =
+  let entity = Temp_id id in
+  let parent_ops =
+    match parent_id with
+    | None -> []
+    | Some parent_id -> [ Add (entity, "block/parent", Ref_to (Lookup_ref ("block/id", String parent_id))) ]
+  in
+  [ Add (entity, "block/id", String id)
+  ; Add (entity, "block/journal-day", String "2026-06-27")
+  ; Add (entity, "block/content", String id)
+  ; Add (entity, "block/order", Float order)
+  ; Add (entity, "block/collapsed", Bool false)
+  ]
+  @ parent_ops
 
 let seq_length seq =
   Seq.fold_left (fun count _ -> count + 1) 0 seq
@@ -77,6 +113,9 @@ let add_one_by_one size =
 let consume_db db =
   consume_int (seq_length (datoms db Eavt ()))
 
+let consume_block_id db id =
+  consume_int (seq_length (datoms db Avet ~a:"block/id" ~v:(String id) ()))
+
 let first_name_entity db =
   match Seq.uncons (datoms db Aevt ~a:"name" ()) with
   | Some (datom, _) -> datom.e
@@ -106,11 +145,39 @@ let test_aevt_prefix_lookup_is_lazy_to_first_match () =
       first_elapsed
       count_elapsed
 
+let test_tempid_unique_entity_add_uses_indexes () =
+  let db = build_outliner_db 5000 in
+  let id = "block-new" in
+  let _, elapsed =
+    time (fun () ->
+      db_with (add_outliner_block ~parent_id:"block-00001" id 5001.0) db
+      |> fun db -> consume_block_id db id)
+  in
+  if elapsed > 0.010 then
+    failf
+      "tempid entity map upsert should stay below 10ms and use indexes instead of scanning EAVT: elapsed=%.4fs"
+      elapsed
+
+let test_lookup_ref_cardinality_one_update_uses_indexes () =
+  let db = build_outliner_db 5000 in
+  let _, elapsed =
+    time (fun () ->
+      db_with [ Add (Lookup_ref ("block/id", String "block-00001"), "block/content", String "Edited") ] db
+      |> fun db -> consume_block_id db "block-00001")
+  in
+  if elapsed > 0.010 then
+    failf
+      "lookup-ref cardinality-one update should stay below 10ms and use indexes instead of scanning EAVT: elapsed=%.4fs"
+      elapsed
+
 let () =
   let failures =
     [ ( "incremental explicit-id entity adds"
       , fun () -> test_incremental_explicit_entity_adds_stay_near_bulk_cost () )
     ; "AEVT prefix first match laziness", (fun () -> test_aevt_prefix_lookup_is_lazy_to_first_match ())
+    ; "tempid unique entity add uses indexes", (fun () -> test_tempid_unique_entity_add_uses_indexes ())
+    ; ( "lookup-ref cardinality-one update uses indexes"
+      , fun () -> test_lookup_ref_cardinality_one_update_uses_indexes () )
     ]
     |> List.filter_map (fun (name, test) ->
       try
