@@ -1,9 +1,9 @@
 open Datascript_types
 
 type context =
-  { datoms_by_entity : db -> entity_id -> datom list
-  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
-  ; all_datoms : db -> datom list
+  { datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
+  ; all_datoms : db -> datom Seq.t
   ; compare_value : value -> value -> int
   ; cardinality : db -> attr -> cardinality
   ; is_ref_attr : db -> attr -> bool
@@ -21,7 +21,7 @@ let tx_value_of_attr_values context db attr values =
   | One, [] -> Many_values []
 
 let entity_has_forward_attrs context db entity_id =
-  context.datoms_by_entity db entity_id <> []
+  Option.is_some (Seq.uncons (context.datoms_by_entity db entity_id))
 
 let entity_visible_attr_values context db attr values =
   if context.is_ref_attr db attr then
@@ -39,7 +39,7 @@ let group_forward_entity_attrs context db entity_id =
     | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
   in
   context.datoms_by_entity db entity_id
-  |> List.fold_left add_attr []
+  |> Seq.fold_left add_attr []
   |> List.filter_map (fun (attr, values) ->
     match entity_visible_attr_values context db attr values with
     | [] -> None
@@ -47,11 +47,11 @@ let group_forward_entity_attrs context db entity_id =
 
 let group_reverse_entity_attrs context db entity_id =
   context.all_datoms db
-  |> List.filter_map (fun d ->
+  |> Seq.filter_map (fun d ->
     match d.v with
     | Ref ref_id when ref_id = entity_id -> Some (context.reverse_ref d.a, d.a, Ref d.e)
     | _ -> None)
-  |> List.fold_left
+  |> Seq.fold_left
        (fun groups (reverse_attr, forward_attr, value) ->
          match List.assoc_opt reverse_attr groups with
          | None -> (reverse_attr, (forward_attr, [ value ])) :: groups
@@ -81,7 +81,8 @@ let sorted_forward_entity_attrs context db entity_id =
 
 let forward_entity_attr context db entity_id attr =
   context.datoms_by_entity db entity_id
-  |> List.filter_map (fun d -> if d.a = attr then Some d.v else None)
+  |> Seq.filter_map (fun d -> if d.a = attr then Some d.v else None)
+  |> List.of_seq
   |> entity_visible_attr_values context db attr
   |> function
   | [] -> None
@@ -91,7 +92,8 @@ let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
   let values =
     context.datoms_by_avet_ref db forward_attr entity_id
-    |> List.map (fun d -> Ref d.e)
+    |> Seq.map (fun d -> Ref d.e)
+    |> List.of_seq
     |> List.sort context.compare_value
   in
   match values with

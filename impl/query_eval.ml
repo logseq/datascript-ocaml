@@ -4,7 +4,7 @@ open Query
 type evaluator_context =
   { result_resolution_context : db -> result_resolution_context
   ; match_context : db -> match_context
-  ; datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+  ; datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
   ; compare_value : value -> value -> int
@@ -16,12 +16,11 @@ let attr_value_for_query context db entity_id attr =
   if context.is_reverse_ref attr then
     let forward_attr = context.reverse_ref attr in
     context.datoms db Eavt ()
-    |> List.find_opt (fun d -> d.a = forward_attr && d.v = Ref entity_id)
-    |> Option.map (fun d -> Ref d.e)
+    |> Seq.find_map (fun d ->
+      if d.a = forward_attr && d.v = Ref entity_id then Some (Ref d.e) else None)
   else
     context.datoms db Eavt ~e:entity_id ~a:attr ()
-    |> List.find_opt (fun _ -> true)
-    |> Option.map (fun d -> d.v)
+    |> Seq.find_map (fun d -> Some d.v)
 
 let attr_present_for_query context db entity_id attr =
   Option.is_some (attr_value_for_query context db entity_id attr)

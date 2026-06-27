@@ -12,6 +12,14 @@ let datoms_ref_seq = datoms_ref
 let datoms_ref db index ?e ?a ?v ?tx () =
   datoms_ref_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
+let seek_datoms_ref_seq = seek_datoms_ref
+let seek_datoms_ref db index ?e ?a ?v ?tx () =
+  seek_datoms_ref_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
+let index_range_seq = index_range
+let index_range db attr ?start ?stop () =
+  index_range_seq db attr ?start ?stop () |> List.of_seq
+
 let assert_equal_triples label expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
   if expected <> actual then

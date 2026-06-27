@@ -7,6 +7,10 @@ let datoms_seq = datoms
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
+let index_range_seq = index_range
+let index_range db attr ?start ?stop () =
+  index_range_seq db attr ?start ?stop () |> List.of_seq
+
 let many =
   { cardinality = Many
   ; unique = None

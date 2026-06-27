@@ -10,6 +10,18 @@ let datoms_seq = datoms
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
+let seek_datoms_seq = seek_datoms
+let seek_datoms db index ?e ?a ?v ?tx () =
+  seek_datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
+let rseek_datoms_seq = rseek_datoms
+let rseek_datoms db index ?e ?a ?v ?tx () =
+  rseek_datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+
+let index_range_seq = index_range
+let index_range db attr ?start ?stop () =
+  index_range_seq db attr ?start ?stop () |> List.of_seq
+
 let assert_upstream_storage_addresses label addresses =
   if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
     failf "%s: storage should not use OCaml snapshot address names" label;

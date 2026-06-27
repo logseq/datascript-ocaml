@@ -311,12 +311,12 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
     | _ -> None
   in
   let context : Entity.context =
-    { datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-    ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+    { datoms_by_entity = (fun db entity_id -> datoms_seq db Eavt ~e:entity_id ())
+    ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_seq db Avet ~a:attr ~v:(Ref entity_id) ())
     ; all_datoms =
         (fun db ->
           incr all_datoms_calls;
-          datoms db Eavt ())
+          datoms_seq db Eavt ())
     ; compare_value = Util.compare_value
     ; cardinality
     ; is_ref_attr

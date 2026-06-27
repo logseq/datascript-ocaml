@@ -5,8 +5,8 @@ type context =
   ; entity : db -> entity_ref -> entity option
   ; entity_attr_raw : entity -> attr -> tx_value option
   ; entity_attrs : entity -> (attr * tx_value) list
-  ; datoms_by_entity : db -> entity_id -> datom list
-  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
+  ; datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; cardinality : db -> attr -> cardinality
   ; is_ref_attr : db -> attr -> bool
   ; is_component : db -> attr -> bool

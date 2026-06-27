@@ -505,9 +505,9 @@ let entity_id_of_ref = Entity_refs_impl.entity_id_of_ref
 let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
 let entity_context =
-  { Entity.datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
-  ; all_datoms = (fun db -> datoms_list db Eavt ())
+  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
   ; cardinality
   ; is_ref_attr
@@ -545,8 +545,8 @@ let pull_api_context : Pull_api_impl.context =
   ; entity
   ; entity_attr_raw
   ; entity_attrs
-  ; datoms_by_entity = (fun db entity_id -> datoms_list db Eavt ~e:entity_id ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_list db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
   ; cardinality
   ; is_ref_attr
   ; is_component
@@ -748,7 +748,7 @@ let collect_query_terms_exn db bindings terms =
 let query_evaluator_context : Query_eval.evaluator_context =
   { result_resolution_context = query_result_context
   ; match_context = query_match_context
-  ; datoms = datoms_list
+  ; datoms
   ; is_reverse_ref
   ; reverse_ref
   ; compare_value
@@ -1601,14 +1601,15 @@ module Query = struct
           index_range db attr ~start:threshold ()
         | LessThan | LessOrEqual when query_attr_uses_avet db attr ->
           index_range db attr ~stop:threshold ()
-        | _ -> datoms_list db Aevt ~a:attr ()
+        | _ -> datoms db Aevt ~a:attr ()
       in
       candidates
-      |> List.filter_map (fun datom ->
+      |> Seq.filter_map (fun datom ->
         if Built_ins.matches_comparison_predicate predicate (compare_value datom.v threshold) then
           Some (row datom.e datom.v)
         else
           None)
+      |> List.of_seq
 
   let planned_simple_query db query =
     match find_var_names query.find, query_has_runtime_features query, query.where with

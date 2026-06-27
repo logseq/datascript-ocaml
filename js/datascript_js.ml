@@ -373,6 +373,7 @@ let () =
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db index ->
                  seek_datoms db (index_of_string (Js.to_string index)) ()
+                 |> List.of_seq
                  |> List.map json_of_datom
                  |> fun values -> js_of_json (`List values))) )
         ; ( "index_range"
@@ -384,6 +385,7 @@ let () =
                    ?start:(value_option_of_js start)
                    ?stop:(value_option_of_js stop)
                    ()
+                 |> List.of_seq
                  |> List.map json_of_datom
                  |> fun values -> js_of_json (`List values))) )
         ; "squuid", Js.Unsafe.inject (Js.wrap_callback (fun () -> js_of_json (json_of_value (squuid ()))))

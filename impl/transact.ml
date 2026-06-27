@@ -335,6 +335,9 @@ let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
   let initial_datoms = lazy (eavt_datoms db) in
   let initial_datoms_list () = Lazy.force initial_datoms in
+  let append_tx_data tx_data_rev datom_tx_data =
+    List.rev_append datom_tx_data tx_data_rev
+  in
   let tx = db.max_tx + 1 in
   let current_schema = ref db.schema in
   let current_tx_fns = ref db.tx_fns in
@@ -473,7 +476,7 @@ let apply_tx context tx_ops db =
   let add_resolved_attr_value e attr value (datoms, max_eid, tempids, entity_tempids, tx_data) =
     let db = current_db () in
     let datoms, datom_tx_data = context.add_entity_attr_value db tx datoms e attr value in
-    datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data
+    datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
   in
   let merge_tempid_entity tempid old_e target_e datoms tempids tx_data =
     let db = current_db () in
@@ -498,16 +501,16 @@ let apply_tx context tx_ops db =
       |> List.map (remap_datom_entity context.resolve_context old_e target_e)
       |> dedupe_facts
     in
-    let datoms, moved_tx_data =
+    let datoms, moved_tx_data_rev =
       old_datoms
       |> List.fold_left
-           (fun (datoms, moved_tx_data) d ->
+           (fun (datoms, moved_tx_data_rev) d ->
              if context.is_tuple_attr db d.a then
-               datoms, moved_tx_data
+               datoms, moved_tx_data_rev
              else
                let d = remap_datom_entity context.resolve_context old_e target_e d in
                let datoms, datom_tx_data = context.add_user_datom_with_report db tx datoms d in
-               datoms, moved_tx_data @ datom_tx_data)
+               datoms, append_tx_data moved_tx_data_rev datom_tx_data)
            (kept_datoms, [])
     in
     let tx_data =
@@ -515,7 +518,7 @@ let apply_tx context tx_ops db =
       |> List.filter_map (fun d ->
         if d.e = old_e then None else Some (remap_datom_entity context.resolve_context old_e target_e d))
     in
-    let tx_data = tx_data @ moved_tx_data in
+    let tx_data = moved_tx_data_rev @ tx_data in
     let tempids = remap_tempid_entity old_e target_e tempids in
     datoms, tempids, tx_data
   in
@@ -622,7 +625,7 @@ let apply_tx context tx_ops db =
       let entity_tempids = mark_entity_tempid entity_tempids entity_ref in
       let d = context.datom ~tx ~e ~a ~v () in
       let datoms, datom_tx_data = context.add_user_datom_with_report db tx datoms d in
-      datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data
+      datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
     | Retract (e, a, value) ->
       let e, max_eid, tempids = resolve_optional_existing_entity_ref context.resolve_context db datoms tx max_eid tempids e in
       (match e with
@@ -632,7 +635,7 @@ let apply_tx context tx_ops db =
          if a = "db/ident" then note_schema_ident_retraction datoms e value;
          note_schema_field_retraction datoms e a;
          let datoms, datom_tx_data = context.retract_user_attr_with_report db tx datoms e a value in
-         datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data)
+         datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data)
     | RetractEntity e ->
       let e, max_eid, tempids = resolve_optional_existing_entity_ref context.resolve_context db datoms tx max_eid tempids e in
       (match e with
@@ -640,7 +643,7 @@ let apply_tx context tx_ops db =
        | Some e ->
          note_schema_ident_retraction datoms e None;
          let datoms, datom_tx_data = context.retract_entity_with_report db tx datoms e in
-         datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data)
+         datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data)
     | RetractAttr (e, a) ->
       let e, max_eid, tempids = resolve_optional_existing_entity_ref context.resolve_context db datoms tx max_eid tempids e in
       (match e with
@@ -649,7 +652,7 @@ let apply_tx context tx_ops db =
          if a = "db/ident" then note_schema_ident_retraction datoms e None;
          note_schema_field_retraction datoms e a;
          let datoms, datom_tx_data = context.retract_user_attr_with_report db tx datoms e a None in
-         datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data)
+         datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data)
     | CompareAndSet (e, a, expected, new_value) ->
       let e, max_eid, tempids = resolve_existing_entity_ref context.resolve_context db datoms tx max_eid tempids e in
       let expected, max_eid, tempids = resolve_optional_value_for_attr context.resolve_context db a datoms tx max_eid tempids expected in
@@ -658,7 +661,7 @@ let apply_tx context tx_ops db =
         invalid_arg (context.compare_and_set_failure_message db datoms e a expected);
       let d = context.datom ~tx ~e ~a ~v:new_value () in
       let datoms, datom_tx_data = context.add_user_datom_with_report db tx datoms d in
-      datoms, max_eid, tempids, entity_tempids, tx_data @ datom_tx_data
+      datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
     | Raw_datom d ->
       let d = context.normalize_datom_for_schema db.schema d in
       max_tx_seen := max !max_tx_seen d.tx;
@@ -666,13 +669,13 @@ let apply_tx context tx_ops db =
         let datoms, datom_tx_data =
           context.add_active_datom_with_report ~allow_tuple:true ~validate_value:false db d.tx datoms d
         in
-        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
+        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
       else
         begin
         if d.a = "db/ident" then note_schema_ident_retraction datoms d.e (Some d.v);
         note_schema_field_retraction datoms d.e d.a;
         let datoms, datom_tx_data = context.retract_active_datom_with_report d.tx datoms d.e d.a (Some d.v) in
-        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, tx_data @ datom_tx_data
+        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
         end
     | Call f ->
       let db_for_call = context.with_db_datoms { db with max_eid } datoms in
@@ -789,7 +792,7 @@ let apply_tx context tx_ops db =
           , max_eid
           , tempids
           , entity_tempids
-          , tx_data @ datom_tx_data
+          , append_tx_data tx_data datom_tx_data
           , (actual_e, actual_attr) :: tuple_sources
           , direct_tuple_writes )
         else
@@ -862,7 +865,8 @@ let apply_tx context tx_ops db =
       let datoms, tx_data =
         List.fold_left
           (fun (datoms, tx_data) (entity_id, source_attr) ->
-            context.refresh_tuple_attrs_for_source db tx datoms entity_id source_attr tx_data)
+            let datoms, tuple_tx_data = context.refresh_tuple_attrs_for_source db tx datoms entity_id source_attr [] in
+            datoms, append_tx_data tx_data tuple_tx_data)
           (datoms, tx_data)
           tuple_sources
       in
@@ -1339,6 +1343,11 @@ let apply_tx context tx_ops db =
       in
       datoms, max_eid, tempids, entity_tempids, tx_data, None
   in
+  let tx_data =
+    match fast_tx_data with
+    | Some tx_data -> tx_data
+    | None -> List.rev tx_data
+  in
   let tempids = ensure_current_tx_tempid tempids tx in
   validate_tempid_usage tempids entity_tempids;
   let schema =
@@ -1362,7 +1371,7 @@ let apply_tx context tx_ops db =
     }
   in
   ( (match fast_tx_data with
-     | Some tx_data ->
+     | Some _ ->
        db_after
        |> fun db -> context.refresh_db_indexes_with_tx_data db tx_data
        |> context.refresh_db_identity

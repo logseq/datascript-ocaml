@@ -5,8 +5,8 @@ type context =
   ; entity : db -> entity_ref -> entity option
   ; entity_attr_raw : entity -> attr -> tx_value option
   ; entity_attrs : entity -> (attr * tx_value) list
-  ; datoms_by_entity : db -> entity_id -> datom list
-  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom list
+  ; datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; cardinality : db -> attr -> cardinality
   ; is_ref_attr : db -> attr -> bool
   ; is_component : db -> attr -> bool
@@ -131,9 +131,10 @@ let tx_value_of_attr_values context db attr values =
   | One, [] -> Many_values []
 
 let forward_entity context db entity_id attrs =
-  match context.datoms_by_entity db entity_id with
-  | [] -> None
-  | datoms ->
+  let datoms = context.datoms_by_entity db entity_id in
+  match Seq.uncons datoms with
+  | None -> None
+  | Some (first, rest) ->
     let wanted attr = attrs = [] || List.mem attr attrs in
     let groups = Hashtbl.create 8 in
     let attr_order = ref [] in
@@ -145,8 +146,8 @@ let forward_entity context db entity_id attrs =
         Hashtbl.replace groups d.a (d.v :: values))
     in
     let attrs =
-      datoms
-      |> List.iter add;
+      Seq.cons first rest
+      |> Seq.iter add;
       !attr_order
       |> List.rev
       |> List.filter_map (fun attr ->
@@ -343,10 +344,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       context.datoms_by_avet_ref db attr entity.id
-      |> List.filter_map
+      |> Seq.filter_map
            (fun d ->
              pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector d.e)
-      |> List.map (fun entity -> Pulled_entity entity)
+      |> Seq.map (fun entity -> Pulled_entity entity)
+      |> List.of_seq
     in
     (if context.is_component db attr then
        match pulled with
@@ -360,10 +362,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       context.datoms_by_avet_ref db attr entity.id
-      |> List.filter_map
+      |> Seq.filter_map
            (fun d ->
              pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector d.e)
-      |> List.map (fun entity -> Pulled_entity entity)
+      |> Seq.map (fun entity -> Pulled_entity entity)
+      |> List.of_seq
     in
     (if context.is_component db attr then
        match pulled with
@@ -377,10 +380,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       context.datoms_by_avet_ref db attr entity.id
-      |> List.filter_map
+      |> Seq.filter_map
            (fun d ->
              pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector d.e)
-      |> List.map (fun entity -> Pulled_entity entity)
+      |> Seq.map (fun entity -> Pulled_entity entity)
+      |> List.of_seq
     in
     (if context.is_component db attr then
        match pulled with
@@ -394,10 +398,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       context.datoms_by_avet_ref db attr entity.id
-      |> List.filter_map
+      |> Seq.filter_map
            (fun d ->
              pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector d.e)
-      |> List.map (fun entity -> Pulled_entity entity)
+      |> Seq.map (fun entity -> Pulled_entity entity)
+      |> List.of_seq
     in
     (if context.is_component db attr then
        match pulled with
@@ -411,10 +416,11 @@ and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited co
     visit_pull visitor (PullVisitReverse (attr, entity.id));
     let pulled =
       context.datoms_by_avet_ref db attr entity.id
-      |> List.filter_map
+      |> Seq.filter_map
            (fun d ->
              pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visited selector selector d.e)
-      |> List.map (fun entity -> Pulled_entity entity)
+      |> Seq.map (fun entity -> Pulled_entity entity)
+      |> List.of_seq
     in
     let pulled =
       if context.is_component db attr then
@@ -587,7 +593,8 @@ and pull_recursive_ref_value
   let pull_reverse_children forward_attr =
     let pulled =
       context.datoms_by_avet_ref db forward_attr current_id
-      |> List.filter_map (fun d -> pull_child d.e)
+      |> Seq.filter_map (fun d -> pull_child d.e)
+      |> List.of_seq
       |> take default_pull_limit
     in
     if context.is_component db forward_attr then

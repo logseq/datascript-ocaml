@@ -124,6 +124,11 @@ let first_name_entity db =
 let count_name_datoms db =
   seq_length (datoms db Aevt ~a:"name" ())
 
+let first_seek_name_entity db =
+  match Seq.uncons (seek_datoms db Avet ~a:"name" ~v:(String "Ivan") ()) with
+  | Some (datom, _) -> datom.e
+  | None -> 0
+
 let test_incremental_explicit_entity_adds_stay_near_bulk_cost () =
   let size = 3000 in
   let _, bulk_elapsed = time (fun () -> consume_db (build_db size)) in
@@ -142,6 +147,17 @@ let test_aevt_prefix_lookup_is_lazy_to_first_match () =
   if first_elapsed > (count_elapsed *. 0.25) then
     failf
       "taking the first AEVT prefix datom should not materialize the whole prefix: first=%.4fs count=%.4fs"
+      first_elapsed
+      count_elapsed
+
+let test_seek_datoms_is_lazy_to_first_match () =
+  let db = build_db 10_000 in
+  let iterations = 200 in
+  let first_elapsed = time_repeated iterations (fun () -> first_seek_name_entity db) in
+  let count_elapsed = time_repeated iterations (fun () -> seq_length (seek_datoms db Avet ~a:"name" ~v:(String "Ivan") ())) in
+  if first_elapsed > (count_elapsed *. 0.25) then
+    failf
+      "taking the first seek_datoms result should not materialize the whole seek: first=%.4fs count=%.4fs"
       first_elapsed
       count_elapsed
 
@@ -175,6 +191,7 @@ let () =
     [ ( "incremental explicit-id entity adds"
       , fun () -> test_incremental_explicit_entity_adds_stay_near_bulk_cost () )
     ; "AEVT prefix first match laziness", (fun () -> test_aevt_prefix_lookup_is_lazy_to_first_match ())
+    ; "seek_datoms first match laziness", (fun () -> test_seek_datoms_is_lazy_to_first_match ())
     ; "tempid unique entity add uses indexes", (fun () -> test_tempid_unique_entity_add_uses_indexes ())
     ; ( "lookup-ref cardinality-one update uses indexes"
       , fun () -> test_lookup_ref_cardinality_one_update_uses_indexes () )

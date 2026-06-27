@@ -318,6 +318,20 @@ let merge_sorted_datoms index left right =
   in
   merge [] left right
 
+let merge_sorted_datom_seqs compare_datom left right =
+  let rec merge left_node right_node () =
+    match left_node, right_node with
+    | Seq.Nil, Seq.Nil -> Seq.Nil
+    | Seq.Nil, Seq.Cons (datom, right_tail) -> Seq.Cons (datom, right_tail)
+    | Seq.Cons (datom, left_tail), Seq.Nil -> Seq.Cons (datom, left_tail)
+    | Seq.Cons (left_datom, left_rest), Seq.Cons (right_datom, right_rest) ->
+      if compare_datom left_datom right_datom <= 0 then
+        Seq.Cons (left_datom, merge (left_rest ()) right_node)
+      else
+        Seq.Cons (right_datom, merge left_node (right_rest ()))
+  in
+  merge (left ()) (right ())
+
 let duplicate_index_datoms db index =
   match index with
   | Eavt -> db.duplicate_datoms
@@ -352,6 +366,17 @@ let index_datoms_seq db index =
   match db.duplicate_datoms with
   | [] -> stored_index db index |> PSet.seq |> PSet.to_seq
   | _ -> raw_index_datoms_list db index |> List.to_seq
+
+let reverse_index_datoms_seq db index =
+  match db.duplicate_datoms with
+  | [] -> stored_index db index |> PSet.rslice_seq |> PSet.to_seq
+  | _ ->
+    let indexed = stored_index db index |> PSet.rslice_seq |> PSet.to_seq in
+    let duplicates = duplicate_index_datoms db index |> List.rev |> List.to_seq in
+    merge_sorted_datom_seqs
+      (fun left right -> Util.compare_datom index right left)
+      indexed
+      duplicates
 
 let apply_filter_pred db seq =
   match db.filter_pred with
@@ -443,16 +468,16 @@ let exact_prefix_datoms context db index e a v tx =
     (match db.duplicate_datoms with
      | [] -> Some (PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> PSet.to_seq)
      | _ ->
-       let indexed = PSet.slice ~from_:bound ~to_:bound ~cmp (stored_index db index) in
+       let indexed = PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> PSet.to_seq in
        let duplicates = duplicate_exact_prefix_datoms db index e |> exact_sorted_slice cmp bound in
-       Some (merge_sorted_datoms index indexed duplicates |> List.to_seq))
+       Some (merge_sorted_datom_seqs (Util.compare_datom index) indexed (List.to_seq duplicates)))
 
 let lower_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = slice_cmp context index bound bound_fields bound bound_fields in
-    let indexed = PSet.slice ~from_:bound ~cmp (stored_index db index) in
+    let indexed = PSet.slice_seq ~from_:bound ~cmp (stored_index db index) |> PSet.to_seq in
     (match db.duplicate_datoms with
      | [] -> Some indexed
      | _ ->
@@ -460,22 +485,27 @@ let lower_prefix_datoms context db index e a v tx =
          duplicate_index_datoms db index
          |> List.filter (fun datom -> cmp datom bound >= 0)
        in
-       Some (merge_sorted_datoms index indexed duplicates))
+       Some (merge_sorted_datom_seqs (Util.compare_datom index) indexed (List.to_seq duplicates)))
 
 let reverse_upper_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = slice_cmp context index bound bound_fields bound bound_fields in
-    let indexed = PSet.rslice ~from_:bound ~cmp (stored_index db index) in
+    let indexed = PSet.rslice_seq ~from_:bound ~cmp (stored_index db index) |> PSet.to_seq in
     (match db.duplicate_datoms with
      | [] -> Some indexed
      | _ ->
        let duplicates =
          duplicate_index_datoms db index
-         |> List.filter (fun datom -> cmp datom bound <= 0)
+          |> List.filter (fun datom -> cmp datom bound <= 0)
+          |> List.rev
        in
-       Some ((indexed @ duplicates) |> List.sort (fun left right -> Util.compare_datom index right left)))
+       Some
+         (merge_sorted_datom_seqs
+            (fun left right -> Util.compare_datom index right left)
+            indexed
+            (List.to_seq duplicates)))
 
 let avet_range_datoms context db attr start stop =
   let from_bound =
@@ -499,7 +529,7 @@ let avet_range_datoms context db attr start stop =
     | None -> fields ~a:true ()
   in
   let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
-  let indexed = PSet.slice ~from_:from_bound ~to_:to_bound ~cmp db.avet_index in
+  let indexed = PSet.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> PSet.to_seq in
   match db.duplicate_datoms with
   | [] -> indexed
   | _ ->
@@ -517,7 +547,7 @@ let avet_range_datoms context db attr start stop =
       duplicate_index_datoms db Avet
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     in
-    merge_sorted_datoms Avet indexed duplicates
+    merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
 
 let indexed_attr_required_message attr =
   "Attribute :" ^ attr ^ " should be marked as :db/index true"
@@ -596,11 +626,10 @@ let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match lower_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db (List.to_seq datoms) |> List.of_seq
+  | Some datoms -> apply_filter_pred db datoms
   | None ->
     datoms context db index ()
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
-    |> List.of_seq
 
 let seek_datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in
@@ -610,12 +639,11 @@ let rseek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match reverse_upper_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db (List.to_seq datoms) |> List.of_seq
+  | Some datoms -> apply_filter_pred db datoms
   | None ->
-    datoms context db index ()
+    reverse_index_datoms_seq db index
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
-    |> List.of_seq
-    |> List.rev
+    |> apply_filter_pred db
 
 let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in
@@ -627,9 +655,7 @@ let index_range context db attr ?start ?stop () =
   let start = Option.map (context.resolve_value_for_attr db attr) start in
   let stop = Option.map (context.resolve_value_for_attr db attr) stop in
   avet_range_datoms context db attr start stop
-  |> List.to_seq
   |> apply_filter_pred db
-  |> List.of_seq
 
 let diff left right =
   let left_datoms = visible_index_datoms left Eavt in
