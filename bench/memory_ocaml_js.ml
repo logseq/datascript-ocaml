@@ -3,7 +3,7 @@ open Js_of_ocaml
 module Scenario = Memory_bench_common.Memory_scenario
 
 let js_number_to_int value =
-  int_of_float (Obj.magic value)
+  int_of_float (Js.to_float value)
 
 let node_memory_usage () =
   let process = Js.Unsafe.get Js.Unsafe.global "process" in

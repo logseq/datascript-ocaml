@@ -102,8 +102,6 @@ let rec value_of_json = function
   | `String value -> String value
   | `List values -> Vector (List.map value_of_json values)
   | `Assoc entries -> Map (List.map (fun (key, value) -> String key, value_of_json value) entries)
-  | json -> failf "unsupported value: %s" (Json.to_string json)
-[@@warning "-11"]
 
 let entity_ref_of_json = function
   | `Int entity_id -> Entity_id entity_id

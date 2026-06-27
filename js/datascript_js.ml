@@ -19,12 +19,6 @@ let json_of_js value =
 let js_of_json json =
   Js.Unsafe.meth_call Js._JSON "parse" [| Js.Unsafe.inject (Js.string (Json.to_string json)) |]
 
-let db_handle value : db =
-  Obj.magic value
-
-let conn_handle value : conn =
-  Obj.magic value
-
 let strip_prefix prefix value =
   let prefix_length = String.length prefix in
   if String.length value >= prefix_length && String.sub value 0 prefix_length = prefix then
@@ -292,13 +286,13 @@ let json_of_tx_report report =
     ]
 
 let tx_report_object report =
-  let obj = Js.Unsafe.coerce (js_of_json (json_of_tx_report report)) in
+  let obj = js_of_json (json_of_tx_report report) in
   Js.Unsafe.set obj "db_before" (Js.Unsafe.inject report.db_before);
   Js.Unsafe.set obj "db_after" (Js.Unsafe.inject report.db_after);
   obj
 
 let conn_db_object conn =
-  Js.Unsafe.inject (db (conn_handle conn))
+  Js.Unsafe.inject (db conn)
 
 let () =
   Js.export_all
@@ -314,13 +308,13 @@ let () =
         ; ( "q"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun query db ->
-                 q_string (db_handle db) (Js.to_string query)
+                 q_string db (Js.to_string query)
                  |> List.map (fun row -> `List (List.map json_of_query_result row))
                  |> fun rows -> js_of_json (`List rows))) )
         ; ( "pull"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db pattern eid ->
-                 match pull_string (db_handle db) (Js.to_string pattern) (entity_ref_of_js eid) with
+                 match pull_string db (Js.to_string pattern) (entity_ref_of_js eid) with
                  | None -> Js.Unsafe.inject Js.null
                  | Some entity -> js_of_json (json_of_pulled_entity entity))) )
         ; ( "pull_many"
@@ -331,19 +325,18 @@ let () =
                    | `List values -> List.map entity_ref_of_json values
                    | _ -> invalid_arg "pull_many expects an array of entity ids"
                  in
-                 pull_many_string (db_handle db) (Js.to_string pattern) eids
+                 pull_many_string db (Js.to_string pattern) eids
                  |> List.map (function None -> `Null | Some entity -> json_of_pulled_entity entity)
                  |> fun values -> js_of_json (`List values))) )
         ; ( "db_with"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db entities ->
-                 let db = db_handle db in
                  Js.Unsafe.inject (db_with (tx_ops_of_json ~db (json_of_js entities)) db))) )
         ; ( "create_conn"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun schema ->
                  Js.Unsafe.inject (create_conn ~schema:(schema_of_json (json_of_js schema)) ()))) )
-        ; "conn_from_db", Js.Unsafe.inject (Js.wrap_callback (fun db -> Js.Unsafe.inject (conn_from_db (db_handle db))))
+        ; "conn_from_db", Js.Unsafe.inject (Js.wrap_callback (fun db -> Js.Unsafe.inject (conn_from_db db)))
         ; ( "conn_from_datoms"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun datoms schema ->
@@ -352,14 +345,13 @@ let () =
         ; ( "transact"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun conn entities ->
-                 let conn = conn_handle conn in
                  let db_before = db conn in
                  let report = transact_conn conn (tx_ops_of_json ~db:db_before (json_of_js entities)) in
                  tx_report_object report)) )
         ; ( "reset_conn"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun conn db ->
-                 Js.Unsafe.inject (reset_conn (conn_handle conn) (db_handle db)))) )
+                 Js.Unsafe.inject (reset_conn conn db))) )
         ; ( "resolve_tempid"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun tempids tempid ->
@@ -373,21 +365,21 @@ let () =
         ; ( "datoms"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db index ->
-                 datoms (db_handle db) (index_of_string (Js.to_string index)) ()
+                 datoms db (index_of_string (Js.to_string index)) ()
                  |> List.of_seq
                  |> List.map json_of_datom
                  |> fun values -> js_of_json (`List values))) )
         ; ( "seek_datoms"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db index ->
-                 seek_datoms (db_handle db) (index_of_string (Js.to_string index)) ()
+                 seek_datoms db (index_of_string (Js.to_string index)) ()
                  |> List.map json_of_datom
                  |> fun values -> js_of_json (`List values))) )
         ; ( "index_range"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun db attr start stop ->
                  index_range
-                   (db_handle db)
+                   db
                    (attr_name (Js.to_string attr))
                    ?start:(value_option_of_js start)
                    ?stop:(value_option_of_js stop)

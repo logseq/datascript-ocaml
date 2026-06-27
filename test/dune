@@ -147,7 +147,6 @@
  (action
   (run
    node
-   --no-warnings
    --experimental-sqlite
    %{dep:sqlite_cross_runtime_parity.js}
    %{dep:sqlite_cross_runtime_native.exe}
