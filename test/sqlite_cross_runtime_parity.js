@@ -7,12 +7,29 @@ const crypto = require("crypto");
 const childProcess = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
 
+function findRepoRoot(startDir) {
+  let dir = startDir;
+  while (true) {
+    if (fs.existsSync(path.join(dir, "dune-project"))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return startDir;
+    }
+    dir = parent;
+  }
+}
+
 const nativeExe = path.resolve(process.argv[2]);
 const jsOfOcamlPath = path.resolve(process.argv[3]);
-const upstreamInput = process.env.UPSTREAM_DATASCRIPT_JS || process.argv[4];
+const defaultUpstreamInput = path.join(findRepoRoot(process.cwd()), "_deps/datascript/release-js/datascript.js");
+const upstreamInput = process.env.UPSTREAM_DATASCRIPT_JS || process.argv[4] || defaultUpstreamInput;
 
-if (!upstreamInput) {
-  console.error("Set UPSTREAM_DATASCRIPT_JS or pass the upstream DataScript bundle path.");
+if (!fs.existsSync(upstreamInput)) {
+  console.error(
+    `Set UPSTREAM_DATASCRIPT_JS or build the upstream DataScript bundle at ${defaultUpstreamInput}.`
+  );
   process.exit(2);
 }
 

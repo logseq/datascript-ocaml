@@ -5,16 +5,16 @@ repo_root="$(git rev-parse --show-toplevel)"
 ocaml_runner="${1:-$repo_root/_build/default/test/cross_runtime_ocaml.exe}"
 upstream_runner="${2:-$repo_root/script/cross_runtime_upstream.js}"
 upstream_fuzz_runner="${3:-$repo_root/script/cross_runtime/upstream_fuzz.cljs}"
-upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-}"
-upstream_datascript_repo="${UPSTREAM_DATASCRIPT_REPO:-}"
+upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-$repo_root/_deps/datascript/release-js/datascript.js}"
+upstream_datascript_repo="${UPSTREAM_DATASCRIPT_REPO:-$repo_root/_deps/datascript}"
 
 if [ -z "$upstream_datascript_js" ]; then
-  echo "Set UPSTREAM_DATASCRIPT_JS to the upstream DataScript JS bundle." >&2
+  echo "Set UPSTREAM_DATASCRIPT_JS or build the upstream DataScript JS bundle at $repo_root/_deps/datascript/release-js/datascript.js." >&2
   exit 2
 fi
 
 if [ -z "$upstream_datascript_repo" ]; then
-  echo "Set UPSTREAM_DATASCRIPT_REPO to the upstream DataScript checkout." >&2
+  echo "Set UPSTREAM_DATASCRIPT_REPO or clone upstream DataScript at $repo_root/_deps/datascript." >&2
   exit 2
 fi
 

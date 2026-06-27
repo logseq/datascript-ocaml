@@ -139,10 +139,21 @@
  (libraries datascript unix sqlite3 yojson))
 
 (rule
+ (target upstream_datascript_bundle.stamp)
+ (deps ../script/ensure_upstream_datascript.sh)
+ (action
+  (progn
+   (run bash %{dep:../script/ensure_upstream_datascript.sh})
+   (with-stdout-to
+    %{target}
+    (echo generated)))))
+
+(rule
  (alias runtest)
  (deps
   sqlite_cross_runtime_native.exe
   sqlite_cross_runtime_parity.js
+  upstream_datascript_bundle.stamp
   ../js/datascript_js.bc.js)
  (action
   (run
@@ -205,6 +216,7 @@
  (deps
   cross_runtime_parity_test.sh
   cross_runtime_ocaml.exe
+  upstream_datascript_bundle.stamp
   ../script/cross_runtime_parity.sh
   ../script/cross_runtime_upstream.js
   ../script/cross_runtime/upstream_fuzz.cljs)
