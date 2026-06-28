@@ -331,9 +331,9 @@ let test_wildcard_pull_plan_uses_entity_slices () =
     [ [ Result_pull
           { pulled_id = 1
           ; pulled_attrs =
-              [ Keyword "marker", Pulled_scalar (Bool true)
+              [ Keyword "db/id", Pulled_scalar (Int 1)
+              ; Keyword "marker", Pulled_scalar (Bool true)
               ; Keyword "name", Pulled_scalar (String "Ivan")
-              ; Keyword "db/id", Pulled_scalar (Int 1)
               ]
           }
       ]
@@ -13810,6 +13810,42 @@ let test_q_source_qualified_rules () =
     [ [ Result_value (String "Oleg") ] ]
     (q_sources (empty_db ()) [ "sexes", Db_source sexes; "ages", Db_source ages ] query)
 
+let test_q_source_qualified_rule_body_can_reference_root_source () =
+  let root =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "root/enabled?", One_value (Bool true) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "root/enabled?", One_value (Bool false) ] }
+         ]
+  in
+  let flags =
+    empty_db ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "flag/enabled?", One_value (Bool true) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "flag/enabled?", One_value (Bool true) ] }
+         ]
+  in
+  let query =
+    { find = [ Find_var "e" ]
+    ; inputs = []
+    ; with_vars = []
+    ; rules =
+        [ { rule_name = "enabled-in-both"
+          ; rule_params = [ "e" ]
+          ; rule_body =
+              [ Pattern (QVar "e", QAttr "flag/enabled?", QValue (Bool true))
+              ; SourcePattern ("$", QVar "e", QAttr "root/enabled?", QValue (Bool true))
+              ]
+          }
+        ]
+    ; where = [ SourceRule ("flags", "enabled-in-both", [ QVar "e" ]) ]
+    }
+  in
+  assert_equal_query
+    "q source-qualified rule bodies can explicitly reference the root source"
+    [ [ Result_entity 1 ] ]
+    (q_sources root [ "flags", Db_source flags ] query)
+
 let test_query_fns__test_query_fns () =
   test_q_predicates_without_free_variables_filter_all_rows ();
   test_q_builtin_get_else_get_some_and_missing ();
@@ -13918,6 +13954,7 @@ let test_query_rules__test_rules () =
   test_q_with_dynamic_callable_inputs_in_rules ();
   test_q_can_call_same_dynamic_predicate_rule_twice ();
   test_q_source_qualified_rules ();
+  test_q_source_qualified_rule_body_can_reference_root_source ();
   test_q_rejects_unknown_rules ()
 
 let test_query_rules__test_false_arguments () =
@@ -17557,6 +17594,7 @@ let () =
   test_q_with_symmetric_recursive_rules ();
   test_q_with_mutually_recursive_rules ();
   test_q_source_qualified_rules ();
+  test_q_source_qualified_rule_body_can_reference_root_source ();
   test_query_fns__test_query_fns ();
   test_query_fns__test_predicates ();
   test_query_fns__test_symbol_resolution ();

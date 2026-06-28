@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 
+const path = require("path");
+
 const datascriptPath = process.env.UPSTREAM_DATASCRIPT_JS;
 
 if (!datascriptPath) {
@@ -8,7 +10,7 @@ if (!datascriptPath) {
   process.exit(2);
 }
 
-const d = require(datascriptPath);
+const d = require(path.resolve(datascriptPath));
 
 const defaultConfig = { size: 200, warmupMs: 200, sampleMs: 500, samples: 5 };
 
@@ -214,6 +216,9 @@ function main() {
   );
   bench(config, "qpred2", () =>
     consumeRows(d.q('[:find ?e ?s :in $ ?min_s :where [?e "salary" ?s] [(> ?s ?min_s)]]', db(), 50000))
+  );
+  bench(config, "q2pred", () =>
+    consumeRows(d.q('[:find ?e ?s :where [?e "name" "Ivan"] [?e "salary" ?s] [(> ?s 50000)]]', db()))
   );
   bench(config, "pull-one", () =>
     consumePull(d.pull(db(), '["name" "age" {"friend" ["name" "age"]}]', 1))

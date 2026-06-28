@@ -99,6 +99,9 @@ end) = struct
   let datoms db index ?e ?a ?v ?tx () =
     Db.datoms db_index_context db index ?e ?a ?v ?tx ()
 
+  let fold_datoms f init db index ?e ?a ?v ?tx () =
+    Db.fold_datoms f init db_index_context db index ?e ?a ?v ?tx ()
+
   let datoms_list db index ?e ?a ?v ?tx () =
     Db.datoms_list db_index_context db index ?e ?a ?v ?tx ()
   

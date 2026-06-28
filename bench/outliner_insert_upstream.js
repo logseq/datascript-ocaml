@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 
+const path = require("path");
+
 const datascriptPath = process.env.UPSTREAM_DATASCRIPT_JS;
 
 if (!datascriptPath) {
@@ -8,7 +10,7 @@ if (!datascriptPath) {
   process.exit(2);
 }
 
-const d = require(datascriptPath);
+const d = require(path.resolve(datascriptPath));
 
 const defaultConfig = { size: 5000, warmupMs: 300, sampleMs: 700, samples: 7 };
 

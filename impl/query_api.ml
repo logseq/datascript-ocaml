@@ -23,7 +23,7 @@ module Make (Context : sig
     query_rule list ->
     bindings list ->
     query_clause list ->
-    (string list * query_result list list) option
+    (string list * query_result list list * bool) option
   val has_aggregates : find_spec list -> bool
   val aggregate_rows : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> query_result list list
   val aggregate_rows_with : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> string list -> query_result list list
@@ -64,25 +64,51 @@ end) = struct
       in
       collect [] find
 
-  let relation_rows_for_find attrs rows find =
+  let relation_rows_for_plain_find attrs rows unique_rows find =
     let* find_vars = find_var_names find in
-    let* indexes =
-      find_vars
-      |> List.fold_left
-           (fun indexes var ->
-             match indexes with
-             | None -> None
-             | Some indexes ->
-               (match List.find_index (( = ) var) attrs with
-                | Some index -> Some (index :: indexes)
-                | None -> None))
-           (Some [])
-      |> Option.map List.rev
-    in
-    rows
-    |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
-    |> List.sort_uniq compare
-    |> fun rows -> Some rows
+    if find_vars = attrs then
+      Some (if unique_rows then rows else List.sort_uniq compare rows)
+    else
+      let* indexes =
+        find_vars
+        |> List.fold_left
+             (fun indexes var ->
+               match indexes with
+               | None -> None
+               | Some indexes ->
+                 (match List.find_index (( = ) var) attrs with
+                  | Some index -> Some (index :: indexes)
+                  | None -> None))
+             (Some [])
+        |> Option.map List.rev
+      in
+      rows
+      |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
+      |> List.sort_uniq compare
+      |> fun rows -> Some rows
+
+  let find_spec_vars = function
+    | Find_var var
+    | Find_pull (var, _)
+    | Find_pull_source (_, var, _) ->
+      [ var ]
+    | Find_pull_var (var, pattern_var)
+    | Find_pull_source_var (_, var, pattern_var) ->
+      [ var; pattern_var ]
+    | Find_aggregate _ -> []
+
+  let relation_rows_for_find db sources attrs rows unique_rows find =
+    match relation_rows_for_plain_find attrs rows unique_rows find with
+    | Some rows -> Some rows
+    | None ->
+      let required_vars = find |> List.concat_map find_spec_vars |> List.sort_uniq compare in
+      if required_vars <> [] && List.for_all (fun var -> List.mem var attrs) required_vars then
+        rows
+        |> List.filter_map (fun row -> collect_find_specs db sources (List.combine attrs row) find)
+        |> List.sort_uniq compare
+        |> fun rows -> Some rows
+      else
+        None
 
   let dedupe_bindings_for_find bindings find =
     let vars = Query.grouping_vars_of_find find in
@@ -98,15 +124,20 @@ end) = struct
   
   let q_sources_raw ?(inputs = []) db sources query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
-    let rules, where = query_rules_and_where query input_rules in
+    let rules, where =
+      match query.rules, input_rules with
+      | [], [] -> [], query.where
+      | _ -> query_rules_and_where query input_rules
+    in
+    let has_aggregates = has_aggregates query.find in
     if
-      (not (has_aggregates query.find))
+      (not has_aggregates)
       && query.with_vars = []
       && query_callables_empty callables
     then
       match eval_relation_rows db sources rules input_bindings where with
-      | Some (attrs, rows) ->
-        (match relation_rows_for_find attrs rows query.find with
+      | Some (attrs, rows, unique_rows) ->
+        (match relation_rows_for_find db sources attrs rows unique_rows query.find with
          | Some rows -> rows
          | None ->
            let bindings = eval_clauses ~callables db sources rules input_bindings where in
@@ -122,7 +153,7 @@ end) = struct
         |> List.sort_uniq compare
     else (
       let bindings = eval_clauses ~callables db sources rules input_bindings where in
-      if has_aggregates query.find then
+      if has_aggregates then
       if query.with_vars = [] then
         aggregate_rows ~callables db sources bindings query.find
       else

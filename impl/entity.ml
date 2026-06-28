@@ -17,8 +17,8 @@ let tx_value_of_attr_values context db attr values =
   let values = List.sort context.compare_value values in
   match context.cardinality db attr, values with
   | Many, values -> Many_values values
-  | One, value :: _ -> One_value value
   | One, [] -> Many_values []
+  | One, values -> One_value (List.hd (List.rev values))
 
 let entity_has_forward_attrs context db entity_id =
   Option.is_some (Seq.uncons (context.datoms_by_entity db entity_id))

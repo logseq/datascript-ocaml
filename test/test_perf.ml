@@ -169,7 +169,7 @@ let test_aevt_prefix_count_has_low_per_item_overhead () =
   let db = build_db 10_000 in
   let iterations = 200 in
   let elapsed = time_repeated iterations (fun () -> count_name_datoms db) in
-  if elapsed > 0.180 then
+  if elapsed > 0.100 then
     failf
       "counting an AEVT attr prefix should avoid comparator allocation overhead: elapsed=%.4fs"
       elapsed

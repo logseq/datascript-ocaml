@@ -467,6 +467,45 @@ let slice_cmp context index from_bound from_fields to_bound to_fields left right
   else
     Util.compare_datom index left right
 
+let single_field_prefix_cmp index bound left right =
+  let compare_bound left right =
+    match index with
+    | Eavt -> compare left.e right.e
+    | Aevt | Avet -> compare left.a right.a
+  in
+  if right == bound then
+    compare_bound left right
+  else if left == bound then
+    -compare_bound right left
+  else
+    match index with
+    | Eavt ->
+      first_nonzero4
+        (compare left.e right.e)
+        (compare left.a right.a)
+        (Util.compare_value left.v right.v)
+        (compare left.tx right.tx)
+    | Aevt ->
+      first_nonzero4
+        (compare left.a right.a)
+        (compare left.e right.e)
+        (Util.compare_value left.v right.v)
+        (compare left.tx right.tx)
+    | Avet ->
+      first_nonzero4
+        (compare left.a right.a)
+        (Util.compare_value left.v right.v)
+        (compare left.e right.e)
+        (compare left.tx right.tx)
+
+let exact_prefix_slice_cmp context index bound bound_fields =
+  match index, bound_fields with
+  | Eavt, { bound_e = true; bound_a = false; bound_v = false; bound_tx = false }
+  | Aevt, { bound_e = false; bound_a = true; bound_v = false; bound_tx = false }
+  | Avet, { bound_e = false; bound_a = true; bound_v = false; bound_tx = false } ->
+    single_field_prefix_cmp index bound
+  | _ -> slice_cmp context index bound bound_fields bound bound_fields
+
 let fields ?(e = false) ?(a = false) ?(v = false) ?(tx = false) () =
   { bound_e = e; bound_a = a; bound_v = v; bound_tx = tx }
 
@@ -510,7 +549,7 @@ let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
   | Some (bound, bound_fields) ->
-    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    let cmp = exact_prefix_slice_cmp context index bound bound_fields in
     (match db.duplicate_datoms with
      | [] -> Some (PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> PSet.to_seq)
      | _ ->
@@ -522,7 +561,7 @@ let exact_prefix_datoms_list context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
   | Some (bound, bound_fields) ->
-    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    let cmp = exact_prefix_slice_cmp context index bound bound_fields in
     (match db.duplicate_datoms with
      | [] ->
        Some
@@ -649,6 +688,55 @@ let datoms context db index ?e ?a ?v ?tx () =
       |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
   apply_filter_pred db datoms
+
+let fold_datoms f init context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  let v = resolved_value_option_for_optional_attr context db a v in
+  let prefix_v, prefix_tx =
+    match index, e, a, v with
+    | Aevt, None, Some _, Some _ -> None, None
+    | _ -> v, tx
+  in
+  let exact_attr_prefix =
+    match index, e, a, v, tx with
+    | Aevt, None, Some _, None, None -> true
+    | _ -> false
+  in
+  let fold_filter acc datom =
+    if matches e datom.e && matches a datom.a && matches_value context v datom.v && matches tx datom.tx then
+      f acc datom
+    else
+      acc
+  in
+  let fold_filter_pred acc datom =
+    match db.filter_pred with
+    | None -> f acc datom
+    | Some pred -> if pred datom then f acc datom else acc
+  in
+  let fold_filter_and_pred acc datom =
+    match db.filter_pred with
+    | Some pred when not (pred datom) -> acc
+    | _ -> fold_filter acc datom
+  in
+  match db.duplicate_datoms, exact_prefix_bound index e a prefix_v prefix_tx with
+  | [], Some (bound, bound_fields) ->
+    let cmp = exact_prefix_slice_cmp context index bound bound_fields in
+    let seq = PSet.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) in
+    let fold =
+      match exact_attr_prefix || (e, a, v, tx) = (None, None, None, None), db.filter_pred with
+      | true, None -> f
+      | true, Some _ -> fold_filter_pred
+      | false, None -> fold_filter
+      | false, Some _ -> fold_filter_and_pred
+    in
+    PSet.fold_seq fold init seq
+  | [], None when (e, a, v, tx) = (None, None, None, None) ->
+    (match db.filter_pred with
+     | None -> PSet.fold f init (stored_index db index)
+     | Some pred ->
+       PSet.fold (fun acc datom -> if pred datom then f acc datom else acc) init (stored_index db index))
+  | _ ->
+    datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
 
 let apply_filter_pred_list db datoms =
   match db.filter_pred with

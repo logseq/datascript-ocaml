@@ -49,7 +49,12 @@ let consume_int value =
   blackhole := (!blackhole + value) land 0x3fffffff
 
 let seq_length seq =
-  Seq.fold_left (fun count _ -> count + 1) 0 seq
+  let rec loop count seq =
+    match seq () with
+    | Seq.Nil -> count
+    | Seq.Cons (_, rest) -> loop (count + 1) rest
+  in
+  loop 0 seq
 
 let consume_db db =
   consume_int (seq_length (datoms db Eavt ()))
@@ -237,7 +242,8 @@ let main () =
   bench config "add-all" (fun () -> consume_db (build_db config.size));
   bench config "storage-roundtrip" (fun () ->
     consume_db (build_storage_db config.size));
-  bench config "datoms-name" (fun () -> consume_int (seq_length (datoms (Lazy.force db) Aevt ~a:"name" ())));
+  bench config "datoms-name" (fun () ->
+    consume_int (fold_datoms (fun count _ -> count + 1) 0 (Lazy.force db) Aevt ~a:"name" ()));
   bench config "q1" (fun () ->
     consume_rows (q_string (Lazy.force db) "[:find ?e :where [?e :name \"Ivan\"]]"));
   bench config "q2" (fun () ->
@@ -260,6 +266,11 @@ let main () =
          ~inputs:[ Arg_scalar (Result_value (Int 50000)) ]
          (Lazy.force db)
          "[:find ?e ?s :in $ ?min-s :where [?e :salary ?s] [(> ?s ?min-s)]]"));
+  bench config "q2pred" (fun () ->
+    consume_rows
+      (q_string
+         (Lazy.force db)
+         "[:find ?e ?s :where [?e :name \"Ivan\"] [?e :salary ?s] [(> ?s 50000)]]"));
   bench config "pull-one" (fun () ->
     consume_pull (pull (Lazy.force db) [ Pull_attr "name"; Pull_attr "age"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ] (Entity_id 1)));
   Printf.eprintf "blackhole=%d\n%!" !blackhole

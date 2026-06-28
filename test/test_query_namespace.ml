@@ -458,6 +458,8 @@ let test_query_namespace__test_source_matching_helpers () =
   let source_context =
     { Query.match_context
     ; pattern_datoms = (fun _ _ _ _ _ -> List.to_seq [ name_datom ])
+    ; fold_pattern_datoms = (fun _ _ _ _ _ ~init ~f -> f init name_datom)
+    ; pattern_comparison_datoms = (fun _ _ _ _ -> None)
     ; match_data_pattern =
         (fun _ bindings e_term a_term v_term datom ->
            Query.match_pattern_clause match_context bindings e_term a_term v_term datom)

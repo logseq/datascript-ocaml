@@ -7,7 +7,7 @@ if [[ "$bench_exe" != */* ]]; then
 fi
 output="$("$bench_exe" --size 20 --warmup-ms 1 --sample-ms 1 --samples 1 2>/dev/null)"
 
-for name in add-1 add-5 add-all q1 q2 q3 q4 q5-shortcircuit qpred1 qpred2 pull-one; do
+for name in add-1 add-5 add-all q1 q2 q3 q4 q5-shortcircuit qpred1 qpred2 q2pred pull-one; do
   if ! grep -q "^${name}[[:space:]]" <<<"$output"; then
     echo "missing benchmark: $name" >&2
     echo "$output" >&2

@@ -164,7 +164,18 @@ let test_db__test_index_api () =
   assert_equal_triples
     "Db.index_range exposes AVET ranges through the db namespace"
     [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
-    (Db.index_range db "name" ~start:(String "I") ~stop:(String "P") () |> List.of_seq)
+    (Db.index_range db "name" ~start:(String "I") ~stop:(String "P") () |> List.of_seq);
+  assert_equal_triples
+    "Db.fold_datoms folds the same ordered datoms as Db.datoms"
+    [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
+    (Db.fold_datoms
+       (fun acc datom -> datom :: acc)
+       []
+       db
+       Aevt
+       ~a:"name"
+       ()
+     |> List.rev)
 
 let test_db__test_indexes_use_persistent_sorted_set () =
   let db =

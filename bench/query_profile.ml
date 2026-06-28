@@ -94,6 +94,17 @@ let people size =
 let seq_len seq =
   Seq.fold_left (fun count _ -> count + 1) 0 seq
 
+let seq_len_direct seq =
+  let rec loop count seq =
+    match seq () with
+    | Seq.Nil -> count
+    | Seq.Cons (_, rest) -> loop (count + 1) rest
+  in
+  loop 0 seq
+
+let list_len list =
+  List.length list
+
 let rows_len rows =
   List.length rows
 
@@ -114,6 +125,34 @@ let direct_q3 db =
        (fun count datom ->
          if datom.e >= 0 && datom.e < Bytes.length male && Bytes.get male datom.e = '\001' then
            count + seq_len (datoms db Eavt ~e:datom.e ~a:"age" ())
+         else
+           count)
+       0
+
+let direct_q3_table db =
+  let max_entity = db.max_datom_e + 1 in
+  let male = Bytes.make max_entity '\000' in
+  datoms db Aevt ~a:"sex" ()
+  |> Seq.iter (fun datom ->
+    if datom.v = Keyword "male" && datom.e >= 0 && datom.e < Bytes.length male then
+      Bytes.set male datom.e '\001');
+  let ages = Array.make max_entity None in
+  datoms db Aevt ~a:"age" ()
+  |> Seq.iter (fun datom ->
+    if datom.e >= 0 && datom.e < Array.length ages then
+      ages.(datom.e) <- Some datom.v);
+  datoms db Avet ~a:"name" ~v:(String "Ivan") ()
+  |> Seq.fold_left
+       (fun count datom ->
+         if
+           datom.e >= 0
+           && datom.e < Bytes.length male
+           && Bytes.get male datom.e = '\001'
+           && datom.e < Array.length ages
+         then
+           match ages.(datom.e) with
+           | Some _ -> count + 1
+           | None -> count
          else
            count)
        0
@@ -237,7 +276,11 @@ let () =
   in
   Printf.printf "case\tms\tblackhole\n%!";
   measure "datoms-name-avet" iterations (fun () -> seq_len (datoms db Avet ~a:"name" ~v:(String "Ivan") ()));
+  measure "datoms-name-aevt-list" iterations (fun () -> list_len (datoms db Aevt ~a:"name" () |> List.of_seq));
   measure "datoms-sex-aevt" iterations (fun () -> seq_len (datoms db Aevt ~a:"sex" ()));
+  measure "datoms-sex-aevt-fold" iterations (fun () -> fold_datoms (fun count _ -> count + 1) 0 db Aevt ~a:"sex" ());
+  measure "datoms-sex-aevt-direct" iterations (fun () -> seq_len_direct (datoms db Aevt ~a:"sex" ()));
+  measure "datoms-sex-aevt-list" iterations (fun () -> list_len (datoms db Aevt ~a:"sex" () |> List.of_seq));
   measure "datoms-sex-aevt-value" iterations (fun () -> seq_len (datoms db Aevt ~a:"sex" ~v:(Keyword "male") ()));
   measure "datoms-age-aevt" iterations (fun () -> seq_len (datoms db Aevt ~a:"age" ()));
   measure "profile-name-list" iterations (fun () -> List.length (name_entities db));
@@ -267,7 +310,9 @@ let () =
     (fun () ->
        q db ~inputs:[ Arg_scalar (Result_value (Int 50000)) ] qpred2_query
        |> rows_len);
-  measure "direct-q3-index-join" iterations (fun () -> direct_q3 db)
+  measure "q2pred" iterations (fun () -> q_len db "[:find ?e ?s :where [?e :name \"Ivan\"] [?e :salary ?s] [(> ?s 50000)]]");
+  measure "direct-q3-index-join" iterations (fun () -> direct_q3 db);
+  measure "direct-q3-table" iterations (fun () -> direct_q3_table db)
   ;
   let tx_iterations = max 1 (iterations / 100) in
   measure "add-1" tx_iterations (fun () -> add_one_by_one size |> fun db -> seq_len (datoms db Eavt ()));

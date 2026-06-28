@@ -57,6 +57,18 @@ type match_context =
 type source_context =
   { match_context : match_context
   ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
+  ; fold_pattern_datoms :
+      'a.
+      db ->
+      query_term ->
+      query_term ->
+      query_term ->
+      query_term option ->
+      init:'a ->
+      f:('a -> datom -> 'a) ->
+      'a
+  ; pattern_comparison_datoms :
+      db -> query_term list -> comparison_predicate -> value -> datom Seq.t option
   ; match_data_pattern :
       db ->
       (string * query_result) list ->

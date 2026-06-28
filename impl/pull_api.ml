@@ -92,7 +92,6 @@ let wildcard_shadowed_attrs context selectors =
   |> List.sort_uniq String.compare
 
 let rec pull_selector_needs_full_entity context = function
-  | Pull_wildcard -> true
   | Pull_attr attr
   | Pull_attr_default (attr, _)
   | Pull_attr_limit (attr, _)
@@ -108,6 +107,7 @@ let rec pull_selector_needs_full_entity context = function
     context.is_reverse_ref attr
   | Pull_as (selector, _) -> pull_selector_needs_full_entity context selector
   | Pull_id
+  | Pull_wildcard
   | Pull_reverse_ref _
   | Pull_reverse_ref_default _
   | Pull_reverse_ref_limit _
@@ -118,17 +118,43 @@ let rec pull_selector_needs_full_entity context = function
 let selector_needs_full_entity context selectors =
   List.exists (pull_selector_needs_full_entity context) selectors
 
+let rec pull_selector_is_wildcard = function
+  | Pull_wildcard -> true
+  | Pull_as (selector, _) -> pull_selector_is_wildcard selector
+  | Pull_id
+  | Pull_attr _
+  | Pull_attr_default _
+  | Pull_attr_limit _
+  | Pull_attr_unlimited _
+  | Pull_attr_xform _
+  | Pull_attr_default_xform _
+  | Pull_ref _
+  | Pull_ref_default _
+  | Pull_ref_limit _
+  | Pull_ref_unlimited _
+  | Pull_ref_xform _
+  | Pull_recursive_ref _
+  | Pull_reverse_ref _
+  | Pull_reverse_ref_default _
+  | Pull_reverse_ref_limit _
+  | Pull_reverse_ref_unlimited _
+  | Pull_reverse_ref_xform _ ->
+    false
+
 let forward_attrs_for_selectors context selectors =
-  selectors
-  |> List.filter_map (pull_selector_forward_attr context)
-  |> List.sort_uniq String.compare
+  if List.exists pull_selector_is_wildcard selectors then
+    []
+  else
+    selectors
+    |> List.filter_map (pull_selector_forward_attr context)
+    |> List.sort_uniq String.compare
 
 let tx_value_of_attr_values context db attr values =
   let values = List.sort context.compare_value values in
   match context.cardinality db attr, values with
   | Many, values -> Many_values values
-  | One, value :: _ -> One_value value
   | One, [] -> Many_values []
+  | One, values -> One_value (List.hd (List.rev values))
 
 let forward_entity context db entity_id attrs =
   let datoms = context.datoms_by_entity db entity_id in
