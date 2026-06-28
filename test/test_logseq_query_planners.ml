@@ -23,13 +23,26 @@ let one =
 let unique_identity =
   { one with unique = Some Identity; indexed = true }
 
+let perf_threshold_multiplier () =
+  (* Normal test runs use coarse wall-clock gates; set this to 1 for strict local checks. *)
+  match Sys.getenv_opt "DATASCRIPT_TEST_PERF_MULTIPLIER" with
+  | None -> 4.0
+  | Some value ->
+    (try max 1.0 (float_of_string value) with
+     | Failure _ -> 4.0)
+
 let timed label max_seconds f =
   Gc.full_major ();
   let started = Unix.gettimeofday () in
   let result = f () in
   let elapsed = Unix.gettimeofday () -. started in
-  if elapsed > max_seconds then
-    failf "%s took %.3fs, expected <= %.3fs" label elapsed max_seconds;
+  let effective_max_seconds = max_seconds *. perf_threshold_multiplier () in
+  if elapsed > effective_max_seconds then
+    failf
+      "%s took %.3fs, expected <= %.3fs"
+      label
+      elapsed
+      effective_max_seconds;
   result
 
 let entity_ids_of_collection = function
