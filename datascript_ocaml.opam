@@ -10,16 +10,24 @@ depends: [
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
   "melange"
-  "melange-edn" {= "0.5.0"}
-  "melange-transit" {= "dev"}
+  "melange-edn-core" {= "0.5.0"}
+  "melange-edn-native" {= "0.5.0" & with-test}
+  "melange-edn-melange" {= "0.5.0"}
+  "melange-transit-core" {= "0.1.0"}
+  "melange-transit-native" {= "0.1.0"}
+  "melange-transit-melange" {= "0.1.0"}
   "js_of_ocaml" {with-test}
   "js_of_ocaml-compiler" {with-test}
   "yojson" {with-test}
 ]
 pin-depends: [
   ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#2920b0034dec7678e218e1b203c57a9f57220708"]
-  ["melange-transit.dev" "git+https://github.com/RCmerci/melange-transit.git#f8388857a1e2c8d53b00dc968ad7bb333be882c3"]
-  ["melange-edn.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#bdc79c1d1d6edc9b0874113759bee29ce45f53f5"]
+  ["melange-edn-core.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
+  ["melange-edn-native.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
+  ["melange-edn-melange.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
+  ["melange-transit-core.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
+  ["melange-transit-native.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
+  ["melange-transit-melange.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]

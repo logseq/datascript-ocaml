@@ -121,7 +121,7 @@
 (test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
- (libraries datascript logseq_sqlite_storage unix sqlite3 melange-transit.native))
+ (libraries datascript logseq_sqlite_storage unix sqlite3 melange-transit-native))
 
 (test
  (name test_sqlite_package)
@@ -131,7 +131,7 @@
 (test
  (name test_melange_transit_backend)
  (modules test_melange_transit_backend)
- (libraries melange-transit.native))
+ (libraries melange-transit-native melange-edn-native))
 
 (executable
  (name sqlite_cross_runtime_native)

@@ -53,7 +53,25 @@ let test_native_backend_roundtrips_verbose_storage_keys () =
       ] -> ()
   | _ -> failwith "native melange-transit backend should roundtrip storage keys in verbose mode"
 
+let test_native_backend_converts_edn_values () =
+  let edn =
+    Melange_edn_native.of_edn_string
+      "{:schema {:name {:db/valueType :db.type/string}}}"
+  in
+  match Json.of_edn edn with
+  | Json.Map
+      [
+        ( Json.Keyword "schema",
+          Json.Map
+            [
+              ( Json.Keyword "name",
+                Json.Map [ (Json.Keyword "db/valueType", Json.Keyword "db.type/string") ] );
+            ] );
+      ] -> ()
+  | _ -> failwith "native melange-transit backend should convert EDN maps to Transit maps"
+
 let () =
   test_native_backend_decodes_logseq_storage_shape ();
   test_native_backend_writes_transit_json ();
-  test_native_backend_roundtrips_verbose_storage_keys ()
+  test_native_backend_roundtrips_verbose_storage_keys ();
+  test_native_backend_converts_edn_values ()

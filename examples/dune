@@ -1,7 +1,7 @@
 (library
  (name logseq_sqlite_storage)
  (modules logseq_sqlite_storage)
- (libraries datascript unix yojson sqlite3 melange-transit.native))
+ (libraries datascript unix yojson sqlite3 melange-transit-native))
 
 (executable
  (name sqlite_storage_example)

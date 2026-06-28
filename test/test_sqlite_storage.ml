@@ -2325,6 +2325,26 @@ let test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization (
          | Query_relation rows -> rows
          | _ -> failwith "direct Logseq SQLite query should return relation rows"))
 
+let test_logseq_sqlite_schema_decodes_cached_schema_keys () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping Logseq SQLite cached schema test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let root_content =
+        {|["^ ","~:schema",["^ ","~:foo",["^ ","~:db/index",true,"~:db/valueType","~:db.type/ref"],"~:block/name",["^ ","^2",true]]]|}
+      in
+      run_sql
+        db_path
+        ("create table kvs (addr INTEGER primary key, content TEXT, addresses JSON);\n"
+         ^ "insert into kvs (addr, content, addresses) values (0, "
+         ^ sql_quote root_content
+         ^ ", '[]');");
+      let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true db_path in
+      match List.assoc_opt "block/name" schema with
+      | Some block_name_schema when block_name_schema.indexed -> ()
+      | Some _ -> failwith "cached Logseq schema key should mark :block/name as indexed"
+      | None -> failwith "cached Logseq schema should expose :block/name")
+
 let test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks_refs () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping Logseq SQLite timestamp schema query test: sqlite3 is not available"
@@ -2832,6 +2852,7 @@ let () =
   test_logseq_sqlite_datom_cache_ignores_transit_tag_values ();
   test_logseq_sqlite_datom_cache_spans_ordered_rows ();
   test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization ();
+  test_logseq_sqlite_schema_decodes_cached_schema_keys ();
   test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks_refs ();
   test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks ();
   test_default_logseq_graph_db_uses_portable_default ();

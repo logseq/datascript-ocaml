@@ -844,26 +844,27 @@ let logseq_root_entries ?(read_only = false) db_path =
 
 let schema_of_logseq_graph ?(read_only = false) db_path =
   let content = logseq_root_content ~read_only db_path in
-  try
-    let root_entries =
-      match Transit.of_string content with
-      | Transit.Map entries -> entries
-      | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
-    in
-    match lookup_transit_key "schema" root_entries with
-    | Some (Transit.Map entries) ->
-      entries
-      |> List.filter_map (fun (attr, schema) ->
-        match keyword_of_transit attr with
-        | Some attr -> Some (attr, logseq_schema_attr_of_transit schema |> normalize_logseq_schema_attr attr)
-        | None -> None)
-    | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
-    | None -> invalid_arg "Logseq graph root metadata has no :schema"
-  with
-  | Transit.Decode_error _ | Yojson.Json_error _ ->
-    (match shallow_schema_of_root_content content with
-     | Some schema -> schema
-     | None -> invalid_arg "Logseq graph root metadata has no decodable :schema")
+  match shallow_schema_of_root_content content with
+  | Some schema -> schema
+  | None ->
+    (try
+       let root_entries =
+         match Transit.of_string content with
+         | Transit.Map entries -> entries
+         | _ -> invalid_arg "Logseq graph root metadata must be a Transit map"
+       in
+       match lookup_transit_key "schema" root_entries with
+       | Some (Transit.Map entries) ->
+         entries
+         |> List.filter_map (fun (attr, schema) ->
+           match keyword_of_transit attr with
+           | Some attr -> Some (attr, logseq_schema_attr_of_transit schema |> normalize_logseq_schema_attr attr)
+           | None -> None)
+       | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
+       | None -> invalid_arg "Logseq graph root metadata has no :schema"
+     with
+     | Transit.Decode_error _ | Yojson.Json_error _ ->
+       invalid_arg "Logseq graph root metadata has no decodable :schema")
 
 let int_of_shallow_string text =
   match int_of_string_opt text with
