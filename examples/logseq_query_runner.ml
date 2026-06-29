@@ -244,21 +244,61 @@ let json_optional_string_member key = function
      | None -> None)
   | _ -> invalid_arg "query input line must be a JSON object"
 
+let json_optional_string_list_member key = function
+  | `Assoc fields ->
+    (match List.assoc_opt key fields with
+     | Some (`List values) ->
+       Some
+         (List.map
+            (function
+              | `String value -> value
+              | _ -> invalid_arg ("query input field must be a string array: " ^ key))
+            values)
+     | Some _ -> invalid_arg ("query input field must be a string array: " ^ key)
+     | None -> None)
+  | _ -> invalid_arg "query input line must be a JSON object"
+
 let input_rules_of_string rules =
   Arg_rules (Parser.parse_rules (read_edn rules))
 
-let run_query_output db inputs query =
+let input_scalar_of_string input =
+  Arg_scalar (Result_value (Util.normalize_value (graph_value_of_form (read_edn input))))
+
+let query_inputs_of_strings query rules inputs =
+  let scalar_inputs = List.map input_scalar_of_string (Option.value ~default:[] inputs) in
+  let rec collect acc scalar_inputs = function
+    | [] -> List.rev acc
+    | Input_source_decl _ :: declarations -> collect acc scalar_inputs declarations
+    | Input_rules_decl :: declarations ->
+      let acc =
+        match rules with
+        | Some rules -> input_rules_of_string rules :: acc
+        | None -> acc
+      in
+      collect acc scalar_inputs declarations
+    | _ :: declarations ->
+      (match scalar_inputs with
+       | input :: scalar_inputs -> collect (input :: acc) scalar_inputs declarations
+       | [] -> collect acc [] declarations)
+  in
+  collect [] scalar_inputs query.inputs
+
+let run_query_output db rules inputs query =
   let return, return_map, parsed_query =
     parse_query_return_map_string_with_pull_context ~default_pull_db:db query
+  in
+  let inputs =
+    match query_inputs_of_strings parsed_query rules inputs with
+    | [] -> None
+    | inputs -> Some inputs
   in
   match return_map with
   | Some return_map -> q_return_map ?inputs db return return_map parsed_query
   | None -> q_return ?inputs db return parsed_query
 
-let run_query db id query rules =
+let run_query db id query rules inputs =
   try
-    let inputs = Option.map (fun rules -> [ input_rules_of_string rules ]) rules in
-    let value = run_query_output db inputs query |> edn_query_output in
+    let value = run_query_output db rules inputs query |> edn_query_output in
     print_endline
       (json_obj [ "id", json_string id; "status", json_string "ok"; "value", json_string value ]);
     flush stdout
@@ -289,6 +329,7 @@ let run_query_loop db queries_path =
               (json_member "id" json)
               (json_member "query" json)
               (json_optional_string_member "rules" json)
+              (json_optional_string_list_member "inputs" json)
         done
       with
       | End_of_file -> ())

@@ -36,6 +36,16 @@ end) = struct
   let source_db = Query.source_db
   let query_source_db = Query.query_source_db
 
+  let matching_rules_for_invocation rules name terms =
+    match Query.matching_rules rules name (List.length terms) with
+    | [] ->
+      invalid_arg
+        ( "Unknown rule '"
+        ^ name
+        ^ " in "
+        ^ Query.query_call_string ~value_to_string:edn_string_of_value name terms )
+    | rules -> rules
+
   let eval_missing_clause = Query_eval.eval_missing_clause query_evaluator_context
   let eval_get_else_clause = Query_eval.eval_get_else_clause query_evaluator_context
   let eval_get_some_clause = Query_eval.eval_get_some_clause query_evaluator_context
@@ -2389,13 +2399,13 @@ end) = struct
 
   and rule_clause_has_no_match db sources default_source rules binding = function
     | Rule (name, terms) ->
-      Query.matching_rules_exn rules name (List.length terms)
+      matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
         rule_candidate_has_no_match db sources default_source binding rule terms)
     | SourceRule (source_name, name, terms) ->
       let rule_db = source_db db sources source_name in
       let source_sources = sources_with_root_default db sources in
-      Query.matching_rules_exn rules name (List.length terms)
+      matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
         rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) binding rule terms)
     | _ -> false
@@ -2601,7 +2611,7 @@ end) = struct
       source_name
       name
       terms =
-    let candidates = Query.matching_rules_exn rules name (List.length terms) in
+    let candidates = matching_rules_for_invocation rules name terms in
     if List.exists rule_is_recursive candidates then
       None
     else
@@ -2689,8 +2699,12 @@ end) = struct
   and rule_call_key db source name bindings terms =
     source, name, List.map (eval_query_term db bindings) terms
   
-  and matching_rules_for_call active_rules key rules name arity =
-    Query.matching_rules_for_call active_rules key rules name arity
+  and matching_rules_for_call active_rules key rules name terms =
+    let candidates = matching_rules_for_invocation rules name terms in
+    if List.mem key active_rules then
+      List.filter (fun rule -> not (List.exists (Query.clause_calls_rule name) rule.rule_body)) candidates
+    else
+      candidates
   
   and collect_dynamic_query_terms_exn db sources bindings terms =
     Query.collect_dynamic_query_terms_exn (query_match_context db) db sources bindings terms
@@ -3136,7 +3150,7 @@ end) = struct
       |> List.filter_map (merge_projected_binding clause_db vars bindings)
     | Rule (name, terms) ->
       let key = rule_call_key db "" name bindings terms in
-      matching_rules_for_call active_rules key rules name (List.length terms)
+      matching_rules_for_call active_rules key rules name terms
       |> List.concat_map (fun rule ->
         match rule_invocation_binding db bindings rule terms with
         | None -> []
@@ -3159,7 +3173,7 @@ end) = struct
       let rule_db = source_db db sources source in
       let source_sources = sources_with_root_default db sources in
       let key = rule_call_key rule_db source name bindings terms in
-      matching_rules_for_call active_rules key rules name (List.length terms)
+      matching_rules_for_call active_rules key rules name terms
       |> List.concat_map (fun rule ->
         match rule_invocation_binding rule_db bindings rule terms with
         | None -> []

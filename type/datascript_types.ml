@@ -426,6 +426,20 @@ type query_arg =
   | Arg_aggregate of (query_result list -> query_result)
   | Arg_rules of query_rule list
 
+type query_form =
+  | QueryFormNil
+  | QueryFormBool of bool
+  | QueryFormInt of int
+  | QueryFormFloat of float
+  | QueryFormString of string
+  | QueryFormKeyword of string
+  | QueryFormSymbol of string
+  | QueryFormVector of query_form list
+  | QueryFormList of query_form list
+  | QueryFormSet of query_form list
+  | QueryFormTagged of string * query_form
+  | QueryFormMap of (query_form * query_form) list
+
 type aggregate =
   | Count
   | CountDistinct
@@ -452,8 +466,10 @@ type aggregate =
 type find_spec =
   | Find_var of string
   | Find_pull of string * pull_selector list
+  | Find_pull_form of string * query_form
   | Find_pull_var of string * string
   | Find_pull_source of string * string * pull_selector list
+  | Find_pull_source_form of string * string * query_form
   | Find_pull_source_var of string * string * string
   | Find_aggregate of aggregate * query_term list
 
@@ -464,20 +480,6 @@ type query =
   ; rules : query_rule list
   ; where : query_clause list
   }
-
-type query_form =
-  | QueryFormNil
-  | QueryFormBool of bool
-  | QueryFormInt of int
-  | QueryFormFloat of float
-  | QueryFormString of string
-  | QueryFormKeyword of string
-  | QueryFormSymbol of string
-  | QueryFormVector of query_form list
-  | QueryFormList of query_form list
-  | QueryFormSet of query_form list
-  | QueryFormTagged of string * query_form
-  | QueryFormMap of (query_form * query_form) list
 
 type query_return =
   | Return_relation

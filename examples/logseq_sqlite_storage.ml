@@ -1125,9 +1125,23 @@ let rec add_pull_selector_attrs acc = function
     List.fold_left add_pull_selector_attrs (attr :: acc) selectors
   | Pull_as (selector, _) -> add_pull_selector_attrs acc selector
 
+let rec add_pull_form_attrs acc = function
+  | QueryFormKeyword attr -> attr :: acc
+  | QueryFormVector forms | QueryFormList forms | QueryFormSet forms ->
+    List.fold_left add_pull_form_attrs acc forms
+  | QueryFormMap entries ->
+    List.fold_left
+      (fun attrs (key, value) -> add_pull_form_attrs (add_pull_form_attrs attrs key) value)
+      acc
+      entries
+  | QueryFormTagged (_, form) -> add_pull_form_attrs acc form
+  | QueryFormNil | QueryFormBool _ | QueryFormInt _ | QueryFormFloat _ | QueryFormString _ | QueryFormSymbol _ ->
+    acc
+
 let add_find_spec_attrs acc = function
   | Find_pull (_, selectors) | Find_pull_source (_, _, selectors) ->
     List.fold_left add_pull_selector_attrs acc selectors
+  | Find_pull_form (_, form) | Find_pull_source_form (_, _, form) -> add_pull_form_attrs acc form
   | Find_var _
   | Find_pull_var _
   | Find_pull_source_var _

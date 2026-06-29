@@ -98,10 +98,10 @@ type query_context =
   ; values_equal : value -> value -> bool
   }
 
-val parse_find_form : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> find_spec
-val parse_find_relation : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> find_spec list
-val is_find_form : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> bool
-val parse_find_return : query_context -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> query_return * find_spec list
+val parse_find_form : query_context -> ?defer_pull_patterns:bool -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> find_spec
+val parse_find_relation : query_context -> ?defer_pull_patterns:bool -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> find_spec list
+val is_find_form : query_context -> ?defer_pull_patterns:bool -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form -> bool
+val parse_find_return : query_context -> ?defer_pull_patterns:bool -> ?default_pull_db:db -> ?pull_db_for_source:(string -> db) -> query_form option -> query_return * find_spec list
 val parse_find : query_context -> query_form -> query_return * find_spec list
 val parse_complement_predicate_clause : query_context -> string -> query_form list -> query_clause
 val parse_join_vars : string -> query_form -> string list

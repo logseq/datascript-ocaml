@@ -72,18 +72,14 @@
   :query [:find ?page ?tag :where [?page :block/tags ?tag]],
   :id "q7"}
  {:file "deps/db/src/logseq/db.cljs",
-  :line 836,
+  :line 834,
   :query
   [:find
-   ?e
-   ?a
-   :in
-   $
-   ?v
+   [?a ...]
    :where
-   [?e ?a ?v]
-   [?ea :db/ident ?a]
-   [?ea :logseq.property/classes ?c]],
+   [?property :db/ident ?a]
+   [?property :db/valueType :db.type/ref]
+   [?property :logseq.property/classes ?class]],
   :id "q8"}
  {:file "deps/db/src/logseq/db/common/initial_data.cljs",
   :line 33,
@@ -993,7 +989,7 @@
    [?e :db/ident ?ident]],
   :id "q107"}
  {:file "deps/outliner/src/logseq/outliner/page.cljs",
-  :line 202,
+  :line 208,
   :query
   [:find
    [?b ...]
@@ -1458,35 +1454,35 @@
    [?comments-area-id :block/parent ?parent-id]],
   :id "q150"}
  {:file "src/main/frontend/worker/db/validate.cljs",
-  :line 216,
+  :line 220,
   :query [:find ?b ?v :in $ ?p :where [?b ?p ?v]],
   :id "q151"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 29,
   :query
-  {:find [[(list 'pull '?e selector) '...]],
-   :in '[$ ?name],
-   :where '[[?e :block/name ?name]]},
+  {:find [[(pull ?e ?selector) ...]],
+   :in [$ ?name ?selector],
+   :where [[?e :block/name ?name]]},
   :id "q152"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 73,
   :query
-  {:find [[(list 'pull '?e selector) '...]],
-   :in '[$ ?name],
+  {:find [[(pull ?e ?selector) ...]],
+   :in [$ ?name ?selector],
    :where
-   '[[?e :block/name ?name]
-     [?e :block/tags ?t]
-     [?t :db/ident :logseq.class/Tag]]},
+   [[?e :block/name ?name]
+    [?e :block/tags ?t]
+    [?t :db/ident :logseq.class/Tag]]},
   :id "q153"}
  {:file "src/main/logseq/cli/command/add.cljs",
   :line 86,
   :query
-  {:find [[(list 'pull '?e selector) '...]],
-   :in '[$ ?name],
+  {:find [[(pull ?e ?selector) ...]],
+   :in [$ ?name ?selector],
    :where
-   '[[?e :block/name ?name]
-     [?e :block/tags ?t]
-     [?t :db/ident :logseq.class/Property]]},
+   [[?e :block/name ?name]
+    [?e :block/tags ?t]
+    [?t :db/ident :logseq.class/Property]]},
   :id "q154"}
  {:file "src/main/logseq/cli/command/graph.cljs",
   :line 96,
@@ -1668,23 +1664,23 @@
   :line 668,
   :query
   [:find
-   (list 'pull '?b tree-block-selector)
+   (pull ?b ?selector)
    :in
-   '$
-   '?page-id
+   $
+   ?page-id
    :where
-   ['?b :block/page '?page-id]],
+   [?b :block/page ?page-id]],
   :id "q167"}
  {:file "src/main/logseq/cli/command/show.cljs",
   :line 711,
   :query
   [:find
-   (list 'pull '?child page-hierarchy-child-selector)
+   (pull ?child ?selector)
    :in
-   '$
-   '?parent-id
+   $
+   ?parent-id
    :where
-   ['?child :block/parent '?parent-id]],
+   [?child :block/parent ?parent-id]],
   :id "q168"}
  {:file "src/main/logseq/cli/command/task_status.cljs",
   :line 3,
@@ -1816,15 +1812,15 @@
   :query [:find ?b :where (block-content ?b ?query) :in $ ?query],
   :id "q187"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
-  :line 657,
+  :line 663,
   :query [:find [?e ...] :where [?e :block/uuid] [?e :block/page]],
   :id "q188"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
-  :line 696,
+  :line 702,
   :query [:find [?e ...] :where [?e :block/uuid]],
   :id "q189"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
-  :line 742,
+  :line 748,
   :query
   [:find
    [?e ...]
@@ -1836,7 +1832,7 @@
    [?e :block/tags :logseq.class/Property]],
   :id "q190"}
  {:file "src/test/frontend/worker/db_sync_sim_test.cljs",
-  :line 763,
+  :line 769,
   :query
   [:find
    [?e ...]

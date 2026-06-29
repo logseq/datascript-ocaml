@@ -166,6 +166,10 @@ let test_parser_where__value_function_helper_batch () =
     (GroundTermCollection (QVar "x", "out"))
     (Parser.parse_clause (vec [ list [ sym "identity"; sym "?x" ]; vec [ sym "?out"; sym "..." ] ]));
   assert_equal
+    "parse_clause parses untuple collection output"
+    (GroundTermCollection (QVar "pages", "page"))
+    (Parser.parse_clause (vec [ list [ sym "untuple"; sym "?pages" ]; vec [ sym "?page"; sym "..." ] ]));
+  assert_equal
     "ground_values_of_form parses tuple ground values"
     [ String "a"; Int 1 ]
     (Parser.ground_values_of_form (vec [ str "a"; int 1 ]));

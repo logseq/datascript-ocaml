@@ -186,6 +186,29 @@ let test_query_pull__test_simple_pull_uses_ref_ident_pattern () =
        rows
    | _ -> failf "simple pull query should return a relation")
 
+let test_query_pull__test_map_specs_validate_when_rows_are_pulled () =
+  let db = empty_db () |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr") ] } ] in
+  assert_query_set
+    "query pull defers map-spec schema validation until a row is pulled"
+    []
+    (q_string db "[:find (pull ?e [{:friend [:name]}]) :where [?e :name \"Ivan\"]]");
+  if q_return_string db "[:find (pull ?e [{:friend [:name]}]) . :where [?e :name \"Ivan\"]]" <> Query_scalar None then
+    failf "scalar query pull should return nil before validating unused map specs";
+  (try
+     ignore (q_string db "[:find (pull ?e [{:friend [:name]}]) :where [?e :name \"Petr\"]");
+     failf "query pull should validate map-spec schema when a matching row is pulled"
+   with
+   | Invalid_argument _ -> ())
+
+let test_query_pull__test_unknown_rule_message_matches_upstream () =
+  try
+    ignore (q_return_string ~inputs:[ Arg_rules [] ] db "[:find (pull ?e [:name]) :in $ % :where (missing-rule ?e :kind \"x\")]");
+    failf "unknown rule query should fail"
+  with
+  | Invalid_argument message ->
+    if message <> "Unknown rule 'missing-rule in (missing-rule ?e :kind \"x\")" then
+      failf "unknown rule message: %s" message
+
 let () =
   test_query_pull__test_basics ();
   test_query_pull__test_var_pattern ();
@@ -195,4 +218,6 @@ let () =
   test_query_pull__test_aggregates ();
   test_query_pull__test_lookup_refs ();
   test_query_pull__test_pull_preserves_duplicate_many_ref_datoms ();
-  test_query_pull__test_simple_pull_uses_ref_ident_pattern ()
+  test_query_pull__test_simple_pull_uses_ref_ident_pattern ();
+  test_query_pull__test_map_specs_validate_when_rows_are_pulled ();
+  test_query_pull__test_unknown_rule_message_matches_upstream ()

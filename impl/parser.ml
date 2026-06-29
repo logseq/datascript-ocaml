@@ -1103,7 +1103,7 @@ type query_context =
 let vars_of_clause = Query.vars_of_clause
 let vars_of_branch = Query.vars_of_branch
 
-let parse_find_form context ?default_pull_db ?pull_db_for_source form =
+let parse_find_form context ?(defer_pull_patterns = false) ?default_pull_db ?pull_db_for_source form =
   let default_pull_db = Option.value default_pull_db ~default:(context.empty_db ()) in
   let pull_db_for_source = Option.value pull_db_for_source ~default:(fun _ -> context.empty_db ()) in
   match form with
@@ -1114,15 +1114,20 @@ let parse_find_form context ?default_pull_db ?pull_db_for_source form =
        when is_query_input_symbol pattern_var && pattern_var <> "*" ->
        Find_pull_var (query_symbol_name var, query_input_name pattern_var)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol var; pattern ] ->
-       Find_pull (query_symbol_name var, context.parse_pull_pattern default_pull_db pattern)
+       let var = query_symbol_name var in
+       if defer_pull_patterns
+       then Find_pull_form (var, pattern)
+       else Find_pull (var, context.parse_pull_pattern default_pull_db pattern)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; QueryFormSymbol pattern_var ]
        when is_query_source_symbol source && is_query_input_symbol pattern_var && pattern_var <> "*" ->
        Find_pull_source_var (query_source_name source, query_symbol_name var, query_input_name pattern_var)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; pattern ]
        when is_query_source_symbol source ->
        let source_name = query_source_name source in
-       Find_pull_source
-         (source_name, query_symbol_name var, context.parse_pull_pattern (pull_db_for_source source_name) pattern)
+       let var = query_symbol_name var in
+       if defer_pull_patterns
+       then Find_pull_source_form (source_name, var, pattern)
+       else Find_pull_source (source_name, var, context.parse_pull_pattern (pull_db_for_source source_name) pattern)
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol var ] ->
        (match aggregate_of_symbol aggregate with
         | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
@@ -1154,35 +1159,37 @@ let parse_find_form context ?default_pull_db ?pull_db_for_source form =
         | None -> invalid_arg "find elements must be variable symbols")
      | Some _ | None -> invalid_arg "find elements must be variable symbols")
 
-let parse_find_relation context ?default_pull_db ?pull_db_for_source = function
+let parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source = function
   | Some (QueryFormVector forms | QueryFormList forms) ->
-    List.map (parse_find_form context ?default_pull_db ?pull_db_for_source) forms
+    List.map (parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source) forms
   | Some _ -> invalid_arg "query :find must be a vector"
   | None -> invalid_arg "query requires :find"
 
-let is_find_form context ?default_pull_db ?pull_db_for_source form =
-  match parse_find_form context ?default_pull_db ?pull_db_for_source form with
+let is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form =
+  match parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form with
   | _ -> true
   | exception Invalid_argument _ -> false
 
-let parse_find_return context ?default_pull_db ?pull_db_for_source = function
+let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source = function
   | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                            | QueryFormList [ form; QueryFormSymbol "..." ]) ])
   | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                          | QueryFormList [ form; QueryFormSymbol "..." ]) ]) ->
-    Return_collection, [ parse_find_form context ?default_pull_db ?pull_db_for_source form ]
+    Return_collection, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ form; QueryFormSymbol "." ])
   | Some (QueryFormList [ form; QueryFormSymbol "." ]) ->
-    Return_scalar, [ parse_find_form context ?default_pull_db ?pull_db_for_source form ]
+    Return_scalar, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ ((QueryFormVector _ | QueryFormList _) as form) ])
   | Some (QueryFormList [ ((QueryFormVector _ | QueryFormList _) as form) ])
-    when not (is_find_form context ?default_pull_db ?pull_db_for_source form) ->
+    when not (is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form) ->
     (match form with
      | QueryFormVector forms
      | QueryFormList forms ->
-       Return_tuple, List.map (parse_find_form context ?default_pull_db ?pull_db_for_source) forms
+       Return_tuple, List.map (parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source) forms
      | _ -> assert false)
-  | form -> Return_relation, parse_find_relation context ?default_pull_db ?pull_db_for_source form
+  | Some form when is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ->
+    Return_relation, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
+  | form -> Return_relation, parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form
 
 let parse_find context form = parse_find_return context (Some form)
 
@@ -1605,6 +1612,13 @@ let rec parse_pattern_clause context = function
   | QueryFormVector
       [ (QueryFormList [ QueryFormSymbol "untuple"; tuple ]
         | QueryFormVector [ QueryFormSymbol "untuple"; tuple ])
+      ; (QueryFormVector [ QueryFormSymbol output; QueryFormSymbol "..." ]
+        | QueryFormList [ QueryFormSymbol output; QueryFormSymbol "..." ])
+      ] ->
+    GroundTermCollection (parse_pattern_term tuple, query_symbol_name output)
+  | QueryFormVector
+      [ (QueryFormList [ QueryFormSymbol "untuple"; tuple ]
+        | QueryFormVector [ QueryFormSymbol "untuple"; tuple ])
       ; output
       ] ->
     UntupleFunction (parse_pattern_term tuple, parse_output_vars output)
@@ -1795,7 +1809,12 @@ let parse_where context = function
 let parse_query_return_with_pull_context context ?default_pull_db ?pull_db_for_source form =
   let entries = query_form_map form in
   let return, find =
-    parse_find_return context ?default_pull_db ?pull_db_for_source (query_form_section "find" entries)
+    parse_find_return
+      context
+      ~defer_pull_patterns:true
+      ?default_pull_db
+      ?pull_db_for_source
+      (query_form_section "find" entries)
   in
   let in_form = query_form_section "in" entries in
   ensure_distinct_input_rules_var in_form;

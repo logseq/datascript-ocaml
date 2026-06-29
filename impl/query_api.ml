@@ -59,7 +59,13 @@ end) = struct
       let rec collect acc = function
         | [] -> Some (List.rev acc)
         | Find_var var :: rest -> collect (var :: acc) rest
-        | (Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ | Find_aggregate _) :: _ ->
+        | (Find_pull _
+          | Find_pull_form _
+          | Find_pull_var _
+          | Find_pull_source _
+          | Find_pull_source_form _
+          | Find_pull_source_var _
+          | Find_aggregate _) :: _ ->
           None
       in
       collect [] find
@@ -90,8 +96,10 @@ end) = struct
   let find_spec_vars = function
     | Find_var var
     | Find_pull (var, _)
+    | Find_pull_form (var, _)
     | Find_pull_source (_, var, _) ->
       [ var ]
+    | Find_pull_source_form (_, var, _) -> [ var ]
     | Find_pull_var (var, pattern_var)
     | Find_pull_source_var (_, var, pattern_var) ->
       [ var; pattern_var ]

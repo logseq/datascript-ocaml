@@ -12,6 +12,10 @@ let list forms = QueryFormList forms
 
 let test_parser_find__test_parse_find () =
   assert_equal "find relation" (Return_relation, [ Find_var "a"; Find_var "b" ]) (Parser.parse_find (vec [ sym "?a"; sym "?b" ]));
+  assert_equal
+    "find relation pull"
+    (Return_relation, [ Find_pull ("b", [ Pull_wildcard ]) ])
+    (Parser.parse_find (list [ sym "pull"; sym "?b"; vec [ sym "*" ] ]));
   assert_equal "find collection" (Return_collection, [ Find_var "a" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "..." ] ]));
   assert_equal "find scalar" (Return_scalar, [ Find_var "a" ]) (Parser.parse_find (vec [ sym "?a"; sym "." ]));
   assert_equal "find tuple" (Return_tuple, [ Find_var "a"; Find_var "b" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "?b" ] ]))

@@ -41,16 +41,76 @@
                  (str x))))
          (tree-seq coll? seq form))))
 
-(defn runnable-query? [query]
+(defn input-source-or-rules-decl? [decl]
+  (#{"$" "%"} (str decl)))
+
+(defn runtime-input-count [query]
   (let [in (input-decls query)]
-    (and (static-form? query)
-         (or (nil? in)
-             (= '[$] in)
-             (= ['$] in)
-             (= ["$"] in)
-             (= '[$ %] in)
-             (= ['$ '%] in)
-             (= ["$" "%"] in)))))
+    (when (sequential? in)
+      (count (remove input-source-or-rules-decl? in)))))
+
+(defn runtime-input-decls [query]
+  (let [in (input-decls query)]
+    (when (sequential? in)
+      (remove input-source-or-rules-decl? in))))
+
+(defn collection-binding? [binding]
+  (and (sequential? binding)
+       (= "..." (str (last binding)))))
+
+(defn relation-binding? [binding]
+  (and (sequential? binding)
+       (sequential? (first binding))))
+
+(defn input-var-name [binding]
+  (some-> binding str (str/replace #"^\?" "")))
+
+(defn scalar-input-edn [binding]
+  (let [name (or (input-var-name binding) "value")]
+    (cond
+      (str/includes? name "selector") "[*]"
+      (str/includes? name "uuid") "#uuid \"00000000-0000-0000-0000-000000000000\""
+      (or (str/includes? name "attrs")
+          (str/includes? name "matches")) "{}"
+      (or (str/ends-with? name "ids")
+          (str/ends-with? name "pages")
+          (str/ends-with? name "classes")) "[]"
+      (or (str/includes? name "ident")
+          (str/includes? name "attr")
+          (str/includes? name "prop")
+          (str/includes? name "class")
+          (= name "p")) ":logseq.class/Tag"
+      (or (str/includes? name "id")
+          (str/includes? name "eid")
+          (str/includes? name "block")
+          (str/includes? name "page")
+          (str/includes? name "day")
+          (str/includes? name "time")
+          (str/includes? name "cutoff")
+          (str/includes? name "start")
+          (str/includes? name "end")
+          (str/includes? name "ms")) "0"
+      :else "\"__logseq_input__\"")))
+
+(defn synthesize-input-edn [binding]
+  (cond
+    (collection-binding? binding) "[]"
+    (relation-binding? binding) "[]"
+    (sequential? binding) (str "[" (str/join " " (map scalar-input-edn binding)) "]")
+    :else (scalar-input-edn binding)))
+
+(defn synthesize-runtime-inputs [query]
+  (some->> (runtime-input-decls query)
+           (mapv synthesize-input-edn)
+           not-empty))
+
+(defn runnable-entry? [{:keys [query inputs]}]
+  (and (static-form? query)
+       (let [input-count (runtime-input-count query)]
+         (cond
+           (nil? (input-decls query)) (not (seq inputs))
+           (nil? input-count) false
+           :else (= input-count (count inputs))))))
 
 (defn nbb-cache-file? [file]
   (and (string? file)
@@ -115,14 +175,20 @@
     (into query [:in '$ '%])
     query))
 
+(defn query-declares-rules-input? [query]
+  (some #(= (str %) "%") (input-decls query)))
+
 (defn entry-with-runtime-inputs [runtime-inputs entry]
   (let [rules (:rules runtime-inputs)
         query (query-with-rules-input (:query entry) rules)
         in (input-decls query)
         selected-rules (when (seq rules) (rule-closure rules query))]
     (cond-> (assoc entry :query query)
-      (and (seq selected-rules) (sequential? in) (some #(= (str %) "%") in))
-      (assoc :rules selected-rules))))
+      (and (sequential? in) (query-declares-rules-input? query))
+      (assoc :rules (or selected-rules []))
+
+      (and (not (seq (:inputs entry))) (seq (synthesize-runtime-inputs query)))
+      (assoc :inputs (synthesize-runtime-inputs query)))))
 
 (defn query-corpus [runtime-inputs entries]
   (->> entries
@@ -303,12 +369,16 @@
    "clojure.main"
    "script/upstream_query_worker.clj"])
 
-(defn run-upstream-query-process [graph-path {:keys [id query] :as entry} timeout-ms]
+(defn run-upstream-query-process [graph-path {:keys [id query inputs] :as entry} timeout-ms]
   (let [base (str "tmp/logseq_upstream_query." (System/currentTimeMillis) "." id)
         query-path (str base ".edn")
         out-path (str base ".out.edn")
         err-path (str base ".err")]
-    (write-edn-file query-path (cond-> {:query query} (:rules entry) (assoc :rules (:rules entry))))
+    (write-edn-file
+      query-path
+      (cond-> {:query query}
+        (:rules entry) (assoc :rules (:rules entry))
+        (seq inputs) (assoc :inputs inputs)))
     (let [started-ns (System/nanoTime)
           process (-> (ProcessBuilder. ^java.util.List (vec (concat (upstream-worker-command) [graph-path query-path])))
                       (.redirectOutput (io/file out-path))
@@ -349,11 +419,17 @@
       (str/replace "\r" "\\r")
       (str/replace "\t" "\\t")))
 
-(defn query-json-line [{:keys [id query rules]}]
+(defn query-json-array [values]
+  (str "[" (str/join "," (map #(str "\"" (json-escape %) "\"") values)) "]"))
+
+(defn query-json-line [{:keys [id query rules inputs]}]
   (str "{\"id\":\"" (json-escape id) "\",\"query\":\""
        (json-escape (pr-str query)) "\""
        (if rules
          (str ",\"rules\":\"" (json-escape (pr-str rules)) "\"")
+         "")
+       (if (seq inputs)
+         (str ",\"inputs\":" (query-json-array inputs))
          "")
        "}"))
 
@@ -379,8 +455,8 @@
        (remove ocaml-ready-line?)
        first))
 
-(defn write-one-query-jsonl [path {:keys [id query rules]}]
-  (spit path (str (query-json-line {:id id :query query :rules rules}) "\n")))
+(defn write-one-query-jsonl [path {:keys [id query rules inputs]}]
+  (spit path (str (query-json-line {:id id :query query :rules rules :inputs inputs}) "\n")))
 
 (defn ocaml-run-command [runner graph-or-sqlite-path query-path]
   (if (graph-edn-path? graph-or-sqlite-path)
@@ -522,7 +598,7 @@
        (not= left right)))
 
 (defn report-markdown [entries batch-entries batch-start batch-size upstream ocaml out-path]
-  (let [runnable (vec (filter #(runnable-query? (:query %)) entries))
+  (let [runnable (vec (filter runnable-entry? entries))
         skipped (- (count entries) (count runnable))
         mismatches (->> batch-entries
                         (keep (fn [{:keys [id file line query]}]
@@ -541,8 +617,8 @@
             (println "# Logseq DataScript Query Parity Report")
             (println)
             (println "- Extracted queries:" (count entries))
-            (println "- Runnable without extra inputs:" (count runnable))
-            (println "- Skipped because they need runtime inputs or are dynamic:" skipped)
+            (println "- Runnable queries:" (count runnable))
+            (println "- Skipped because they are missing runtime inputs or are dynamic:" skipped)
             (println "- Batch start:" batch-start)
             (println "- Batch size:" batch-size)
             (println "- Batch query ids:" (str/join ", " (map :id batch-entries)))
@@ -601,7 +677,7 @@
                            (edn/read-string (slurp "logseq_runtime_inputs.edn"))
                            {}))
         entries (query-corpus runtime-inputs (edn/read-string (slurp queries-path)))
-        runnable (vec (filter #(runnable-query? (:query %)) entries))
+        runnable (vec (filter runnable-entry? entries))
         batch-entries (->> runnable (drop batch-start) (take batch-size) vec)
         _ (log-progress "loaded" (count entries) "queries from" queries-path)
         _ (log-progress "selected runnable batch" batch-start batch-size "=>" (count batch-entries) "queries")

@@ -19,6 +19,13 @@ end) = struct
   let pull_pattern_of_result = function
     | Result_value value -> parse_pull_pattern (empty_db ()) (query_form_of_value value)
     | Result_entity _ | Result_attr _ | Result_db _ | Result_pull _ -> invalid_arg "pull pattern input must be a value"
+
+  let pull_pattern_of_form db form = parse_pull_pattern db form
+
+  let collect_pull db selector entity_id =
+    match pull db selector (Entity_id entity_id) with
+    | Some entity -> Some (Result_pull entity)
+    | None -> None
   
   let collect_find_specs db sources bindings find =
     let rec collect acc = function
@@ -31,9 +38,14 @@ end) = struct
         let pull_db = source_db db sources "$" in
         (match Option.bind (List.assoc_opt var bindings) (query_result_entity_id pull_db) with
          | Some entity_id ->
-           (match pull pull_db selector (Entity_id entity_id) with
-            | Some entity -> collect (Result_pull entity :: acc) rest
-            | None -> None)
+           Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> collect (pulled :: acc) rest)
+         | None -> None)
+      | Find_pull_form (var, pattern) :: rest ->
+        let pull_db = source_db db sources "$" in
+        (match Option.bind (List.assoc_opt var bindings) (query_result_entity_id pull_db) with
+         | Some entity_id ->
+           let selector = pull_pattern_of_form pull_db pattern in
+           Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> collect (pulled :: acc) rest)
          | None -> None)
       | Find_pull_var (var, pattern_var) :: rest ->
         let pull_db = source_db db sources "$" in
@@ -50,9 +62,14 @@ end) = struct
         let pull_db = source_db db sources source in
         (match Option.bind (List.assoc_opt var bindings) (query_result_entity_id pull_db) with
          | Some entity_id ->
-           (match pull pull_db selector (Entity_id entity_id) with
-            | Some entity -> collect (Result_pull entity :: acc) rest
-            | None -> None)
+           Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> collect (pulled :: acc) rest)
+         | None -> None)
+      | Find_pull_source_form (source, var, pattern) :: rest ->
+        let pull_db = source_db db sources source in
+        (match Option.bind (List.assoc_opt var bindings) (query_result_entity_id pull_db) with
+         | Some entity_id ->
+           let selector = pull_pattern_of_form pull_db pattern in
+           Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> collect (pulled :: acc) rest)
          | None -> None)
       | Find_pull_source_var (source, var, pattern_var) :: rest ->
         let pull_db = source_db db sources source in
@@ -118,9 +135,14 @@ end) = struct
           let pull_db = source_db db sources "$" in
           (match Option.bind (List.assoc_opt var group_binding) (query_result_entity_id pull_db) with
            | Some entity_id ->
-             (match pull pull_db selector (Entity_id entity_id) with
-              | Some entity -> build_row (Result_pull entity :: acc) rest
-              | None -> None)
+             Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> build_row (pulled :: acc) rest)
+           | None -> None)
+        | Find_pull_form (var, pattern) :: rest ->
+          let pull_db = source_db db sources "$" in
+          (match Option.bind (List.assoc_opt var group_binding) (query_result_entity_id pull_db) with
+           | Some entity_id ->
+             let selector = pull_pattern_of_form pull_db pattern in
+             Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> build_row (pulled :: acc) rest)
            | None -> None)
         | Find_pull_var (var, pattern_var) :: rest ->
           let pull_db = source_db db sources "$" in
@@ -137,9 +159,14 @@ end) = struct
           let pull_db = source_db db sources source in
           (match Option.bind (List.assoc_opt var group_binding) (query_result_entity_id pull_db) with
            | Some entity_id ->
-             (match pull pull_db selector (Entity_id entity_id) with
-              | Some entity -> build_row (Result_pull entity :: acc) rest
-              | None -> None)
+             Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> build_row (pulled :: acc) rest)
+           | None -> None)
+        | Find_pull_source_form (source, var, pattern) :: rest ->
+          let pull_db = source_db db sources source in
+          (match Option.bind (List.assoc_opt var group_binding) (query_result_entity_id pull_db) with
+           | Some entity_id ->
+             let selector = pull_pattern_of_form pull_db pattern in
+             Option.bind (collect_pull pull_db selector entity_id) (fun pulled -> build_row (pulled :: acc) rest)
            | None -> None)
         | Find_pull_source_var (source, var, pattern_var) :: rest ->
           let pull_db = source_db db sources source in
@@ -171,7 +198,14 @@ end) = struct
         (function
           | Find_aggregate (aggregate, terms) ->
             query_term_vars terms @ aggregate_param_vars aggregate
-          | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> [])
+          | Find_var _
+          | Find_pull _
+          | Find_pull_form _
+          | Find_pull_var _
+          | Find_pull_source _
+          | Find_pull_source_form _
+          | Find_pull_source_var _ ->
+            [])
         find
     in
     let dedupe_vars = group_vars @ aggregate_vars @ with_vars |> List.sort_uniq compare in

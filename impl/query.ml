@@ -231,7 +231,14 @@ let has_aggregates find =
   List.exists
     (function
       | Find_aggregate _ -> true
-      | Find_var _ | Find_pull _ | Find_pull_var _ | Find_pull_source _ | Find_pull_source_var _ -> false)
+      | Find_var _
+      | Find_pull _
+      | Find_pull_form _
+      | Find_pull_var _
+      | Find_pull_source _
+      | Find_pull_source_form _
+      | Find_pull_source_var _ ->
+        false)
     find
 
 let collect_find_vars bindings find =
@@ -256,7 +263,12 @@ let group_by_key rows =
 let grouping_vars_of_find find =
   find
   |> List.concat_map (function
-    | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) -> [ var ]
+    | Find_var var
+    | Find_pull (var, _)
+    | Find_pull_form (var, _)
+    | Find_pull_source (_, var, _)
+    | Find_pull_source_form (_, var, _) ->
+      [ var ]
     | Find_pull_var (var, pattern_var) | Find_pull_source_var (_, var, pattern_var) ->
       [ var; pattern_var ]
     | Find_aggregate _ -> [])
@@ -1014,9 +1026,12 @@ let rec sources_of_clause = function
     []
 
 let sources_of_find_spec = function
-  | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> named_source source
+  | Find_pull_source (source, _, _)
+  | Find_pull_source_form (source, _, _)
+  | Find_pull_source_var (source, _, _) ->
+    named_source source
   | Find_aggregate (_, terms) -> sources_of_query_terms terms
-  | Find_var _ | Find_pull _ | Find_pull_var _ -> []
+  | Find_var _ | Find_pull _ | Find_pull_form _ | Find_pull_var _ -> []
 
 let rec has_rule_clause = function
   | Rule _ | SourceRule _ -> true
@@ -1161,8 +1176,11 @@ let resolve_dynamic_rule names rule =
   { rule with rule_body = List.map (resolve_dynamic_rule_clause names) rule.rule_body }
 
 let find_spec_uses_default_source = function
-  | Find_pull_source (source, _, _) | Find_pull_source_var (source, _, _) -> source = "$"
-  | Find_var _ | Find_pull _ | Find_pull_var _ | Find_aggregate _ -> false
+  | Find_pull_source (source, _, _)
+  | Find_pull_source_form (source, _, _)
+  | Find_pull_source_var (source, _, _) ->
+    source = "$"
+  | Find_var _ | Find_pull _ | Find_pull_form _ | Find_pull_var _ | Find_aggregate _ -> false
 
 let rec clause_uses_default_source = function
   | SourceClause (source, clause) -> source = "$" || clause_uses_default_source clause
@@ -1300,7 +1318,11 @@ let query_term_vars terms =
     | QEntity _ | QIdent _ | QLookupRef _ | QAttr _ | QValue _ | QSource _ | QWildcard -> None)
 
 let vars_of_find_spec = function
-  | Find_var var | Find_pull (var, _) | Find_pull_source (_, var, _) ->
+  | Find_var var
+  | Find_pull (var, _)
+  | Find_pull_form (var, _)
+  | Find_pull_source (_, var, _)
+  | Find_pull_source_form (_, var, _) ->
     [ var ]
   | Find_aggregate (aggregate, terms) ->
     query_term_vars terms @ aggregate_param_vars aggregate @ aggregate_callable_vars aggregate

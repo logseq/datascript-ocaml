@@ -13,6 +13,55 @@
     (map? form) (contains? form :find)
     :else false))
 
+(defn quoted-form? [form]
+  (and (seq? form)
+       (= 'quote (first form))
+       (= 2 (count form))))
+
+(def selector-input-symbol '?selector)
+
+(defn dynamic-pull-list? [form]
+  (and (seq? form)
+       (= 'list (first form))
+       (= 'pull (second form))
+       (= 4 (count form))))
+
+(defn contains-selector-input? [form]
+  (some #(= selector-input-symbol %) (tree-seq coll? seq form)))
+
+(defn append-selector-input [query]
+  (if (and (map? query)
+           (contains-selector-input? (:find query))
+           (vector? (:in query))
+           (not (some #{selector-input-symbol} (:in query))))
+    (update query :in conj selector-input-symbol)
+    query))
+
+(defn normalize-query-form [form]
+  (cond
+    (quoted-form? form)
+    (normalize-query-form (second form))
+
+    (map? form)
+    (-> (into (empty form)
+              (map (fn [[k v]] [(normalize-query-form k) (normalize-query-form v)]))
+              form)
+        append-selector-input)
+
+    (vector? form)
+    (mapv normalize-query-form form)
+
+    (list? form)
+    (let [normalized (apply list (map normalize-query-form form))]
+      (if (dynamic-pull-list? normalized)
+        (list 'pull (nth normalized 2) selector-input-symbol)
+        normalized))
+
+    (set? form)
+    (set (map normalize-query-form form))
+
+    :else form))
+
 (defn walk-queries [form]
   (let [children (cond
                    (map? form) (concat (keys form) (vals form))
@@ -20,7 +69,7 @@
                    :else nil)
         nested (mapcat walk-queries children)]
     (if (query-form? form)
-      (cons form nested)
+      (cons (normalize-query-form form) nested)
       nested)))
 
 (defn nbb-cache-path? [path]

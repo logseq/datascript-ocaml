@@ -49,14 +49,44 @@
                     datoms)]
     (d/init-db datoms schema)))
 
+(defn query-sections [query]
+  (when (vector? query)
+    (loop [xs query
+           current nil
+           sections {}]
+      (if (empty? xs)
+        sections
+        (let [x (first xs)]
+          (if (keyword? x)
+            (recur (rest xs) x (assoc sections x []))
+            (recur (rest xs) current (update sections current conj x))))))))
+
+(defn input-decls [query]
+  (cond
+    (vector? query) (get (query-sections query) :in)
+    (map? query) (:in query)
+    :else nil))
+
+(defn query-inputs [query rules inputs]
+  (let [input-values (map edn/read-string inputs)]
+    (loop [[decl & decls] (input-decls query)
+           remaining-inputs input-values
+           args []]
+      (cond
+        (nil? decl) args
+        (= "$" (str decl)) (recur decls remaining-inputs args)
+        (= "%" (str decl)) (recur decls remaining-inputs (cond-> args rules (conj rules)))
+        :else (recur decls (rest remaining-inputs) (cond-> args (seq remaining-inputs) (conj (first remaining-inputs))))))))
+
 (defn -main [graph-path query-path]
   (let [db (load-graph-file graph-path)
         payload (edn/read-string (slurp query-path))
         query (if (map? payload) (:query payload) payload)
-        rules (:rules payload)]
+        rules (:rules payload)
+        inputs (:inputs payload)]
     (prn
      (try
-       (result-ok (if rules (d/q query db rules) (d/q query db)))
+       (result-ok (apply d/q query db (query-inputs query rules inputs)))
        (catch Throwable t
          (result-error t))))
     (shutdown-agents)))
