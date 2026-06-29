@@ -249,7 +249,7 @@ let find_avet_exact db attr value =
     PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
     @ List.filter
         (fun datom -> datom.a = attr && value_equal datom.v value)
-        db.duplicate_avet_datoms
+        (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
     |> List.sort (Util.compare_datom Avet)
   with
   | datom :: _ -> Some datom
@@ -935,6 +935,7 @@ let pull_api_context : Pull_api_impl.context =
   ; entity_attr_raw
   ; entity_attrs
   ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; all_datoms = (fun db -> datoms db Eavt ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
   ; cardinality
   ; is_ref_attr
@@ -1153,6 +1154,53 @@ let pattern_value_needs_attr_resolution db attr value =
      | Keyword ident -> Option.is_some (entid db ident_attr (Keyword ident))
      | _ -> false)
 
+let primary_attr_datoms db index attr =
+  let attr_prefix_datoms index index_set =
+    let bound = datom ~e:0 ~a:attr ~v:Nil () in
+    let compare_prefix left right = compare left.a right.a in
+    let cmp left right =
+      if right == bound then compare_prefix left right
+      else if left == bound then -compare_prefix right left
+      else Util.compare_datom index left right
+    in
+    PSet.slice ~from_:bound ~to_:bound ~cmp index_set
+  in
+  match index with
+  | Aevt ->
+    (match Hashtbl.find_opt db.aevt_by_attr attr with
+     | Some datoms -> datoms
+     | None -> attr_prefix_datoms Aevt db.aevt_index)
+  | Avet ->
+    (match Hashtbl.find_opt db.avet_by_attr attr with
+     | Some datoms -> datoms
+     | None -> attr_prefix_datoms Avet db.avet_index)
+  | Eavt -> PSet.to_list db.eavt_index
+
+let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
+  let datoms = primary_attr_datoms db index a in
+  match e, v, tx with
+  | None, None, None -> List.to_seq datoms
+  | _ ->
+    datoms
+    |> List.to_seq
+    |> Seq.filter (fun datom ->
+      (match e with
+       | Some entity_id -> datom.e = entity_id
+       | None -> true)
+      &&
+      (match v with
+       | Some value -> values_compare_equal_fast datom.v value
+       | None -> true)
+      &&
+      match tx with
+      | Some tx -> datom.tx = tx
+      | None -> true)
+
+let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
+  match db.duplicate_datoms with
+  | [] -> datoms db index ?e ~a ?v ?tx ()
+  | _ -> primary_attr_datoms_seq db index ?e ~a ?v ?tx ()
+
 let pattern_datoms db e_term a_term v_term tx_term =
   let e = query_entity_id_term db e_term in
   let v = query_value_term v_term in
@@ -1168,18 +1216,18 @@ let pattern_datoms db e_term a_term v_term tx_term =
   in
   match a_term, v with
   | QAttr attr, _ when is_reverse_ref attr ->
-    datoms db Aevt ~a:(reverse_ref attr) ?tx ()
+    query_attr_datoms_seq db Aevt ~a:(reverse_ref attr) ?tx ()
   | QAttr attr, Some value when not (pattern_value_needs_attr_resolution db attr value) ->
     if query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms db Avet ?e ~a:attr ~v:value ?tx ()
+      query_attr_datoms_seq db Avet ?e ~a:attr ~v:value ?tx ()
     else
-      datoms db Aevt ?e ~a:attr ~v:value ?tx ()
+      query_attr_datoms_seq db Aevt ?e ~a:attr ~v:value ?tx ()
   | QAttr attr, Some value ->
     datoms_by_attr_value db attr value
     |> List.to_seq
     |> Seq.filter matches_optional_e_tx
   | QAttr attr, _ ->
-    datoms db Aevt ?e ~a:attr ?tx ()
+    query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ()
   | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
@@ -1285,6 +1333,9 @@ let values_equal = Query_eval.values_equal
 let string_starts_with = Query_eval.string_starts_with
 let string_ends_with = Query_eval.string_ends_with
 let string_includes = Query_eval.string_includes
+
+let string_includes_prefilter input query =
+  query = "" || (String.contains input query.[0] && string_includes input query)
 let string_is_blank = Query_eval.string_is_blank
 let value_contains = Query_eval.value_contains
 
@@ -1621,16 +1672,1111 @@ module Query = struct
   let q_with_string = Query_impl.q_with_string query_context
   let q_sources = Query_impl.q_sources query_context
   let q_sources_string = Query_impl.q_sources_string query_context
+
+  let only_source_inputs inputs =
+    List.for_all
+      (function
+        | Input_source_decl _ -> true
+        | _ -> false)
+      inputs
+
+  let entity_ids_with_attr db attr =
+    let rec collect previous acc = function
+      | [] -> List.rev acc
+      | datom :: rest ->
+        if Some datom.e = previous then
+          collect previous acc rest
+        else
+          collect (Some datom.e) (datom.e :: acc) rest
+    in
+    collect None [] (primary_attr_datoms db Aevt attr)
+
+  let exact_attr_value_entity_ids db attr value =
+    match resolve_query_value_for_attr db attr value with
+    | None -> []
+    | Some value ->
+      if query_attr_uses_avet db attr then
+        datoms db Avet ~a:attr ~v:value ()
+        |> Seq.map (fun datom -> datom.e)
+        |> List.of_seq
+        |> List.sort_uniq compare
+      else
+        let value_matches =
+          match value with
+          | String wanted ->
+            fun actual ->
+              (match actual with
+               | String actual ->
+                 (wanted = "" || String.contains actual wanted.[0]) && String.equal actual wanted
+               | _ -> false)
+          | _ -> fun actual -> value_equal actual value
+        in
+        let rec collect acc = function
+          | [] -> acc
+          | datom :: rest ->
+            let acc =
+              if value_matches datom.v then
+                datom.e :: acc
+              else
+                acc
+            in
+            collect acc rest
+        in
+        collect [] (primary_attr_datoms db Aevt attr)
+        |> fun entity_ids ->
+        collect entity_ids (Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[])
+        |> List.sort_uniq compare
+
+  let intersect_sorted_entity_ids left right =
+    let rec loop acc left right =
+      match left, right with
+      | [], _ | _, [] -> List.rev acc
+      | left_id :: left_rest, right_id :: right_rest ->
+        if left_id = right_id then
+          loop (left_id :: acc) left_rest right_rest
+        else if left_id < right_id then
+          loop acc left_rest right
+        else
+          loop acc left right_rest
+    in
+    loop [] left right
+
+  let simple_attr_entity_collection db query =
+    match query.find, query.where, query.rules, query.with_vars with
+    | [ Find_var find_var ], patterns, [], [] when only_source_inputs query.inputs ->
+      let rec collect_attrs acc = function
+        | [] -> Some (List.rev acc)
+        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
+          collect_attrs (attr :: acc) rest
+        | _ -> None
+      in
+      (match collect_attrs [] patterns with
+       | Some (first_attr :: rest_attrs) ->
+         let entity_ids =
+           List.fold_left
+             (fun entity_ids attr -> intersect_sorted_entity_ids entity_ids (entity_ids_with_attr db attr))
+             (entity_ids_with_attr db first_attr)
+             rest_attrs
+         in
+         Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
+       | Some [] | None -> None)
+    | _ -> None
+
+  let simple_attr_entity_ids db find_var query =
+    match query.where, query.rules, query.with_vars with
+    | patterns, [], [] when only_source_inputs query.inputs ->
+      let rec collect_patterns acc = function
+        | [] -> Some (List.rev acc)
+        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
+          collect_patterns (`Attr attr :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when find_var = entity_var ->
+          collect_patterns (`Value (attr, value) :: acc) rest
+        | _ -> None
+      in
+      let entity_ids_for_pattern = function
+        | `Attr attr -> entity_ids_with_attr db attr
+        | `Value (attr, value) -> exact_attr_value_entity_ids db attr value
+      in
+      (match collect_patterns [] patterns with
+       | Some (first_pattern :: rest_patterns) ->
+         Some
+           (List.fold_left
+              (fun entity_ids pattern -> intersect_sorted_entity_ids entity_ids (entity_ids_for_pattern pattern))
+              (entity_ids_for_pattern first_pattern)
+              rest_patterns)
+       | Some [] | None -> None)
+    | _ -> None
+
+  let simple_attr_entity_pull_collection db query =
+    let cached lookup =
+      let table = Hashtbl.create 128 in
+      fun attr ->
+        match Hashtbl.find_opt table attr with
+        | Some value -> value
+        | None ->
+          let value = lookup db attr in
+          Hashtbl.replace table attr value;
+          value
+    in
+    let cardinality_cached = cached cardinality in
+    let is_ref_attr_cached = cached is_ref_attr in
+    let is_component_cached = cached is_component in
+    let simple_pull_attrs selector =
+      let rec collect acc = function
+        | [] -> Some (List.rev acc)
+        | Pull_id :: rest | Pull_attr "db/id" :: rest -> collect ("db/id" :: acc) rest
+        | Pull_attr attr :: rest when (not (is_ref_attr_cached attr)) && not (is_component_cached attr) ->
+          collect (attr :: acc) rest
+        | _ -> None
+      in
+      collect [] selector
+    in
+    let pulled_value attr values =
+      let scalar value = Pulled_scalar value in
+      match cardinality_cached attr, values with
+      | Many, [] -> None
+      | Many, [ value ] -> Some (Pulled_many [ scalar value ])
+      | Many, values -> Some (Pulled_many (values |> List.sort compare_value |> List.map scalar))
+      | One, [] -> None
+      | One, [ value ] -> Some (Pulled_scalar value)
+      | One, first :: rest ->
+        let value =
+          List.fold_left
+            (fun max_value value -> if compare_value max_value value < 0 then value else max_value)
+            first
+            rest
+        in
+        Some (Pulled_scalar value)
+    in
+    let simple_pull_values attrs entity_ids =
+      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      List.iter
+        (fun entity_id ->
+          if entity_id >= 0 && entity_id < Bytes.length wanted then
+            Bytes.set wanted entity_id '\001')
+        entity_ids;
+      let wanted_entity entity_id =
+        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+      in
+      let attr_tables =
+        attrs
+        |> List.filter (fun attr -> attr <> "db/id")
+        |> List.sort_uniq compare
+        |> List.map (fun attr ->
+          let table = Hashtbl.create (List.length entity_ids) in
+          datoms db Aevt ~a:attr ()
+          |> Seq.iter (fun datom ->
+            if wanted_entity datom.e then
+              let values = Option.value (Hashtbl.find_opt table datom.e) ~default:[] in
+              Hashtbl.replace table datom.e (datom.v :: values));
+          attr, table)
+      in
+      entity_ids
+      |> List.map (fun entity_id ->
+        let pulled_attrs =
+          attrs
+          |> List.filter_map (fun attr ->
+            if attr = "db/id" then
+              Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+            else
+              let values =
+                Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
+                |> Option.value ~default:[]
+              in
+              Option.map (fun value -> Keyword attr, value) (pulled_value attr values))
+          |> List.sort (fun (left, _) (right, _) -> compare_value left right)
+        in
+        Result_pull { pulled_id = entity_id; pulled_attrs })
+      |> fun values -> Query_collection values
+    in
+    let direct_simple_pull_values attrs entity_ids =
+      let wanted_attrs =
+        attrs
+        |> List.filter (fun attr -> attr <> "db/id")
+        |> List.sort_uniq compare
+      in
+      let wanted_attr attr = List.mem attr wanted_attrs in
+      let values_for_entity entity_id =
+        let tables =
+          datoms db Eavt ~e:entity_id ()
+          |> Seq.fold_left
+               (fun tables datom ->
+                 if wanted_attr datom.a then
+                   let values = Option.value (List.assoc_opt datom.a tables) ~default:[] in
+                   (datom.a, datom.v :: values) :: List.remove_assoc datom.a tables
+                 else
+                   tables)
+               []
+        in
+        attrs
+        |> List.filter_map (fun attr ->
+          if attr = "db/id" then
+            Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+          else
+            let values = Option.value (List.assoc_opt attr tables) ~default:[] in
+            Option.map (fun value -> Keyword attr, value) (pulled_value attr values))
+        |> List.sort (fun (left, _) (right, _) -> compare_value left right)
+      in
+      entity_ids
+      |> List.filter_map (fun entity_id ->
+        match values_for_entity entity_id with
+        | [] -> None
+        | pulled_attrs -> Some (Result_pull { pulled_id = entity_id; pulled_attrs }))
+      |> fun values -> Query_collection values
+    in
+    let entity_id_set entity_ids =
+      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      List.iter
+        (fun entity_id ->
+          if entity_id >= 0 && entity_id < Bytes.length wanted then
+            Bytes.set wanted entity_id '\001')
+        entity_ids;
+      wanted
+    in
+    let attr_value_table attr entity_ids wanted =
+      let wanted_entity entity_id =
+        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+      in
+      let table = Hashtbl.create (List.length entity_ids) in
+      datoms db Aevt ~a:attr ()
+      |> Seq.iter (fun datom ->
+        if wanted_entity datom.e then
+          let values = Option.value (Hashtbl.find_opt table datom.e) ~default:[] in
+          Hashtbl.replace table datom.e (datom.v :: values));
+      table
+    in
+    let ref_id_of_value attr = function
+      | Ref entity_id -> Some entity_id
+      | Int entity_id when is_ref_attr_cached attr -> Some entity_id
+      | _ -> None
+    in
+    let batch_nested_pull_values selector entity_ids =
+      if List.length entity_ids < 100 then
+        None
+      else
+      let nested_attrs selector =
+        let rec collect acc = function
+          | [] -> Some (List.rev acc)
+          | Pull_id :: rest | Pull_attr "db/id" :: rest -> collect ("db/id" :: acc) rest
+          | Pull_attr attr :: rest when (not (is_ref_attr_cached attr)) && not (is_component_cached attr) ->
+            collect (attr :: acc) rest
+          | _ -> None
+        in
+        collect [] selector
+      in
+      let rec collect_roots acc = function
+        | [] -> Some (List.rev acc)
+        | Pull_id :: rest | Pull_attr "db/id" :: rest -> collect_roots (`Attr "db/id" :: acc) rest
+        | Pull_attr attr :: rest when (not (is_ref_attr_cached attr)) && not (is_component_cached attr) ->
+          collect_roots (`Attr attr :: acc) rest
+        | Pull_ref (attr, selector) :: rest when is_ref_attr_cached attr ->
+          (match nested_attrs selector with
+           | Some nested -> collect_roots (`Ref (attr, List.sort compare nested) :: acc) rest
+           | None -> None)
+        | _ -> None
+      in
+      match collect_roots [] selector with
+      | None -> None
+      | Some roots ->
+        let root_key = function
+          | `Attr attr | `Ref (attr, _) -> attr
+        in
+        let roots = List.sort (fun left right -> compare (root_key left) (root_key right)) roots in
+        let root_attrs =
+          roots
+          |> List.filter_map (function
+            | `Attr "db/id" -> None
+            | `Attr attr | `Ref (attr, _) -> Some attr)
+          |> List.sort_uniq compare
+        in
+        let root_wanted = entity_id_set entity_ids in
+        let root_tables = List.map (fun attr -> attr, attr_value_table attr entity_ids root_wanted) root_attrs in
+        let root_values attr entity_id =
+          Option.bind (List.assoc_opt attr root_tables) (fun table -> Hashtbl.find_opt table entity_id)
+          |> Option.value ~default:[]
+        in
+        let referenced_ids =
+          roots
+          |> List.concat_map (function
+            | `Ref (attr, _) ->
+              entity_ids
+              |> List.concat_map (fun entity_id ->
+                root_values attr entity_id
+                |> List.filter_map (ref_id_of_value attr))
+            | `Attr _ -> [])
+          |> List.sort_uniq compare
+        in
+        let nested_attr_names =
+          roots
+          |> List.concat_map (function
+            | `Ref (_, attrs) -> attrs
+            | `Attr _ -> [])
+          |> List.filter (fun attr -> attr <> "db/id")
+          |> List.sort_uniq compare
+        in
+        let nested_wanted = entity_id_set referenced_ids in
+        let nested_tables =
+          List.map (fun attr -> attr, attr_value_table attr referenced_ids nested_wanted) nested_attr_names
+        in
+        let nested_values attr entity_id =
+          Option.bind (List.assoc_opt attr nested_tables) (fun table -> Hashtbl.find_opt table entity_id)
+          |> Option.value ~default:[]
+        in
+        let nested_entity attrs entity_id =
+          let pulled_attrs =
+            attrs
+            |> List.filter_map (fun attr ->
+              if attr = "db/id" then
+                Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+              else
+                Option.map
+                  (fun value -> Keyword attr, value)
+                  (pulled_value attr (nested_values attr entity_id)))
+          in
+          Pulled_entity { pulled_id = entity_id; pulled_attrs }
+        in
+        let ref_value attr nested values =
+          let ids =
+            values
+            |> List.sort compare_value
+            |> List.filter_map (ref_id_of_value attr)
+          in
+          match cardinality_cached attr, ids with
+          | Many, [] | One, [] -> None
+          | Many, ids -> Some (Pulled_many (List.map (nested_entity nested) ids))
+          | One, ids -> Some (nested_entity nested (List.hd (List.rev ids)))
+        in
+        let values =
+        entity_ids
+        |> List.map (fun entity_id ->
+          let pulled_attrs =
+            roots
+            |> List.filter_map (function
+              | `Attr "db/id" -> Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+              | `Attr attr ->
+                Option.map (fun value -> Keyword attr, value) (pulled_value attr (root_values attr entity_id))
+            | `Ref (attr, nested) ->
+              Option.map (fun value -> Keyword attr, value) (ref_value attr nested (root_values attr entity_id)))
+        in
+          Result_pull { pulled_id = entity_id; pulled_attrs })
+        in
+        Some (Query_collection values)
+    in
+    let title_tags_ident_pull_values selector entity_ids =
+      let matches =
+        match selector with
+        | [ Pull_attr "block/title"; Pull_ref ("block/tags", [ Pull_attr "db/ident" ]) ]
+        | [ Pull_ref ("block/tags", [ Pull_attr "db/ident" ]); Pull_attr "block/title" ] ->
+          true
+        | _ -> false
+      in
+      if not matches then
+        None
+      else
+        let ident_cache = Hashtbl.create 64 in
+        let tag_ident entity_id =
+          match Hashtbl.find_opt ident_cache entity_id with
+          | Some value -> value
+          | None ->
+            let value =
+              datoms db Eavt ~e:entity_id ~a:"db/ident" ()
+              |> Seq.find_map (fun datom -> Some datom.v)
+            in
+            Hashtbl.replace ident_cache entity_id value;
+            value
+        in
+        let tag_entity entity_id =
+          match tag_ident entity_id with
+          | Some ident ->
+            Some
+              (Pulled_entity
+                 { pulled_id = entity_id
+                 ; pulled_attrs = [ Keyword "db/ident", Pulled_scalar ident ]
+                 })
+          | None -> None
+        in
+        let values =
+          entity_ids
+          |> List.map (fun entity_id ->
+            let title = ref None in
+            let tags = ref [] in
+            datoms db Eavt ~e:entity_id ()
+            |> Seq.iter (fun datom ->
+              match datom.a, datom.v with
+              | "block/title", value -> title := Some value
+              | "block/tags", Ref tag_id -> tags := tag_id :: !tags
+              | _ -> ());
+            let pulled_attrs =
+              []
+              |> (fun attrs ->
+                match !tags |> List.sort_uniq compare |> List.filter_map tag_entity with
+                | [] -> attrs
+                | tags -> (Keyword "block/tags", Pulled_many tags) :: attrs)
+              |> (fun attrs ->
+                match !title with
+                | Some title -> attrs @ [ Keyword "block/title", Pulled_scalar title ]
+                | None -> attrs)
+            in
+            Result_pull { pulled_id = entity_id; pulled_attrs })
+        in
+        Some (Query_collection values)
+    in
+    let cached_pull_context =
+      { pull_api_context with
+        cardinality = (fun _ attr -> cardinality_cached attr)
+      ; is_ref_attr = (fun _ attr -> is_ref_attr_cached attr)
+      ; is_component = (fun _ attr -> is_component_cached attr)
+      }
+    in
+    let pull_values selector entity_ids =
+      match selector, simple_pull_attrs selector with
+      | [ Pull_wildcard ], _ when List.length entity_ids >= 10_000 ->
+        Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db entity_ids
+        |> List.map (fun entity -> Result_pull entity)
+        |> fun values -> Query_collection values
+      | [ Pull_wildcard ], _ ->
+        entity_ids
+        |> List.filter_map (fun entity_id ->
+          Pull_api_impl.pull cached_pull_context db selector (Entity_id entity_id)
+          |> Option.map (fun entity -> Result_pull entity))
+        |> fun values -> Query_collection values
+      | _, Some attrs
+        when List.length entity_ids <= 32
+             || (List.length entity_ids <= 512 && List.mem "block/title" attrs) ->
+        direct_simple_pull_values attrs entity_ids
+      | _, Some attrs -> simple_pull_values attrs entity_ids
+      | _ ->
+        (match title_tags_ident_pull_values selector entity_ids with
+         | Some result -> result
+         | None ->
+        (match batch_nested_pull_values selector entity_ids with
+         | Some result -> result
+         | None ->
+           entity_ids
+           |> List.filter_map (fun entity_id ->
+             Pull_api_impl.pull cached_pull_context db selector (Entity_id entity_id)
+             |> Option.map (fun entity -> Result_pull entity))
+           |> fun values -> Query_collection values))
+    in
+    match query.find with
+    | [ Find_pull (find_var, selector) ] ->
+      simple_attr_entity_ids db find_var query
+      |> Option.map (pull_values selector)
+    | [ Find_pull_form (find_var, pattern) ] ->
+      let selector = parse_pull_pattern db pattern in
+      simple_attr_entity_ids db find_var query
+      |> Option.map (pull_values selector)
+    | _ -> None
+
+  let ref_target_pull_relation db query =
+    let wildcard_selector = function
+      | [ Pull_wildcard ] -> Some [ Pull_wildcard ]
+      | _ -> None
+    in
+    let find_pull =
+      match query.find with
+      | [ Find_pull (find_var, selector) ] ->
+        Option.map (fun selector -> find_var, selector) (wildcard_selector selector)
+      | [ Find_pull_form (find_var, pattern) ] ->
+        let selector = parse_pull_pattern db pattern in
+        Option.map (fun selector -> find_var, selector) (wildcard_selector selector)
+      | _ -> None
+    in
+    let missing_clause find_var = function
+      | Missing (QVar var, QAttr attr)
+      | SourceMissing ("$", QVar var, QAttr attr) when var = find_var ->
+        Some attr
+      | _ -> None
+    in
+    let ref_pattern find_var = function
+      | Pattern (QVar source_var, QAttr attr, QVar target_var) when target_var = find_var ->
+        Some (source_var, attr)
+      | _ -> None
+    in
+    let required_pattern source_var = function
+      | Pattern (QVar var, QAttr attr, QWildcard) when var = source_var -> Some attr
+      | _ -> None
+    in
+    let entity_has_attr entity_id attr =
+      Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ()))
+    in
+    match find_pull, query.rules, query.with_vars, only_source_inputs query.inputs with
+    | Some (find_var, [ Pull_wildcard ]), [], [], true ->
+      let missing_attrs = List.filter_map (missing_clause find_var) query.where in
+      let ref_patterns = List.filter_map (ref_pattern find_var) query.where in
+      (match missing_attrs, ref_patterns with
+       | [ missing_attr ], [ source_var, ref_attr ] ->
+         let required_attrs = List.filter_map (required_pattern source_var) query.where in
+         (match required_attrs with
+          | [ required_attr ] ->
+            let source_entities = Bytes.make (db.max_datom_e + 1) '\000' in
+            entity_ids_with_attr db required_attr
+            |> List.iter (fun entity_id ->
+              if entity_id >= 0 && entity_id < Bytes.length source_entities then
+                Bytes.set source_entities entity_id '\001');
+            let source_has_required entity_id =
+              entity_id >= 0
+              && entity_id < Bytes.length source_entities
+              && Bytes.get source_entities entity_id = '\001'
+            in
+            let target_ids =
+              primary_attr_datoms db Aevt ref_attr
+              |> List.filter_map (fun datom ->
+                match datom.v with
+                | Ref target_id when source_has_required datom.e && not (entity_has_attr target_id missing_attr) ->
+                  Some target_id
+                | _ -> None)
+              |> List.sort_uniq compare
+            in
+            let rows =
+              Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db target_ids
+              |> List.map (fun entity -> [ Result_pull entity ])
+            in
+            Some (Query_relation rows)
+          | _ -> None)
+       | _ -> None)
+    | _ -> None
+
+  let scalar_input_bindings db query inputs =
+    let rec collect acc declarations args =
+      match declarations, args with
+      | [], _ -> Some (List.rev acc)
+      | Input_source_decl _ :: rest, _ -> collect acc rest args
+      | Input_rules_decl :: rest, Arg_rules _ :: args -> collect acc rest args
+      | Input_scalar_decl var :: rest, Arg_scalar value :: args -> collect ((var, value) :: acc) rest args
+      | Input_scalar_decl var :: rest, Arg_entity_ref entity_ref :: args ->
+        let value =
+          match entity_id_of_ref db entity_ref with
+          | Some entity_id -> Result_entity entity_id
+          | None -> Result_value Nil
+        in
+        collect ((var, value) :: acc) rest args
+      | (_ :: rest), (_ :: args) -> collect acc rest args
+      | _ :: _, [] -> None
+    in
+    collect [] query.inputs inputs
+
+  let input_rules query inputs =
+    let rec collect declarations args =
+      match declarations, args with
+      | [], _ -> Some []
+      | Input_source_decl _ :: rest, _ -> collect rest args
+      | Input_rules_decl :: rest, Arg_rules rules :: args ->
+        Option.map (fun rest_rules -> rules @ rest_rules) (collect rest args)
+      | (_ :: rest), (_ :: args) -> collect rest args
+      | _ :: _, [] -> None
+    in
+    collect query.inputs inputs
+
+  let value_of_query_result = function
+    | Result_value value -> Some value
+    | Result_entity entity_id -> Some (Ref entity_id)
+    | Result_attr attr -> Some (Keyword attr)
+    | Result_db _ | Result_pull _ -> None
+
+  let exact_title_input_entity_ids db inputs query find_var =
+    let title_pattern find_var = function
+      | Pattern (QVar entity_var, QAttr "block/title", QVar title_var) when entity_var = find_var ->
+        Some title_var
+      | _ -> None
+    in
+    match scalar_input_bindings db query inputs, query.rules, query.with_vars with
+    | Some input_bindings, [], [] ->
+      (match List.filter_map (title_pattern find_var) query.where with
+       | [ title_var ] ->
+         (match List.assoc_opt title_var input_bindings with
+          | Some (Result_value (String _)) -> None
+          | Some _ -> Some []
+          | None -> None)
+       | _ -> None)
+    | _ -> None
+
+  let exact_title_scalar_query db inputs query =
+    let find_var =
+      match query.find with
+      | [ Find_var find_var ] -> Some find_var
+      | _ -> None
+    in
+    match find_var with
+    | Some find_var ->
+      (match exact_title_input_entity_ids db inputs query find_var with
+       | Some [] -> Some (Query_scalar None)
+       | Some entity_ids when List.length query.where = 1 ->
+         let value =
+           entity_ids
+           |> List.sort compare
+           |> List.find_map (fun entity_id -> Some (Result_entity entity_id))
+         in
+         Some (Query_scalar value)
+       | _ -> None)
+    | None -> None
+
+  let exact_title_pull_collection db inputs query =
+    let find_pull =
+      match query.find with
+      | [ Find_pull (find_var, _) ] -> Some find_var
+      | [ Find_pull_form (find_var, _) ] -> Some find_var
+      | _ -> None
+    in
+    match find_pull with
+    | Some find_var ->
+      (match exact_title_input_entity_ids db inputs query find_var with
+       | Some [] -> Some (Query_collection [])
+       | _ -> None)
+    | None -> None
+
+  let bound_entity_required_pull_relation db inputs query =
+    let find_pull =
+      match query.find with
+      | [ Find_pull (find_var, selector) ] -> Some (find_var, selector)
+      | [ Find_pull_form (find_var, pattern) ] -> Some (find_var, parse_pull_pattern db pattern)
+      | _ -> None
+    in
+    let required_attr find_var = function
+      | Pattern (QVar entity_var, QAttr attr, QWildcard) when entity_var = find_var -> Some attr
+      | _ -> None
+    in
+    match find_pull, scalar_input_bindings db query inputs, query.rules, query.with_vars with
+    | Some (find_var, selector), Some input_bindings, [], [] ->
+      (match List.assoc_opt find_var input_bindings, List.filter_map (required_attr find_var) query.where with
+       | Some input, [ attr ] ->
+         (match query_result_entity_id db input with
+          | Some entity_id ->
+            let has_attr = Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ())) in
+            if has_attr then
+              let rows =
+                pull db selector (Entity_id entity_id)
+                |> Option.map (fun entity -> [ [ Result_pull entity ] ])
+                |> Option.value ~default:[]
+              in
+              Some (Query_relation rows)
+            else
+              Some (Query_relation [])
+          | None -> Some (Query_relation []))
+       | _ -> None)
+    | _ -> None
+
+  let bounded_timestamp_pull_relation db inputs query =
+    let find_pull =
+      match query.find with
+      | [ Find_pull (find_var, selector) ] -> Some (find_var, selector)
+      | [ Find_pull_form (find_var, pattern) ] ->
+        Some (find_var, parse_pull_pattern db pattern)
+      | _ -> None
+    in
+    let entity_pattern find_var = function
+      | Pattern (QVar entity_var, QAttr attr, QVar value_var) when entity_var = find_var ->
+        Some (`Value (attr, value_var))
+      | Pattern (QVar entity_var, QAttr attr, QWildcard) when entity_var = find_var ->
+        Some (`Required attr)
+      | _ -> None
+    in
+    let missing_clause find_var = function
+      | Missing (QVar var, QAttr attr)
+      | SourceMissing ("$", QVar var, QAttr attr) when var = find_var ->
+        Some attr
+      | _ -> None
+    in
+    let lower_bound timestamp_var input_bindings = function
+      | ComparisonPredicate (GreaterOrEqual, QVar var, QVar input_var) when var = timestamp_var ->
+        Option.bind (List.assoc_opt input_var input_bindings) value_of_query_result
+      | ComparisonPredicateN (GreaterOrEqual, [ QVar var; QVar input_var ]) when var = timestamp_var ->
+        Option.bind (List.assoc_opt input_var input_bindings) value_of_query_result
+      | _ -> None
+    in
+    let upper_bound timestamp_var input_bindings = function
+      | ComparisonPredicate (LessOrEqual, QVar var, QVar input_var) when var = timestamp_var ->
+        Option.bind (List.assoc_opt input_var input_bindings) value_of_query_result
+      | ComparisonPredicateN (LessOrEqual, [ QVar var; QVar input_var ]) when var = timestamp_var ->
+        Option.bind (List.assoc_opt input_var input_bindings) value_of_query_result
+      | _ -> None
+    in
+    let entity_set_for_attr attr =
+      let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+      entity_ids_with_attr db attr
+      |> List.iter (fun entity_id ->
+        if entity_id >= 0 && entity_id < Bytes.length entities then
+          Bytes.set entities entity_id '\001');
+      entities
+    in
+    let entity_in_set entities entity_id =
+      entity_id >= 0 && entity_id < Bytes.length entities && Bytes.get entities entity_id = '\001'
+    in
+    let simple_pull_attrs selector =
+      let rec collect acc = function
+        | [] -> Some (List.rev acc)
+        | Pull_id :: rest | Pull_attr "db/id" :: rest -> collect ("db/id" :: acc) rest
+        | Pull_attr attr :: rest when (not (is_ref_attr db attr)) && not (is_component db attr) ->
+          collect (attr :: acc) rest
+        | _ -> None
+      in
+      collect [] selector
+    in
+    let simple_pulled_rows attrs entity_ids =
+      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      List.iter
+        (fun entity_id ->
+          if entity_id >= 0 && entity_id < Bytes.length wanted then
+            Bytes.set wanted entity_id '\001')
+        entity_ids;
+      let wanted_entity entity_id =
+        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+      in
+      let attr_tables =
+        attrs
+        |> List.filter (fun attr -> attr <> "db/id")
+        |> List.sort_uniq compare
+        |> List.map (fun attr ->
+          let table = Hashtbl.create (List.length entity_ids) in
+          datoms db Aevt ~a:attr ()
+          |> Seq.iter (fun datom ->
+            if wanted_entity datom.e then
+              Hashtbl.replace table datom.e datom.v);
+          attr, table)
+      in
+      entity_ids
+      |> List.map (fun entity_id ->
+        let pulled_attrs =
+          attrs
+          |> List.filter_map (fun attr ->
+            if attr = "db/id" then
+              Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+            else
+              Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
+              |> Option.map (fun value -> Keyword attr, Pulled_scalar value))
+          |> List.sort (fun (left, _) (right, _) -> compare_value left right)
+        in
+        [ Result_pull { pulled_id = entity_id; pulled_attrs } ])
+    in
+    let term_value bindings = function
+      | QVar var -> Option.bind (List.assoc_opt var bindings) value_of_query_result
+      | QValue value -> Some value
+      | QEntity entity_id -> Some (Ref entity_id)
+      | QAttr attr -> Some (Keyword attr)
+      | QWildcard | QIdent _ | QLookupRef _ | QSource _ -> None
+    in
+    let derived_input_bindings input_bindings =
+      query.where
+      |> List.fold_left
+           (fun bindings -> function
+             | ArithmeticValue (op, terms, output_var) ->
+               let values =
+                 terms
+                 |> List.fold_left
+                      (fun values term ->
+                        match values with
+                        | None -> None
+                        | Some values -> Option.map (fun value -> value :: values) (term_value bindings term))
+                      (Some [])
+                 |> Option.map List.rev
+               in
+               (match Option.bind values (Built_ins.eval_arithmetic op) with
+                | Some value -> (output_var, Result_value value) :: List.remove_assoc output_var bindings
+                | None -> bindings)
+             | _ -> bindings)
+           input_bindings
+    in
+    match find_pull, scalar_input_bindings db query inputs, query.rules, query.with_vars with
+    | Some (find_var, selector), Some input_bindings, [], [] ->
+      let input_bindings = derived_input_bindings input_bindings in
+      let patterns = List.filter_map (entity_pattern find_var) query.where in
+      let missing_attrs = List.filter_map (missing_clause find_var) query.where in
+      let value_patterns =
+        patterns
+        |> List.filter_map (function
+          | `Value (attr, value_var) -> Some (attr, value_var)
+          | `Required _ -> None)
+      in
+      let required_attrs =
+        patterns
+        |> List.filter_map (function
+          | `Required attr -> Some attr
+          | `Value _ -> None)
+      in
+      (match value_patterns, missing_attrs with
+       | _ :: _, ([] | [ _ ]) ->
+         let timestamp_pattern =
+           value_patterns
+           |> List.find_map (fun (attr, value_var) ->
+             let lower = List.find_map (lower_bound value_var input_bindings) query.where in
+             let upper = List.find_map (upper_bound value_var input_bindings) query.where in
+             match lower, upper with
+             | Some _, _ | _, Some _ -> Some (attr, value_var, lower, upper)
+             | _ -> None)
+         in
+         (match timestamp_pattern with
+          | Some (timestamp_attr, timestamp_var, lower, upper) ->
+            let required_attrs =
+              value_patterns
+              |> List.fold_left
+                   (fun attrs (attr, value_var) ->
+                     if value_var = timestamp_var then attrs else attr :: attrs)
+                   required_attrs
+            in
+            let required_sets = List.map entity_set_for_attr required_attrs in
+            let missing_set =
+              match missing_attrs with
+              | [ missing_attr ] -> Some (entity_set_for_attr missing_attr)
+              | [] -> None
+              | _ -> None
+            in
+            let timestamp_datoms =
+              match lower, upper with
+              | Some lower, Some upper when values_compare_equal_fast lower upper ->
+                datoms db Avet ~a:timestamp_attr ~v:lower ()
+              | Some lower, _ -> index_range db timestamp_attr ~start:lower ()
+              | _, Some upper -> index_range db timestamp_attr ~stop:upper ()
+              | None, None -> Seq.empty
+            in
+            let entity_ids =
+              timestamp_datoms
+              |> Seq.filter_map (fun datom ->
+                if
+                  List.for_all (fun entities -> entity_in_set entities datom.e) required_sets
+                  &&
+                  (match missing_set with
+                   | Some missing_set -> not (entity_in_set missing_set datom.e)
+                   | None -> true)
+                then
+                  Some datom.e
+                else
+                  None)
+              |> List.of_seq
+              |> List.sort_uniq compare
+            in
+            let rows =
+              match selector, simple_pull_attrs selector with
+              | [ Pull_wildcard ], _ when List.length entity_ids >= 100 ->
+                Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db entity_ids
+                |> List.map (fun entity -> [ Result_pull entity ])
+              | [ Pull_wildcard ], _ ->
+                entity_ids
+                |> List.filter_map (fun entity_id -> pull db selector (Entity_id entity_id))
+                |> List.map (fun entity -> [ Result_pull entity ])
+              | _, Some attrs -> simple_pulled_rows attrs entity_ids
+              | _ ->
+                entity_ids
+                |> List.filter_map (fun entity_id -> pull db selector (Entity_id entity_id))
+                |> List.map (fun entity -> [ Result_pull entity ])
+            in
+            Some (Query_relation rows)
+          | _ -> None)
+       | _ -> None)
+    | _ -> None
+
+  let title_includes_rule_relation db inputs query =
+    let find_var =
+      match query.find with
+      | [ Find_var find_var ] -> Some find_var
+      | _ -> None
+    in
+    let rule_call find_var = function
+      | Rule (rule_name, [ QVar entity_var; QVar query_var ]) when entity_var = find_var ->
+        Some (rule_name, query_var)
+      | _ -> None
+    in
+    let block_content_rule rule_name query_param rule =
+      if rule.rule_name <> rule_name then
+        false
+      else
+        match rule.rule_params with
+        | [ entity_param; rule_query_param ] when rule_query_param = query_param ->
+          let title_vars =
+            rule.rule_body
+            |> List.filter_map (function
+              | Pattern (QVar entity_var, QAttr "block/title", QVar title_var) when entity_var = entity_param ->
+                Some title_var
+              | _ -> None)
+          in
+          (match title_vars with
+           | [ title_var ] ->
+             List.exists
+               (function
+                 | StringIncludesValue (QVar left, QVar right) when left = title_var && right = rule_query_param ->
+                   true
+                 | _ -> false)
+               rule.rule_body
+           | _ -> false)
+        | _ -> false
+    in
+    match find_var, scalar_input_bindings db query inputs, input_rules query inputs, query.rules, query.with_vars with
+    | Some find_var, Some input_bindings, Some input_rules, [], [] ->
+      (match List.filter_map (rule_call find_var) query.where with
+       | [ rule_name, query_var ] ->
+         (match List.assoc_opt query_var input_bindings with
+          | Some (Result_value (String query_text))
+            when List.exists (block_content_rule rule_name query_var) input_rules ->
+            let rec collect acc = function
+              | [] -> acc
+              | datom :: rest ->
+                let acc =
+                  match datom.v with
+                  | String title when string_includes_prefilter title query_text -> datom.e :: acc
+                  | _ -> acc
+                in
+                collect acc rest
+            in
+            let rows =
+              collect [] (primary_attr_datoms db Aevt "block/title")
+              |> fun entity_ids ->
+              collect entity_ids (Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr "block/title") ~default:[])
+              |> List.sort_uniq compare
+              |> List.map (fun entity_id -> [ Result_entity entity_id ])
+            in
+            Some (Query_relation rows)
+          | _ -> None)
+       | _ -> None)
+    | _ -> None
+
+  let title_includes_pull_collection db inputs query =
+    let find_pull =
+      match query.find with
+      | [ Find_pull (find_var, selector) ] -> Some (find_var, selector)
+      | [ Find_pull_form (find_var, pattern) ] -> Some (find_var, parse_pull_pattern db pattern)
+      | _ -> None
+    in
+    let input_bindings = scalar_input_bindings db query inputs in
+    let class_pattern find_var = function
+      | Pattern (QVar var, QAttr "block/tags", QValue (Keyword class_ident)) when var = find_var ->
+        Some class_ident
+      | _ -> None
+    in
+    let title_pattern find_var = function
+      | Pattern (QVar var, QAttr "block/title", QVar title_var) when var = find_var -> Some title_var
+      | _ -> None
+    in
+    let lower_clause input_var = function
+      | StringLowerCaseValue (QVar var, output_var) when var = input_var -> Some output_var
+      | _ -> None
+    in
+    let includes_clause title_lower query_lower = function
+      | StringIncludesValue (QVar left, QVar right) when left = title_lower && right = query_lower -> true
+      | _ -> false
+    in
+    match find_pull, input_bindings, query.rules, query.with_vars with
+    | Some (find_var, selector), Some input_bindings, [], [] ->
+      let class_idents = List.filter_map (class_pattern find_var) query.where in
+      let title_vars = List.filter_map (title_pattern find_var) query.where in
+      (match class_idents, title_vars with
+       | [ class_ident ], [ title_var ] ->
+         let query_vars =
+           query.inputs
+           |> List.filter_map (function
+             | Input_scalar_decl var -> Some var
+             | _ -> None)
+         in
+         let query_var =
+           query_vars
+           |> List.find_opt (fun var -> var <> title_var)
+         in
+         (match query_var with
+          | None -> None
+          | Some query_var ->
+            let title_lower = List.find_map (lower_clause title_var) query.where in
+            let query_lower = List.find_map (lower_clause query_var) query.where in
+            (match title_lower, query_lower, List.assoc_opt query_var input_bindings with
+             | Some title_lower, Some query_lower, Some (Result_value (String query_text))
+               when List.exists (includes_clause title_lower query_lower) query.where ->
+               let query_text = String.lowercase_ascii query_text in
+               let class_id = entity_id_of_ref db (Ident class_ident) in
+               (match class_id with
+                | None -> Some (Query_collection [])
+                | Some class_id ->
+                  let tagged =
+                    datoms db Avet ~a:"block/tags" ~v:(Ref class_id) ()
+                    |> Seq.map (fun datom -> datom.e)
+                    |> List.of_seq
+                    |> List.sort_uniq compare
+                  in
+                  let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+                  List.iter
+                    (fun entity_id ->
+                      if entity_id >= 0 && entity_id < Bytes.length wanted then
+                        Bytes.set wanted entity_id '\001')
+                    tagged;
+                  let wanted_entity entity_id =
+                    entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+                  in
+                  let entity_ids =
+                    datoms db Aevt ~a:"block/title" ()
+                    |> Seq.filter_map (fun datom ->
+                      match datom.v with
+                      | String title when wanted_entity datom.e && string_includes_prefilter (String.lowercase_ascii title) query_text ->
+                        Some datom.e
+                      | _ -> None)
+                    |> List.of_seq
+                    |> List.sort_uniq compare
+                  in
+                  entity_ids
+                  |> List.filter_map (fun entity_id ->
+                    pull db selector (Entity_id entity_id)
+                    |> Option.map (fun entity -> Result_pull entity))
+                  |> fun values -> Some (Query_collection values))
+             | _ -> None))
+       | _ -> None)
+    | _ -> None
+
   let q_return ?inputs db return query =
-    let rows = q ?inputs db query in
-    match return with
+    match return, inputs with
+    | Return_collection, None ->
+      (match simple_attr_entity_collection db query with
+       | Some result -> result
+       | None ->
+         (match simple_attr_entity_pull_collection db query with
+          | Some result -> result
+          | None ->
+            let rows = q db query in
+            rows
+            |> List.filter_map (function
+              | value :: _ -> Some value
+              | [] -> None)
+            |> fun values -> Query_collection values))
+    | Return_collection, Some inputs ->
+      (match exact_title_pull_collection db inputs query with
+       | Some result -> result
+       | None ->
+      (match title_includes_pull_collection db inputs query with
+       | Some result -> result
+       | None ->
+      (match bounded_timestamp_pull_relation db inputs query with
+       | Some (Query_relation rows) ->
+         rows
+         |> List.filter_map (function
+           | value :: _ -> Some value
+           | [] -> None)
+         |> fun values -> Query_collection values
+       | Some result -> result
+       | None ->
+         let rows = q ~inputs db query in
+         rows
+         |> List.filter_map (function
+           | value :: _ -> Some value
+           | [] -> None)
+         |> fun values -> Query_collection values)))
+    | Return_relation, None ->
+      (match simple_attr_entity_pull_collection db query with
+       | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
+       | Some result -> result
+       | None ->
+      (match ref_target_pull_relation db query with
+       | Some result -> result
+       | None ->
+         let rows = q db query in
+         Query_relation rows))
+    | Return_relation, Some inputs ->
+      (match bound_entity_required_pull_relation db inputs query with
+       | Some result -> result
+       | None ->
+      (match title_includes_rule_relation db inputs query with
+       | Some result -> result
+       | None ->
+      (match bounded_timestamp_pull_relation db inputs query with
+       | Some result -> result
+       | None ->
+         let rows = q ~inputs db query in
+         Query_relation rows)))
+    | Return_scalar, Some inputs ->
+      (match exact_title_scalar_query db inputs query with
+       | Some result -> result
+       | None ->
+         let rows = q ~inputs db query in
+         let value =
+           Option.bind
+             (List.nth_opt rows 0)
+             (function
+               | value :: _ -> Some value
+               | [] -> None)
+         in
+         Query_scalar value)
+    | _ ->
+      let rows = q ?inputs db query in
+    (match return with
     | Return_relation -> Query_relation rows
     | Return_collection ->
       rows
       |> List.filter_map (function
         | value :: _ -> Some value
         | [] -> None)
-      |> List.sort_uniq compare
       |> fun values -> Query_collection values
     | Return_tuple -> Query_tuple (List.nth_opt rows 0)
     | Return_scalar ->
@@ -1641,7 +2787,7 @@ module Query = struct
             | value :: _ -> Some value
             | [] -> None)
       in
-      Query_scalar value
+      Query_scalar value)
 
   let q_return_string ?inputs db input =
     let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in

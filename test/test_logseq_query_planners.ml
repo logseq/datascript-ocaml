@@ -305,6 +305,34 @@ let test_wildcard_pull_page_missing_query_uses_bounded_entity_scan () =
       failf "wildcard pull page query should return %d pages, got %d" page_count (List.length rows)
   | _ -> failwith "expected relation pull result"
 
+let test_attr_prefix_query_ignores_unrelated_duplicate_datoms () =
+  let duplicate_count = 120_000 in
+  let target_count = 500 in
+  let duplicate_noise =
+    List.concat
+      (List.init duplicate_count (fun index ->
+         let d = datom ~e:(100_000 + index) ~a:"aaa/noise" ~v:(String "duplicate") () in
+         [ d; d ]))
+  in
+  let targets =
+    List.init target_count (fun index ->
+      let entity = 1_000 + index in
+      datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ())
+  in
+  let db =
+    init_db
+      ~schema:[ "aaa/noise", one; "block/uuid", unique_identity ]
+      (duplicate_noise @ targets)
+  in
+  match
+    timed "attr prefix query ignores unrelated duplicate datoms" 0.120 (fun () ->
+      q_return_string db "[:find [?e ...] :where [?e :block/uuid]]")
+  with
+  | Query_collection values ->
+    if List.length values <> target_count then
+      failf "attr prefix query should return %d entities, got %d" target_count (List.length values)
+  | _ -> failwith "expected collection query result"
+
 let test_tag_value_with_present_attr_uses_indexed_intersection () =
   let tag = 10 in
   let tagged_count = 60 in
@@ -748,6 +776,69 @@ let test_source_has_property_with_missing_title_uses_rule_prefix_context () =
   if rows <> [] then
     failf "source missing title should return no rows, got %d" (List.length rows)
 
+let test_has_property_with_bound_title_uses_rule_suffix_context () =
+  let rules =
+    Parser.parse_rules
+      (read_edn
+         "[[[has-property ?b ?prop]
+           [?b ?prop _]
+           [?prop-e :db/ident ?prop]]]")
+  in
+  let count = 180_000 in
+  let db =
+    init_db
+      ~schema:[ "block/title", one; "db/ident", unique_identity; "noise/value", one ]
+      ([ datom ~e:1 ~a:"block/title" ~v:(String "Page1") ()
+       ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "noise/value") ()
+       ]
+       @ List.init count (fun index ->
+         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(Int index) ()))
+  in
+  match
+    timed "has-property bound title suffix context" 0.250 (fun () ->
+      q_return_string
+        ~inputs:[ Arg_rules rules ]
+        db
+        "[:find [?p ...] :where (has-property ?b ?p) [?b :block/title \"Page1\"] :in $ %]")
+  with
+  | Query_collection [] -> ()
+  | Query_collection values -> failf "bound title should return no properties, got %d" (List.length values)
+  | _ -> failwith "expected collection result"
+
+let test_ref_property_with_bound_title_uses_rule_suffix_context () =
+  let rules =
+    Parser.parse_rules
+      (read_edn
+         "[[[ref-property ?b ?prop ?val]
+           [?b ?prop ?pv]
+           [?prop-e :db/ident ?prop]
+           (ref->val ?pv ?val)]
+          [[ref->val ?pv ?val]
+           [?pv :block/title ?val]]]")
+  in
+  let count = 180_000 in
+  let target = 99 in
+  let db =
+    init_db
+      ~schema:[ "block/title", one; "db/ident", unique_identity; "noise/ref", ref_one ]
+      ([ datom ~e:1 ~a:"block/title" ~v:(String "Page1") ()
+       ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "noise/ref") ()
+       ; datom ~e:target ~a:"block/title" ~v:(String "bar") ()
+       ]
+       @ List.init count (fun index ->
+         datom ~e:(100_000 + index) ~a:"noise/ref" ~v:(Ref target) ()))
+  in
+  match
+    timed "ref-property bound title suffix context" 0.250 (fun () ->
+      q_return_string
+        ~inputs:[ Arg_rules rules ]
+        db
+        "[:find [?p ...] :where (ref-property ?b ?p \"bar\") [?b :block/title \"Page1\"] :in $ %]")
+  with
+  | Query_collection [] -> ()
+  | Query_collection values -> failf "bound title should return no ref properties, got %d" (List.length values)
+  | _ -> failwith "expected collection result"
+
 let test_source_task_page_ref_literal_string_uses_rule_prefix_context () =
   let rules =
     Parser.parse_rules
@@ -778,6 +869,92 @@ let test_source_task_page_ref_literal_string_uses_rule_prefix_context () =
   in
   if rows <> [] then
     failf "source task page-ref literal string should return no rows, got %d" (List.length rows)
+
+let test_scalar_title_query_rejects_non_string_input_without_title_scan () =
+  let tag = 10 in
+  let count = 180_000 in
+  let datoms =
+    datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+    :: List.concat
+         (List.init count (fun index ->
+            let entity = 1_000 + index in
+            [ datom ~e:entity ~a:"block/title" ~v:(String (Printf.sprintf "Title %d" index)) ()
+            ; datom ~e:entity ~a:"block/tags" ~v:(Ref tag) ()
+            ]))
+  in
+  let db = init_db ~schema:[ "db/ident", unique_identity; "block/title", one; "block/tags", ref_many ] datoms in
+  match
+    timed "scalar title non-string input" 0.006 (fun () ->
+      q_return_string
+        ~inputs:
+          [ Arg_scalar (Result_value (Keyword "logseq.class/Tag"))
+          ; Arg_scalar (Result_value (Keyword "logseq.class/Tag"))
+          ]
+        db
+        "[:find ?other .
+          :in $ ?class-title ?class-id
+          :where [?other :block/title ?class-title]
+                 [?other :block/tags :logseq.class/Tag]
+                 [(not= ?other ?class-id)]
+                 (not [?other :logseq.property/deleted-at])]")
+  with
+  | Query_scalar None -> ()
+  | _ -> failwith "non-string title input should not match block/title"
+
+let test_exact_title_simple_pull_uses_entity_lookup_for_small_results () =
+  let count = 180_000 in
+  let target = 42_000 in
+  let datoms =
+    List.concat
+      (List.init count (fun index ->
+         let entity = 1_000 + index in
+         let title =
+           if entity = target then
+             "Plain Page"
+           else
+             Printf.sprintf "Page %d" index
+         in
+         [ datom ~e:entity ~a:"block/title" ~v:(String title) ()
+         ; datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ()
+         ]))
+  in
+  let db = init_db ~schema:[ "block/title", one; "block/uuid", unique_identity ] datoms in
+  match
+    timed "exact title small pull" 0.006 (fun () ->
+      q_return_string db "[:find (pull ?p [:block/uuid]) :where [?p :block/title \"Plain Page\"]]")
+  with
+  | Query_relation [ [ Result_pull entity ] ] ->
+    if entity.pulled_id <> target then
+      failf "expected target entity %d, got %d" target entity.pulled_id
+  | Query_relation rows -> failf "expected one pulled row, got %d" (List.length rows)
+  | _ -> failwith "expected relation result"
+
+let test_block_content_rule_uses_title_scan_once () =
+  let count = 180_000 in
+  let db =
+    init_db
+      ~schema:[ "block/title", one ]
+      (List.init count (fun index ->
+         datom ~e:(1_000 + index) ~a:"block/title" ~v:(String (Printf.sprintf "Title %d" index)) ()))
+  in
+  let rules =
+    Parser.parse_rules
+      (read_edn
+         "[[(block-content ?b ?query)
+            [?b :block/title ?content]
+            [(clojure.string/includes? ?content ?query)]]]")
+  in
+  let result =
+    timed "block-content rule title includes" 0.025 (fun () ->
+      q_return_string
+        ~inputs:[ Arg_scalar (Result_value (String "__logseq_input__")); Arg_rules rules ]
+        db
+        "[:find ?b :where (block-content ?b ?query) :in $ ?query %]")
+  in
+  match result with
+  | Query_relation [] -> ()
+  | Query_relation rows -> failf "unexpected block-content matches: %d" (List.length rows)
+  | _ -> failwith "expected relation result"
 
 let test_source_ref_property_malformed_lookup_keeps_upstream_error_order () =
   let rules =
@@ -1374,6 +1551,7 @@ let () =
   test_source_namespace_value_join_uses_relation_functions ();
   test_wildcard_pull_single_attr_pattern_uses_bounded_entity_scan ();
   test_wildcard_pull_page_missing_query_uses_bounded_entity_scan ();
+  test_attr_prefix_query_ignores_unrelated_duplicate_datoms ();
   test_tag_value_with_present_attr_uses_indexed_intersection ();
   test_tag_value_without_attr_uses_indexed_difference ();
   test_simple_not_uses_relation_antijoin ();
@@ -1386,7 +1564,12 @@ let () =
   test_source_missing_property_ident_rule_call_uses_rule_prefix_context ();
   test_has_property_with_missing_title_returns_empty_without_rule_scan ();
   test_source_has_property_with_missing_title_uses_rule_prefix_context ();
+  test_has_property_with_bound_title_uses_rule_suffix_context ();
+  test_ref_property_with_bound_title_uses_rule_suffix_context ();
   test_source_task_page_ref_literal_string_uses_rule_prefix_context ();
+  test_scalar_title_query_rejects_non_string_input_without_title_scan ();
+  test_exact_title_simple_pull_uses_entity_lookup_for_small_results ();
+  test_block_content_rule_uses_title_scan_once ();
   test_source_ref_property_malformed_lookup_keeps_upstream_error_order ();
   test_rule_call_uses_relation_context_for_many_bindings ();
   test_source_rule_call_uses_relation_context_for_many_bindings ();

@@ -304,19 +304,38 @@ let restore context storage =
       Hashtbl.iter (fun entity_id datoms -> Hashtbl.replace table entity_id (List.rev datoms)) table;
       table
     in
+    let duplicate_datoms_by_attr duplicate_datoms =
+      let table = Hashtbl.create 1024 in
+      List.iter
+        (fun datom ->
+          let existing = Option.value (Hashtbl.find_opt table datom.a) ~default:[] in
+          Hashtbl.replace table datom.a (datom :: existing))
+        duplicate_datoms;
+      Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
+      table
+    in
+    let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
+    let duplicate_avet_datoms =
+      duplicate_datoms
+      |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible schema datom.a)
+      |> List.sort (Util.compare_datom Avet)
+    in
+    let aevt_index = restore_index Aevt root.storage_aevt in
+    let avet_index = restore_index Avet root.storage_avet in
     let db =
       { db_uid = context.next_db_uid ()
       ; schema
       ; eavt_index = restore_index Eavt root.storage_eavt
-      ; aevt_index = restore_index Aevt root.storage_aevt
-      ; avet_index = restore_index Avet root.storage_avet
+      ; aevt_index
+      ; avet_index
+      ; aevt_by_attr = Hashtbl.create 0
+      ; avet_by_attr = Hashtbl.create 0
       ; duplicate_datoms
-      ; duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms
-      ; duplicate_avet_datoms =
-          duplicate_datoms
-          |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible schema datom.a)
-          |> List.sort (Util.compare_datom Avet)
+      ; duplicate_aevt_datoms
+      ; duplicate_avet_datoms
       ; duplicate_eavt_by_entity
+      ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
+      ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
       ; max_eid = root.storage_max_eid
       ; max_datom_e = root.storage_max_eid
       ; max_tx = root.storage_max_tx

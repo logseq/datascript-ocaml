@@ -255,7 +255,16 @@ end) = struct
       | [ _; _; _; _; _ ] -> false
       | _ -> false
     in
-    if can_direct then
+    let can_direct_dynamic_attr =
+      direct_pattern_terms terms
+      &&
+      match terms with
+      | [ _; QVar _; (QVar _ | QWildcard) ] -> true
+      | [ _; QVar _; (QVar _ | QWildcard); _ ] -> true
+      | [ _; QVar _; (QVar _ | QWildcard); _; _ ] -> true
+      | _ -> false
+    in
+    if can_direct || can_direct_dynamic_attr then
       match terms with
       | [ e_term; a_term; v_term ] ->
         datoms
@@ -670,6 +679,16 @@ end) = struct
     | QAttr attr -> Some (fun _ -> Query_eval.value_of_query_result (Result_attr attr))
     | QWildcard | QIdent _ | QLookupRef _ | QSource _ -> None
 
+  let relation_term_result_getter relation = function
+    | QVar var ->
+      (match List.find_index (( = ) var) relation.attrs with
+       | Some index -> Some (fun row -> Some (row_value row index))
+       | None -> None)
+    | QValue value -> Some (fun _ -> Some (Result_value value))
+    | QEntity entity_id -> Some (fun _ -> Some (Result_entity entity_id))
+    | QAttr attr -> Some (fun _ -> Some (Result_attr attr))
+    | QWildcard | QIdent _ | QLookupRef _ | QSource _ -> None
+
   let relation_comparison_matches db relation row predicate left_term right_term =
     match
       ( value_of_relation_term db relation row left_term
@@ -704,6 +723,48 @@ end) = struct
             relation.rows
       }
 
+  let filter_relation_equality db relation predicate terms =
+    let term_values =
+      terms
+      |> List.fold_left
+           (fun acc term ->
+             match acc with
+             | None -> None
+             | Some getters ->
+               Option.map (fun getter -> getter :: getters) (relation_term_value_getter relation term))
+           (Some [])
+      |> Option.map List.rev
+    in
+    let row_matches values =
+      let equal = Built_ins.all_values_equal values in
+      match predicate with
+      | EqualValues -> equal
+      | NotEqualValues -> not equal
+    in
+    let collect_values row =
+      match term_values with
+      | Some term_values ->
+        term_values
+        |> List.fold_left
+             (fun acc term_value ->
+               match acc with
+               | None -> None
+               | Some values -> Option.map (fun value -> value :: values) (term_value row))
+             (Some [])
+        |> Option.map List.rev
+      | None ->
+        let binding = row_binding relation.attrs row in
+        Query_eval.collect_query_values query_evaluator_context db binding terms
+    in
+    let rows =
+      relation.rows
+      |> List.filter (fun row ->
+        match collect_values row with
+        | Some values -> row_matches values
+        | None -> false)
+    in
+    { relation with rows }
+
   let append_relation_value row value =
     match row with
     | [] -> [ value ]
@@ -718,6 +779,86 @@ end) = struct
       let existing = row_value row index in
       Option.map (fun _ -> row) (bind_var db output_var result [ output_var, existing ])
     | None -> Some (append_relation_value row result)
+
+  let apply_relation_unary_result db relation term output_var f =
+    match relation_term_result_getter relation term with
+    | None -> None
+    | Some term_result ->
+      let output_index = List.find_index (( = ) output_var) relation.attrs in
+      let attrs =
+        match output_index with
+        | Some _ -> relation.attrs
+        | None -> relation.attrs @ [ output_var ]
+      in
+      let rows =
+        relation.rows
+        |> List.filter_map (fun row ->
+          match Option.bind (term_result row) f with
+          | None -> None
+          | Some result -> bind_relation_output_at db output_var output_index result row)
+      in
+      Some { relation with attrs; rows; unique_rows = false }
+
+  let name_result = function
+    | Result_value (Keyword keyword) ->
+      let _, name = query_evaluator_context.split_keyword keyword in
+      Some (Result_value (String name))
+    | Result_attr attr ->
+      let _, name = query_evaluator_context.split_keyword attr in
+      Some (Result_value (String name))
+    | Result_value (String value) -> Some (Result_value (String value))
+    | Result_value _ | Result_entity _ | Result_db _ | Result_pull _ -> None
+
+  let namespace_result = function
+    | Result_value (Keyword keyword) ->
+      let namespace, _ = query_evaluator_context.split_keyword keyword in
+      if namespace = "" then None else Some (Result_value (String namespace))
+    | Result_attr attr ->
+      let namespace, _ = query_evaluator_context.split_keyword attr in
+      if namespace = "" then None else Some (Result_value (String namespace))
+    | Result_value _ | Result_entity _ | Result_db _ | Result_pull _ -> None
+
+  let keyword_from_name_result = function
+    | Result_value (String value) -> Some (Result_value (Keyword value))
+    | Result_value (Keyword keyword) | Result_attr keyword -> Some (Result_value (Keyword keyword))
+    | Result_value _ | Result_entity _ | Result_db _ | Result_pull _ -> None
+
+  let apply_relation_name_value db relation term output_var =
+    apply_relation_unary_result db relation term output_var name_result
+
+  let apply_relation_namespace_value db relation term output_var =
+    apply_relation_unary_result db relation term output_var namespace_result
+
+  let apply_relation_keyword_from_name db relation term output_var =
+    apply_relation_unary_result db relation term output_var keyword_from_name_result
+
+  let apply_relation_keyword_from_namespace_name db relation namespace_term name_term output_var =
+    match
+      ( relation_term_value_getter relation namespace_term
+      , relation_term_value_getter relation name_term )
+    with
+    | Some namespace_value, Some name_value ->
+      let output_index = List.find_index (( = ) output_var) relation.attrs in
+      let attrs =
+        match output_index with
+        | Some _ -> relation.attrs
+        | None -> relation.attrs @ [ output_var ]
+      in
+      let rows =
+        relation.rows
+        |> List.filter_map (fun row ->
+          match namespace_value row, name_value row with
+          | Some (String namespace), Some (String name) ->
+            bind_relation_output_at
+              db
+              output_var
+              output_index
+              (Result_value (Keyword (namespace ^ "/" ^ name)))
+              row
+          | _ -> None)
+      in
+      Some { relation with attrs; rows; unique_rows = false }
+    | _ -> None
 
   let apply_relation_arithmetic db relation op terms output_var =
     let term_values =
@@ -1326,6 +1467,12 @@ end) = struct
           let rows =
             match value_var_patterns with
             | (scan_value_var, scan_attr) :: remaining_value_vars
+              when direct_attr scan_attr
+                   && List.for_all
+                        (fun (_, attr) -> direct_attr attr && cardinality_one source_db attr)
+                        remaining_value_vars ->
+              rows_from_cardinality_one_value_scan scan_value_var scan_attr remaining_value_vars
+            | (scan_value_var, scan_attr) :: remaining_value_vars
               when List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns ->
               rows_from_cardinality_one_value_scan scan_value_var scan_attr remaining_value_vars
             | _ :: _ when List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns ->
@@ -1407,7 +1554,38 @@ end) = struct
     in
     { attrs = vars; rows; lookup_vars; unique_rows = false }
 
+  let attr_binding_var_clause = function
+    | Pattern (_, QAttr "db/ident", QVar var) -> Some var
+    | _ -> None
+
+  let dynamic_attr_var_clause = function
+    | Pattern (_, QVar var, (QVar _ | QWildcard)) -> Some var
+    | PatternTx (_, QVar var, (QVar _ | QWildcard), _) -> Some var
+    | PatternTxOp (_, QVar var, (QVar _ | QWildcard), _, _) -> Some var
+    | _ -> None
+
+  let promote_attr_binding_clauses clauses =
+    let rec take_attr_binding var seen = function
+      | [] -> None
+      | clause :: rest ->
+        (match attr_binding_var_clause clause with
+         | Some attr_var when attr_var = var -> Some (clause, List.rev_append seen rest)
+         | _ -> take_attr_binding var (clause :: seen) rest)
+    in
+    let rec promote acc = function
+      | [] -> List.rev acc
+      | clause :: rest ->
+        (match dynamic_attr_var_clause clause with
+         | Some attr_var ->
+           (match take_attr_binding attr_var [] rest with
+            | Some (binding_clause, rest) -> promote (clause :: binding_clause :: acc) rest
+            | None -> promote (clause :: acc) rest)
+         | None -> promote (clause :: acc) rest)
+    in
+    promote [] clauses
+
   let rec eval_relation_from_relation db sources default_source relation clauses =
+    let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
       | _ when relation.rows = [] -> Some relation
@@ -1441,6 +1619,22 @@ end) = struct
         apply (hash_join relation next) rest
       | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
         apply (filter_relation_comparison db relation predicate left_term right_term) rest
+      | EqualityPredicate (predicate, terms) :: rest ->
+        apply (filter_relation_equality db relation predicate terms) rest
+      | NameValue (term, output_var) :: rest ->
+        let* relation = apply_relation_name_value db relation term output_var in
+        apply relation rest
+      | NamespaceValue (term, output_var) :: rest ->
+        let* relation = apply_relation_namespace_value db relation term output_var in
+        apply relation rest
+      | KeywordFromName (term, output_var) :: rest ->
+        let* relation = apply_relation_keyword_from_name db relation term output_var in
+        apply relation rest
+      | KeywordFromNamespaceName (namespace_term, name_term, output_var) :: rest ->
+        let* relation =
+          apply_relation_keyword_from_namespace_name db relation namespace_term name_term output_var
+        in
+        apply relation rest
       | ArithmeticValue (op, terms, output_var) :: rest ->
         let* relation = apply_relation_arithmetic db relation op terms output_var in
         apply relation rest
@@ -1560,6 +1754,11 @@ end) = struct
     | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _
     | SourceRelationPattern _
     | ComparisonPredicate _
+    | EqualityPredicate _
+    | NameValue _
+    | NamespaceValue _
+    | KeywordFromName _
+    | KeywordFromNamespaceName _
     | SourceClause _
     | Not [ Pattern _ ]
     | SourceNot (_, [ Pattern _ ])
@@ -1574,6 +1773,197 @@ end) = struct
       | rest -> List.rev prefix, rest
     in
     split [] clauses
+
+  let split_suffix_relation_prefix clauses =
+    let rec split prefix = function
+      | (Pattern _ | PatternTx _ | PatternTxOp _
+        | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _
+        | SourceRelationPattern _
+        | ComparisonPredicate _ as clause) :: rest ->
+        split (clause :: prefix) rest
+      | rest -> List.rev prefix, rest
+    in
+    split [] clauses
+
+  let suffix_relation_bound_vars clauses =
+    clauses
+    |> List.concat_map (function
+      | Pattern (e_term, a_term, v_term)
+      | SourcePattern (_, e_term, a_term, v_term) ->
+        Query.vars_of_query_terms [ e_term; a_term; v_term ]
+      | PatternTx (e_term, a_term, v_term, tx_term)
+      | SourcePatternTx (_, e_term, a_term, v_term, tx_term) ->
+        Query.vars_of_query_terms [ e_term; a_term; v_term; tx_term ]
+      | PatternTxOp (e_term, a_term, v_term, tx_term, op_term)
+      | SourcePatternTxOp (_, e_term, a_term, v_term, tx_term, op_term) ->
+        Query.vars_of_query_terms [ e_term; a_term; v_term; tx_term; op_term ]
+      | SourceRelationPattern (_, terms) -> Query.vars_of_query_terms terms
+      | ComparisonPredicate _ -> []
+      | _ -> [])
+    |> List.sort_uniq compare
+
+  let suffix_relation_binds_invocation terms clauses =
+    let invocation_vars = Query.vars_of_query_terms terms in
+    let bound_vars = suffix_relation_bound_vars clauses in
+    List.exists (fun var -> List.mem var bound_vars) invocation_vars
+
+  let query_term_is_ground = function
+    | QVar _ | QWildcard -> false
+    | _ -> true
+
+  let suffix_relation_is_selective clauses =
+    clauses
+    |> List.exists (function
+      | Pattern (e_term, QAttr _, v_term)
+      | SourcePattern (_, e_term, QAttr _, v_term)
+      | PatternTx (e_term, QAttr _, v_term, _)
+      | SourcePatternTx (_, e_term, QAttr _, v_term, _)
+      | PatternTxOp (e_term, QAttr _, v_term, _, _)
+      | SourcePatternTxOp (_, e_term, QAttr _, v_term, _, _) ->
+        query_term_is_ground e_term || query_term_is_ground v_term
+      | _ -> false)
+
+  let clause_has_lookup_ref = function
+    | Pattern (e_term, a_term, v_term)
+    | SourcePattern (_, e_term, a_term, v_term) ->
+      List.exists (function QLookupRef _ -> true | _ -> false) [ e_term; a_term; v_term ]
+    | PatternTx (e_term, a_term, v_term, tx_term)
+    | SourcePatternTx (_, e_term, a_term, v_term, tx_term) ->
+      List.exists (function QLookupRef _ -> true | _ -> false) [ e_term; a_term; v_term; tx_term ]
+    | PatternTxOp (e_term, a_term, v_term, tx_term, op_term)
+    | SourcePatternTxOp (_, e_term, a_term, v_term, tx_term, op_term) ->
+      List.exists
+        (function QLookupRef _ -> true | _ -> false)
+        [ e_term; a_term; v_term; tx_term; op_term ]
+    | SourceRelationPattern (_, terms) -> List.exists (function QLookupRef _ -> true | _ -> false) terms
+    | ComparisonPredicate (_, left_term, right_term) ->
+      List.exists (function QLookupRef _ -> true | _ -> false) [ left_term; right_term ]
+    | _ -> false
+
+  let rule_dynamic_attr_binds_value = function
+    | Pattern (_, QVar _, QVar _)
+    | PatternTx (_, QVar _, QVar _, _)
+    | PatternTxOp (_, QVar _, QVar _, _, _) ->
+      true
+    | _ -> false
+
+  let rule_safe_for_suffix_relation_context rule =
+    (not (List.exists Query.has_rule_clause rule.rule_body))
+    && not (List.exists rule_dynamic_attr_binds_value rule.rule_body)
+
+  let malformed_lookup_ref_value = function
+    | List ((Keyword _ | String _) :: _ as values)
+    | Vector ((Keyword _ | String _) :: _ as values) ->
+      List.length values <> 2
+    | _ -> false
+
+  let malformed_lookup_ref_message value =
+    "Lookup ref should contain 2 elements: " ^ edn_string_of_value value
+
+  let malformed_lookup_ref_value_in_attr (source_context : Query.source_context) source_db attr =
+    source_context.pattern_datoms source_db QWildcard (QAttr attr) QWildcard None
+    |> Seq.find_map (fun datom -> if malformed_lookup_ref_value datom.v then Some datom.v else None)
+
+  let first_malformed_lookup_ref_value_in_attrs (source_context : Query.source_context) source_db attrs =
+    attrs
+    |> List.find_map (fun attr ->
+      if is_ref_attr source_db attr then
+        None
+      else
+        malformed_lookup_ref_value_in_attr source_context source_db attr)
+
+  let identified_attrs (source_context : Query.source_context) source_db =
+    source_context.pattern_datoms source_db QWildcard (QAttr "db/ident") QWildcard None
+    |> Seq.filter_map (fun datom ->
+      match datom.v with
+      | Keyword attr | String attr | Symbol attr -> Some attr
+      | _ -> None)
+    |> List.of_seq
+
+  let first_malformed_lookup_ref_value db source =
+    match source with
+    | Relation_source _ -> Some Nil
+    | Db_source source_db ->
+      let source_context = query_source_context db in
+      (match identified_attrs source_context source_db with
+       | [] ->
+         source_context.pattern_datoms source_db QWildcard QWildcard QWildcard None
+         |> Seq.find_map (fun datom -> if malformed_lookup_ref_value datom.v then Some datom.v else None)
+       | attrs -> first_malformed_lookup_ref_value_in_attrs source_context source_db attrs)
+
+  let source_has_malformed_lookup_ref_value db source =
+    Option.is_some (first_malformed_lookup_ref_value db source)
+
+  let first_malformed_lookup_ref_value_for_logseq_property_attrs db source =
+    match source with
+    | Relation_source _ -> Some Nil
+    | Db_source source_db ->
+      let source_context = query_source_context db in
+      let property_entities =
+        source_context.pattern_datoms
+          source_db
+          QWildcard
+          (QAttr "block/tags")
+          (QValue (Keyword "logseq.class/Property"))
+          None
+        |> Seq.map (fun datom -> datom.e)
+        |> List.of_seq
+      in
+      if property_entities = [] then
+        first_malformed_lookup_ref_value db source
+      else
+        let property_attrs =
+          property_entities
+          |> List.filter_map (fun entity_id ->
+            source_context.pattern_datoms source_db (QEntity entity_id) (QAttr "db/ident") QWildcard None
+            |> Seq.find_map (fun datom ->
+              match datom.v with
+              | Keyword attr | String attr | Symbol attr -> Some attr
+              | _ -> None))
+        in
+        first_malformed_lookup_ref_value_in_attrs source_context source_db property_attrs
+
+  let source_has_malformed_lookup_ref_value_for_logseq_property_attrs db source =
+    Option.is_some (first_malformed_lookup_ref_value_for_logseq_property_attrs db source)
+
+  let rule_requires_logseq_property_tag rule =
+    rule.rule_body
+    |> List.exists (function
+      | Pattern (_, QAttr "block/tags", QValue (Keyword "logseq.class/Property")) -> true
+      | _ -> false)
+
+  let rec clause_mentions_logseq_property_public = function
+    | Pattern (_, QAttr "logseq.property/public?", _)
+    | SourcePattern (_, _, QAttr "logseq.property/public?", _)
+    | Missing (_, QAttr "logseq.property/public?")
+    | SourceMissing (_, _, QAttr "logseq.property/public?") ->
+      true
+    | Or branches
+    | OrJoin (_, branches)
+    | OrJoinRequired (_, _, branches) ->
+      List.exists (List.exists clause_mentions_logseq_property_public) branches
+    | SourceOr (_, branches)
+    | SourceOrJoin (_, _, branches)
+    | SourceOrJoinRequired (_, _, _, branches) ->
+      List.exists (List.exists clause_mentions_logseq_property_public) branches
+    | SourceClause (_, clause) -> clause_mentions_logseq_property_public clause
+    | _ -> false
+
+  let rule_filters_logseq_property_public rule =
+    List.exists clause_mentions_logseq_property_public rule.rule_body
+
+  let first_malformed_lookup_ref_value_for_rules db source rules =
+    if
+      List.for_all
+        (fun rule -> rule_requires_logseq_property_tag rule || rule_filters_logseq_property_public rule)
+        rules
+    then
+      first_malformed_lookup_ref_value_for_logseq_property_attrs db source
+    else
+      first_malformed_lookup_ref_value db source
+
+  let source_has_malformed_lookup_ref_value_for_rules db source rules =
+    Option.is_some (first_malformed_lookup_ref_value_for_rules db source rules)
 
   let relation_only_clauses clauses =
     List.for_all relation_prefix_clause clauses
@@ -1646,7 +2036,21 @@ end) = struct
         | _ -> false)
       clauses
 
+  let relation_prefix_uses_bound_equality bindings clauses =
+    let binding_vars =
+      bindings
+      |> List.concat_map (List.map fst)
+      |> List.sort_uniq compare
+    in
+    clauses
+    |> List.exists (function
+      | EqualityPredicate (_, terms) ->
+        Query.vars_of_query_terms terms
+        |> List.exists (fun var -> List.mem var binding_vars)
+      | _ -> false)
+
   let eval_relation_from_empty db sources default_source clauses =
+    let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
       | _ when relation.rows = [] -> Some { relation with rows = []; unique_rows = true }
@@ -1710,6 +2114,22 @@ end) = struct
         apply (hash_join relation next) rest
       | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
         apply (filter_relation_comparison db relation predicate left_term right_term) rest
+      | EqualityPredicate (predicate, terms) :: rest ->
+        apply (filter_relation_equality db relation predicate terms) rest
+      | NameValue (term, output_var) :: rest ->
+        let* relation = apply_relation_name_value db relation term output_var in
+        apply relation rest
+      | NamespaceValue (term, output_var) :: rest ->
+        let* relation = apply_relation_namespace_value db relation term output_var in
+        apply relation rest
+      | KeywordFromName (term, output_var) :: rest ->
+        let* relation = apply_relation_keyword_from_name db relation term output_var in
+        apply relation rest
+      | KeywordFromNamespaceName (namespace_term, name_term, output_var) :: rest ->
+        let* relation =
+          apply_relation_keyword_from_namespace_name db relation namespace_term name_term output_var
+        in
+        apply relation rest
       | ArithmeticValue (op, terms, output_var) :: rest ->
         let* relation = apply_relation_arithmetic db relation op terms output_var in
         apply relation rest
@@ -1909,6 +2329,13 @@ end) = struct
             | None -> left_term, right_term
           in
           apply (filter_relation_comparison db relation predicate left_term right_term) rest
+        | EqualityPredicate (predicate, terms) :: rest ->
+          let terms =
+            match single_binding with
+            | Some binding -> List.map (bound_pattern_term binding) terms
+            | None -> terms
+          in
+          apply (filter_relation_equality db relation predicate terms) rest
         | ArithmeticValue (op, terms, output_var) :: rest ->
           let terms =
             match single_binding with
@@ -1998,6 +2425,77 @@ end) = struct
       bindings
       clauses =
     let default_source = Option.value default_source ~default:(source db sources "$") in
+    let eval_sequential bindings clauses =
+      List.fold_left
+        (fun bindings clause ->
+          List.concat_map
+            (fun binding ->
+               eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+            bindings)
+        bindings
+        clauses
+    in
+    let eval_rule_with_suffix_relation_context
+        rule_db
+        rule_sources
+        rule_default_source
+        source_name
+        name
+        terms
+        rest =
+      let suffix_prefix, suffix_rest = split_suffix_relation_prefix rest in
+      let candidates = Query.matching_rules rules name (List.length terms) in
+      let suffix_safe = List.for_all rule_safe_for_suffix_relation_context candidates in
+      if suffix_prefix = []
+         || candidates = []
+         || List.exists rule_is_recursive candidates
+         || List.exists clause_has_lookup_ref suffix_prefix
+         || not (suffix_relation_is_selective suffix_prefix)
+         || not (suffix_relation_binds_invocation terms suffix_prefix)
+      then
+        None
+      else
+        match eval_relation_clauses db sources default_source bindings suffix_prefix with
+        | None -> None
+        | Some [] ->
+          if suffix_safe then
+            Some []
+          else
+            (match first_malformed_lookup_ref_value_for_rules rule_db rule_default_source candidates with
+             | Some value -> invalid_arg (malformed_lookup_ref_message value)
+             | None -> Some [])
+        | Some _ when (not suffix_safe)
+                      && source_has_malformed_lookup_ref_value_for_rules rule_db rule_default_source candidates ->
+          (match first_malformed_lookup_ref_value_for_rules rule_db rule_default_source candidates with
+           | Some value -> invalid_arg (malformed_lookup_ref_message value)
+           | None -> None)
+        | Some context_bindings ->
+          (match
+             eval_nonrecursive_rule_for_bindings
+               ~active_rules
+               ~callables
+               ~default_source:rule_default_source
+               rule_db
+               rule_sources
+               rules
+               context_bindings
+               source_name
+               name
+               terms
+           with
+           | None -> None
+           | Some rule_bindings ->
+             Some
+               (eval_clauses
+                  ~active_rules
+                  ~callables
+                  ~default_source
+                  db
+                  sources
+                  rules
+                  rule_bindings
+                  suffix_rest))
+    in
     match active_rules, query_callables_empty callables, rules, bindings with
     | [], true, _ :: _, [ binding ] when clauses_have_impossible_rule db sources default_source rules binding clauses ->
       []
@@ -2027,6 +2525,25 @@ end) = struct
       (match
          query_callables_empty callables, bindings, clauses, relation_prefix, rest
        with
+       | true, [ [] ], (Rule (name, terms) :: rule_rest), [], _ when active_rules = [] ->
+         (match eval_rule_with_suffix_relation_context db sources default_source "" name terms rule_rest with
+          | Some bindings -> bindings
+          | None -> eval_sequential bindings clauses)
+       | true, [ [] ], (SourceRule (source_name, name, terms) :: rule_rest), [], _ when active_rules = [] ->
+         let rule_db = source_db db sources source_name in
+         let source_sources = sources_with_root_default db sources in
+         (match
+            eval_rule_with_suffix_relation_context
+              rule_db
+              source_sources
+              (Db_source rule_db)
+              source_name
+              name
+              terms
+              rule_rest
+          with
+          | Some bindings -> bindings
+          | None -> eval_sequential bindings clauses)
        | true, _ :: _ :: _, (Rule (name, terms) :: rest), _, _ ->
          (match
             eval_nonrecursive_rule_for_bindings
@@ -2267,6 +2784,7 @@ end) = struct
                  || relation_prefix_uses_bound_attr_key bindings relation_prefix
                | [ _ ] ->
                  relation_rest_starts_source_clause rest
+                 || relation_prefix_uses_bound_equality bindings relation_prefix
                | _ :: _ :: _ ->
                  relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
                  || relation_prefix_uses_bound_attr_key bindings relation_prefix
@@ -2385,6 +2903,11 @@ end) = struct
         ; bound_pattern_term binding v_term
         ; bound_pattern_term binding tx_term
         ]
+    | ContainsValue (collection_term, _) ->
+      (match bound_pattern_term binding collection_term with
+       | QValue (Map _ | Set _ | List _ | Vector _ | Tuple _) -> false
+       | QValue _ -> true
+       | _ -> false)
     | _ -> false
 
   and rule_body_has_no_match db sources default_source binding rule =
@@ -2397,17 +2920,41 @@ end) = struct
     | None -> true
     | Some rule_binding -> rule_body_has_no_match db sources default_source rule_binding rule
 
+  and ref_rule_name = function
+    | "has-ref" | "page-ref" | "parent" -> true
+    | _ -> false
+
+  and ref_rule_body_has_no_match db sources default_source rules binding rule =
+    rule.rule_body
+    |> List.exists (function
+      | Rule (name, terms) when ref_rule_name name ->
+        rule_clause_has_no_match db sources default_source rules binding (Rule (name, terms))
+      | SourceRule (source_name, name, terms) when ref_rule_name name ->
+        rule_clause_has_no_match db sources default_source rules binding (SourceRule (source_name, name, terms))
+      | clause -> bound_rule_clause_has_no_match db sources default_source binding clause)
+
+  and ref_rule_candidate_has_no_match db sources default_source rules binding rule terms =
+    match rule_invocation_binding db binding rule terms with
+    | None -> true
+    | Some rule_binding -> ref_rule_body_has_no_match db sources default_source rules rule_binding rule
+
   and rule_clause_has_no_match db sources default_source rules binding = function
     | Rule (name, terms) ->
       matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
-        rule_candidate_has_no_match db sources default_source binding rule terms)
+        if ref_rule_name name then
+          ref_rule_candidate_has_no_match db sources default_source rules binding rule terms
+        else
+          rule_candidate_has_no_match db sources default_source binding rule terms)
     | SourceRule (source_name, name, terms) ->
       let rule_db = source_db db sources source_name in
       let source_sources = sources_with_root_default db sources in
       matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
-        rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) binding rule terms)
+        if ref_rule_name name then
+          ref_rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) rules binding rule terms
+        else
+          rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) binding rule terms)
     | _ -> false
 
   and clauses_have_impossible_rule db sources default_source rules binding clauses =
@@ -2643,7 +3190,7 @@ end) = struct
           match pairs with
           | [] -> []
           | _ ->
-            let rule_bindings = List.map snd pairs in
+            let rule_bindings = pairs |> List.map snd |> unique_projected_bindings in
             let grouped_vars, grouped_pairs = grouped_rule_pairs pairs in
             let active_rules =
               if List.exists Query.has_rule_clause rule.rule_body then

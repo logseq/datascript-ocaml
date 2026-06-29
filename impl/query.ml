@@ -155,7 +155,6 @@ let q_return context ?inputs db return query =
     |> List.filter_map (function
       | value :: _ -> Some value
       | [] -> None)
-    |> List.sort_uniq compare
     |> fun values -> Query_collection values
   | Return_tuple -> Query_tuple (List.nth_opt rows 0)
   | Return_scalar ->

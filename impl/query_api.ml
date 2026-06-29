@@ -70,10 +70,29 @@ end) = struct
       in
       collect [] find
 
+  let sort_uniq_presorted compare rows =
+    let rec collect previous acc = function
+      | [] -> Some (List.rev acc)
+      | row :: rest ->
+        (match previous with
+         | None -> collect (Some row) (row :: acc) rest
+         | Some previous ->
+           let order = compare previous row in
+           if order = 0 then
+             collect (Some previous) acc rest
+           else if order < 0 then
+             collect (Some row) (row :: acc) rest
+           else
+             None)
+    in
+    match collect None [] rows with
+    | Some rows -> rows
+    | None -> List.sort_uniq compare rows
+
   let relation_rows_for_plain_find attrs rows unique_rows find =
     let* find_vars = find_var_names find in
     if find_vars = attrs then
-      Some (if unique_rows then rows else List.sort_uniq compare rows)
+      Some (if unique_rows then rows else sort_uniq_presorted compare rows)
     else
       let* indexes =
         find_vars
@@ -90,7 +109,7 @@ end) = struct
       in
       rows
       |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
-      |> List.sort_uniq compare
+      |> sort_uniq_presorted compare
       |> fun rows -> Some rows
 
   let find_spec_vars = function

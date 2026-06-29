@@ -6,6 +6,7 @@ type context =
   ; entity_attr_raw : entity -> attr -> tx_value option
   ; entity_attrs : entity -> (attr * tx_value) list
   ; datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; all_datoms : db -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; cardinality : db -> attr -> cardinality
   ; is_ref_attr : db -> attr -> bool
@@ -150,11 +151,19 @@ let forward_attrs_for_selectors context selectors =
     |> List.sort_uniq String.compare
 
 let tx_value_of_attr_values context db attr values =
-  let values = List.sort context.compare_value values in
   match context.cardinality db attr, values with
-  | Many, values -> Many_values values
+  | Many, [] -> Many_values []
+  | Many, [ _ ] -> Many_values values
+  | Many, values -> Many_values (List.sort context.compare_value values)
   | One, [] -> Many_values []
-  | One, values -> One_value (List.hd (List.rev values))
+  | One, [ value ] -> One_value value
+  | One, first :: rest ->
+    One_value
+      (List.fold_left
+         (fun max_value value ->
+           if context.compare_value max_value value < 0 then value else max_value)
+         first
+         rest)
 
 let forward_entity context db entity_id attrs =
   let datoms = context.datoms_by_entity db entity_id in
@@ -162,25 +171,30 @@ let forward_entity context db entity_id attrs =
   | None -> None
   | Some (first, rest) ->
     let wanted attr = attrs = [] || List.mem attr attrs in
-    let groups = Hashtbl.create 8 in
-    let attr_order = ref [] in
-    let add d =
-      if wanted d.a then (
-        if not (Hashtbl.mem groups d.a) then
-          attr_order := d.a :: !attr_order;
-        let values = Option.value (Hashtbl.find_opt groups d.a) ~default:[] in
-        Hashtbl.replace groups d.a (d.v :: values))
+    let add_attr attr values acc =
+      match tx_value_of_attr_values context db attr values with
+      | Many_values [] -> acc
+      | value -> (attr, value) :: acc
     in
     let attrs =
-      Seq.cons first rest
-      |> Seq.iter add;
-      !attr_order
-      |> List.rev
-      |> List.filter_map (fun attr ->
-        let values = Hashtbl.find groups attr in
-        match tx_value_of_attr_values context db attr values with
-        | Many_values [] -> None
-        | value -> Some (attr, value))
+      let rec collect current_attr current_values acc seq =
+        match seq () with
+        | Seq.Nil ->
+          (match current_attr with
+           | None -> List.rev acc
+           | Some attr -> List.rev (add_attr attr current_values acc))
+        | Seq.Cons (datom, rest) ->
+          if not (wanted datom.a) then
+            collect current_attr current_values acc rest
+          else
+            match current_attr with
+            | Some attr when attr = datom.a ->
+              collect current_attr (datom.v :: current_values) acc rest
+            | Some attr ->
+              collect (Some datom.a) [ datom.v ] (add_attr attr current_values acc) rest
+            | None -> collect (Some datom.a) [ datom.v ] acc rest
+      in
+      collect None [] [] (Seq.cons first rest)
     in
     Some
       { id = entity_id
@@ -657,3 +671,94 @@ let pull ?visitor context db selector entity_ref =
 
 let pull_many ?visitor context db selector entity_refs =
   List.map (pull ?visitor context db selector) entity_refs
+
+let pull_wildcard_entity ?visitor context db entity_id attrs =
+  let entity =
+    { id = entity_id
+    ; db
+    ; attrs
+    ; lookup_attr = (fun attr -> List.assoc_opt attr attrs)
+    ; materialize_attrs = (fun () -> attrs)
+    }
+  in
+  visit_pull visitor (PullVisitWildcard entity_id);
+  (pull_key_of_attr "db/id", Pulled_scalar (Int entity_id))
+  :: (attrs
+      |> List.filter (fun (attr, _) -> not (context.is_reverse_ref attr))
+      |> List.map (fun (attr, value) ->
+        visit_pull_attr context visitor entity_id attr;
+        pull_key_of_attr attr, pulled_attr_value ?visitor ~root_id:entity_id ~root_reexpanded:false context db [] entity attr (default_limit_tx_value value)))
+  |> List.sort (fun (left, _) (right, _) -> compare_pull_key context left right)
+  |> fun pulled_attrs -> { pulled_id = entity_id; pulled_attrs }
+
+let pull_wildcard_many_by_ids ?visitor context db entity_ids =
+  match entity_ids with
+  | [] -> []
+  | _ ->
+    let cached lookup =
+      let table = Hashtbl.create 128 in
+      fun db attr ->
+        match Hashtbl.find_opt table attr with
+        | Some value -> value
+        | None ->
+          let value = lookup db attr in
+          Hashtbl.replace table attr value;
+          value
+    in
+    let context =
+      { context with
+        cardinality = cached context.cardinality
+      ; is_ref_attr = cached context.is_ref_attr
+      ; is_component = cached context.is_component
+      }
+    in
+    let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+    List.iter
+      (fun entity_id ->
+        if entity_id >= 0 && entity_id < Bytes.length wanted then
+          Bytes.set wanted entity_id '\001')
+      entity_ids;
+    let wanted_entity entity_id =
+      entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+    in
+    let add_attr attr values acc =
+      match tx_value_of_attr_values context db attr values with
+      | Many_values [] -> acc
+      | value -> (attr, value) :: acc
+    in
+    let finish_entity current_entity current_attr current_values attrs acc =
+      match current_entity with
+      | None -> acc
+      | Some entity_id ->
+        let attrs =
+          match current_attr with
+          | None -> attrs
+          | Some attr -> add_attr attr current_values attrs
+        in
+        pull_wildcard_entity ?visitor context db entity_id (List.rev attrs) :: acc
+    in
+    let rec collect current_entity current_attr current_values attrs acc seq =
+      match seq () with
+      | Seq.Nil -> List.rev (finish_entity current_entity current_attr current_values attrs acc)
+      | Seq.Cons (datom, rest) ->
+        if not (wanted_entity datom.e) then
+          collect current_entity current_attr current_values attrs acc rest
+        else
+          match current_entity, current_attr with
+          | Some entity_id, Some attr when entity_id = datom.e && attr = datom.a ->
+            collect current_entity current_attr (datom.v :: current_values) attrs acc rest
+          | Some entity_id, Some attr when entity_id = datom.e ->
+            collect
+              current_entity
+              (Some datom.a)
+              [ datom.v ]
+              (add_attr attr current_values attrs)
+              acc
+              rest
+          | Some _, _ ->
+            let acc = finish_entity current_entity current_attr current_values attrs acc in
+            collect (Some datom.e) (Some datom.a) [ datom.v ] [] acc rest
+          | None, _ ->
+            collect (Some datom.e) (Some datom.a) [ datom.v ] [] acc rest
+    in
+    collect None None [] [] [] (context.all_datoms db)

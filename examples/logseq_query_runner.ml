@@ -24,6 +24,7 @@ let json_string value =
 
 let json_field key value = json_string key ^ ":" ^ value
 let json_obj fields = "{" ^ String.concat "," (List.map (fun (key, value) -> json_field key value) fields) ^ "}"
+let parsed_query_cache = Hashtbl.create 256
 
 let exception_message = function
   | Invalid_argument message | Failure message -> message
@@ -285,7 +286,12 @@ let query_inputs_of_strings query rules inputs =
 
 let run_query_output db rules inputs query =
   let return, return_map, parsed_query =
-    parse_query_return_map_string_with_pull_context ~default_pull_db:db query
+    match Hashtbl.find_opt parsed_query_cache query with
+    | Some parsed -> parsed
+    | None ->
+      let parsed = parse_query_return_map_string_with_pull_context ~default_pull_db:db query in
+      Hashtbl.replace parsed_query_cache query parsed;
+      parsed
   in
   let inputs =
     match query_inputs_of_strings parsed_query rules inputs with
@@ -297,13 +303,31 @@ let run_query_output db rules inputs query =
   | None -> q_return ?inputs db return parsed_query
 
 let run_query db id query rules inputs =
+  let trace = Sys.getenv_opt "LOGSEQ_QUERY_RUNNER_TRACE" = Some "1" in
+  if trace then (
+    prerr_endline ("query-start " ^ id);
+    flush stderr);
+  let started = Unix.gettimeofday () in
   try
-    let value = run_query_output db rules inputs query |> edn_query_output in
-    print_endline
-      (json_obj [ "id", json_string id; "status", json_string "ok"; "value", json_string value ]);
+    let output = run_query_output db rules inputs query in
+    if trace then (
+      Printf.eprintf "query-done %s %.6f\n" id (Unix.gettimeofday () -. started);
+      flush stderr);
+    let fields =
+      [ "id", json_string id; "status", json_string "ok" ]
+      @
+      if Sys.getenv_opt "LOGSEQ_QUERY_RUNNER_OMIT_VALUE" = Some "1" then
+        []
+      else
+        [ "value", json_string (edn_query_output output) ]
+    in
+    print_endline (json_obj fields);
     flush stdout
   with
   | exn ->
+    if trace then (
+      Printf.eprintf "query-error %s %.6f\n" id (Unix.gettimeofday () -. started);
+      flush stderr);
     print_endline
       (json_obj
          [ "id", json_string id

@@ -133,10 +133,14 @@ and db =
   ; eavt_index : datom Persistent_sorted_set.t
   ; aevt_index : datom Persistent_sorted_set.t
   ; avet_index : datom Persistent_sorted_set.t
+  ; aevt_by_attr : (attr, datom list) Hashtbl.t
+  ; avet_by_attr : (attr, datom list) Hashtbl.t
   ; duplicate_datoms : datom list
   ; duplicate_aevt_datoms : datom list
   ; duplicate_avet_datoms : datom list
   ; duplicate_eavt_by_entity : (entity_id, datom list) Hashtbl.t
+  ; duplicate_aevt_by_attr : (attr, datom list) Hashtbl.t
+  ; duplicate_avet_by_attr : (attr, datom list) Hashtbl.t
   ; max_eid : entity_id
   ; max_datom_e : entity_id
   ; max_tx : tx

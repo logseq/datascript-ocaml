@@ -56,19 +56,35 @@ let duplicate_eavt_by_entity duplicate_datoms =
   Hashtbl.iter (fun entity_id datoms -> Hashtbl.replace table entity_id (List.rev datoms)) table;
   table
 
+let duplicate_datoms_by_attr duplicate_datoms =
+  let table = Hashtbl.create 1024 in
+  List.iter
+    (fun datom ->
+      let existing = Option.value (Hashtbl.find_opt table datom.a) ~default:[] in
+      Hashtbl.replace table datom.a (datom :: existing))
+    duplicate_datoms;
+  Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
+  table
+
 let from_serializable context snapshot =
   let schema = context.validate_schema snapshot.serializable_schema in
   let datoms = List.map (context.normalize_datom_for_schema schema) snapshot.serializable_datoms in
   let duplicate_datoms = duplicate_datoms datoms in
+  let duplicate_aevt_datoms = duplicate_aevt_datoms duplicate_datoms in
+  let duplicate_avet_datoms = duplicate_avet_datoms schema duplicate_datoms in
   { db_uid = context.next_db_uid ()
   ; schema
   ; eavt_index = index_from_datoms Eavt datoms
   ; aevt_index = empty_index Aevt
   ; avet_index = empty_index Avet
+  ; aevt_by_attr = Hashtbl.create 0
+  ; avet_by_attr = Hashtbl.create 0
   ; duplicate_datoms
-  ; duplicate_aevt_datoms = duplicate_aevt_datoms duplicate_datoms
-  ; duplicate_avet_datoms = duplicate_avet_datoms schema duplicate_datoms
+  ; duplicate_aevt_datoms
+  ; duplicate_avet_datoms
   ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
+  ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
+  ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
   ; max_eid = snapshot.serializable_max_eid
   ; max_datom_e = 0
   ; max_tx = snapshot.serializable_max_tx

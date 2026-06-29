@@ -6,6 +6,7 @@ type context =
   ; entity_attr_raw : entity -> attr -> tx_value option
   ; entity_attrs : entity -> (attr * tx_value) list
   ; datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; all_datoms : db -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; cardinality : db -> attr -> cardinality
   ; is_ref_attr : db -> attr -> bool
@@ -17,3 +18,4 @@ type context =
 
 val pull : ?visitor:(pull_visit -> unit) -> context -> db -> pull_selector list -> entity_ref -> pulled_entity option
 val pull_many : ?visitor:(pull_visit -> unit) -> context -> db -> pull_selector list -> entity_ref list -> pulled_entity option list
+val pull_wildcard_many_by_ids : ?visitor:(pull_visit -> unit) -> context -> db -> entity_id list -> pulled_entity list
