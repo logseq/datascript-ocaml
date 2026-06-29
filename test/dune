@@ -21,7 +21,7 @@
 (test
  (name test_db)
  (modules test_db)
- (libraries datascript persistent_sorted_set_ocaml))
+ (libraries datascript persistent_sorted_set_ocaml unix))
 
 (test
  (name test_perf)

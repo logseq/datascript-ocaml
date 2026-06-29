@@ -56,7 +56,7 @@
     (binding [*out* *err*]
       (println "Usage: clojure -M script/extract_logseq_runtime_inputs.clj LOGSEQ_ROOT [OUT]"))
     (System/exit 2))
-  (let [out (or out "logseq_runtime_inputs.edn")
+  (let [out (or out "test/logseq_runtime_inputs.edn")
         rules-file (io/file logseq-root "deps/db/src/logseq/db/frontend/rules.cljc")
         forms (read-file-forms rules-file)
         base-rules (merge-rules-form {} (def-form forms 'rules))

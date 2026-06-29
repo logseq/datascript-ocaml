@@ -665,7 +665,7 @@
       parsed)))
 
 (defn -main [& [queries-path sqlite-path runner report-path batch-start-arg batch-size-arg runtime-inputs-path]]
-  (let [queries-path (or queries-path "logseq_queries.edn")
+  (let [queries-path (or queries-path "test/logseq_queries.edn")
         sqlite-path (or sqlite-path "lambda.sqlite")
         runner (or runner "_build/default/examples/logseq_query_runner.exe")
         report-path (or report-path "logseq_query_diff_report.md")
@@ -673,8 +673,8 @@
         batch-size (parse-nonnegative-int batch-size-arg 20)
         runtime-inputs (if (and runtime-inputs-path (.exists (io/file runtime-inputs-path)))
                          (edn/read-string (slurp runtime-inputs-path))
-                         (if (.exists (io/file "logseq_runtime_inputs.edn"))
-                           (edn/read-string (slurp "logseq_runtime_inputs.edn"))
+                         (if (.exists (io/file "test/logseq_runtime_inputs.edn"))
+                           (edn/read-string (slurp "test/logseq_runtime_inputs.edn"))
                            {}))
         entries (query-corpus runtime-inputs (edn/read-string (slurp queries-path)))
         runnable (vec (filter runnable-entry? entries))

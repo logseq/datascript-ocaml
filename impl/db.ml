@@ -1023,22 +1023,41 @@ let diff left right =
   )
 
 let squuid_counter = ref 0
+let squuid_random_initialized = ref false
+let hex_digits = "0123456789abcdef"
+
+let ensure_squuid_random_initialized () =
+  if not !squuid_random_initialized then (
+    Random.self_init ();
+    squuid_random_initialized := true)
+
+let hex8_of_seconds seconds =
+  let bytes = Bytes.make 8 '0' in
+  let rec loop index value =
+    if index >= 0 then (
+      let digit = int_of_float (mod_float value 16.0) in
+      Bytes.set bytes index hex_digits.[digit];
+      loop (index - 1) (floor (value /. 16.0)))
+  in
+  loop 7 (floor seconds);
+  Bytes.unsafe_to_string bytes
 
 let squuid ?msec () =
+  ensure_squuid_random_initialized ();
   incr squuid_counter;
-  let msec =
+  let seconds =
     match msec with
-    | Some msec -> msec
-    | None -> int_of_float (Sys.time () *. 1000.0)
+    | Some msec -> Float.of_int msec /. 1000.0
+    | None -> Unix.gettimeofday ()
   in
-  let seconds = msec / 1000 in
+  let seconds_hex = hex8_of_seconds seconds in
   let r1 = Random.bits () land 0xffff in
   let r2 = ((Random.bits () land 0x0fff) lor 0x4000) land 0xffff in
   let r3 = ((Random.bits () land 0x3fff) lor 0x8000) land 0xffff in
   let r4 = !squuid_counter land 0xffff in
   let r5 = Random.bits () land 0xffff in
   let r6 = Random.bits () land 0xffff in
-  Uuid (Printf.sprintf "%08x-%04x-%04x-%04x-%04x%04x%04x" seconds r1 r2 r3 r4 r5 r6)
+  Uuid (Printf.sprintf "%s-%04x-%04x-%04x-%04x%04x%04x" seconds_hex r1 r2 r3 r4 r5 r6)
 
 let squuid_time_millis = function
   | Uuid uuid ->

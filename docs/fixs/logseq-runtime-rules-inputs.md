@@ -10,7 +10,7 @@ The comparator only treated queries with no runtime inputs, or only `$`, as runn
 
 ## Fix
 
-`script/extract_logseq_runtime_inputs.clj` extracts Logseq rule forms into `logseq_runtime_inputs.edn`. `script/compare_logseq_queries.clj` now:
+`script/extract_logseq_runtime_inputs.clj` extracts Logseq rule forms into `test/logseq_runtime_inputs.edn`. `script/compare_logseq_queries.clj` now:
 
 - detects queries that call extracted rules;
 - adds `:in $ %` when the query omitted rule inputs;

@@ -133,7 +133,7 @@
     (binding [*out* *err*]
       (println "Usage: clojure -M script/extract_logseq_queries.clj LOGSEQ_ROOT [OUT]"))
     (System/exit 2))
-  (let [out (or out "logseq_queries.edn")
+  (let [out (or out "test/logseq_queries.edn")
         entries (->> (source-files root)
                      (mapcat #(extract-from-file root %))
                      (remove :read-error)

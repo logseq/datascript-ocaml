@@ -55,6 +55,16 @@ const report = d.transact(conn, [{ ":db/id": -1, name: "Petr" }]);
 assert(d.db(conn) === report.db_after, "transact should update the connection");
 assert(d.resolve_tempid(report.tempids, -1) === 1, "resolve_tempid should read tempid map");
 
+const beforeSquuid = Math.floor(Date.now() / 1000);
+const squuid = d.squuid();
+const afterSquuid = Math.floor(Date.now() / 1000);
+const squuidSeconds = Number.parseInt(squuid.slice(0, 8), 16);
+assert(
+  squuidSeconds >= beforeSquuid && squuidSeconds <= afterSquuid,
+  `squuid should embed wall-clock seconds, got ${squuidSeconds} outside [${beforeSquuid}, ${afterSquuid}]`,
+);
+assert(d.squuid_time_millis(squuid) === squuidSeconds * 1000, "squuid_time_millis should decode squuid seconds");
+
 const refConn = d.create_conn({
   friend: { ":db/valueType": ":db.type/ref" },
   team: { ":db/valueType": ":db.type/ref", ":db/cardinality": ":db.cardinality/many" },

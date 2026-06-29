@@ -112,6 +112,19 @@ let test_db__test_uuid () =
   if first_uuid.[8] <> '-' || first_uuid.[13] <> '-' || first_uuid.[18] <> '-' || first_uuid.[23] <> '-' then
     failwith "squuid should use canonical UUID separators"
 
+let test_db__test_squuid_uses_wall_clock_time () =
+  let before = int_of_float (Unix.gettimeofday ()) in
+  let uuid =
+    match squuid () with
+    | Uuid uuid -> uuid
+    | _ -> failwith "squuid should return a Uuid value"
+  in
+  let after = int_of_float (Unix.gettimeofday ()) in
+  let seconds = int_of_string ("0x" ^ String.sub uuid 0 8) in
+  if seconds < before || seconds > after then
+    failf "squuid should embed wall-clock seconds, got %d outside [%d, %d]"
+      seconds before after
+
 let test_db__test_diff () =
   let left =
     empty_db ()
@@ -216,6 +229,7 @@ let () =
   test_db__test_defrecord_updatable ();
   test_db__test_db_hash_cache ();
   test_db__test_uuid ();
+  test_db__test_squuid_uses_wall_clock_time ();
   test_db__test_diff ();
   test_db__test_index_api ();
   test_db__test_indexes_use_persistent_sorted_set ();

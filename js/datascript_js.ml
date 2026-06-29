@@ -276,6 +276,11 @@ let tempids_object tempids =
   |> List.map (fun (tempid, entity_id) -> tempid, `Int entity_id)
   |> fun entries -> `Assoc entries
 
+let squuid_time_millis_json uuid =
+  if String.length uuid < 8 then invalid_arg "invalid squuid";
+  let seconds = Int32.to_float (Int32.of_string ("0x" ^ String.sub uuid 0 8)) in
+  `Float (seconds *. 1000.0)
+
 let json_of_tx_report report =
   `Assoc
     [ "db_before", `String "<db>"
@@ -392,5 +397,5 @@ let () =
         ; ( "squuid_time_millis"
           , Js.Unsafe.inject
               (Js.wrap_callback (fun uuid ->
-                 Js.Unsafe.inject (squuid_time_millis (String (Js.to_string uuid))))) )
+                 js_of_json (squuid_time_millis_json (Js.to_string uuid)))) )
        |])
