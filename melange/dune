@@ -3,4 +3,7 @@
  (public_name datascript_ocaml.melange_storage)
  (modes melange)
  (enabled_if (= %{context_name} default))
- (libraries datascript_ocaml melange-transit-melange persistent_sorted_set_ocaml))
+ (libraries
+  datascript_ocaml
+  melange-transit-melange
+  persistent_sorted_set_ocaml.melange))
