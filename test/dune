@@ -1,132 +1,132 @@
 (test
  (name test_datascript)
  (modules test_datascript)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (test
  (name test_lru)
  (modules test_lru)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_conn)
  (modules test_conn)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_core)
  (modules test_core)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_db)
  (modules test_db)
- (libraries datascript persistent_sorted_set_ocaml unix))
+ (libraries datascript-ocaml-native persistent_sorted_set_ocaml unix))
 
 (test
  (name test_perf)
  (modules test_perf)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (test
  (name test_data_readers)
  (modules test_data_readers)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_built_ins)
  (modules test_built_ins)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_issues)
  (modules test_issues)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_entity)
  (modules test_entity)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_listen)
  (modules test_listen)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_lookup_refs)
  (modules test_lookup_refs)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser)
  (modules test_parser)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser_find)
  (modules test_parser_find)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser_query)
  (modules test_parser_query)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser_return_map)
  (modules test_parser_return_map)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser_rules)
  (modules test_parser_rules)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_parser_where)
  (modules test_parser_where)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_pull_api)
  (modules test_pull_api)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_pull_parser)
  (modules test_pull_parser)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_query_pull)
  (modules test_query_pull)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_query_namespace)
  (modules test_query_namespace)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_tuples)
  (modules test_tuples)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_serialize)
  (modules test_serialize)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
- (libraries datascript logseq_sqlite_storage unix sqlite3 melange-transit-native))
+ (libraries datascript-ocaml-native logseq_sqlite_storage unix sqlite3 melange-transit-native))
 
 (test
  (name test_sqlite_package)
  (modules test_sqlite_package)
- (libraries datascript datascript_ocaml.sqlite))
+ (libraries datascript-ocaml-native datascript-ocaml-native.sqlite))
 
 (test
  (name test_melange_transit_backend)
@@ -136,7 +136,7 @@
 (executable
  (name sqlite_cross_runtime_native)
  (modules sqlite_cross_runtime_native)
- (libraries datascript unix sqlite3 yojson))
+ (libraries datascript-ocaml-native unix sqlite3 yojson))
 
 (rule
  (target upstream_datascript_bundle.stamp)
@@ -166,44 +166,59 @@
 (test
  (name test_logseq_query_parity)
  (modules test_logseq_query_parity)
- (libraries datascript logseq_sqlite_storage unix sqlite3))
+ (libraries datascript-ocaml-native logseq_sqlite_storage unix sqlite3))
 
 (test
  (name test_logseq_query_planners)
  (modules test_logseq_query_planners)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (test
  (name test_storage)
  (modules test_storage)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (test
  (name test_upsert)
  (modules test_upsert)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (test
  (name test_util)
  (modules test_util)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (executable
  (name cross_runtime_ocaml)
  (modules cross_runtime_ocaml)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (executable
  (name js_smoke)
  (modes js)
  (modules js_smoke)
- (libraries datascript))
+ (libraries datascript-ocaml-jsoo))
+
+(melange.emit
+ (target melange-smoke)
+ (alias melange-smoke)
+ (module_systems es6)
+ (modules melange_smoke)
+ (libraries datascript-ocaml-melange))
 
 (rule
  (alias runtest)
  (deps js_smoke.bc.js)
  (action
   (run node %{dep:js_smoke.bc.js})))
+
+(rule
+ (alias runtest)
+ (deps
+  (alias melange-smoke)
+  melange-smoke/test/melange_smoke.js)
+ (action
+  (run node %{dep:melange-smoke/test/melange_smoke.js})))
 
 (rule
  (alias runtest)

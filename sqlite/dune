@@ -1,10 +1,10 @@
 (library
  (name datascript_sqlite)
- (public_name datascript_ocaml.sqlite)
+ (public_name datascript-ocaml-native.sqlite)
  (wrapped false)
  (foreign_stubs
   (language c)
   (names datascript_sqlite_stubs))
  (c_library_flags
   (:standard -lsqlite3))
- (libraries datascript persistent_sorted_set_ocaml melange-transit-native))
+ (libraries datascript-ocaml-native persistent_sorted_set_ocaml melange-transit-native))

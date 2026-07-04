@@ -1,14 +1,14 @@
 (library
  (name logseq_sqlite_storage)
  (modules logseq_sqlite_storage)
- (libraries datascript unix yojson sqlite3 melange-transit-native))
+ (libraries datascript-ocaml-native unix yojson sqlite3 melange-transit-native))
 
 (executable
  (name sqlite_storage_example)
  (modules sqlite_storage_example)
- (libraries datascript logseq_sqlite_storage unix))
+ (libraries datascript-ocaml-native logseq_sqlite_storage unix))
 
 (executable
  (name logseq_query_runner)
  (modules logseq_query_runner)
- (libraries datascript logseq_sqlite_storage unix yojson))
+ (libraries datascript-ocaml-native logseq_sqlite_storage unix yojson))

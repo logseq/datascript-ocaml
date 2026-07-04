@@ -2,18 +2,18 @@
  (name bench_ocaml)
  (modules bench_ocaml)
  (modes exe js)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (executable
  (name query_profile)
  (modules query_profile)
  (modes exe js)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (library
  (name memory_bench_common)
  (modules memory_scenario)
- (libraries datascript))
+ (libraries datascript-ocaml-native))
 
 (executable
  (name memory_ocaml)
@@ -31,13 +31,13 @@
  (name persistent_sqlite)
  (modules persistent_sqlite)
  (modes exe)
- (libraries datascript datascript_sqlite unix sqlite3))
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
 
 (executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe js)
- (libraries datascript unix))
+ (libraries datascript-ocaml-native unix))
 
 (rule
  (alias bench)

@@ -1,17 +1,20 @@
 opam-version: "2.0"
-synopsis: "An OCaml 5 rewrite of DataScript"
-description: "A OCaml 5 rewrite of DataScript."
+synopsis: "Native OCaml implementation for DataScript OCaml"
+description: "Native OCaml implementation package for the DataScript OCaml virtual library."
 maintainer: "rcmerci"
 authors: ["rcmerci"]
 license: "MIT"
 depends: [
   "ocaml" {>= "5.2.1"}
   "dune" {>= "3.17"}
+  "datascript_ocaml" {= version}
   "persistent_sorted_set_ocaml" {= "dev"}
-  "melange"
+  "sqlite3"
+  "melange-transit-native" {= "0.1.0"}
 ]
 pin-depends: [
   ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
+  ["melange-transit-native.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
