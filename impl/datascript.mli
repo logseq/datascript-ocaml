@@ -1,6 +1,8 @@
 include module type of Datascript_types
 
 module Built_ins : sig
+  type regex
+
   val map_get_value : (value * value) list -> value -> value option
   val value_get : value -> value -> value option
   val value_count : value -> int option
@@ -30,7 +32,7 @@ module Built_ins : sig
   val print_query_values : readably:bool -> value list -> string
   val collection_string_values : value -> string list option
   val replace_string : ?first_only:bool -> string -> string -> string -> string
-  val compile_regex : string -> Str.regexp
+  val compile_regex : string -> regex
   val replace_regex : ?first_only:bool -> string -> string -> string -> string
   val string_escape_replacement : (value * value) list -> char -> string option
   val escape_string : string -> (value * value) list -> string

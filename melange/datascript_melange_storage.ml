@@ -1,4 +1,4 @@
-module Ds = Datascript_types
+module Ds = Datascript
 module PSet = Persistent_sorted_set
 module Transit = Transit_melange.Transit.Json
 

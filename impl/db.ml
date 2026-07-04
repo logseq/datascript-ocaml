@@ -1048,7 +1048,7 @@ let squuid ?msec () =
   let seconds =
     match msec with
     | Some msec -> Float.of_int msec /. 1000.0
-    | None -> Unix.gettimeofday ()
+    | None -> Platform.now_seconds ()
   in
   let seconds_hex = hex8_of_seconds seconds in
   let r1 = Random.bits () land 0xffff in

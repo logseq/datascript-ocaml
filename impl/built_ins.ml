@@ -1,5 +1,7 @@
 open Datascript_types
 
+type regex = Platform.regex
+
 let compare_value = Util.compare_value
 
 let normalize_value = Util.normalize_value
@@ -367,15 +369,11 @@ let replace_string ?(first_only = false) value pattern replacement =
     Buffer.contents buffer
 
 let compile_regex pattern =
-  try Str.regexp pattern with
-  | Failure message -> invalid_arg ("invalid regex pattern: " ^ message)
+  Platform.compile_regex pattern
 
 let replace_regex ?(first_only = false) value pattern replacement =
   let regex = compile_regex pattern in
-  if first_only then
-    Str.replace_first regex replacement value
-  else
-    Str.global_replace regex replacement value
+  Platform.replace_regex ~first_only regex value replacement
 
 let string_escape_replacement replacements ch =
   let key = String (String.make 1 ch) in
@@ -400,62 +398,21 @@ let regex_pattern_of_result = function
 
 let regex_find pattern value =
   let regex = compile_regex pattern in
-  try
-    ignore (Str.search_forward regex value 0);
-    Some (Str.matched_string value)
-  with
-  | Not_found -> None
+  Platform.regex_find regex value
 
 let regex_matches pattern value =
   let regex = compile_regex pattern in
-  if Str.string_match regex value 0 && Str.match_end () = String.length value then
-    Some (Str.matched_string value)
-  else
-    None
+  Platform.regex_matches regex value
 
 let regex_seq pattern value =
   let regex = compile_regex pattern in
-  let length = String.length value in
-  let rec collect index matches =
-    if index > length then
-      List.rev matches
-    else
-      try
-        let match_start = Str.search_forward regex value index in
-        let match_end = Str.match_end () in
-        let matched = Str.matched_string value in
-        let next_index = if match_end <= match_start then match_start + 1 else match_end in
-        collect next_index (matched :: matches)
-      with
-      | Not_found -> List.rev matches
-  in
-  collect 0 []
+  Platform.regex_seq regex value
 
 let split_regex value pattern =
-  Str.split (compile_regex pattern) value
+  Platform.split_regex (compile_regex pattern) value
 
 let split_regex_limited value pattern limit =
-  if limit <= 0 then
-    split_regex value pattern
-  else if limit = 1 then
-    [ value ]
-  else begin
-    let regex = compile_regex pattern in
-    let length = String.length value in
-    let rec collect start remaining acc =
-      if remaining = 1 || start > length then
-        List.rev (String.sub value start (length - start) :: acc)
-      else
-        try
-          let match_start = Str.search_forward regex value start in
-          let match_end = Str.match_end () in
-          let next_start = if match_end <= match_start then match_start + 1 else match_end in
-          collect next_start (remaining - 1) (String.sub value start (match_start - start) :: acc)
-        with
-        | Not_found -> List.rev (String.sub value start (length - start) :: acc)
-    in
-    collect 0 limit []
-  end
+  Platform.split_regex_limited (compile_regex pattern) value limit
 
 let reverse_string value =
   String.init (String.length value) (fun index -> value.[String.length value - index - 1])
