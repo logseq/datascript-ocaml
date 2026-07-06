@@ -958,7 +958,7 @@ end) = struct
     let has_not = List.exists (function Not _ -> true | _ -> false) clauses in
     if has_not then
       validate_not_order clauses;
-    let* patterns, excluded_patterns =
+    let* patterns, excluded_patterns, relation_comparisons =
       if has_not then
         let clause_pattern = function
           | Pattern (QVar e_var, QAttr attr, value_term) -> Some (`Positive (e_var, attr, value_term))
@@ -969,21 +969,23 @@ end) = struct
         |> List.fold_left
              (fun acc clause ->
                match acc, clause_pattern clause with
-               | Some (patterns, excluded), Some (`Positive pattern) -> Some (pattern :: patterns, excluded)
-               | Some (patterns, excluded), Some (`Excluded pattern) -> Some (patterns, pattern :: excluded)
-               | _ -> None)
+             | Some (patterns, excluded), Some (`Positive pattern) -> Some (pattern :: patterns, excluded)
+             | Some (patterns, excluded), Some (`Excluded pattern) -> Some (patterns, pattern :: excluded)
+             | _ -> None)
              (Some ([], []))
-        |> Option.map (fun (patterns, excluded) -> List.rev patterns, List.rev excluded)
+        |> Option.map (fun (patterns, excluded) -> List.rev patterns, List.rev excluded, [])
       else
         clauses
         |> List.fold_left
              (fun acc clause ->
                match acc, clause with
-               | Some patterns, Pattern (QVar e_var, QAttr attr, value_term) ->
-                 Some ((e_var, attr, value_term) :: patterns)
+               | Some (patterns, comparisons), Pattern (QVar e_var, QAttr attr, value_term) ->
+                 Some ((e_var, attr, value_term) :: patterns, comparisons)
+               | Some (patterns, comparisons), ComparisonPredicate (predicate, left_term, right_term) ->
+                 Some (patterns, ComparisonPredicate (predicate, left_term, right_term) :: comparisons)
                | _ -> None)
-             (Some [])
-        |> Option.map (fun patterns -> List.rev patterns, [])
+             (Some ([], []))
+        |> Option.map (fun (patterns, comparisons) -> List.rev patterns, [], List.rev comparisons)
     in
     match source, patterns with
     | Db_source source_db, (e_var, _, _) :: _ ->
@@ -1019,6 +1021,7 @@ end) = struct
         in
         if
           duplicate_value_var
+          || (relation_comparisons <> [] && constant_patterns = [])
           || (constant_patterns = []
               && value_var_patterns = []
               && required_patterns = []
@@ -1041,34 +1044,19 @@ end) = struct
                   (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) (QValue value) datom))
               |> List.of_seq
           in
-          let fold_matching_datoms attr value ~init ~f =
-            source_context.fold_pattern_datoms
-              source_db
-              (QVar e_var)
-              (QAttr attr)
-              (QValue value)
-              None
-              ~init
-              ~f:(fun acc datom ->
-                if
-                  direct_attr attr
-                  || Option.is_some
-                       (source_context.match_data_pattern
-                          source_db
-                          []
-                          (QVar e_var)
-                          (QAttr attr)
-                          (QValue value)
-                          datom)
-                then
-                  f acc datom
-                else
-                  acc)
-          in
           let constant_datoms =
             constant_patterns
             |> List.map (fun (attr, value) -> attr, value, lazy (datoms_matching attr value))
           in
+          let attrs =
+            patterns
+            |> List.concat_map (fun (e_var, attr, value_term) -> [ QVar e_var; QAttr attr; value_term ])
+            |> unique_vars
+          in
+          let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
+          if List.exists (fun (_, _, datoms) -> Lazy.force datoms = []) constant_datoms then
+            Some { attrs; rows = []; lookup_vars; unique_rows = true }
+          else
           let constant_sets =
             let set_from_datoms datoms =
               let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
@@ -1079,22 +1067,8 @@ end) = struct
                 datoms;
               entities
             in
-            match value_var_patterns with
-            | [] ->
-              constant_datoms
-              |> List.map (fun (_, _, datoms) -> set_from_datoms (Lazy.force datoms))
-            | _ ->
-              constant_patterns
-              |> List.map (fun (attr, value) ->
-                let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
-                fold_matching_datoms
-                  attr
-                  value
-                  ~init:()
-                  ~f:(fun () datom ->
-                    if datom.e >= 0 && datom.e < Bytes.length entities then
-                      Bytes.set entities datom.e '\001');
-                entities)
+            constant_datoms
+            |> List.map (fun (_, _, datoms) -> set_from_datoms (Lazy.force datoms))
           in
           let candidate_entities () =
             match constant_datoms with
@@ -1240,12 +1214,6 @@ end) = struct
                 | Some _ -> None
                 | None -> Some ((value_var, value) :: binding)))
           in
-          let attrs =
-            patterns
-            |> List.concat_map (fun (e_var, attr, value_term) -> [ QVar e_var; QAttr attr; value_term ])
-            |> unique_vars
-          in
-          let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
           let rows_from_cardinality_one_candidates value_vars =
             candidate_entities ()
             |> List.filter_map (fun entity_id ->
@@ -1500,7 +1468,15 @@ end) = struct
             && List.mem e_var attrs
             && List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns
           in
-          Some { attrs; rows; lookup_vars; unique_rows }
+          let relation = { attrs; rows; lookup_vars; unique_rows } in
+          Some
+            (List.fold_left
+               (fun relation -> function
+                 | ComparisonPredicate (predicate, left_term, right_term) ->
+                   filter_relation_comparison db relation predicate left_term right_term
+                 | _ -> relation)
+               relation
+               relation_comparisons)
     | _ -> None
 
   let relation_bindings relation =

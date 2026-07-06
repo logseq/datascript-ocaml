@@ -77,7 +77,9 @@ let run_for duration_ms f =
   loop 0
 
 let bench config name f =
+  Gc.full_major ();
   ignore (run_for config.warmup_ms f);
+  Gc.full_major ();
   let samples =
     List.init config.samples (fun _ ->
       let iterations, elapsed = run_for config.sample_ms f in
@@ -240,8 +242,6 @@ let main () =
   bench config "add-1" (fun () -> consume_db (add_one_datom_per_tx config.size));
   bench config "add-5" (fun () -> consume_db (add_one_by_one config.size));
   bench config "add-all" (fun () -> consume_db (build_db config.size));
-  bench config "storage-roundtrip" (fun () ->
-    consume_db (build_storage_db config.size));
   bench config "datoms-name" (fun () ->
     consume_int (fold_datoms (fun count _ -> count + 1) 0 (Lazy.force db) Aevt ~a:"name" ()));
   bench config "q1" (fun () ->
@@ -273,6 +273,8 @@ let main () =
          "[:find ?e ?s :where [?e :name \"Ivan\"] [?e :salary ?s] [(> ?s 50000)]]"));
   bench config "pull-one" (fun () ->
     consume_pull (pull (Lazy.force db) [ Pull_attr "name"; Pull_attr "age"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ] (Entity_id 1)));
+  bench config "storage-roundtrip" (fun () ->
+    consume_db (build_storage_db config.size));
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 
 let () = main ()

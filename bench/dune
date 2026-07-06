@@ -62,3 +62,11 @@
   bench_output_test.sh)
  (action
   (run bash %{dep:bench_output_test.sh} %{dep:bench_ocaml.exe})))
+
+(rule
+ (alias runtest)
+ (deps
+  ../script/benchmark_gate_vs_cljs_check.js
+  ../script/benchmark_gate_vs_cljs_check_test.sh)
+ (action
+  (run bash %{dep:../script/benchmark_gate_vs_cljs_check_test.sh})))

@@ -118,76 +118,11 @@ let datoms_by_attr datoms =
   Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
   table
 
-let attr_tables_are_lazy db =
-  Option.is_some db.storage_ref
-  && Hashtbl.length db.aevt_by_attr = 0
-  && Hashtbl.length db.avet_by_attr = 0
-
-let insert_sorted compare_datom datom datoms =
-  let rec loop acc = function
-    | [] -> List.rev (datom :: acc)
-    | current :: rest when compare_datom datom current <= 0 ->
-      List.rev_append acc (datom :: current :: rest)
-    | current :: rest -> loop (current :: acc) rest
-  in
-  loop [] datoms
-
-let same_indexed_datom left right =
-  left.e = right.e
-  && left.a = right.a
-  && value_equal left.v right.v
-  && left.tx = right.tx
-  && left.added = right.added
-
-let remove_sorted_datom datom datoms =
-  let rec loop acc = function
-    | [] -> List.rev acc
-    | current :: rest when same_indexed_datom current datom -> List.rev_append acc rest
-    | current :: rest -> loop (current :: acc) rest
-  in
-  loop [] datoms
-
-let add_attr_table_datom table compare_datom datom =
-  let table = Hashtbl.copy table in
-  let existing = Option.value (Hashtbl.find_opt table datom.a) ~default:[] in
-  Hashtbl.replace table datom.a (insert_sorted compare_datom datom existing);
-  table
-
-let remove_attr_table_datom table datom =
-  let table = Hashtbl.copy table in
-  (match Hashtbl.find_opt table datom.a with
-   | None -> ()
-   | Some existing ->
-     let remaining = remove_sorted_datom datom existing in
-     if remaining = [] then Hashtbl.remove table datom.a
-     else Hashtbl.replace table datom.a remaining);
-  table
-
-let add_datom_to_attr_tables db datom =
-  if attr_tables_are_lazy db then
+let invalidate_attr_tables db =
+  if Hashtbl.length db.aevt_by_attr = 0 && Hashtbl.length db.avet_by_attr = 0 then
     db
   else
-    { db with
-      aevt_by_attr = add_attr_table_datom db.aevt_by_attr (Util.compare_datom Aevt) datom
-    ; avet_by_attr =
-        if Schema.schema_attr_is_avet_accessible db.schema datom.a then
-          add_attr_table_datom db.avet_by_attr (Util.compare_datom Avet) datom
-        else
-          db.avet_by_attr
-    }
-
-let remove_datom_from_attr_tables db datom =
-  if attr_tables_are_lazy db then
-    db
-  else
-    { db with
-      aevt_by_attr = remove_attr_table_datom db.aevt_by_attr datom
-    ; avet_by_attr =
-        if Schema.schema_attr_is_avet_accessible db.schema datom.a then
-          remove_attr_table_datom db.avet_by_attr datom
-        else
-          db.avet_by_attr
-    }
+    { db with aevt_by_attr = Hashtbl.create 0; avet_by_attr = Hashtbl.create 0 }
 
 let set_indexes_from_datoms db datoms =
   let eavt_index = build_index Eavt datoms in
@@ -250,7 +185,7 @@ let refresh_indexes_with_added_datoms db added_datoms =
   ; duplicate_avet_by_attr = db.duplicate_avet_by_attr
   ; max_datom_e
   }
-  |> fun db -> List.fold_left add_datom_to_attr_tables db added_datoms
+  |> invalidate_attr_tables
 
 let find_active_datom_by_fact db datom =
   let bound = { datom with tx = tx0; added = true } in
@@ -286,26 +221,26 @@ let add_datom_to_indexes db datom =
         db.avet_index
   ; max_datom_e = max db.max_datom_e datom.e
   }
-  |> fun db -> add_datom_to_attr_tables db datom
-
-let remove_datom_from_indexes db datom =
-  match find_active_datom_by_fact db datom with
-  | None -> db
-  | Some active ->
-    { db with
-      eavt_index = PSet.remove active db.eavt_index
-    ; aevt_index = PSet.remove active db.aevt_index
-    ; avet_index = PSet.remove active db.avet_index
-    }
-    |> fun db -> remove_datom_from_attr_tables db active
 
 let refresh_indexes_with_tx_data db tx_data =
-  List.fold_left
-    (fun db datom ->
-      if datom.added then add_datom_to_indexes db datom
-      else remove_datom_from_indexes db datom)
-    db
-    tx_data
+  let db =
+    List.fold_left
+      (fun db datom ->
+        if datom.added then
+          add_datom_to_indexes db datom
+        else
+          match find_active_datom_by_fact db datom with
+          | None -> db
+          | Some active ->
+            { db with
+              eavt_index = PSet.remove active db.eavt_index
+            ; aevt_index = PSet.remove active db.aevt_index
+            ; avet_index = PSet.remove active db.avet_index
+            })
+      db
+      tx_data
+  in
+  invalidate_attr_tables db
 
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
@@ -469,11 +404,17 @@ let primary_attr_datoms db index attr =
   | Aevt ->
     (match Hashtbl.find_opt db.aevt_by_attr attr with
      | Some datoms -> datoms
-     | None -> attr_prefix_datoms Aevt db.aevt_index)
+     | None ->
+       let datoms = attr_prefix_datoms Aevt db.aevt_index in
+       Hashtbl.replace db.aevt_by_attr attr datoms;
+       datoms)
   | Avet ->
     (match Hashtbl.find_opt db.avet_by_attr attr with
      | Some datoms -> datoms
-     | None -> attr_prefix_datoms Avet db.avet_index)
+     | None ->
+       let datoms = attr_prefix_datoms Avet db.avet_index in
+       Hashtbl.replace db.avet_by_attr attr datoms;
+       datoms)
   | Eavt -> PSet.to_list db.eavt_index
 
 let duplicate_prefix_datoms db index e a =

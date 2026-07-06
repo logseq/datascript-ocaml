@@ -1169,11 +1169,17 @@ let primary_attr_datoms db index attr =
   | Aevt ->
     (match Hashtbl.find_opt db.aevt_by_attr attr with
      | Some datoms -> datoms
-     | None -> attr_prefix_datoms Aevt db.aevt_index)
+     | None ->
+       let datoms = attr_prefix_datoms Aevt db.aevt_index in
+       Hashtbl.replace db.aevt_by_attr attr datoms;
+       datoms)
   | Avet ->
     (match Hashtbl.find_opt db.avet_by_attr attr with
      | Some datoms -> datoms
-     | None -> attr_prefix_datoms Avet db.avet_index)
+     | None ->
+       let datoms = attr_prefix_datoms Avet db.avet_index in
+       Hashtbl.replace db.avet_by_attr attr datoms;
+       datoms)
   | Eavt -> PSet.to_list db.eavt_index
 
 let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
@@ -1651,7 +1657,155 @@ module Query = struct
 
   let empty_query_callables = Query_impl.empty_query_callables
 
-  let q ?inputs db query = Query_impl.q query_context ?inputs db query
+  type simple_row_slot =
+    | Simple_entity_slot
+    | Simple_value_slot of query_result option array
+
+  let simple_same_entity_constant_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _ -> None
+    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
+    | false, None, [], [] ->
+      let* find_vars =
+        query.find
+        |> List.fold_left
+             (fun vars -> function
+               | Find_var var -> Option.map (fun vars -> var :: vars) vars
+               | _ -> None)
+             (Some [])
+        |> Option.map List.rev
+      in
+      let pattern_summary =
+        List.fold_left
+          (fun acc -> function
+            | Pattern (QVar entity_var, QAttr attr, value_term)
+              when (not (is_reverse_ref attr)) && cardinality db attr = One ->
+              (match acc with
+               | None -> None
+               | Some (e_var, value_var_attrs, constant_patterns) ->
+                 let e_var =
+                   match e_var with
+                   | None -> Some entity_var
+                   | Some existing when existing = entity_var -> e_var
+                   | Some _ -> None
+                 in
+                 (match e_var, value_term with
+                  | None, _ -> None
+                  | Some _, QVar value_var when value_var <> entity_var ->
+                    Some (e_var, (value_var, attr) :: value_var_attrs, constant_patterns)
+                  | Some _, QValue value ->
+                    Some (e_var, value_var_attrs, (attr, value) :: constant_patterns)
+                  | _ -> None))
+            | _ -> None)
+          (Some (None, [], []))
+          query.where
+      in
+      let* e_var, value_var_attrs, constant_patterns =
+        Option.bind pattern_summary (function
+          | Some e_var, value_var_attrs, constant_patterns ->
+            Some (e_var, List.rev value_var_attrs, List.rev constant_patterns)
+          | None, _, _ -> None)
+      in
+      if constant_patterns = [] then
+        None
+      else
+        let duplicate_value_var =
+          let seen = Hashtbl.create (List.length value_var_attrs) in
+          List.exists
+            (fun (value_var, _) ->
+              if Hashtbl.mem seen value_var then true
+              else (
+                Hashtbl.add seen value_var ();
+                false ))
+            value_var_attrs
+        in
+        if duplicate_value_var then
+          None
+        else
+          let constant_datoms =
+            constant_patterns
+            |> List.map (fun (attr, value) -> attr, datoms_by_attr_value db attr value)
+          in
+          if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
+            Some []
+          else
+            let value_tables =
+              value_var_attrs
+              |> List.map (fun (value_var, attr) ->
+                let values = Array.make (db.max_datom_e + 1) None in
+                primary_attr_datoms db Aevt attr
+                |> List.iter (fun datom ->
+                  if datom.e >= 0 && datom.e < Array.length values then
+                    values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
+                value_var, values)
+            in
+            let slot_for_find_var var =
+              if var = e_var then
+                Some Simple_entity_slot
+              else
+                Option.map
+                  (fun values -> Simple_value_slot values)
+                  (List.assoc_opt var value_tables)
+            in
+            let* row_slots =
+              find_vars
+              |> List.fold_left
+                   (fun slots var ->
+                     match slots with
+                     | None -> None
+                     | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var var))
+                   (Some [])
+              |> Option.map List.rev
+            in
+            let constant_sets =
+              constant_datoms
+              |> List.map (fun (_, datoms) ->
+                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+                List.iter
+                  (fun datom ->
+                    if datom.e >= 0 && datom.e < Bytes.length entities then
+                      Bytes.set entities datom.e '\001')
+                  datoms;
+                entities)
+            in
+            let _, scan_datoms =
+              constant_datoms
+              |> List.sort (fun (_, left) (_, right) -> compare (List.length left) (List.length right))
+              |> List.hd
+            in
+            let entity_allowed entity_id =
+              constant_sets
+              |> List.for_all (fun entities ->
+                entity_id >= 0
+                && entity_id < Bytes.length entities
+                && Bytes.get entities entity_id = '\001')
+            in
+            let value_of_slot entity_id = function
+              | Simple_entity_slot -> Some (Result_entity entity_id)
+              | Simple_value_slot values ->
+                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+            in
+            let row_for_entity entity_id =
+              row_slots
+              |> List.fold_left
+                   (fun row slot ->
+                     match row with
+                     | None -> None
+                     | Some row -> Option.map (fun value -> value :: row) (value_of_slot entity_id slot))
+                   (Some [])
+              |> Option.map List.rev
+            in
+            scan_datoms
+            |> List.filter_map (fun datom ->
+              if entity_allowed datom.e then row_for_entity datom.e else None)
+            |> List.sort_uniq compare
+            |> fun rows -> Some rows
+
+  let q ?inputs db query =
+    match simple_same_entity_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None -> Query_impl.q query_context ?inputs db query
 
   let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
   let cached_query_string input =
