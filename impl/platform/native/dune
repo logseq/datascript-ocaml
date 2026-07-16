@@ -3,4 +3,4 @@
  (public_name datascript-ocaml-native)
  (implements datascript)
  (modes native byte)
- (libraries str unix persistent_sorted_set_ocaml.native))
+ (libraries str unix persistent_sorted_set_ocaml-native))

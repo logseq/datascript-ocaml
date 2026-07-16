@@ -3,6 +3,6 @@
  (public_name datascript-ocaml-melange)
  (implements datascript)
  (modes melange)
- (libraries melange.js persistent_sorted_set_ocaml.melange)
+ (libraries melange.js persistent_sorted_set_ocaml-melange)
  (preprocess
   (pps melange.ppx)))

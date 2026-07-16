@@ -6,4 +6,4 @@
  (libraries
   datascript-ocaml-melange
   melange-transit-melange
-  persistent_sorted_set_ocaml.melange))
+  persistent_sorted_set_ocaml-melange))

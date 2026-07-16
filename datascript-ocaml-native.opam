@@ -9,11 +9,13 @@ depends: [
   "dune" {>= "3.17"}
   "datascript_ocaml" {= version}
   "persistent_sorted_set_ocaml" {= "dev"}
+  "persistent_sorted_set_ocaml-native" {= "dev"}
   "sqlite3"
   "melange-transit-native" {= "0.1.0"}
 ]
 pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
+  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#9b4e736dfe429861efff7d5c388451a2ad6152f7"]
+  ["persistent_sorted_set_ocaml-native.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#9b4e736dfe429861efff7d5c388451a2ad6152f7"]
   ["melange-edn-core.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
   ["melange-edn-native.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
   ["melange-transit-core.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
