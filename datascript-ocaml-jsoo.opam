@@ -5,7 +5,7 @@ maintainer: "rcmerci"
 authors: ["rcmerci"]
 license: "MIT"
 depends: [
-  "ocaml" {>= "5.2.1"}
+  "ocaml" {>= "5.1.1"}
   "dune" {>= "3.17"}
   "datascript_ocaml" {= version}
   "js_of_ocaml"

@@ -5,7 +5,7 @@ maintainer: "rcmerci"
 authors: ["rcmerci"]
 license: "MIT"
 depends: [
-  "ocaml" {>= "5.2.1"}
+  "ocaml" {>= "5.1.1"}
   "dune" {>= "3.17"}
   "datascript_ocaml" {= version}
   "persistent_sorted_set_ocaml" {= "dev"}
@@ -13,7 +13,7 @@ depends: [
   "melange-transit-native" {= "0.1.0"}
 ]
 pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#529e0fcf013f0fd0aa344108fad3e1f76504fa1d"]
+  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
   ["melange-edn-core.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
   ["melange-edn-native.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
   ["melange-transit-core.0.1.0" "git+https://github.com/RCmerci/melange-transit.git#main"]
