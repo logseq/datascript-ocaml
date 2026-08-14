@@ -126,7 +126,10 @@
 (test
  (name test_sqlite_package)
  (modules test_sqlite_package)
- (libraries datascript-ocaml-native datascript-ocaml-native.sqlite))
+ (libraries
+  datascript-ocaml-native
+  datascript-ocaml-native.sqlite
+  datascript-ocaml-native.logseq-sqlite-storage))
 
 (test
  (name test_melange_transit_backend)

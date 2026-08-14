@@ -49,6 +49,7 @@ let test_storage_roundtrip () =
   require
     (List.mem Storage.root_address (storage_addresses storage))
     "expected SQLite storage to contain the root address";
+  let _packaged_logseq_reader = Logseq_sqlite_storage.inspect in
   Datascript_sqlite.close session
 
 let test_session_close_blocks_use () =
