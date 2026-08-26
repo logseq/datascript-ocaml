@@ -28,6 +28,7 @@ type transact_context =
 type reset_context =
   { store : ?storage:storage -> db -> unit
   ; datoms : db -> datom list
+  ; snapshot_db : db -> db
   }
 
 type context =
@@ -131,6 +132,7 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
   report
 
 let reset (context : reset_context) ?(tx_meta = []) conn db =
+  let db_before = context.snapshot_db conn.db in
   let db =
     match conn.storage with
     | None -> db
@@ -140,7 +142,7 @@ let reset (context : reset_context) ?(tx_meta = []) conn db =
     List.map (fun datom -> { datom with added = false }) (context.datoms conn.db)
     @ context.datoms db
   in
-  let report = { db_before = conn.db; db_after = db; tx_data; tempids = []; tx_meta } in
+  let report = { db_before; db_after = db; tx_data; tempids = []; tx_meta } in
   conn.db <- db;
   (match conn.storage with
    | None -> ()

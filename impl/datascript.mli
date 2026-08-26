@@ -98,6 +98,7 @@ module Conn : sig
   type reset_context =
     { store : ?storage:storage -> db -> unit
     ; datoms : db -> datom list
+    ; snapshot_db : db -> db
     }
 
   val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t

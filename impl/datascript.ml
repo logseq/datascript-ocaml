@@ -53,6 +53,7 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
 let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
+let snapshot_db = Db_impl.snapshot_db
 
 let empty_db ?(schema = []) ?storage () =
   Db_impl.empty_db db_core_context ~schema ?storage ()
@@ -754,8 +755,9 @@ let persist_transact ~tx_meta db =
     | Some storage -> store ~storage db
 
 let transact_report ?(tx_meta = []) db tx_ops =
+  let db_before = snapshot_db db in
   let db_after, tempids, tx_data = apply_tx tx_ops db in
-  { db_before = db; db_after; tx_data; tempids; tx_meta }
+  { db_before; db_after; tx_data; tempids; tx_meta }
 
 let transact ?(tx_meta = []) db tx_ops =
   let report = transact_report ~tx_meta db tx_ops in
@@ -814,7 +816,10 @@ let squuid_time_millis = Db_impl.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
   let context : Conn.reset_context =
-    { store; datoms = (fun db -> datoms_list db Eavt ()) }
+    { store
+    ; datoms = (fun db -> datoms_list db Eavt ())
+    ; snapshot_db
+    }
   in
   Conn.reset context ~tx_meta conn db
 

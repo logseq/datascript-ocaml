@@ -12,18 +12,18 @@ type lmdb = Datascript_lmdb_db.t
 let create_lmdb storage =
   match storage with
   | Some storage -> (Datascript_storage_lmdb.lmdb storage, Some storage)
-  | None ->
-      let lmdb = Datascript_lmdb_db.create_temp () in
-      (lmdb, Some (Datascript_storage_lmdb.wrap lmdb))
+  | None -> (Datascript_lmdb_db.create_temp (), None)
 
 let lmdb_of lmdb = lmdb
 let db_of t = Datascript_lmdb_index.db_of (project t)
 
 let lmdb_for_storage storage = Datascript_storage_lmdb.lmdb storage
 
-let sync_indexes_to_storage source target_storage =
+let sync_indexes_to_storage eavt aevt avet target_storage =
   let target = Datascript_storage_lmdb.lmdb target_storage in
-  if source != target then Datascript_storage_lmdb.sync_indexes source target
+  Datascript_lmdb_index.sync_merged_to_lmdb (project eavt) target;
+  Datascript_lmdb_index.sync_merged_to_lmdb (project aevt) target;
+  Datascript_lmdb_index.sync_merged_to_lmdb (project avet) target
 
 let load_indexes_from_storage storage target_lmdb =
   let source = Datascript_storage_lmdb.lmdb storage in
@@ -44,3 +44,5 @@ let seq_to_list = Datascript_lmdb_index.seq_to_list
 let fold_seq = Datascript_lmdb_index.fold_seq
 let to_seq = Datascript_lmdb_index.to_seq
 let seek = Datascript_lmdb_index.seek
+let flush t = Datascript_lmdb_index.flush (project t) |> inject
+let copy t = Datascript_lmdb_index.copy (project t) |> inject

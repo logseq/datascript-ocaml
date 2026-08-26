@@ -33,13 +33,6 @@ let open_db path =
   ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; closed = false
   }
 
-let create_temp () =
-  open_db
-    (Filename.temp_file
-       ~temp_dir:(Filename.get_temp_dir_name ())
-       "datascript_lmdb"
-       ".mdb")
-
 let open_path path = open_db path
 
 let ensure_open db =
@@ -54,6 +47,24 @@ let close db =
     Env.sync db.env;
     Env.close db.env;
     db.closed <- true)
+
+let temps_created = ref 0
+
+let create_temp () =
+  let db =
+    open_db
+      (Filename.temp_file
+         ~temp_dir:(Filename.get_temp_dir_name ())
+         "datascript_lmdb"
+         ".mdb")
+  in
+  Gc.finalise
+    (fun lmdb ->
+      if not lmdb.closed then close lmdb)
+    db;
+  incr temps_created;
+  if !temps_created mod 64 = 0 then Gc.full_major ();
+  db
 
 let sync db =
   ensure_open db;

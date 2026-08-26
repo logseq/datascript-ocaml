@@ -23,6 +23,7 @@ type transact_context =
 type reset_context =
   { store : ?storage:storage -> db -> unit
   ; datoms : db -> datom list
+  ; snapshot_db : db -> db
   }
 
 type context =

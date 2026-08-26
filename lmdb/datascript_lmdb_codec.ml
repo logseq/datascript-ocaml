@@ -110,19 +110,16 @@ let rec encode_value_key = function
   | Int value ->
       let buffer = Buffer.create 16 in
       append_byte buffer 9;
-      append_byte buffer 0;
       append_int64 buffer (float_sort_bits (float_of_int value));
       Buffer.contents buffer
   | Float value ->
       let buffer = Buffer.create 16 in
       append_byte buffer 9;
-      append_byte buffer 1;
       append_int64 buffer (float_sort_bits value);
       Buffer.contents buffer
   | Ref value ->
       let buffer = Buffer.create 16 in
       append_byte buffer 9;
-      append_byte buffer 2;
       append_int64 buffer (float_sort_bits (float_of_int value));
       Buffer.contents buffer
   | String value ->
@@ -200,20 +197,14 @@ let rec decode_value_key bytes offset =
       let value, offset = read_byte bytes offset in
       (match value with 0 -> Bool false | 1 -> Bool true | _ -> invalid_arg "invalid bool key"), offset
   | 9 ->
-      let kind, offset = read_byte bytes offset in
       let bits, offset =
         if offset + 8 > String.length bytes then invalid_arg "truncated numeric key"
         else int64_of_be (String.sub bytes offset 8), offset + 8
       in
-      let float_value =
-        let raw = if Int64.compare bits 0L < 0 then Int64.logxor bits 0x7fffffffffffffffL else bits in
-        Int64.float_of_bits raw
+      let raw =
+        if Int64.compare bits 0L < 0 then Int64.logxor bits 0x7fffffffffffffffL else bits
       in
-      (match kind with
-       | 0 -> Int (int_of_float float_value)
-       | 1 -> Float float_value
-       | 2 -> Ref (int_of_float float_value)
-       | _ -> invalid_arg "invalid numeric kind"), offset
+      Float (Int64.float_of_bits raw), offset
   | 10 ->
       let value, offset = read_string bytes offset in
       String value, offset

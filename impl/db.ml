@@ -258,6 +258,13 @@ let refresh_indexes_with_tx_data db tx_data =
   in
   invalidate_attr_tables db
 
+let snapshot_db db =
+  { db with
+    eavt_index = Index.copy db.eavt_index
+  ; aevt_index = Index.copy db.aevt_index
+  ; avet_index = Index.copy db.avet_index
+  }
+
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
 
