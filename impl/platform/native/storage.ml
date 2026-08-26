@@ -6,25 +6,22 @@ type restore_context = { next_db_uid : unit -> int }
 
 let memory_storage = Datascript_storage_lmdb.memory_storage
 
-let index_lmdb storage =
-  let lmdb, _ = Index.create_lmdb (Some storage) in
-  lmdb
-
 let store ?storage db =
   match storage, db.storage_ref with
-  | Some storage, _ | None, Some storage ->
-      let lmdb = Datascript_storage_lmdb.lmdb storage in
-      Datascript_storage_lmdb.store_meta lmdb db
+  | Some target_storage, _ | None, Some target_storage ->
+      Index.sync_indexes_to_storage (Index.db_of db.eavt_index) target_storage;
+      Datascript_storage_lmdb.store_db target_storage db
   | None, None -> invalid_arg "db has no attached storage"
 
 let restore_root_snapshot storage =
   let schema, max_eid, max_tx, duplicate_datoms =
     Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb storage)
   in
-  let index_lmdb = index_lmdb storage in
+  let lmdb, _ = Index.create_lmdb None in
+  Index.load_indexes_from_storage storage lmdb;
   Some
     { serializable_schema = schema
-    ; serializable_datoms = Index.to_list (Index.empty Eavt index_lmdb) @ duplicate_datoms
+    ; serializable_datoms = Index.to_list (Index.empty Eavt lmdb) @ duplicate_datoms
     ; serializable_max_eid = max_eid
     ; serializable_max_tx = max_tx
     }
@@ -34,7 +31,8 @@ let restore context storage =
     Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb storage)
   in
   let schema = Schema.validate_schema schema in
-  let index_lmdb = index_lmdb storage in
+  let lmdb, _ = Index.create_lmdb None in
+  Index.load_indexes_from_storage storage lmdb;
   let duplicate_eavt_by_entity =
     let table = Hashtbl.create 1024 in
     List.iter
@@ -64,9 +62,9 @@ let restore context storage =
   Some
     { db_uid = context.next_db_uid ()
     ; schema
-    ; eavt_index = Index.empty Eavt index_lmdb
-    ; aevt_index = Index.empty Aevt index_lmdb
-    ; avet_index = Index.empty Avet index_lmdb
+    ; eavt_index = Index.empty Eavt lmdb
+    ; aevt_index = Index.empty Aevt lmdb
+    ; avet_index = Index.empty Avet lmdb
     ; aevt_by_attr = Hashtbl.create 0
     ; avet_by_attr = Hashtbl.create 0
     ; duplicate_datoms

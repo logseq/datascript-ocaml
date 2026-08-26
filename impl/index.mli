@@ -7,6 +7,9 @@ type lmdb
 val create_lmdb : storage option -> lmdb * storage option
 val lmdb_of : lmdb -> lmdb
 val db_of : t -> lmdb
+val lmdb_for_storage : storage -> lmdb
+val sync_indexes_to_storage : lmdb -> storage -> unit
+val load_indexes_from_storage : storage -> lmdb -> unit
 
 val empty : index -> lmdb -> t
 val of_sorted_list : index -> datom list -> lmdb -> t

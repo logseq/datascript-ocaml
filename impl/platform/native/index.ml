@@ -19,6 +19,16 @@ let create_lmdb storage =
 let lmdb_of lmdb = lmdb
 let db_of t = Datascript_lmdb_index.db_of (project t)
 
+let lmdb_for_storage storage = Datascript_storage_lmdb.lmdb storage
+
+let sync_indexes_to_storage source target_storage =
+  let target = Datascript_storage_lmdb.lmdb target_storage in
+  if source != target then Datascript_storage_lmdb.sync_indexes source target
+
+let load_indexes_from_storage storage target_lmdb =
+  let source = Datascript_storage_lmdb.lmdb storage in
+  if source != target_lmdb then Datascript_storage_lmdb.sync_indexes source target_lmdb
+
 let empty index lmdb = Datascript_lmdb_index.empty index lmdb |> inject
 let of_sorted_list index datoms lmdb = Datascript_lmdb_index.of_sorted_list index datoms lmdb |> inject
 

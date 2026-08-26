@@ -79,6 +79,18 @@ let duplicate_datoms datoms =
   in
   loop None [] datoms
 
+let primary_datoms index datoms =
+  let datoms = List.sort (Util.compare_datom index) datoms in
+  let rec loop previous primary = function
+    | [] -> List.rev primary
+    | datom :: rest ->
+      (match previous with
+       | Some previous when Util.compare_datom index previous datom = 0 ->
+         loop (Some datom) primary rest
+       | _ -> loop (Some datom) (datom :: primary) rest)
+  in
+  loop None [] datoms
+
 let duplicate_eavt_by_entity duplicate_datoms =
   let table = Hashtbl.create 1024 in
   List.iter
@@ -124,14 +136,15 @@ let lmdb_of_db db =
 
 let set_indexes_from_datoms db datoms =
   let lmdb = lmdb_of_db db in
-  let eavt_index = build_index Eavt lmdb datoms in
-  let aevt_index = build_index Aevt lmdb datoms in
+  let duplicate_datoms = duplicate_datoms datoms in
+  let eavt_index = build_index Eavt lmdb (primary_datoms Eavt datoms) in
+  let aevt_index = build_index Aevt lmdb (primary_datoms Aevt datoms) in
   let avet_index =
     datoms
     |> List.filter (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
+    |> primary_datoms Avet
     |> build_index Avet lmdb
   in
-  let duplicate_datoms = duplicate_datoms datoms in
   let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
   let duplicate_avet_datoms =
     duplicate_datoms
@@ -248,9 +261,14 @@ let refresh_indexes_with_tx_data db tx_data =
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
 
+let storage_ref_of ?storage auto_storage_ref =
+  match storage with
+  | Some attached_storage -> Some attached_storage
+  | None -> auto_storage_ref
+
 let empty_db context ?(schema = []) ?storage () =
   let schema = Schema.validate_schema schema in
-  let lmdb, storage_ref = Index.create_lmdb storage in
+  let lmdb, auto_storage_ref = Index.create_lmdb None in
   { db_uid = context.next_db_uid ()
   ; schema
   ; eavt_index = empty_index Eavt lmdb
@@ -268,7 +286,7 @@ let empty_db context ?(schema = []) ?storage () =
   ; max_datom_e = 0
   ; max_tx = tx0
   ; filter_pred = None
-  ; storage_ref
+  ; storage_ref = storage_ref_of ?storage auto_storage_ref
   ; tx_fns = []
   }
 
@@ -281,7 +299,7 @@ let init_db context ?(schema = []) ?storage datoms =
     List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0 datoms
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
-  let lmdb, storage_ref = Index.create_lmdb storage in
+  let lmdb, auto_storage_ref = Index.create_lmdb None in
   { db_uid = context.next_db_uid ()
   ; schema
   ; eavt_index = empty_index Eavt lmdb
@@ -299,7 +317,7 @@ let init_db context ?(schema = []) ?storage datoms =
   ; max_datom_e = 0
   ; max_tx
   ; filter_pred = None
-  ; storage_ref
+  ; storage_ref = storage_ref_of ?storage auto_storage_ref
   ; tx_fns = []
   }
   |> fun db -> with_datoms db datoms

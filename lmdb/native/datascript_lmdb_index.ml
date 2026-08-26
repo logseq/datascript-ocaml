@@ -78,7 +78,19 @@ let slice_seq ?from_ ?to_ ?cmp t =
 
 let rslice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  make_seq ~cmp ?from_ ?to_ (List.rev (to_list t))
+  let datoms =
+    to_list t
+    |> List.filter (fun datom ->
+      match from_ with
+      | None -> true
+      | Some bound -> cmp datom bound <= 0)
+    |> List.filter (fun datom ->
+      match to_ with
+      | None -> true
+      | Some bound -> cmp datom bound >= 0)
+    |> List.rev
+  in
+  make_seq ~cmp datoms
 
 let seq_to_list seq = to_seq seq |> List.of_seq
 

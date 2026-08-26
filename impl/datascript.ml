@@ -77,7 +77,7 @@ let serialize_context : Serialize.context =
   { next_db_uid
   ; validate_schema
   ; normalize_datom_for_schema
-  ; refresh_db_indexes
+  ; with_datoms = Db_impl.with_datoms
   }
 
 let from_serializable snapshot =

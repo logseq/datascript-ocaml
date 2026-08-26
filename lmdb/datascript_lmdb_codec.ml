@@ -37,8 +37,8 @@ let float_sort_bits value =
   if Int64.compare bits 0L < 0 then Int64.logxor bits 0x7fffffffffffffffL else bits
 
 let append_string buffer text =
-  append_int32 buffer (String.length text);
-  Buffer.add_string buffer text
+  Buffer.add_string buffer text;
+  Buffer.add_char buffer '\000'
 
 let append_byte buffer value = Buffer.add_char buffer (Char.chr value)
 
@@ -47,9 +47,15 @@ let read_int32 key offset =
   int32_of_be (String.sub key offset 4), offset + 4
 
 let read_string key offset =
-  let length, offset = read_int32 key offset in
-  if length < 0 || offset + length > String.length key then invalid_arg "truncated string";
-  String.sub key offset length, offset + length
+  let len = String.length key in
+  if offset >= len then invalid_arg "truncated string";
+  let rec find_end index =
+    if index >= len then invalid_arg "unterminated string"
+    else if key.[index] = '\000' then index
+    else find_end (index + 1)
+  in
+  let end_offset = find_end offset in
+  String.sub key offset (end_offset - offset), end_offset + 1
 
 let read_byte key offset =
   if offset >= String.length key then invalid_arg "truncated byte";

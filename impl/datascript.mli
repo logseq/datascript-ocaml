@@ -217,7 +217,7 @@ module Serialize : sig
     { next_db_uid : unit -> int
     ; validate_schema : schema -> schema
     ; normalize_datom_for_schema : schema -> datom -> datom
-    ; refresh_db_indexes : db -> db
+    ; with_datoms : db -> datom list -> db
     }
 
   val serializable : db -> serializable_db
