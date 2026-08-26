@@ -11,6 +11,7 @@ depends: [
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
   "melange-transit-native" {= "0.1.0"}
+  "yojson"
 ]
 pin-depends: [
   ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]

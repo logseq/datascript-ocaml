@@ -1,5 +1,6 @@
 (library
  (name logseq_sqlite_storage)
+ (public_name datascript-ocaml-native.logseq-sqlite-storage)
  (modules logseq_sqlite_storage)
  (libraries datascript-ocaml-native unix yojson sqlite3 melange-transit-native))
 

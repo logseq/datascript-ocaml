@@ -6,5 +6,5 @@
   (language c)
   (names datascript_sqlite_stubs))
  (c_library_flags
-  (:standard -lsqlite3))
+  (:standard -L%{env:DATASCRIPT_SQLITE_LIB_DIR=.} -lsqlite3))
  (libraries datascript-ocaml-native persistent_sorted_set_ocaml melange-transit-native))
