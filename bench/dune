@@ -34,6 +34,12 @@
  (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
 
 (executable
+ (name persistent_storage_bench)
+ (modules persistent_storage_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe js)

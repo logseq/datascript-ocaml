@@ -132,6 +132,11 @@
   datascript-ocaml-native.logseq-sqlite-storage))
 
 (test
+ (name test_lmdb_package)
+ (modules test_lmdb_package)
+ (libraries datascript-ocaml-native datascript-ocaml-native.lmdb))
+
+(test
  (name test_melange_transit_backend)
  (modules test_melange_transit_backend)
  (libraries melange-transit-native melange-edn-native))

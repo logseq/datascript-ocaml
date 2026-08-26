@@ -1,0 +1,5 @@
+(library
+ (name datascript_lmdb)
+ (public_name datascript-ocaml-native.lmdb)
+ (wrapped false)
+ (libraries datascript-ocaml-native datascript_sqlite lmdb))

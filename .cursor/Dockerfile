@@ -11,6 +11,7 @@ RUN apt-get update \
         build-essential \
         pkg-config \
         libsqlite3-dev \
+        liblmdb-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 24 for js_of_ocaml smoke tests and cross-runtime helpers.

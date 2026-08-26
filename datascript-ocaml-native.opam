@@ -10,6 +10,7 @@ depends: [
   "datascript_ocaml" {= version}
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
+  "lmdb"
   "melange-transit-native" {= "0.1.0"}
   "yojson"
 ]
