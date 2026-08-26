@@ -1,6 +1,7 @@
 open Datascript_types
 
-module PSet = Persistent_sorted_set
+module Index = Index
+module Schema = Schema
 
 type context =
   { next_db_uid : unit -> int
@@ -12,39 +13,30 @@ type context =
 let serializable db =
   { serializable_schema = db.schema
   ; serializable_datoms =
-      PSet.to_list db.eavt_index @ db.duplicate_datoms |> List.sort (Util.compare_datom Eavt)
+      Index.to_list db.eavt_index @ db.duplicate_datoms |> List.sort (Datascript_types.Compare.compare_datom Eavt)
   ; serializable_max_eid = db.max_eid
   ; serializable_max_tx = db.max_tx
   }
 
-let empty_index index =
-  PSet.empty_by ~cmp:(Util.compare_datom index) ()
-
-let index_from_datoms index datoms =
-  let cmp = Util.compare_datom index in
-  let items = Array.of_list datoms in
-  Array.sort cmp items;
-  PSet.of_sorted_array_by ~cmp items
-
 let duplicate_datoms datoms =
-  let datoms = List.sort (Util.compare_datom Eavt) datoms in
+  let datoms = List.sort (Datascript_types.Compare.compare_datom Eavt) datoms in
   let rec loop previous duplicates = function
     | [] -> List.rev duplicates
     | datom :: rest ->
       (match previous with
-       | Some previous when Util.compare_datom Eavt previous datom = 0 ->
+       | Some previous when Datascript_types.Compare.compare_datom Eavt previous datom = 0 ->
          loop (Some datom) (datom :: duplicates) rest
        | _ -> loop (Some datom) duplicates rest)
   in
   loop None [] datoms
 
 let duplicate_aevt_datoms duplicate_datoms =
-  List.sort (Util.compare_datom Aevt) duplicate_datoms
+  List.sort (Datascript_types.Compare.compare_datom Aevt) duplicate_datoms
 
 let duplicate_avet_datoms schema duplicate_datoms =
   duplicate_datoms
   |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible schema datom.a)
-  |> List.sort (Util.compare_datom Avet)
+  |> List.sort (Datascript_types.Compare.compare_datom Avet)
 
 let duplicate_eavt_by_entity duplicate_datoms =
   let table = Hashtbl.create 1024 in
@@ -72,11 +64,12 @@ let from_serializable context snapshot =
   let duplicate_datoms = duplicate_datoms datoms in
   let duplicate_aevt_datoms = duplicate_aevt_datoms duplicate_datoms in
   let duplicate_avet_datoms = duplicate_avet_datoms schema duplicate_datoms in
+  let lmdb, storage_ref = Index.create_lmdb None in
   { db_uid = context.next_db_uid ()
   ; schema
-  ; eavt_index = index_from_datoms Eavt datoms
-  ; aevt_index = empty_index Aevt
-  ; avet_index = empty_index Avet
+  ; eavt_index = Index.empty Eavt lmdb
+  ; aevt_index = Index.empty Aevt lmdb
+  ; avet_index = Index.empty Avet lmdb
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
   ; duplicate_datoms
@@ -89,7 +82,7 @@ let from_serializable context snapshot =
   ; max_datom_e = 0
   ; max_tx = snapshot.serializable_max_tx
   ; filter_pred = None
-  ; storage_ref = None
+  ; storage_ref
   ; tx_fns = []
   }
   |> context.refresh_db_indexes

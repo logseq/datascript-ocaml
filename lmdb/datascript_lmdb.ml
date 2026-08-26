@@ -42,9 +42,9 @@ let close session =
     Env.close session.env;
     session.closed <- true)
 
-let encode_payload payload = Datascript_sqlite_codec.encode payload
+let encode_payload payload = Datascript_sqlite_codec.encode_storage_payload payload
 
-let decode_payload content = Datascript_sqlite_codec.decode content
+let decode_payload content = Datascript_sqlite_codec.decode_storage_payload content
 
 let storage session : Ds.storage =
   { storage_store =

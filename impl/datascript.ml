@@ -29,7 +29,7 @@ module Serialize = Serialize
 module Storage = Storage
 module Util = Util
 module Upsert = Upsert
-module PSet = Persistent_sorted_set
+module Index = Index
 
 let validate_entity_id = Db_impl.validate_entity_id
 
@@ -87,11 +87,6 @@ let store ?storage db =
   Storage.store ?storage db
 
 let memory_storage = Storage.memory_storage
-let file_storage = Storage.file_storage
-let store_tail = Storage.store_tail
-let storage_tail_compaction_threshold = Storage.tail_compaction_threshold
-let storage_tail_datom_count = Storage.tail_datom_count
-let restore_tail_groups = Storage.restore_tail_groups
 let storage_addresses = Storage.storage_addresses
 let storage = Storage.storage
 let addresses = Storage.addresses
@@ -246,7 +241,7 @@ let find_avet_exact db attr value =
     else Util.compare_datom Avet left right
   in
   match
-    PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
+    Index.slice ~from_:bound ~to_:bound ~cmp db.avet_index
     @ List.filter
         (fun datom -> datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
@@ -270,7 +265,7 @@ let find_eavt_exact db entity_id attr value =
     else Util.compare_datom Eavt left right
   in
   match
-    PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+    Index.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
     @ List.filter
         (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[])
@@ -736,61 +731,13 @@ let db_with tx_ops db =
   let db_after, _, _ = apply_tx tx_ops db in
   db_after
 
-let apply_tail_group db group =
-  List.iter
-    (fun datom ->
-      if datom.added && is_unique db datom.a then
-        match Db_access_impl.find_datom db Avet ~a:datom.a ~v:datom.v () with
-        | Some existing when existing.e <> datom.e ->
-          invalid_arg "tail group conflicts with an existing unique value"
-        | Some _ | None -> ())
-    group;
-  let group =
-    List.fold_left
-      (fun tx_data datom ->
-        if datom.added && cardinality db datom.a = One then
-          let existing =
-            Db_access_impl.datoms db Eavt ~e:datom.e ~a:datom.a ()
-            |> Seq.filter (fun existing -> not (value_equal existing.v datom.v))
-            |> Seq.map (fun existing ->
-              { existing with tx = datom.tx; added = false })
-            |> List.of_seq
-          in
-          List.rev_append existing (datom :: tx_data)
-        else
-          datom :: tx_data)
-      []
-      group
-    |> List.rev
-  in
-  let max_eid =
-    List.fold_left
-      (fun max_eid datom ->
-        let max_eid =
-          if datom.e <= max_allocatable_entity_id then max max_eid datom.e
-          else max_eid
-        in
-        max_eid_in_value max_eid datom.v)
-      db.max_eid
-      group
-  in
-  let db = refresh_db_indexes_with_tx_data db group in
-  { db with max_eid }
-
-let storage_tail_context : Storage.tail_context =
-  { apply_group = apply_tail_group }
-
-let db_with_tail db tail =
-  Storage.db_with_tail storage_tail_context db tail
-
-let storage_restore_context : Storage.restore_context =
-  { next_db_uid; db_with_tail }
+let storage_restore_context : Storage.restore_context = { next_db_uid }
 
 let restore storage =
   Storage.restore storage_restore_context storage
 
 let restore_conn storage =
-  let context : Conn.restore_context = { restore; restore_tail_groups } in
+  let context : Conn.restore_context = { restore } in
   Conn.restore context storage
 
 let tx_meta_skips_store tx_meta =
@@ -800,16 +747,11 @@ let tx_meta_skips_store tx_meta =
       | _ -> false)
     tx_meta
 
-let persist_transact_tail ~tx_meta db tx_data =
-  if tx_data <> [] && not (tx_meta_skips_store tx_meta) then
+let persist_transact ~tx_meta db =
+  if not (tx_meta_skips_store tx_meta) then
     match db.storage_ref with
     | None -> ()
-    | Some storage ->
-      let tail = restore_tail_groups storage @ [ tx_data ] in
-      if storage_tail_datom_count tail > storage_tail_compaction_threshold then
-        store ~storage db
-      else
-        store_tail storage tail
+    | Some storage -> store ~storage db
 
 let transact_report ?(tx_meta = []) db tx_ops =
   let db_after, tempids, tx_data = apply_tx tx_ops db in
@@ -817,19 +759,14 @@ let transact_report ?(tx_meta = []) db tx_ops =
 
 let transact ?(tx_meta = []) db tx_ops =
   let report = transact_report ~tx_meta db tx_ops in
-  persist_transact_tail ~tx_meta report.db_after report.tx_data;
+  persist_transact ~tx_meta report.db_after;
   report
 
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops
 
 let transact_conn ?(tx_meta = []) conn tx_data =
   let context : Conn.transact_context =
-    { store
-    ; store_tail
-    ; storage_tail_datom_count
-    ; storage_tail_compaction_threshold
-    ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
-    }
+    { store; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data) }
   in
   Conn.transact context ~tx_meta conn tx_data
 
@@ -1163,7 +1100,7 @@ let primary_attr_datoms db index attr =
       else if left == bound then -compare_prefix right left
       else Util.compare_datom index left right
     in
-    PSet.slice ~from_:bound ~to_:bound ~cmp index_set
+    Index.slice ~from_:bound ~to_:bound ~cmp index_set
   in
   match index with
   | Aevt ->
@@ -1180,7 +1117,7 @@ let primary_attr_datoms db index attr =
        let datoms = attr_prefix_datoms Avet db.avet_index in
        Hashtbl.replace db.avet_by_attr attr datoms;
        datoms)
-  | Eavt -> PSet.to_list db.eavt_index
+  | Eavt -> Index.to_list db.eavt_index
 
 let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
   let datoms = primary_attr_datoms db index a in

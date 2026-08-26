@@ -1,0 +1,36 @@
+open Datascript_types
+
+(* Native LMDB indexes use identity coercions because [index_set] stays abstract in
+   [Datascript_types] while this module owns the concrete LMDB representation. *)
+external inject : Datascript_lmdb_index.t -> index_set = "%identity"
+external project : index_set -> Datascript_lmdb_index.t = "%identity"
+
+type t = index_set
+type 'a seq = 'a Datascript_lmdb_index.seq
+type lmdb = Datascript_lmdb_db.t
+
+let create_lmdb storage =
+  match storage with
+  | Some storage -> (Datascript_storage_lmdb.lmdb storage, Some storage)
+  | None ->
+      let lmdb = Datascript_lmdb_db.create_temp () in
+      (lmdb, Some (Datascript_storage_lmdb.wrap lmdb))
+
+let lmdb_of lmdb = lmdb
+let db_of t = Datascript_lmdb_index.db_of (project t)
+
+let empty index lmdb = Datascript_lmdb_index.empty index lmdb |> inject
+let of_sorted_list index datoms lmdb = Datascript_lmdb_index.of_sorted_list index datoms lmdb |> inject
+
+let add datom t = Datascript_lmdb_index.add datom (project t) |> inject
+let remove datom t = Datascript_lmdb_index.remove datom (project t) |> inject
+let to_list t = Datascript_lmdb_index.to_list (project t)
+let fold f init t = Datascript_lmdb_index.fold f init (project t)
+let slice ?from_ ?to_ ?cmp t = Datascript_lmdb_index.slice ?from_ ?to_ ?cmp (project t)
+let slice_seq ?from_ ?to_ ?cmp t = Datascript_lmdb_index.slice_seq ?from_ ?to_ ?cmp (project t)
+let rslice_seq ?from_ ?to_ ?cmp t = Datascript_lmdb_index.rslice_seq ?from_ ?to_ ?cmp (project t)
+let seq t = Datascript_lmdb_index.seq (project t)
+let seq_to_list = Datascript_lmdb_index.seq_to_list
+let fold_seq = Datascript_lmdb_index.fold_seq
+let to_seq = Datascript_lmdb_index.to_seq
+let seek = Datascript_lmdb_index.seek

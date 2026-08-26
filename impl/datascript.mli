@@ -88,16 +88,10 @@ module Conn : sig
     ; with_schema : db -> schema -> db
     }
 
-  type restore_context =
-    { restore : storage -> db option
-    ; restore_tail_groups : storage -> datom list list
-    }
+  type restore_context = { restore : storage -> db option }
 
   type transact_context =
     { store : ?storage:storage -> db -> unit
-    ; store_tail : storage -> datom list list -> unit
-    ; storage_tail_datom_count : datom list list -> int
-    ; storage_tail_compaction_threshold : int
     ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
     }
 
@@ -231,26 +225,11 @@ module Serialize : sig
 end
 
 module Storage : sig
-  type tail_context =
-    { apply_group : db -> datom list -> db
-    }
+  type restore_context = { next_db_uid : unit -> int }
 
-  type restore_context =
-    { next_db_uid : unit -> int
-    ; db_with_tail : db -> datom list list -> db
-    }
-
-  val root_address : storage_address
-  val tail_address : storage_address
   val memory_storage : unit -> storage
-  val file_storage : string -> storage
   val store : ?storage:storage -> db -> unit
-  val store_tail : storage -> datom list list -> unit
-  val tail_compaction_threshold : int
-  val tail_datom_count : datom list list -> int
   val restore_root_snapshot : storage -> serializable_db option
-  val restore_tail_groups : storage -> datom list list
-  val db_with_tail : tail_context -> db -> datom list list -> db
   val restore : restore_context -> storage -> db option
   val storage_addresses : storage -> storage_address list
   val storage : db -> storage option
@@ -404,11 +383,8 @@ val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
-val file_storage : string -> storage
 val store : ?storage:storage -> db -> unit
-val store_tail : storage -> datom list list -> unit
 val restore : storage -> db option
-val db_with_tail : db -> datom list list -> db
 val storage : db -> storage option
 val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list

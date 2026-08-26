@@ -1,8 +1,34 @@
 module Ds = Datascript
-module PSet = Persistent_sorted_set
 module Transit = Transit_native.Transit.Json
 
 open Ds
+
+type ref_type =
+  | Strong
+  | Weak
+
+type stored_node =
+  | Leaf of datom list
+  | Branch of datom list * storage_address list
+
+type storage_root =
+  { storage_schema : schema
+  ; storage_max_eid : entity_id
+  ; storage_max_tx : tx
+  ; storage_eavt : storage_address
+  ; storage_aevt : storage_address
+  ; storage_avet : storage_address
+  ; storage_duplicate_datoms : datom list
+  ; storage_max_addr : int
+  ; storage_branching_factor : int
+  ; storage_ref_type : ref_type
+  }
+
+type compat_payload =
+  | Compat_root of storage_root
+  | Compat_node of stored_node
+  | Compat_tail of datom list list
+  | Compat_session
 
 let schema_attr_default : Ds.schema_attr =
   {
@@ -87,13 +113,13 @@ let value_type_of_transit = function
   | _ -> None
 
 let transit_of_ref_type = function
-  | PSet.Strong -> Transit.Keyword "strong"
-  | PSet.Weak -> Transit.Keyword "weak"
+  | Strong -> Transit.Keyword "strong"
+  | Weak -> Transit.Keyword "weak"
 
 let ref_type_of_transit = function
-  | Transit.Keyword "soft" -> PSet.Weak
-  | Transit.Keyword "weak" -> PSet.Weak
-  | Transit.Keyword "strong" | _ -> PSet.Strong
+  | Transit.Keyword "soft" -> Weak
+  | Transit.Keyword "weak" -> Weak
+  | Transit.Keyword "strong" | _ -> Strong
 
 let address_to_transit address = Transit.String address
 
@@ -274,8 +300,8 @@ let storage_root_to_transit root =
     ]
 
 let storage_node_to_transit = function
-  | PSet.Leaf datoms -> Transit.Map [ (Transit.Keyword "keys", datoms_to_transit datoms) ]
-  | PSet.Branch (keys, child_addresses) ->
+  | Leaf datoms -> Transit.Map [ (Transit.Keyword "keys", datoms_to_transit datoms) ]
+  | Branch (keys, child_addresses) ->
       Transit.Map
         [
           (Transit.Keyword "keys", datoms_to_transit keys);
@@ -286,9 +312,10 @@ let storage_tail_to_transit groups =
   Transit.Array (List.map (fun group -> datoms_to_transit group) groups)
 
 let payload_to_transit = function
-  | Ds.Storage_root root -> storage_root_to_transit root
-  | Storage_node node -> storage_node_to_transit node
-  | Storage_tail groups -> storage_tail_to_transit groups
+  | Compat_root root -> storage_root_to_transit root
+  | Compat_node node -> storage_node_to_transit node
+  | Compat_tail groups -> storage_tail_to_transit groups
+  | Compat_session -> Transit.Map []
 
 let require_key key entries =
   match lookup_transit_key key entries with
@@ -302,7 +329,7 @@ let optional_datoms key entries =
 
 let storage_root_of_transit entries =
   {
-    Ds.storage_schema = schema_of_transit (require_key "schema" entries);
+    storage_schema = schema_of_transit (require_key "schema" entries);
     storage_max_eid = int_of_transit "storage root :max-eid" (require_key "max-eid" entries);
     storage_max_tx = int_of_transit "storage root :max-tx" (require_key "max-tx" entries);
     storage_eavt = address_of_transit "storage root :eavt" (require_key "eavt" entries);
@@ -323,8 +350,8 @@ let child_addresses_of_transit = function
 let storage_node_of_transit entries =
   let keys = datoms_of_transit (require_key "keys" entries) in
   match lookup_transit_key "children" entries with
-  | None -> PSet.Leaf keys
-  | Some children -> PSet.Branch (keys, child_addresses_of_transit children)
+  | None -> Leaf keys
+  | Some children -> Branch (keys, child_addresses_of_transit children)
 
 let storage_tail_of_transit = function
   | Transit.Array groups | Transit.List groups -> List.map datoms_of_transit groups
@@ -332,11 +359,20 @@ let storage_tail_of_transit = function
 
 let payload_of_transit = function
   | Transit.Map entries ->
-      if Option.is_some (lookup_transit_key "schema" entries) then Storage_root (storage_root_of_transit entries)
-      else if Option.is_some (lookup_transit_key "keys" entries) then Storage_node (storage_node_of_transit entries)
-      else invalid_arg "unknown storage payload map"
-  | (Transit.Array _ | Transit.List _) as tail -> Storage_tail (storage_tail_of_transit tail)
+      if Option.is_some (lookup_transit_key "schema" entries) then Compat_root (storage_root_of_transit entries)
+      else if Option.is_some (lookup_transit_key "keys" entries) then Compat_node (storage_node_of_transit entries)
+      else Compat_session
+  | (Transit.Array _ | Transit.List _) as tail -> Compat_tail (storage_tail_of_transit tail)
   | _ -> invalid_arg "unknown storage payload"
 
 let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit
+
+let encode_storage_payload (payload : Ds.storage_payload) =
+  match payload with Storage_session -> encode Compat_session
+
+let decode_storage_payload payload =
+  match decode payload with
+  | Compat_session -> Storage_session
+  | Compat_root _ | Compat_node _ | Compat_tail _ ->
+      invalid_arg "legacy PSS storage payloads are no longer supported"

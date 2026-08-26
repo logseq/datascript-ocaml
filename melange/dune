@@ -5,5 +5,4 @@
  (enabled_if (= %{context_name} default))
  (libraries
   datascript-ocaml-melange
-  melange-transit-melange
-  persistent_sorted_set_ocaml.melange))
+  melange-transit-melange))

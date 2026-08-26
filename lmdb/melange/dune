@@ -1,0 +1,25 @@
+(include_subdirs no)
+
+(library
+ (name lmdb_db_melange)
+ (public_name datascript-ocaml-melange.lmdb-db)
+ (wrapped false)
+ (modes melange)
+ (modules datascript_lmdb_db)
+ (libraries datascript_lmdb_codec melange.js))
+
+(library
+ (name lmdb_index_melange)
+ (public_name datascript-ocaml-melange.lmdb-index)
+ (wrapped false)
+ (modes melange)
+ (modules datascript_lmdb_index)
+ (libraries datascript_lmdb_codec lmdb_db_melange))
+
+(library
+ (name storage_lmdb_melange)
+ (public_name datascript-ocaml-melange.storage-lmdb)
+ (wrapped false)
+ (modes melange)
+ (modules datascript_storage_lmdb)
+ (libraries datascript_lmdb_codec lmdb_db_melange datascript_types))

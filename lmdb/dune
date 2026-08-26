@@ -1,5 +1,23 @@
 (library
+ (name datascript_lmdb_codec)
+ (public_name datascript-ocaml-native.lmdb-codec)
+ (wrapped false)
+ (modes native melange)
+ (modules datascript_lmdb_codec)
+ (libraries datascript_types))
+
+(library
  (name datascript_lmdb)
  (public_name datascript-ocaml-native.lmdb)
  (wrapped false)
- (libraries datascript-ocaml-native datascript_sqlite lmdb))
+ (modes native)
+ (modules datascript_lmdb)
+ (libraries
+  datascript-ocaml-native
+  datascript_sqlite
+  lmdb_db_native
+  storage_lmdb_native
+  lmdb))
+
+(subdir native)
+(subdir melange)

@@ -71,7 +71,7 @@ let indexed =
 
 let unique_identity = { indexed with unique = Some Identity }
 
-let assert_uses_persistent_sorted_set (_index : datom Persistent_sorted_set.t) = ()
+let assert_uses_lmdb_index (_index : index_set) = ()
 
 let test_db__test_defrecord_updatable () =
   let value = { x = Keyword "ignored"; tag = "kept" } in
@@ -190,7 +190,7 @@ let test_db__test_index_api () =
        ()
      |> List.rev)
 
-let test_db__test_indexes_use_persistent_sorted_set () =
+let test_db__test_indexes_use_lmdb () =
   let db =
     empty_db ~schema:[ "name", indexed; "friend", { indexed with value_type = Some RefType } ] ()
     |> db_with
@@ -199,9 +199,9 @@ let test_db__test_indexes_use_persistent_sorted_set () =
          ; Add (Entity_id 2, "name", String "Oleg")
          ]
   in
-  assert_uses_persistent_sorted_set db.eavt_index;
-  assert_uses_persistent_sorted_set db.aevt_index;
-  assert_uses_persistent_sorted_set db.avet_index
+  assert_uses_lmdb_index db.eavt_index;
+  assert_uses_lmdb_index db.aevt_index;
+  assert_uses_lmdb_index db.avet_index
 
 let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
   let db =
@@ -232,5 +232,5 @@ let () =
   test_db__test_squuid_uses_wall_clock_time ();
   test_db__test_diff ();
   test_db__test_index_api ();
-  test_db__test_indexes_use_persistent_sorted_set ();
+  test_db__test_indexes_use_lmdb ();
   test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds ()
