@@ -1726,12 +1726,7 @@ module Query = struct
 
   type simple_row_slot =
     | Simple_entity_slot
-    | Simple_value_lookup of datom array
-
-  let entity_id_table ids =
-    let table = Hashtbl.create (List.length ids) in
-    List.iter (fun id -> Hashtbl.replace table id ()) ids;
-    table
+    | Simple_value_table of query_result option array
 
   let intersect_constant_entity_ids id_lists =
     let table_of_ids ids =
@@ -2031,31 +2026,66 @@ module Query = struct
                 ignore (primary_attr_datoms db Aevt attr);
                 Hashtbl.find_opt db.aevt_by_attr attr
             in
-            let slot_for_find_var value_slots var =
-              if var = e_var then Some Simple_entity_slot else List.assoc_opt var value_slots
+            (* Build entity-indexed value tables with one linear AEVT scan per attr,
+               then assemble rows. Avoids per-entity binary search (q-5-merge / q3 / q4). *)
+            let max_entity = db.max_datom_e + 1 in
+            let candidates = Bytes.make max_entity '\000' in
+            List.iter
+              (fun entity_id ->
+                if entity_id >= 0 && entity_id < max_entity then
+                  Bytes.unsafe_set candidates entity_id '\001')
+              entity_ids;
+            let value_table_for attr =
+              match aevt_attr_array attr with
+              | None -> None
+              | Some arr ->
+                let values = Array.make max_entity None in
+                Array.iter
+                  (fun datom ->
+                    if
+                      datom.e >= 0
+                      && datom.e < max_entity
+                      && Bytes.unsafe_get candidates datom.e <> '\000'
+                    then
+                      values.(datom.e) <- Some (Query_impl.result_of_datom_v datom))
+                  arr;
+                Some values
+            in
+            let slot_for_find_var value_tables var =
+              if var = e_var then Some Simple_entity_slot
+              else
+                match List.assoc_opt var value_tables with
+                | Some table -> Some (Simple_value_table table)
+                | None -> None
             in
             let row_for_entity row_slots entity_id =
-              let rec loop acc = function
-                | [] -> Some (List.rev acc)
-                | Simple_entity_slot :: rest -> loop (Result_entity entity_id :: acc) rest
-                | Simple_value_lookup arr :: rest -> (
-                  match Db_impl.find_entity_in_aevt_array arr entity_id with
-                  | None -> None
-                  | Some datom -> loop (Query_impl.result_of_datom_v datom :: acc) rest)
-              in
-              loop [] row_slots
+              if entity_id < 0 || entity_id >= max_entity then None
+              else
+                let rec loop acc = function
+                  | [] -> Some (List.rev acc)
+                  | Simple_entity_slot :: rest -> loop (Result_entity entity_id :: acc) rest
+                  | Simple_value_table table :: rest -> (
+                    match table.(entity_id) with
+                    | None -> None
+                    | Some value -> loop (value :: acc) rest)
+                in
+                loop [] row_slots
             in
             (match value_var_attrs with
-            | [] -> Some []
+            | [] ->
+              if find_vars = [ e_var ] then
+                Some (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids)
+              else
+                None
             | _ -> (
-              let value_slots =
+              let value_tables =
                 value_var_attrs
                 |> List.filter_map (fun (value_var, attr) ->
-                  match aevt_attr_array attr with
+                  match value_table_for attr with
                   | None -> None
-                  | Some arr -> Some (value_var, Simple_value_lookup arr))
+                  | Some table -> Some (value_var, table))
               in
-              if List.length value_slots <> List.length value_var_attrs then
+              if List.length value_tables <> List.length value_var_attrs then
                 None
               else
                 match
@@ -2064,7 +2094,8 @@ module Query = struct
                        (fun slots var ->
                          match slots with
                          | None -> None
-                         | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var value_slots var))
+                         | Some slots ->
+                           Option.map (fun slot -> slot :: slots) (slot_for_find_var value_tables var))
                        (Some [])
                   |> Option.map List.rev
                 with
@@ -2301,6 +2332,8 @@ module Query = struct
             Some (entity_var, seed_attr, value_var, clauses)
           else
             None
+        | Pattern (QVar entity_var, QAttr seed_attr, QVar value_var) :: [ Not clauses ] ->
+          Some (entity_var, seed_attr, value_var, clauses)
         | _ :: _ -> None
         | [] -> None
       in
@@ -2322,25 +2355,39 @@ module Query = struct
         match clauses with
         | [ Pattern (QVar clause_entity, QAttr clause_attr, QValue clause_value) ]
           when clause_entity = entity_var ->
-          let excluded =
-            match entity_ids_by_attr_value db clause_attr clause_value with
-            | Some entity_ids -> entity_id_table entity_ids
+          let max_entity = db.max_datom_e + 1 in
+          let excluded = Bytes.make max_entity '\000' in
+          let mark_excluded entity_id =
+            if entity_id >= 0 && entity_id < max_entity then
+              Bytes.unsafe_set excluded entity_id '\001'
+          in
+          (match entity_ids_by_attr_value db clause_attr clause_value with
+           | Some entity_ids -> List.iter mark_excluded entity_ids
+           | None ->
+             datoms_by_attr_value db clause_attr clause_value
+             |> List.iter (fun datom -> mark_excluded datom.e));
+          let seed_arr =
+            match Hashtbl.find_opt db.aevt_by_attr seed_attr with
+            | Some arr -> Some arr
             | None ->
-              datoms_by_attr_value db clause_attr clause_value
-              |> List.map (fun datom -> datom.e)
-              |> entity_id_table
+              ignore (primary_attr_datoms db Aevt seed_attr);
+              Hashtbl.find_opt db.aevt_by_attr seed_attr
           in
-          let rows =
-            datoms db Aevt ~a:seed_attr () |> Seq.fold_left
-              (fun rows datom ->
-                if Hashtbl.mem excluded datom.e then
-                  rows
-                else
-                  [ Result_entity datom.e; Query_impl.result_of_datom_v datom ] :: rows)
-              []
-            |> List.rev
-          in
-          Some rows
+          (match seed_arr with
+           | None -> None
+           | Some arr ->
+             let rows = ref [] in
+             Array.iter
+               (fun datom ->
+                 if
+                   datom.e >= 0
+                   && datom.e < max_entity
+                   && Bytes.unsafe_get excluded datom.e = '\000'
+                 then
+                   rows :=
+                     [ Result_entity datom.e; Query_impl.result_of_datom_v datom ] :: !rows)
+               arr;
+             Some (List.rev !rows))
         | _ -> None
 
   let rules_from_input_args query = function
