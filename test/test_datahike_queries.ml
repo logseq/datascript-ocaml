@@ -124,6 +124,12 @@ let () =
             (fun () ->
               check_count "q4" 0
                 "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]")
+        ; test_case "last-name AEVT attr slice" `Quick
+            (fun () ->
+              let db = Lazy.force db in
+              check_int "last-name datoms"
+                2000
+                (datoms db Aevt ~a:"last-name" () |> List.of_seq |> List.length))
         ; test_case "q5 cross-entity age join" `Quick
             (fun () ->
               check_count "q5" 1000

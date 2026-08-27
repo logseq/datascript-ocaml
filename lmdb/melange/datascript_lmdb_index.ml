@@ -112,6 +112,29 @@ let in_range cmp lower upper datom =
   in
   above_lower && below_upper
 
+let same_prefix_bound left right =
+  left.e = right.e && left.a = right.a && left.v = right.v
+
+let is_attr_only_prefix_bound bound =
+  bound.a <> "" && bound.e = 0 && bound.v = Nil
+
+let attr_exact_prefix from_ to_ index =
+  match from_, to_ with
+  | Some from, Some to_
+    when same_prefix_bound from to_
+         && is_attr_only_prefix_bound from
+         && (index = Aevt || index = Avet) ->
+      Some from.a
+  | _ -> None
+
+let attr_value_exact_prefix from_ to_ =
+  match from_, to_ with
+  | Some from, Some to_
+    when same_prefix_bound from to_
+         && from.a <> "" && from.e = 0 && from.v <> Nil ->
+      Some (from.a, from.v)
+  | _ -> None
+
 let fold_stored t f acc =
   let acc = ref acc in
   Datascript_lmdb_db.fold_index t.which t.db (fun key value ->
@@ -129,6 +152,9 @@ let fold_stored_prefix t attr f acc =
     in
     acc := f !acc datom);
   !acc
+
+let fold_attr_exact_prefix f init t attr =
+  fold_stored_prefix t attr (fun acc datom -> if datom.a = attr then f acc datom else acc) init
 
 let fold_stored_attr_value_prefix t attr value f acc =
   let prefix = Datascript_lmdb_codec.encode_index_attr_value_prefix t.which attr value in
@@ -230,13 +256,12 @@ let fold_slice f init ?from_ ?to_ ?cmp t =
       fold_stored_avet_value_range t attr ?start_value:start_value ?stop_value:stop_value
         Datascript_types.Compare.compare_value f init
   | _ -> (
-    match from_, to_ with
-    | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
-      && (t.which = Aevt || t.which = Avet) ->
-      fold_stored_prefix t bound.a f init
-    | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-      fold_stored_attr_value_prefix t bound.a bound.v f init
-    | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init)
+    match attr_exact_prefix from_ to_ t.which with
+    | Some attr -> fold_attr_exact_prefix f init t attr
+    | None -> (
+      match attr_value_exact_prefix from_ to_ with
+      | Some (attr, value) -> fold_stored_attr_value_prefix t attr value f init
+      | None -> fold_stored_bounded t ?from_ ?to_ cmp apply init))
 
 let find_first_slice ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
@@ -247,18 +272,17 @@ let find_first_slice ?from_ ?to_ ?cmp t =
       raise Stop_search)
   in
   (try
-     match from_, to_ with
-     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
-       && (t.which = Aevt || t.which = Avet) ->
-       fold_stored_prefix t bound.a (fun () datom -> consider datom) ()
-     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-       fold_stored_attr_value_prefix t bound.a bound.v (fun () datom -> consider datom) ()
-     | _ -> fold_stored_bounded t ?from_ ?to_ cmp (fun () datom -> consider datom) ()
+     match attr_exact_prefix from_ to_ t.which with
+     | Some attr -> fold_attr_exact_prefix (fun () datom -> consider datom) () t attr
+     | None -> (
+       match attr_value_exact_prefix from_ to_ with
+       | Some (attr, value) ->
+           fold_stored_attr_value_prefix t attr value (fun () datom -> consider datom) ()
+       | _ -> fold_stored_bounded t ?from_ ?to_ cmp (fun () datom -> consider datom) ())
    with Stop_search -> ());
   !found
 
-let fold_attr_prefix f init t attr =
-  fold_stored_prefix t attr (fun acc datom -> if datom.a = attr then f acc datom else acc) init
+let fold_attr_prefix f init t attr = fold_attr_exact_prefix f init t attr
 
 let materialize_range t ?from_ ?to_ cmp =
   fold_slice (fun acc datom -> datom :: acc) [] ?from_ ?to_ ~cmp t |> List.rev

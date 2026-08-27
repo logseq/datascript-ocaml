@@ -1237,33 +1237,7 @@ let pattern_value_needs_attr_resolution db attr value =
      | Keyword ident -> Option.is_some (entid db ident_attr (Keyword ident))
      | _ -> false)
 
-let primary_attr_datoms db index attr =
-  let attr_prefix_datoms index index_set =
-    let bound = datom ~e:0 ~a:attr ~v:Nil () in
-    let compare_prefix left right = compare left.a right.a in
-    let cmp left right =
-      if right == bound then compare_prefix left right
-      else if left == bound then -compare_prefix right left
-      else Util.compare_datom index left right
-    in
-    Index.slice ~from_:bound ~to_:bound ~cmp index_set
-  in
-  match index with
-  | Aevt ->
-    (match Hashtbl.find_opt db.aevt_by_attr attr with
-     | Some datoms -> Array.to_list datoms
-     | None ->
-       let datoms = attr_prefix_datoms Aevt db.aevt_index in
-       Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
-       datoms)
-  | Avet ->
-    (match Hashtbl.find_opt db.avet_by_attr attr with
-     | Some datoms -> Array.to_list datoms
-     | None ->
-       let datoms = attr_prefix_datoms Avet db.avet_index in
-       Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
-       datoms)
-  | Eavt -> Index.to_list db.eavt_index
+let primary_attr_datoms = Db_impl.primary_attr_datoms
 
 let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
   let datoms = primary_attr_datoms db index a in
@@ -2062,12 +2036,7 @@ module Query = struct
                 if datom.e >= 0 && datom.e < Array.length values then
                   values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
               in
-              (match Hashtbl.find_opt db.aevt_by_attr attr with
-               | Some arr when Array.length arr > 0 ->
-                 for index = 0 to Array.length arr - 1 do
-                   fill arr.(index)
-                 done
-               | _ -> datoms db Aevt ~a:attr () |> Seq.iter fill);
+              primary_attr_datoms db Aevt attr |> List.iter fill;
               values
             in
             let value_slots =
@@ -2241,12 +2210,7 @@ module Query = struct
               if datom.e >= 0 && datom.e < Array.length values then
                 values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
             in
-            (match Hashtbl.find_opt db.aevt_by_attr attr with
-             | Some arr when Array.length arr > 0 ->
-               for index = 0 to Array.length arr - 1 do
-                 fill arr.(index)
-               done
-             | _ -> datoms db Aevt ~a:attr () |> Seq.iter fill);
+            primary_attr_datoms db Aevt attr |> List.iter fill;
             value_var, values)
         in
         let rows =
