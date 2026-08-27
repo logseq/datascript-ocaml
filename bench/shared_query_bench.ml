@@ -2,6 +2,11 @@ open Datascript
 
 (* Align with the shared 20k people query suite and timing protocol. *)
 
+type storage_backend =
+  | Memory_lmdb_nosync
+  | Lmdb_file
+  | Sqlite_file
+
 type config =
   { size : int
   ; warmup_ms : float
@@ -10,6 +15,7 @@ type config =
   ; step : int
   ; jit_warmup : int
   ; query : string option
+  ; storages : storage_backend list
   }
 
 let default_config =
@@ -20,7 +26,28 @@ let default_config =
   ; step = 10
   ; jit_warmup = 100
   ; query = None
+  ; storages = [ Memory_lmdb_nosync ]
   }
+
+let storage_label = function
+  | Memory_lmdb_nosync -> "memory-lmdb-nosync"
+  | Lmdb_file -> "lmdb"
+  | Sqlite_file -> "sqlite"
+
+let parse_storage_list value =
+  value
+  |> String.split_on_char ','
+  |> List.map String.trim
+  |> List.filter (fun s -> s <> "")
+  |> List.map (function
+    | "memory-lmdb-nosync" | "memory" -> Memory_lmdb_nosync
+    | "lmdb" -> Lmdb_file
+    | "sqlite" -> Sqlite_file
+    | other ->
+      invalid_arg
+        ("unknown storage "
+        ^ other
+        ^ " (expected: memory-lmdb-nosync|lmdb|sqlite, comma-separated)"))
 
 let int_from_env name default =
   match Sys.getenv_opt name with
@@ -55,6 +82,16 @@ let parse_args () =
   let set_repeats value = config := { !config with repeats = int_of_string value } in
   let set_jit_warmup value = config := { !config with jit_warmup = int_of_string value } in
   let set_query value = config := { !config with query = Some value } in
+  let set_storage value =
+    config :=
+      { !config with
+        storages =
+          (match value with
+           | "all" -> [ Memory_lmdb_nosync; Lmdb_file; Sqlite_file ]
+           | "compare" -> [ Lmdb_file; Sqlite_file ]
+           | other -> parse_storage_list other)
+      }
+  in
   let rec loop = function
     | [] -> !config
     | "--size" :: value :: rest ->
@@ -74,6 +111,9 @@ let parse_args () =
       loop rest
     | "--query" :: value :: rest ->
       set_query value;
+      loop rest
+    | "--storage" :: value :: rest ->
+      set_storage value;
       loop rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
@@ -253,11 +293,14 @@ let select_queries = function
        invalid_arg
          (Printf.sprintf "unknown query %S (available: %s)" name (String.concat ", " query_names)))
 
-let build_db size =
-  let storage = benchmark_memory_storage () in
+let remove_path path =
+  if Sys.file_exists path then Sys.remove path;
+  let lock = path ^ "-lock" in
+  if Sys.file_exists lock then Sys.remove lock
+
+let people_and_follows size =
   let rng = rng 1 in
   let entities = List.init size (fun index -> random_man rng (index + 1)) in
-  let db = db_with entities (empty_db ~schema ~storage ()) in
   let follow_ops =
     List.concat_map
       (fun entity_id ->
@@ -268,8 +311,87 @@ let build_db size =
           [])
       (List.init size (fun index -> index + 1))
   in
+  entities, follow_ops
+
+let build_db_with_storage ~storage ~persist size =
+  let entities, follow_ops = people_and_follows size in
+  let started = now_ms () in
+  let db = db_with entities (empty_db ~schema ~storage ()) in
   let db = if follow_ops = [] then db else db_with follow_ops db in
-  refresh_db_indexes db
+  let db = refresh_db_indexes db in
+  let build_ms = now_ms () -. started in
+  if not persist then db, build_ms, 0.
+  else
+    let store_started = now_ms () in
+    store db;
+    let restored =
+      match restore storage with
+      | Some db -> db
+      | None -> failwith "storage-backed benchmark db should restore"
+    in
+    let restore_ms = now_ms () -. store_started in
+    restored, build_ms, restore_ms
+
+type prepared_db =
+  { label : string
+  ; db : db
+  ; build_ms : float
+  ; restore_ms : float
+  ; cleanup : unit -> unit
+  }
+
+let prepare_backend backend size =
+  match backend with
+  | Memory_lmdb_nosync ->
+    let storage = benchmark_memory_storage () in
+    let db, build_ms, restore_ms =
+      build_db_with_storage ~storage ~persist:false size
+    in
+    { label = storage_label backend; db; build_ms; restore_ms; cleanup = Fun.id }
+  | Lmdb_file ->
+    let path =
+      Filename.temp_file
+        ~temp_dir:(Filename.get_temp_dir_name ())
+        "datascript-query-bench-lmdb"
+        ".mdb"
+    in
+    remove_path path;
+    let session = Datascript_lmdb.open_session path in
+    let (storage : storage) = storage_of_handle (Datascript_lmdb.storage session) in
+    let db, build_ms, restore_ms =
+      build_db_with_storage ~storage ~persist:true size
+    in
+    { label = storage_label backend
+    ; db
+    ; build_ms
+    ; restore_ms
+    ; cleanup =
+        (fun () ->
+          Datascript_lmdb.close session;
+          remove_path path)
+    }
+  | Sqlite_file ->
+    let path =
+      Filename.temp_file
+        ~temp_dir:(Filename.get_temp_dir_name ())
+        "datascript-query-bench-sqlite"
+        ".sqlite3"
+    in
+    remove_path path;
+    let session = Datascript_sqlite.open_session path in
+    let (storage : storage) = storage_of_handle (Datascript_sqlite.storage session) in
+    let db, build_ms, restore_ms =
+      build_db_with_storage ~storage ~persist:true size
+    in
+    { label = storage_label backend
+    ; db
+    ; build_ms
+    ; restore_ms
+    ; cleanup =
+        (fun () ->
+          Datascript_sqlite.close session;
+          remove_path path)
+    }
 
 let warmup_queries jit_warmup selected db =
   if jit_warmup <= 0 then ()
@@ -281,6 +403,23 @@ let warmup_queries jit_warmup selected db =
         done)
       selected
 
+let run_backend config selected prepared =
+  Printf.printf "storage\t%s\n%!" prepared.label;
+  Printf.printf "build-ms\t%s\n%!" (format_ms prepared.build_ms);
+  if prepared.restore_ms > 0. then
+    Printf.printf "store-restore-ms\t%s\n%!" (format_ms prepared.restore_ms);
+  Printf.eprintf
+    "[%s] JIT pre-warmup (%d/query)...\n%!"
+    prepared.label
+    config.jit_warmup;
+  warmup_queries config.jit_warmup selected prepared.db;
+  Printf.eprintf "[%s] Running %d query benchmarks...\n%!" prepared.label (List.length selected);
+  List.iter
+    (fun query ->
+      let ms = bench config (fun () -> query.run prepared.db) in
+      Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
+    selected
+
 let main () =
   let config = parse_args () in
   let selected = select_queries config.query in
@@ -291,25 +430,24 @@ let main () =
   in
   Printf.printf "runtime\t%s\n%!" runtime_label;
   Printf.printf "size\t%d\n%!" config.size;
-  Printf.printf "storage\tmemory-lmdb-nosync-index\n%!";
   Printf.printf "warmup-ms\t%.0f\n%!" config.warmup_ms;
   Printf.printf "sample-ms\t%.0f\n%!" config.sample_ms;
   Printf.printf "repeats\t%d\n%!" config.repeats;
   Printf.printf "jit-warmup\t%d\n%!" config.jit_warmup;
   Printf.printf "db-mode\tshared\n%!";
+  Printf.printf "query-cases\t%d\n%!" (List.length selected);
   (match config.query with
   | Some name -> Printf.printf "query\t%s\n%!" name
   | None -> ());
-  Printf.eprintf "Building shared database (%d entities)...\n%!" config.size;
-  let db = build_db config.size in
-  Printf.eprintf "JIT pre-warmup (%d/query)...\n%!" config.jit_warmup;
-  warmup_queries config.jit_warmup selected db;
-  Printf.eprintf "Running benchmarks...\n%!";
   List.iter
-    (fun query ->
-      let ms = bench config (fun () -> query.run db) in
-      Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
-    selected;
+    (fun backend ->
+      Printf.eprintf
+        "Building database (%d entities, storage=%s)...\n%!"
+        config.size
+        (storage_label backend);
+      let prepared = prepare_backend backend config.size in
+      Fun.protect ~finally:prepared.cleanup (fun () -> run_backend config selected prepared))
+    config.storages;
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 
 let () =
