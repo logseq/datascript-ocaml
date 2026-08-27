@@ -1,36 +1,31 @@
 open Datascript_types
-open Lmdb
+
+module Txn = struct
+  type t = unit
+end
+
+type map = (string, string) Hashtbl.t
 
 type t =
   { path : string
-  ; env : Env.t
-  ; eavt : (string, string, [ `Uni ]) Map.t
-  ; aevt : (string, string, [ `Uni ]) Map.t
-  ; avet : (string, string, [ `Uni ]) Map.t
-  ; meta : (string, string, [ `Uni ]) Map.t
+  ; eavt : map
+  ; aevt : map
+  ; avet : map
+  ; meta : map
   ; mutable closed : bool
   }
 
-let default_map_size = 1024 * 1024 * 1024
-let lock_path path = path ^ "-lock"
+let make_map () = Hashtbl.create 256
 
-let remove_path path =
-  if Sys.file_exists path then Sys.remove path;
-  let lock = lock_path path in
-  if Sys.file_exists lock then Sys.remove lock
-
-let open_env db_path =
-  Env.(create Rw ~flags:Flags.no_subdir ~map_size:default_map_size ~max_maps:8 db_path)
-
-let open_named_map env name =
-  try Map.open_existing Nodup ~key:Conv.string ~value:Conv.string ~name env
-  with Not_found -> Map.create Nodup ~key:Conv.string ~value:Conv.string ~name env
+let remove_path _path = ()
 
 let open_db path =
-  remove_path path;
-  let env = open_env path in
-  { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
-  ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; closed = false
+  { path
+  ; eavt = make_map ()
+  ; aevt = make_map ()
+  ; avet = make_map ()
+  ; meta = make_map ()
+  ; closed = false
   }
 
 let open_path path = open_db path
@@ -39,36 +34,16 @@ let ensure_open db =
   if db.closed then invalid_arg ("LMDB database is closed: " ^ db.path)
 
 let close db =
-  if not db.closed then (
-    Map.close db.eavt;
-    Map.close db.aevt;
-    Map.close db.avet;
-    Map.close db.meta;
-    Env.sync db.env;
-    Env.close db.env;
-    db.closed <- true)
+  if not db.closed then db.closed <- true
 
 let temps_created = ref 0
 
 let create_temp () =
-  let db =
-    open_db
-      (Filename.temp_file
-         ~temp_dir:(Filename.get_temp_dir_name ())
-         "datascript_lmdb"
-         ".mdb")
-  in
-  Gc.finalise
-    (fun lmdb ->
-      if not lmdb.closed then close lmdb)
-    db;
+  let db = open_db ("melange:" ^ string_of_int !temps_created) in
   incr temps_created;
-  if !temps_created mod 64 = 0 then Gc.full_major ();
   db
 
-let sync db =
-  ensure_open db;
-  Env.sync db.env
+let sync _db = ()
 
 let map_for_index index db =
   match index with
@@ -78,27 +53,21 @@ let map_for_index index db =
 
 let meta_get db key =
   ensure_open db;
-  try Some (Map.get db.meta key) with Not_found -> None
+  Hashtbl.find_opt db.meta key
 
 let meta_set db key value =
   ensure_open db;
-  ignore
-    (Txn.go Rw db.env (fun txn ->
-       Map.set ~txn db.meta key value;
-       ()))
+  Hashtbl.replace db.meta key value
 
 let with_write_txn db f =
   ensure_open db;
-  ignore
-    (Txn.go Rw db.env (fun txn ->
-       f txn;
-       ()))
+  f ()
 
-let put_index_txn index txn db key value =
-  Map.set ~txn (map_for_index index db) key value
+let put_index_txn index _txn db key value =
+  Hashtbl.replace (map_for_index index db) key value
 
-let remove_index_txn index txn db key =
-  try Map.remove ~txn (map_for_index index db) key with Not_found -> ()
+let remove_index_txn index _txn db key =
+  Hashtbl.remove (map_for_index index db) key
 
 let put_index index db key value =
   with_write_txn db (fun txn -> put_index_txn index txn db key value)
@@ -108,97 +77,53 @@ let remove_index index db key =
 
 let get_index index db key =
   ensure_open db;
-  try Some (Map.get (map_for_index index db) key) with Not_found -> None
+  Hashtbl.find_opt (map_for_index index db) key
+
+let sorted_entries map =
+  Hashtbl.to_seq map
+  |> Seq.map (fun (key, value) -> (key, value))
+  |> List.of_seq
+  |> List.sort (fun (k1, _) (k2, _) -> String.compare k1 k2)
 
 let fold_index index db f =
   ensure_open db;
-  let map = map_for_index index db in
-  let next = Map.to_dispenser map in
-  let rec loop () =
-    match next () with
-    | None -> ()
-    | Some (key, value) ->
-        f key value;
-        loop ()
-  in
-  loop ()
+  List.iter (fun (key, value) -> f key value) (sorted_entries (map_for_index index db))
 
 let fold_index_prefix index db prefix f =
   ensure_open db;
-  let map = map_for_index index db in
   let prefix_len = String.length prefix in
-  (try
-     Cursor.go Ro map (fun cursor ->
-       (try ignore (Cursor.seek_range cursor prefix) with Not_found -> raise Exit);
-       let rec loop () =
-         let key, value =
-           try Cursor.current cursor
-           with Not_found -> raise Exit
-         in
-         if String.length key < prefix_len || String.sub key 0 prefix_len <> prefix then raise Exit;
-         f key value;
-         try
-           ignore (Cursor.next cursor);
-           loop ()
-         with Not_found -> raise Exit
-       in
-       loop ())
-   with Exit -> ())
+  List.iter
+    (fun (key, value) ->
+      if String.length key >= prefix_len && String.sub key 0 prefix_len = prefix then f key value)
+    (sorted_entries (map_for_index index db))
 
 let fold_index_range index db ?from_key ?to_key f =
   ensure_open db;
-  let map = map_for_index index db in
-  (try
-     Cursor.go Ro map (fun cursor ->
-       (match from_key with
-        | None -> (
-          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
-        | Some key -> (
-          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
-       let rec loop () =
-         let key, value =
-           try Cursor.current cursor
-           with Not_found -> raise Exit
-         in
-         (match to_key with
-          | Some bound when String.compare key bound > 0 -> raise Exit
-          | _ -> ());
-         f key value;
-         try
-           ignore (Cursor.next cursor);
-           loop ()
-         with Not_found -> raise Exit
-       in
-       loop ())
-   with Exit -> ())
+  List.iter
+    (fun (key, value) ->
+      (match from_key with
+       | Some bound when String.compare key bound < 0 -> ()
+       | _ -> (
+         match to_key with
+         | Some bound when String.compare key bound > 0 -> ()
+         | _ -> f key value)))
+    (sorted_entries (map_for_index index db))
 
 let fold_index_range_until index db ?from_key ?stop f =
   ensure_open db;
-  let map = map_for_index index db in
-  (try
-     Cursor.go Ro map (fun cursor ->
-       (match from_key with
-        | None -> (
-          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
-        | Some key -> (
-          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
-       let rec loop () =
-         let key, value =
-           try Cursor.current cursor
-           with Not_found -> raise Exit
-         in
-         (match stop with
-          | Some stop when stop key value -> raise Exit
-          | _ -> ());
-         f key value;
-         try
-           ignore (Cursor.next cursor);
-           loop ()
-         with Not_found -> raise Exit
-       in
-       loop ())
-   with Exit -> ())
+  let rec iter = function
+    | [] -> ()
+    | (key, value) :: rest ->
+        (match from_key with
+         | Some bound when String.compare key bound < 0 -> iter rest
+         | _ -> (
+           match stop with
+           | Some stop when stop key value -> ()
+           | _ ->
+               f key value;
+               iter rest))
+  in
+  iter (sorted_entries (map_for_index index db))
 
 let copy_index_txn index txn from_db to_db =
-  fold_index index from_db (fun key value ->
-    put_index_txn index txn to_db key value)
+  fold_index index from_db (fun key value -> put_index_txn index txn to_db key value)

@@ -15,8 +15,8 @@ Expose dbval-compatible `history`, `as_of`, `since`, `basis_tx`, `as_of_t`, `sin
 Index.t = LMDB + overlay lists
   add/remove  → mutate overlay (O(1))
   read        → merge LMDB cursor + overlay hashtables
-  snapshot_db → Index.copy (shallow list copy)
-  store       → sync_merged_to_lmdb (full merge + rewrite)
+  snapshot_db → O(1) handle copy (no overlay)
+  store       → append tx batch + meta update (sync_append_since_tx for delta copy)
 ```
 
 ## Target model
@@ -104,7 +104,7 @@ Single-tx bulk append (`of_bulk` → direct LMDB write batch). No overlay stagin
 
   - **store**: append new datoms for the tx + update meta (`max_tx`, `max_eid`, schema)
   - **restore**: open LMDB env, read meta, rebuild attr caches from filtered scan at `max_tx`
-  - Remove `sync_merged_to_lmdb` clear-and-rewrite path; use `sync_append_since_tx` for delta copy when session and storage envs differ
+  - Storage sync uses `sync_append_since_tx` for delta copy when session and storage envs differ
 
 PSS tail replay (`impl/storage_pss.ml`) is the closest in-repo precedent for append-only persistence.
 

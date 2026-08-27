@@ -9,16 +9,6 @@
  (wrapped false)
  (libraries alcotest))
 
-(executable
- (name debug_cardinality)
- (modules debug_cardinality)
- (libraries datascript-ocaml-native))
-
-(executable
- (name debug_entity)
- (modules debug_entity)
- (libraries datascript-ocaml-native))
-
 (test
  (name test_lru)
  (modules test_lru)
@@ -277,9 +267,3 @@
    %{dep:cross_runtime_parity_test.sh}
    %{dep:cross_runtime_ocaml.exe}
    %{dep:../script/cross_runtime_upstream.js})))
-(executable (name debug_tuple) (modules debug_tuple) (libraries datascript-ocaml-native))
-
-(executable
- (name debug_query)
- (modules debug_query)
- (libraries datascript-ocaml-native))

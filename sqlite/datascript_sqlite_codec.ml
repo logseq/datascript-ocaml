@@ -1,7 +1,5 @@
-module Ds = Datascript
+open Datascript_types
 module Transit = Transit_native.Transit.Json
-
-open Ds
 
 type ref_type =
   | Strong
@@ -30,7 +28,7 @@ type compat_payload =
   | Compat_tail of datom list list
   | Compat_session
 
-let schema_attr_default : Ds.schema_attr =
+let schema_attr_default : schema_attr =
   {
     cardinality = One;
     unique = None;
@@ -201,7 +199,7 @@ let schema_of_transit = function
   | _ -> []
 
 let rec value_to_transit = function
-  | Ds.Nil -> Transit.Null
+  | Nil -> Transit.Null
   | Int value -> Transit.Int value
   | Float value -> Transit.Float value
   | String value -> Transit.String value
@@ -228,7 +226,7 @@ let rec value_to_transit = function
   | Ref_to _ -> invalid_arg "storage payload cannot contain unresolved refs"
 
 let rec value_of_transit = function
-  | Transit.Null -> Ds.Nil
+  | Transit.Null -> Nil
   | Bool value -> Bool value
   | String value -> String value
   | Int value -> Int value
@@ -258,7 +256,7 @@ let rec value_of_transit = function
   | Tagged (tag, value) -> Vector [ String tag; value_of_transit value ]
 
 let datom_to_transit datom =
-  let tx = if datom.Ds.added then datom.tx else -datom.tx in
+  let tx = if datom.added then datom.tx else -datom.tx in
   Transit.Array [ Transit.Int datom.e; Transit.Keyword datom.a; value_to_transit datom.v; Transit.Int tx ]
 
 let int_of_transit label value =
@@ -275,7 +273,7 @@ let datom_of_transit = function
         | None -> invalid_arg "datom attr must be a Transit keyword"
       in
       let tx = int_of_transit "datom tx" tx in
-      { Ds.e; a; v = value_of_transit value; tx = abs tx; added = tx >= 0 }
+      { e; a; v = value_of_transit value; tx = abs tx; added = tx >= 0 }
   | _ -> invalid_arg "storage datom must be [e a v tx]"
 
 let datoms_to_transit datoms = Transit.Array (List.map datom_to_transit datoms)
@@ -368,11 +366,12 @@ let payload_of_transit = function
 let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit
 
-let encode_storage_payload (payload : Ds.storage_payload) =
-  match payload with Storage_session -> encode Compat_session
+(* Legacy Logseq KVS codec helpers kept for examples/logseq_sqlite_storage.ml *)
+
+let encode_storage_payload () = encode Compat_session
 
 let decode_storage_payload payload =
   match decode payload with
-  | Compat_session -> Storage_session
+  | Compat_session -> ()
   | Compat_root _ | Compat_node _ | Compat_tail _ ->
       invalid_arg "legacy PSS storage payloads are no longer supported"

@@ -1070,6 +1070,9 @@ let datoms context db index ?e ?a ?v ?tx () =
 
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
+  if temporal_view db then
+    datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
+  else
   let v = resolved_value_option_for_optional_attr context db a v in
   let prefix_v, prefix_tx =
     match index, e, a, v with

@@ -4,14 +4,14 @@
  (name lmdb_db_melange)
  (public_name datascript-ocaml-melange.lmdb-db)
  (wrapped false)
- (modes melange)
+ (modes melange byte)
  (modules datascript_lmdb_db)
- (libraries datascript_lmdb_codec melange.js))
+ (libraries datascript_lmdb_codec))
 
 (library
  (name lmdb_index_melange)
  (public_name datascript-ocaml-melange.lmdb-index)
  (wrapped false)
- (modes melange)
+ (modes melange byte)
  (modules datascript_lmdb_index)
  (libraries datascript_lmdb_codec lmdb_db_melange))

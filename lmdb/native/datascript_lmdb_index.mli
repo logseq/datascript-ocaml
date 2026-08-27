@@ -16,7 +16,6 @@ val remove : datom -> t -> t
 val remove_datoms : datom list -> t -> t
 val flush : t -> t
 val copy : t -> t
-val sync_merged_to_lmdb : t -> Datascript_lmdb_db.t -> unit
 val sync_append_since_tx : since_tx:tx -> t -> Datascript_lmdb_db.t -> unit
 val lookup : t -> datom -> datom option
 val to_list : t -> datom list

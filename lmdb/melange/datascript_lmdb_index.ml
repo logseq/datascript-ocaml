@@ -140,17 +140,6 @@ let fold_stored_bounded t ?from_ ?to_ cmp f acc =
         if in_range cmp from_ to_ datom then acc := f !acc datom);
     !acc
 
-let clear_index_txn txn index lmdb =
-  Datascript_lmdb_db.fold_index index lmdb (fun key _ ->
-    Datascript_lmdb_db.remove_index_txn index txn lmdb key)
-
-let sync_merged_to_lmdb t target_lmdb =
-  if t.db == target_lmdb then ()
-  else
-    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
-      clear_index_txn txn t.which target_lmdb;
-      Datascript_lmdb_db.copy_index_txn t.which txn t.db target_lmdb)
-
 let sync_append_since_tx ~since_tx t target_lmdb =
   if t.db == target_lmdb then ()
   else
