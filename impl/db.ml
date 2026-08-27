@@ -125,6 +125,10 @@ let apply_db_view db datoms = Tx_visibility.apply_view db.schema (view_bounds db
 
 let apply_db_view_seq db seq = Tx_visibility.filter_seq db.schema (view_bounds db) seq
 
+(** Apply temporal cancel to a descending (rseek) sequence by restoring ascending order. *)
+let apply_db_view_reverse_seq db seq =
+  seq |> List.of_seq |> List.rev |> apply_db_view db |> List.rev |> List.to_seq
+
 let indexes_on_storage db = Option.is_some db.storage_ref
 
 let merged_index db = db.duplicate_datoms <> []
@@ -1358,7 +1362,8 @@ let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match lower_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db (rehydrate_datom_seq db index datoms)
+  | Some datoms ->
+    apply_db_view_seq db (rehydrate_datom_seq db index datoms) |> apply_filter_pred db
   | None ->
     datoms context db index ()
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
@@ -1373,9 +1378,11 @@ let rseek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match reverse_upper_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db (rehydrate_datom_seq db index datoms)
+  | Some datoms ->
+    apply_db_view_reverse_seq db (rehydrate_datom_seq db index datoms) |> apply_filter_pred db
   | None ->
     reverse_index_datoms_seq db index
+    |> apply_db_view_reverse_seq db
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
     |> rehydrate_datom_seq db index
     |> apply_filter_pred db

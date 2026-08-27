@@ -38,9 +38,19 @@ let test_visible_at_tx_respects_bounds () =
   assert_equal_bool "inside range is visible" true (visible_at_tx bounds inside);
   assert_equal_bool "view_tx excludes future tx" false (visible_at_tx bounds after)
 
+let test_filter_seq_streams_without_full_materialization () =
+  let bounds = { view_tx = 200; since_tx = None; history = false } in
+  let d1 = datom ~e:1 ~a:":name" ~v:(String "Ivan") ~tx:100 ~added:true in
+  let d2 = datom ~e:1 ~a:":name" ~v:(String "Ivan") ~tx:150 ~added:false in
+  let d3 = datom ~e:2 ~a:":name" ~v:(String "Petr") ~tx:160 ~added:true in
+  let result = filter_seq [] bounds (List.to_seq [ d1; d2; d3 ]) |> List.of_seq in
+  assert_equal_int "streaming filter cancels retracted name" 1 (List.length result);
+  assert_equal_int "surviving entity is Petr" 2 (List.hd result).e
+
 let () =
   test_datoms_filter_cancels_later_retract ();
   test_datoms_filter_keeps_active_add ();
   test_datoms_filter_same_tx_cancel ();
   test_visible_at_tx_respects_bounds ();
+  test_filter_seq_streams_without_full_materialization ();
   Printf.printf "test_tx_visibility: ok\n"

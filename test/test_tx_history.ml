@@ -232,6 +232,32 @@ let test_history_cardinality_many () =
   check_string_list "history many attr keeps both assertions" [ "a"; "b" ]
     (history_asserted_values db ~a:"tag" ())
 
+let test_seek_respects_as_of_view () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      ]
+      (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
+  in
+  let tx0 = basis_tx db in
+  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let past = as_of tx0 db in
+  let seek_ages =
+    seek_datoms past Aevt ~a:"age" ()
+    |> List.of_seq
+    |> List.filter (fun d -> d.e = 1)
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  in
+  let rseek_ages =
+    rseek_datoms past Aevt ~a:"age" ()
+    |> List.of_seq
+    |> List.filter (fun d -> d.e = 1)
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  in
+  check_string_list "seek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int seek_ages);
+  check_string_list "rseek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int rseek_ages)
+
 let test_public_api_aliases () =
   let db =
     db_with [ Add (Entity_id 1, "name", String "Alice") ] (empty_db ~schema:[ "name", indexed ] ())
@@ -264,6 +290,7 @@ let () =
         ; test_case "history as_of composition" `Quick test_history_as_of_composition
         ; test_case "temporal views preserve index parity" `Quick test_temporal_views_preserve_index_parity
         ; test_case "history cardinality many" `Quick test_history_cardinality_many
+        ; test_case "seek and rseek respect as_of" `Quick test_seek_respects_as_of_view
         ; test_case "public api aliases" `Quick test_public_api_aliases
         ] )
     ]
