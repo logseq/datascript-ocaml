@@ -179,11 +179,16 @@ let index_avet_entities_by_attr_value avet_sorted =
       let existing = Option.value (Hashtbl.find_opt table key) ~default:[] in
       Hashtbl.replace table key (datom.e :: existing))
     avet_sorted;
-  Hashtbl.iter (fun key entity_ids -> Hashtbl.replace table key (List.rev entity_ids)) table;
-  table
+  let array_table = Hashtbl.create (Hashtbl.length table) in
+  Hashtbl.iter
+    (fun key entity_ids -> Hashtbl.replace array_table key (Array.of_list (List.rev entity_ids)))
+    table;
+  array_table
 
 let datoms_of_avet_entities attr value entity_ids =
-  List.map (fun e -> { e; a = attr; v = value; tx = tx0; added = true }) entity_ids
+  entity_ids
+  |> Array.to_list
+  |> List.map (fun e -> { e; a = attr; v = value; tx = tx0; added = true })
 
 let set_indexes_from_datoms db datoms =
   let lmdb = lmdb_of_db db in
@@ -904,7 +909,8 @@ let avet_entity_ids_by_attr_value context db attr value =
     Some
       (primary_attr_datoms db Avet attr
        |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
-       |> List.map (fun datom -> datom.e))
+       |> List.map (fun datom -> datom.e)
+       |> Array.of_list)
   else
     match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
     | Some entity_ids -> Some entity_ids
@@ -915,7 +921,8 @@ let avet_entity_ids_by_attr_value context db attr value =
         let bound_fields = fields ~a:true ~v:true () in
         Some
           (array_attr_value_slice context Avet bound bound_fields datoms
-           |> List.map (fun datom -> datom.e))
+           |> List.map (fun datom -> datom.e)
+           |> Array.of_list)
       | None -> None)
 
 let avet_datoms_by_value context db attr value =

@@ -1,7 +1,7 @@
 # Query Planner Implementation Plan
 
 See also `docs/query_implementation_comparison.md` for a side-by-side analysis of
-Datahike's compiled executor versus the current OCaml interpreter (lists, bindings,
+a reference compiled executor versus the current OCaml interpreter (lists, bindings,
 allocation patterns, and per-query-shape gaps).
 
 This plan implements the decision in `docs/adr/query-planner.md`. It is ordered by
@@ -34,10 +34,10 @@ risk and benchmark impact. Each phase has explicit parity and performance gates.
 2. Tighten AVET bounds for strict Int inequalities; skip post-filter when exact.
 3. Extend `eval_relation_rows` to simple non-recursive rule heads whose body is
    relation-only (e.g. `(follow ?e1 ?e2)` → `[?e1 :follows ?e2]`).
-4. Expand golden tests in `test/test_datahike_queries.ml` to all 15 benchmark
+4. Expand golden tests in `test/test_shared_queries.ml` to all 15 benchmark
    queries at size=2000, seed=1.
 
-**Gate:** `opam exec -- dune runtest`; `datahike_compare.exe --size 2000`; qpred ≤ 0.5 ms
+**Gate:** `opam exec -- dune runtest`; `shared_query_bench.exe --size 2000`; qpred ≤ 0.5 ms
 at 2000; no result count regressions.
 
 ## Phase 1 — Logical plan IR and analysis
@@ -102,9 +102,9 @@ filtered index access.
 
 | Layer | Tool |
 | --- | --- |
-| Result parity | `test/test_datahike_queries.ml` — counts per query |
+| Result parity | `test/test_shared_queries.ml` — counts per query |
 | Semantic parity | existing `dune runtest` query fixtures |
-| Performance | `bench/datahike_compare.ml`, `script/benchmark_vs_cljs.sh` |
+| Performance | `bench/shared_query_bench.ml`, `script/benchmark_vs_cljs.sh` |
 | Planner internals | new `test/test_query_plan.ml` (analyze/lower only) |
 
 ## File ownership (target end state)

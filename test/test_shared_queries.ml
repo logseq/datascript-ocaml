@@ -178,7 +178,7 @@ let () =
     dump "q-5-merge" "[:find ?e ?n ?l ?a ?s :where [?e :name ?n] [?e :last-name ?l] [?e :age ?a] [?e :salary ?s] [?e :sex :male]]";
     dump_in "q-rule" "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]" [ Arg_rules follow_rules ];
     exit 0);
-  Alcotest.run "datahike query parity"
+  Alcotest.run "shared query parity"
     [
       ( "queries"
       , [

@@ -1202,6 +1202,23 @@ let entity_ids_by_attr_value db attr value =
         normalize_value value
     in
     if query_value_uses_avet value && query_attr_uses_avet db attr then
+      match Db_access_impl.avet_entity_ids_by_attr_value db attr value with
+      | None -> None
+      | Some entity_ids -> Some (Array.to_list entity_ids)
+    else
+      None
+
+let entity_ids_array_by_attr_value db attr value =
+  match resolve_query_value_for_attr db attr value with
+  | None -> Some [||]
+  | Some value ->
+    let value =
+      if is_tuple_attr db attr then
+        coerce_tuple_lookup_value_db db attr value
+      else
+        normalize_value value
+    in
+    if query_value_uses_avet value && query_attr_uses_avet db attr then
       Db_access_impl.avet_entity_ids_by_attr_value db attr value
     else
       None
@@ -1338,7 +1355,7 @@ let match_data_pattern_tx db bindings e_term a_term v_term tx_term datom =
 let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term datom =
   let ( let* ) = Option.bind in
   let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
-  (* Datahike/Datomic history patterns use boolean added flags; also accept
+  (* History patterns use boolean added flags; also accept
      :db/add / :db/retract keywords for DataScript-style queries. *)
   match op_term with
   | QValue (Bool expected) when datom.added = expected -> Some bindings
@@ -1726,19 +1743,38 @@ module Query = struct
 
   type simple_row_slot =
     | Simple_entity_slot
-    | Simple_value_table of query_result option array
+    | Simple_value_attr of int
+      (** Index into the parallel AEVT cursor arrays for value attrs. *)
+
+  let ensure_sorted_entity_ids ids =
+    match ids with
+    | [] | [ _ ] -> ids
+    | first :: rest ->
+      let rec ascending prev = function
+        | [] -> true
+        | x :: xs -> x >= prev && ascending x xs
+      in
+      if ascending first rest then ids else List.sort_uniq compare ids
+
+  let intersect_sorted_entity_id_lists left right =
+    let rec loop left right acc =
+      match left, right with
+      | [], _ | _, [] -> List.rev acc
+      | x :: xs, y :: ys ->
+        if x = y then loop xs ys (x :: acc)
+        else if x < y then loop xs right acc
+        else loop left ys acc
+    in
+    loop left right []
 
   let intersect_constant_entity_ids id_lists =
-    let table_of_ids ids =
-      let table = Hashtbl.create (List.length ids) in
-      List.iter (fun id -> Hashtbl.replace table id ()) ids;
-      table
-    in
+    (* AVET entity-id lists are sorted by e; prefer merge intersection to avoid
+       allocating membership hashtables on every query (q3/q4 hot path). *)
+    let id_lists = List.map ensure_sorted_entity_ids id_lists in
     match List.sort (fun left right -> compare (List.length left) (List.length right)) id_lists with
     | [] -> []
     | smallest :: rest ->
-      let tables = List.map table_of_ids rest in
-      List.filter (fun id -> List.for_all (fun table -> Hashtbl.mem table id) tables) smallest
+      List.fold_left intersect_sorted_entity_id_lists smallest rest
 
   let reverse_comparison_predicate = function
     | GreaterThan -> LessThan
@@ -2007,6 +2043,189 @@ module Query = struct
           |> function
           | Some rows -> Some rows
           | None ->
+          let aevt_attr_array attr =
+            match Hashtbl.find_opt db.aevt_by_attr attr with
+            | Some arr -> Some arr
+            | None ->
+              ignore (primary_attr_datoms db Aevt attr);
+              Hashtbl.find_opt db.aevt_by_attr attr
+          in
+          let build_slots value_attrs =
+            let attr_count = Array.length value_attrs in
+            let var_attr_index =
+              let table = Hashtbl.create attr_count in
+              Array.iteri
+                (fun index (value_var, _) -> Hashtbl.replace table value_var index)
+                value_attrs;
+              table
+            in
+            let slot_for_find_var var =
+              if var = e_var then Some Simple_entity_slot
+              else
+                match Hashtbl.find_opt var_attr_index var with
+                | Some index -> Some (Simple_value_attr index)
+                | None -> None
+            in
+            find_vars
+            |> List.fold_left
+                 (fun slots var ->
+                   match slots with
+                   | None -> None
+                   | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var var))
+                 (Some [])
+            |> Option.map (fun slots -> Array.of_list (List.rev slots))
+          in
+          let build_row_from row_slots entity_id value_results =
+            let slot_count = Array.length row_slots in
+            let rec loop i acc =
+              if i < 0 then acc
+              else
+                match row_slots.(i) with
+                | Simple_entity_slot -> loop (i - 1) (Result_entity entity_id :: acc)
+                | Simple_value_attr index -> loop (i - 1) (value_results.(index) :: acc)
+            in
+            loop (slot_count - 1) []
+          in
+          (* Dense cardinality-one case (q-5-merge): equal-length AEVT arrays share the
+             same entity at each index. Prefer AVET entity ids for the constant (already
+             selective) and gather values by direct index; fall back to a filtered scan. *)
+          let aligned_constant_rows () =
+            match constant_patterns, value_var_attrs with
+            | [ (const_attr, const_value) ], _ :: _ -> (
+              match aevt_attr_array const_attr with
+              | None -> None
+              | Some const_arr ->
+                let value_attr_arrays =
+                  value_var_attrs
+                  |> List.map (fun (value_var, attr) ->
+                    match aevt_attr_array attr with
+                    | None -> None
+                    | Some arr -> Some (value_var, arr))
+                in
+                if List.exists Option.is_none value_attr_arrays then
+                  None
+                else
+                  let value_attrs =
+                    value_attr_arrays |> List.map Option.get |> Array.of_list
+                  in
+                  let attr_count = Array.length value_attrs in
+                  let attr_arrays = Array.map (fun (_, arr) -> arr) value_attrs in
+                  let const_len = Array.length const_arr in
+                  let lengths_match =
+                    Array.for_all (fun arr -> Array.length arr = const_len) attr_arrays
+                  in
+                  if (not lengths_match) || const_len = 0 then
+                    None
+                  else
+                    let mid = const_len / 2 in
+                    let e_aligned =
+                      let check i =
+                        let e = const_arr.(i).e in
+                        Array.for_all (fun arr -> arr.(i).e = e) attr_arrays
+                      in
+                      check 0 && check mid && check (const_len - 1)
+                    in
+                    if not e_aligned then
+                      None
+                    else
+                      match build_slots value_attrs with
+                      | None -> None
+                      | Some row_slots ->
+                        let base_e = const_arr.(0).e in
+                        let dense =
+                          const_arr.(const_len - 1).e = base_e + const_len - 1
+                          && Array.for_all
+                               (fun arr ->
+                                 arr.(0).e = base_e
+                                 && arr.(const_len - 1).e = base_e + const_len - 1)
+                               attr_arrays
+                        in
+                        let value_results = Array.make attr_count (Result_value (Int 0)) in
+                        let specialized_find =
+                          let expected =
+                            e_var :: (value_attrs |> Array.to_list |> List.map fst)
+                          in
+                          find_vars = expected
+                        in
+                        let emit_at rows i =
+                          let e = const_arr.(i).e in
+                          if specialized_find then
+                            let rec vals a acc =
+                              if a < 0 then Result_entity e :: acc
+                              else vals (a - 1) (Result_value attr_arrays.(a).(i).v :: acc)
+                            in
+                            vals (attr_count - 1) [] :: rows
+                          else (
+                            for a = 0 to attr_count - 1 do
+                              value_results.(a) <- Result_value attr_arrays.(a).(i).v
+                            done;
+                            build_row_from row_slots e value_results :: rows)
+                        in
+                        if dense && specialized_find && attr_count = 4 then
+                          let a0 = attr_arrays.(0) in
+                          let a1 = attr_arrays.(1) in
+                          let a2 = attr_arrays.(2) in
+                          let a3 = attr_arrays.(3) in
+                          let rows = ref [] in
+                          (match entity_ids_array_by_attr_value db const_attr const_value with
+                           | Some ids ->
+                             for i = Array.length ids - 1 downto 0 do
+                               let e = ids.(i) in
+                               let index = e - base_e in
+                               if index >= 0 && index < const_len then
+                                 rows :=
+                                   [ Result_entity e
+                                   ; Result_value a0.(index).v
+                                   ; Result_value a1.(index).v
+                                   ; Result_value a2.(index).v
+                                   ; Result_value a3.(index).v
+                                   ]
+                                   :: !rows
+                             done
+                           | None ->
+                             for i = const_len - 1 downto 0 do
+                               if value_equal const_arr.(i).v const_value then
+                                 let e = const_arr.(i).e in
+                                 rows :=
+                                   [ Result_entity e
+                                   ; Result_value a0.(i).v
+                                   ; Result_value a1.(i).v
+                                   ; Result_value a2.(i).v
+                                   ; Result_value a3.(i).v
+                                   ]
+                                   :: !rows
+                             done);
+                          Some !rows
+                        else if dense then
+                          match entity_ids_array_by_attr_value db const_attr const_value with
+                          | Some ids ->
+                            let rows = ref [] in
+                            for i = Array.length ids - 1 downto 0 do
+                              let e = ids.(i) in
+                              let index = e - base_e in
+                              if index >= 0 && index < const_len then
+                                rows := emit_at !rows index
+                            done;
+                            Some !rows
+                          | None ->
+                            let rows = ref [] in
+                            for i = const_len - 1 downto 0 do
+                              if value_equal const_arr.(i).v const_value then
+                                rows := emit_at !rows i
+                            done;
+                            Some !rows
+                        else
+                          let rows = ref [] in
+                          for i = const_len - 1 downto 0 do
+                            if value_equal const_arr.(i).v const_value then
+                              rows := emit_at !rows i
+                          done;
+                          Some !rows)
+            | _ -> None
+          in
+          match aligned_constant_rows () with
+          | Some rows -> Some rows
+          | None ->
           let constant_entity_ids =
             constant_patterns
             |> List.map (fun (attr, value) ->
@@ -2019,89 +2238,74 @@ module Query = struct
             let entity_ids = intersect_constant_entity_ids constant_entity_ids in
             if entity_ids = [] then Some []
             else
-            let aevt_attr_array attr =
-              match Hashtbl.find_opt db.aevt_by_attr attr with
-              | Some arr -> Some arr
-              | None ->
-                ignore (primary_attr_datoms db Aevt attr);
-                Hashtbl.find_opt db.aevt_by_attr attr
-            in
-            (* Build entity-indexed value tables with one linear AEVT scan per attr,
-               then assemble rows. Avoids per-entity binary search (q-5-merge / q3 / q4). *)
-            let max_entity = db.max_datom_e + 1 in
-            let candidates = Bytes.make max_entity '\000' in
-            List.iter
-              (fun entity_id ->
-                if entity_id >= 0 && entity_id < max_entity then
-                  Bytes.unsafe_set candidates entity_id '\001')
-              entity_ids;
-            let value_table_for attr =
-              match aevt_attr_array attr with
-              | None -> None
-              | Some arr ->
-                let values = Array.make max_entity None in
-                Array.iter
-                  (fun datom ->
-                    if
-                      datom.e >= 0
-                      && datom.e < max_entity
-                      && Bytes.unsafe_get candidates datom.e <> '\000'
-                    then
-                      values.(datom.e) <- Some (Query_impl.result_of_datom_v datom))
-                  arr;
-                Some values
-            in
-            let slot_for_find_var value_tables var =
-              if var = e_var then Some Simple_entity_slot
-              else
-                match List.assoc_opt var value_tables with
-                | Some table -> Some (Simple_value_table table)
-                | None -> None
-            in
-            let row_for_entity row_slots entity_id =
-              if entity_id < 0 || entity_id >= max_entity then None
-              else
-                let rec loop acc = function
-                  | [] -> Some (List.rev acc)
-                  | Simple_entity_slot :: rest -> loop (Result_entity entity_id :: acc) rest
-                  | Simple_value_table table :: rest -> (
-                    match table.(entity_id) with
-                    | None -> None
-                    | Some value -> loop (value :: acc) rest)
-                in
-                loop [] row_slots
-            in
+            (* Multi-cursor merge: sorted entity ids advance through each AEVT array
+               once and emit rows without intermediate value-column tables. *)
+            let entities = Array.of_list (ensure_sorted_entity_ids entity_ids) in
+            let entity_count = Array.length entities in
             (match value_var_attrs with
             | [] ->
               if find_vars = [ e_var ] then
-                Some (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids)
+                Some
+                  (Array.to_list
+                     (Array.map (fun entity_id -> [ Result_entity entity_id ]) entities))
               else
                 None
             | _ -> (
-              let value_tables =
+              let value_attr_arrays =
                 value_var_attrs
-                |> List.filter_map (fun (value_var, attr) ->
-                  match value_table_for attr with
+                |> List.map (fun (value_var, attr) ->
+                  match aevt_attr_array attr with
                   | None -> None
-                  | Some table -> Some (value_var, table))
+                  | Some arr -> Some (value_var, arr))
               in
-              if List.length value_tables <> List.length value_var_attrs then
+              if List.exists Option.is_none value_attr_arrays then
                 None
               else
-                match
-                  find_vars
-                  |> List.fold_left
-                       (fun slots var ->
-                         match slots with
-                         | None -> None
-                         | Some slots ->
-                           Option.map (fun slot -> slot :: slots) (slot_for_find_var value_tables var))
-                       (Some [])
-                  |> Option.map List.rev
-                with
+                let value_attrs =
+                  value_attr_arrays
+                  |> List.map Option.get
+                  |> Array.of_list
+                in
+                let attr_count = Array.length value_attrs in
+                let attr_arrays = Array.map (fun (_, arr) -> arr) value_attrs in
+                let attr_lengths = Array.map Array.length attr_arrays in
+                let cursors = Array.make attr_count 0 in
+                let value_results = Array.make attr_count (Result_value (Int 0)) in
+                match build_slots value_attrs with
                 | None -> None
                 | Some row_slots ->
-                  Some (entity_ids |> List.filter_map (fun entity_id -> row_for_entity row_slots entity_id))))
+                  let advance_to eid attr_index =
+                    let arr = attr_arrays.(attr_index) in
+                    let len = attr_lengths.(attr_index) in
+                    let j = ref cursors.(attr_index) in
+                    while !j < len && arr.(!j).e < eid do
+                      incr j
+                    done;
+                    let at = !j in
+                    cursors.(attr_index) <- at;
+                    if at < len && arr.(at).e = eid then (
+                      value_results.(attr_index) <- Result_value arr.(at).v;
+                      true)
+                    else
+                      false
+                  in
+                  let rows = Array.make entity_count [] in
+                  let row_count = ref 0 in
+                  for i = 0 to entity_count - 1 do
+                    let eid = entities.(i) in
+                    let rec fill attr_index =
+                      if attr_index >= attr_count then true
+                      else if advance_to eid attr_index then fill (attr_index + 1)
+                      else false
+                    in
+                    if fill 0 then (
+                      rows.(!row_count) <- build_row_from row_slots eid value_results;
+                      incr row_count)
+                  done;
+                  let rec rows_to_list i acc =
+                    if i < 0 then acc else rows_to_list (i - 1) (rows.(i) :: acc)
+                  in
+                  Some (rows_to_list (!row_count - 1) [])))
 
   let value_membership_table values =
     let table = Hashtbl.create (List.length values) in

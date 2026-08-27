@@ -26,8 +26,8 @@
  (libraries datascript-ocaml-native unix))
 
 (executable
- (name datahike_compare)
- (modules datahike_compare)
+ (name shared_query_bench)
+ (modules shared_query_bench)
  (libraries datascript-ocaml-native unix))
 
 (executable

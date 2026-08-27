@@ -1,31 +1,29 @@
-# OCaml vs Datahike Query Implementation Comparison
+# OCaml vs Reference Query Implementation Comparison
 
-This document compares how the shared Datahike benchmark queries are executed in
-Datahike (compiled planner) versus this OCaml port (interpreter + shape gates).
+This document compares how the shared-API benchmark queries are executed in a
+reference compiled planner versus this OCaml port (interpreter + shape gates).
 It explains **structural** differences—not per-query fast paths—and lists
 allocation and algorithm gaps to close in the general executor.
 
 ## Architecture
 
-| | Datahike | OCaml (this repo) |
+| | Reference engine | OCaml (this repo) |
 |---|---|---|
 | Default path | Compile → logical plan → cost-based order → fused execute | `eval_clauses` / `eval_relation_rows` interpreter |
 | Shape recognition | Generic planner (entity group, OR, hash-probe) | Ad hoc gates in `impl/datascript.ml` + `relation_of_*` in `impl/query_where.ml` |
-| Hot-loop output | `ArrayList`, `object[]` tuples, PSS cursors | `query_result list list`, `(string × query_result) list` bindings |
+| Hot-loop output | Dense tuple buffers / index cursors | `query_result list list`, `(string × query_result) list` bindings |
 | Index walk | Cursor `lookupGE` / prefix slice, no full relation | `Seq.t` / `List.t`, often `List.of_seq` materialization |
 | Cost model | `count-slice` + Selinger DP | Source order / smallest-constant heuristic |
-
-Reference: Datahike `doc/query-engine.md`, `execute.cljc`, `plan.cljc`.
 
 ## Same-entity multi-attr (q-5-merge, q3, q4)
 
 **Query shape:** `[?e :name ?n] … [?e :sex :male]` — one entity var, mix of free vars and constants.
 
-### Datahike
+### Reference
 
-1. Groups clauses into one `:entity-group` on `?e`.
+1. Groups clauses into one entity group on `?e`.
 2. Picks driving scan by cost (e.g. `:sex :male` ~50% selectivity).
-3. For each surviving entity: **in-index `lookupGE`** on EAVT/AEVT for each remaining attr.
+3. For each surviving entity: in-index lookup on EAVT/AEVT for each remaining attr.
 4. Emits tuples directly into pre-sized arrays; no `{attrs; rows}` relation.
 
 ### OCaml today
@@ -38,11 +36,11 @@ Two overlapping implementations:
    `eval_relation_rows`.
 
 Both use entity bitsets for constant intersection. Same-entity queries with constants use the
-Datahike entity-group pattern: constant slice → candidate entities → in-index lookup per
+entity-group pattern: constant slice → candidate entities → in-index lookup per
 value attr. No `(max_e+1)` value arrays.
 
 - **`simple_same_entity_constant_rows`:** caches `aevt_by_attr` arrays, then
-  `find_entity_in_aevt_array` (binary search on entity id) for each candidate × value attr.
+  multi-cursor / dense-index gather for each candidate × value attr.
 - **`find_datom` / `find_primary_aevt_entity_attr`:** fast Aevt `~e ~a` point reads without
   Seq materialization.
 - **`relation_of_same_entity_patterns`:** driver scan + lookup when multiple value patterns
@@ -52,15 +50,15 @@ value attr. No `(max_e+1)` value arrays.
 
 ## OR / NOT (q-or, q-not)
 
-### Datahike
+### Reference
 
-- `(or …)` → `:or` op; each branch is an independent sub-plan.
-- Union at **relation** level (`rel/sum-rel`); `limit-context` avoids Cartesian growth.
+- `(or …)` → OR op; each branch is an independent sub-plan.
+- Union at **relation** level; limit context avoids Cartesian growth.
 
 ### OCaml
 
 - `eval_relation_rows` / `eval_relation_from_empty` union OR branches via `union_relations`
-  (relation-level, Datahike `sum-rel` style).
+  (relation-level sum-rel style).
 - `eval_clauses` on embedded `(Or branches)` still uses binding `List.concat_map` for non-relation
   query shapes.
 
@@ -68,7 +66,7 @@ value attr. No `(max_e+1)` value arrays.
 
 ## Cross-entity / value join (q5)
 
-### Datahike
+### Reference
 
 - Hash-probe between entity groups; producer builds probe-set of join values; consumer
   scan filtered during iteration.
@@ -82,7 +80,7 @@ value attr. No `(max_e+1)` value arrays.
 
 ## Predicates / AVET range (qpred*, q-pred-range)
 
-### Datahike
+### Reference
 
 - Comparison pushdown to AVET encoded bounds; strict int ranges skip post-filter.
 
@@ -95,7 +93,7 @@ value attr. No `(max_e+1)` value arrays.
 
 ## Rules (q-rule)
 
-### Datahike
+### Reference
 
 - Non-recursive rule heads expanded at plan time → single pattern scan on rule body.
 
@@ -136,16 +134,16 @@ parity work but **do not replace** a compiled executor:
 - Benchmark wins on q5/q-or/q-rule came from bypassing the interpreter, not fixing it.
 
 Roadmap: `docs/query_planner_plan.md` (Phases 0–4). Phase 0 = allocation + bounds fixes;
-Phases 1–3 = plan IR, cost ordering, streaming operators matching Datahike's entity-group
+Phases 1–3 = plan IR, cost ordering, streaming operators matching the reference entity-group
 and OR union semantics.
 
 ## Verification
 
 | Check | Command |
 |---|---|
-| Result parity | `dune runtest test/test_datahike_queries.ml` |
-| vs Datahike timing | `./bench/compare_ocaml_datahike.sh 2000 [QUERY]` |
+| Result parity | `dune runtest test/test_shared_queries.ml` |
+| Shared suite timing | `dune exec --release bench/shared_query_bench.exe -- --size 2000` |
 | General path only | Temporarily disable fast paths or use `max_datom_e > 50_000` test DB |
 
-When optimizing, measure both **single-query** compare and **full suite**, and confirm
-counts match Datahike golden values (size=2000, seed=1).
+When optimizing, measure both **single-query** and **full suite** timing, and confirm
+counts match shared-API golden values (size=2000, seed=1).

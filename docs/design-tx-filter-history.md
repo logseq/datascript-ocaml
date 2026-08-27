@@ -55,7 +55,7 @@ Public API (matches dbval.core):
 
 Transact rejects temporal views with dbval-compatible error message.
 
-## Purge (Datahike-compatible excise)
+## Purge (compatible excise)
 
 Physical removal of datoms from current **and** history (GDPR-style), unlike retract:
 

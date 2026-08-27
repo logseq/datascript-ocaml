@@ -123,7 +123,7 @@ and db =
   ; avet_index : index_set
   ; aevt_by_attr : (attr, datom array) Hashtbl.t
   ; avet_by_attr : (attr, datom array) Hashtbl.t
-  ; avet_entities_by_attr_value : (attr * value, entity_id list) Hashtbl.t
+  ; avet_entities_by_attr_value : (attr * value, entity_id array) Hashtbl.t
   ; duplicate_datoms : datom list
   ; duplicate_aevt_datoms : datom list
   ; duplicate_avet_datoms : datom list

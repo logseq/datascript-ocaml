@@ -35,13 +35,13 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
- (name test_datahike_parity)
- (modules test_datahike_parity)
+ (name test_shared_api_parity)
+ (modules test_shared_api_parity)
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
- (name test_datahike_queries)
- (modules test_datahike_queries)
+ (name test_shared_queries)
+ (modules test_shared_queries)
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test

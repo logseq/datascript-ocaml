@@ -1,4 +1,4 @@
-(** Datahike shared-API category parity tests.
+(** Shared-API category parity tests.
     Covers queries / writes / rules / aggregates / temporal / joins with
     deterministic fixtures and identical result-set assertions (not just counts). *)
 
@@ -269,7 +269,7 @@ let test_writes_add_5 () =
 (* ---------- rules category (recursive) ---------- *)
 
 let wide_db depth width =
-  (* Port of Datahike wide-db-data: each node has [width] children, [depth] levels. *)
+  (* Wide tree fixture: each node has [width] children, [depth] levels. *)
   let rec build id depth =
     if depth <= 0 then [ Entity { db_id = Some (Temp_id (string_of_int id)); attrs = [ "name", One_value (String "Ivan") ] } ]
     else
@@ -605,7 +605,7 @@ let test_joins () =
        "[:find ?pn ?dn :where [?e :p/salary ?s] [(> ?s 90000)] [?e :p/name ?pn] [?e :p/dept ?d] [?d :d/name ?dn]]")
 
 let () =
-  run "datahike category parity"
+  run "shared-api category parity"
     [ ( "queries"
       , [ test_case "all query shapes exact rows" `Quick test_queries ] )
     ; ( "writes"

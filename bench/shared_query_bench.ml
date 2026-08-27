@@ -1,6 +1,6 @@
 open Datascript
 
-(* Align with Datahike benchmark.datascript-bench: 20k people, query suite, timing protocol. *)
+(* Align with the shared 20k people query suite and timing protocol. *)
 
 type config =
   { size : int
@@ -160,7 +160,7 @@ let next_int rng bound =
 
 let rand_nth rng values = values.(next_int rng (Array.length values))
 
-(* See test_datahike_queries.ml: decorrelate sex from name under this LCG. *)
+(* See test_shared_queries.ml: decorrelate sex from name under this LCG. *)
 let rand_sex rng = sexes.(next_int rng 997 mod Array.length sexes)
 
 let random_man rng i =
