@@ -39,4 +39,4 @@ tx-visibility read pipeline. Prefer one based on ops and access pattern, not API
 Benches: `bench/compare_lmdb_sqlite.sh` (persistent store/restore),
 `bench/compare_lmdb_sqlite_queries.sh` (shared query suite), and
 `bench/compare_lmdb_sqlite_index_scan.sh` (cold open + narrow Index scans;
-default sizes `50000,1000000`).
+default sizes `200000,500000`).

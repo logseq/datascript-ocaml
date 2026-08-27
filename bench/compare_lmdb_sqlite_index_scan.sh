@@ -3,9 +3,9 @@
 # Measures cold open/restore + cold/hot point/prefix/range/full scans — not the
 # shared query evaluator.
 #
-# Default sizes: 50k (quick) and 1M (large-index stress).
+# Default sizes: 200k and 500k (large-index stress without a full 1M build).
 #   SIZES=50000 bash bench/compare_lmdb_sqlite_index_scan.sh
-#   SIZES=1000000 WARMUP=5 REPEATS=3 bash bench/compare_lmdb_sqlite_index_scan.sh
+#   SIZES=200000,500000 WARMUP=5 REPEATS=3 bash bench/compare_lmdb_sqlite_index_scan.sh
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,8 +19,8 @@ fi
 if [[ -n "${SIZE:-}" && -z "${SIZES:-}" ]]; then
   SIZES="$SIZE"
 fi
-SIZES="${SIZES:-50000,1000000}"
-# Defaults tuned for the 1M case; override upward for tighter 50k medians.
+SIZES="${SIZES:-200000,500000}"
+# Defaults tuned for multi-hundred-k sizes; override upward for tighter medians.
 WARMUP="${WARMUP:-5}"
 REPEATS="${REPEATS:-3}"
 DATA_DIR="${DATA_DIR:-$repo_root/_bench_data/index-scan}"
