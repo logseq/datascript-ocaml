@@ -35,6 +35,15 @@ let of_sorted_lists index_datoms lmdb = Datascript_lmdb_index.of_sorted_lists in
 let of_eavt_datoms ~avet datoms lmdb = Datascript_lmdb_index.of_eavt_datoms ~avet datoms lmdb
 let of_bulk index datoms lmdb = Datascript_lmdb_index.of_bulk index datoms lmdb |> inject
 
+let append_tx_data ~avet:is_avet datoms eavt_index aevt_index avet_index =
+  let eavt, aevt, avet_index' =
+    Datascript_lmdb_index.append_tx_data ~avet:is_avet datoms (project eavt_index) (project aevt_index)
+      (project avet_index)
+  in
+  inject eavt, inject aevt, inject avet_index'
+
+let append_datoms datoms t = Datascript_lmdb_index.append_datoms datoms (project t) |> inject
+
 let add datom t = Datascript_lmdb_index.add datom (project t) |> inject
 let remove datom t = Datascript_lmdb_index.remove datom (project t) |> inject
 let lookup t datom = Datascript_lmdb_index.lookup (project t) datom

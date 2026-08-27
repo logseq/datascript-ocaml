@@ -16,6 +16,8 @@ val of_sorted_list : index -> datom list -> lmdb -> t
 val of_sorted_lists : (index * datom list) list -> lmdb -> unit
 val of_eavt_datoms : avet:(string -> bool) -> datom list -> lmdb -> unit
 val of_bulk : index -> datom list -> lmdb -> t
+val append_datoms : datom list -> t -> t
+val append_tx_data : avet:(attr -> bool) -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t
 val remove : datom -> t -> t
 val lookup : t -> datom -> datom option

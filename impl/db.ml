@@ -118,6 +118,13 @@ let invalidate_attr_tables db =
     ; avet_entities_by_attr_value = Hashtbl.create 0
     }
 
+let view_bounds db =
+  { Tx_visibility.view_tx = db.max_tx; since_tx = db.since_tx; history = db.history }
+
+let apply_db_view db datoms = Tx_visibility.apply_view (view_bounds db) datoms
+
+let apply_db_view_seq db seq = Tx_visibility.filter_seq (view_bounds db) seq
+
 let lmdb_of_db db =
   try Index.lmdb_of (Index.db_of db.eavt_index)
   with Invalid_argument _ ->
@@ -163,9 +170,13 @@ let set_indexes_from_datoms db datoms =
     |> List.filter (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
     |> List.sort (Util.compare_datom Avet)
   in
-  let eavt_index = Index.of_bulk Eavt eavt_datoms lmdb in
-  let aevt_index = Index.of_bulk Aevt aevt_sorted lmdb in
-  let avet_index = Index.of_bulk Avet avet_sorted lmdb in
+  Index.of_eavt_datoms
+    ~avet:(Schema.schema_attr_is_avet_accessible db.schema)
+    eavt_datoms
+    lmdb;
+  let eavt_index = Index.empty Eavt lmdb in
+  let aevt_index = Index.empty Aevt lmdb in
+  let avet_index = Index.empty Avet lmdb in
   let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
   let duplicate_avet_datoms =
     duplicate_datoms
@@ -193,7 +204,9 @@ let set_indexes_from_datoms db datoms =
   }
 
 let eavt_datoms db =
-  Index.to_list db.eavt_index @ db.duplicate_datoms |> List.sort (Util.compare_datom Eavt)
+  Index.to_list db.eavt_index @ db.duplicate_datoms
+  |> List.sort (Util.compare_datom Eavt)
+  |> apply_db_view db
 
 let refresh_indexes db =
   set_indexes_from_datoms db (eavt_datoms db)
@@ -225,81 +238,21 @@ let refresh_indexes_with_added_datoms db added_datoms =
   }
   |> invalidate_attr_tables
 
-let find_active_datom_by_fact db datom =
-  let bound = { datom with tx = tx0; added = true } in
-  let compare_to_fact left right =
-    Util.first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; Util.compare_value left.v right.v
-      ]
-  in
-  let cmp left right =
-    if right == bound then
-      compare_to_fact left right
-    else
-      Util.compare_datom Eavt left right
-  in
-  let duplicate_matches =
-    Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity datom.e) ~default:[]
-    |> List.filter (fun active -> active.a = datom.a && value_equal active.v datom.v)
-  in
-  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.eavt_index with
-  | Some active when active.e = datom.e && active.a = datom.a && value_equal active.v datom.v -> Some active
-  | _ -> (
-    match duplicate_matches with
-    | [] -> None
-    | matches -> Some (matches |> List.sort (Util.compare_datom Eavt) |> List.hd))
-
-let add_datom_to_indexes db datom =
-  { db with
-    eavt_index = Index.add datom db.eavt_index
-  ; aevt_index = Index.add datom db.aevt_index
-  ; avet_index =
-      if Schema.schema_attr_is_avet_accessible db.schema datom.a then
-        Index.add datom db.avet_index
-      else
-        db.avet_index
-  ; max_datom_e = max db.max_datom_e datom.e
-  }
-
 let refresh_indexes_with_tx_data db tx_data =
-  let db =
-    List.fold_left
-      (fun db datom ->
-        if datom.added then
-          add_datom_to_indexes db datom
-        else
-          match find_active_datom_by_fact db datom with
-          | None -> db
-          | Some active ->
-            { db with
-              eavt_index = Index.remove active db.eavt_index
-            ; aevt_index = Index.remove active db.aevt_index
-            ; avet_index = Index.remove active db.avet_index
-            })
-      db
-      tx_data
-  in
-  invalidate_attr_tables db
+  if tx_data = [] then db
+  else
+    let avet attr = Schema.schema_attr_is_avet_accessible db.schema attr in
+    let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) db.max_datom_e tx_data in
+    let eavt_index, aevt_index, avet_index =
+      Index.append_tx_data ~avet tx_data db.eavt_index db.aevt_index db.avet_index
+    in
+    { db with eavt_index; aevt_index; avet_index; max_datom_e }
+    |> invalidate_attr_tables
 
-let snapshot_db db =
-  { db with
-    eavt_index = Index.copy db.eavt_index
-  ; aevt_index = Index.copy db.aevt_index
-  ; avet_index = Index.copy db.avet_index
-  }
-
-let view_bounds db =
-  { Tx_visibility.view_tx = db.max_tx; since_tx = db.since_tx; history = db.history }
+let snapshot_db db = db
 
 let temporal_view db =
   Option.is_some db.as_of_tx || Option.is_some db.since_tx || db.history
-
-let apply_db_view db datoms = Tx_visibility.apply_view (view_bounds db) datoms
-
-let apply_db_view_seq db seq =
-  if temporal_view db then Tx_visibility.filter_seq (view_bounds db) seq else seq
 
 let basis_tx db = db.max_tx
 
@@ -488,25 +441,22 @@ let primary_attr_datoms db index attr =
   let attr_prefix_datoms _index index_set =
     Index.fold_attr_prefix (fun acc datom -> datom :: acc) [] index_set attr |> List.rev
   in
-  let attr_prefix_array index index_set =
-    Array.of_list (attr_prefix_datoms index index_set)
-  in
   match index with
   | Aevt ->
     (match Hashtbl.find_opt db.aevt_by_attr attr with
      | Some datoms -> Array.to_list datoms
      | None ->
-       let datoms = attr_prefix_array Aevt db.aevt_index in
-       Hashtbl.replace db.aevt_by_attr attr datoms;
-       Array.to_list datoms)
+       let datoms = attr_prefix_datoms Aevt db.aevt_index |> apply_db_view db in
+       Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
+       datoms)
   | Avet ->
     (match Hashtbl.find_opt db.avet_by_attr attr with
      | Some datoms -> Array.to_list datoms
      | None ->
-       let datoms = attr_prefix_array Avet db.avet_index in
-       Hashtbl.replace db.avet_by_attr attr datoms;
-       Array.to_list datoms)
-  | Eavt -> Index.to_list db.eavt_index
+       let datoms = attr_prefix_datoms Avet db.avet_index |> apply_db_view db in
+       Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
+       datoms)
+  | Eavt -> apply_db_view db (Index.to_list db.eavt_index)
 
 let duplicate_prefix_datoms db index e a =
   match index, e, a with
@@ -518,15 +468,15 @@ let raw_index_datoms_list db index =
   merge_sorted_datoms index (stored_index db index |> Index.to_list) (duplicate_index_datoms db index)
 
 let visible_index_datoms db index =
-  let datoms = raw_index_datoms_list db index in
+  let datoms = apply_db_view db (raw_index_datoms_list db index) in
   match db.filter_pred with
   | None -> datoms
   | Some pred -> List.filter pred datoms
 
 let index_datoms_seq db index =
   match db.duplicate_datoms with
-  | [] -> stored_index db index |> Index.seq |> Index.to_seq
-  | _ -> raw_index_datoms_list db index |> List.to_seq
+  | [] -> stored_index db index |> Index.seq |> Index.to_seq |> apply_db_view_seq db
+  | _ -> raw_index_datoms_list db index |> apply_db_view db |> List.to_seq
 
 let reverse_index_datoms_seq db index =
   match db.duplicate_datoms with

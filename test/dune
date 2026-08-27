@@ -24,6 +24,11 @@
  (libraries datascript-ocaml-native))
 
 (test
+ (name test_tx_history)
+ (modules test_tx_history)
+ (libraries datascript-ocaml-native))
+
+(test
  (name test_db)
  (modules test_db)
  (libraries datascript-ocaml-native unix))
