@@ -3,9 +3,24 @@ open Datascript
 (* Align with Datahike benchmark.datascript-bench: 20k people, query suite, timing protocol. *)
 
 type config =
-  { size : int; warmup_ms : float; sample_ms : float; repeats : int; step : int; jit_warmup : int }
+  { size : int
+  ; warmup_ms : float
+  ; sample_ms : float
+  ; repeats : int
+  ; step : int
+  ; jit_warmup : int
+  ; query : string option
+  }
 
-let default_config = { size = 20_000; warmup_ms = 200.; sample_ms = 200.; repeats = 2; step = 10; jit_warmup = 100 }
+let default_config =
+  { size = 20_000
+  ; warmup_ms = 200.
+  ; sample_ms = 200.
+  ; repeats = 2
+  ; step = 10
+  ; jit_warmup = 100
+  ; query = None
+  }
 
 let int_from_env name default =
   match Sys.getenv_opt name with
@@ -17,12 +32,19 @@ let float_from_env name default =
   | Some value -> float_of_string value
   | None -> default
 
+let query_from_env () =
+  match Sys.getenv_opt "BENCH_QUERY" with
+  | Some "" -> None
+  | Some value -> Some value
+  | None -> None
+
 let config_from_env base =
   { base with
     warmup_ms = float_from_env "BENCH_WARMUP_MS" base.warmup_ms
   ; sample_ms = float_from_env "BENCH_SAMPLE_MS" base.sample_ms
   ; repeats = int_from_env "BENCH_REPEATS" base.repeats
   ; jit_warmup = int_from_env "BENCH_JIT_WARMUP" base.jit_warmup
+  ; query = (match query_from_env () with Some query -> Some query | None -> base.query)
   }
 
 let parse_args () =
@@ -32,6 +54,7 @@ let parse_args () =
   let set_sample_ms value = config := { !config with sample_ms = float_of_string value } in
   let set_repeats value = config := { !config with repeats = int_of_string value } in
   let set_jit_warmup value = config := { !config with jit_warmup = int_of_string value } in
+  let set_query value = config := { !config with query = Some value } in
   let rec loop = function
     | [] -> !config
     | "--size" :: value :: rest ->
@@ -48,6 +71,9 @@ let parse_args () =
       loop rest
     | "--jit-warmup" :: value :: rest ->
       set_jit_warmup value;
+      loop rest
+    | "--query" :: value :: rest ->
+      set_query value;
       loop rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
@@ -205,6 +231,18 @@ let queries =
   ; q_rules "q-rule" "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
   ]
 
+let query_names =
+  List.map (fun query -> query.name) queries
+
+let select_queries = function
+  | None -> queries
+  | Some name ->
+    (match List.find_opt (fun query -> query.name = name) queries with
+     | Some query -> [ query ]
+     | None ->
+       invalid_arg
+         (Printf.sprintf "unknown query %S (available: %s)" name (String.concat ", " query_names)))
+
 let build_db size =
   let storage = benchmark_memory_storage () in
   let rng = rng 1 in
@@ -223,7 +261,7 @@ let build_db size =
   let db = if follow_ops = [] then db else db_with follow_ops db in
   refresh_db_indexes db
 
-let warmup_queries jit_warmup db =
+let warmup_queries jit_warmup selected db =
   if jit_warmup <= 0 then ()
   else
     List.iter
@@ -231,10 +269,11 @@ let warmup_queries jit_warmup db =
         for _ = 1 to jit_warmup do
           query.run db
         done)
-      queries
+      selected
 
 let main () =
   let config = parse_args () in
+  let selected = select_queries config.query in
   let runtime_label =
     match Sys.getenv_opt "BENCH_RUNTIME_LABEL" with
     | Some label -> label
@@ -248,16 +287,23 @@ let main () =
   Printf.printf "repeats\t%d\n%!" config.repeats;
   Printf.printf "jit-warmup\t%d\n%!" config.jit_warmup;
   Printf.printf "db-mode\tshared\n%!";
+  (match config.query with
+  | Some name -> Printf.printf "query\t%s\n%!" name
+  | None -> ());
   Printf.eprintf "Building shared database (%d entities)...\n%!" config.size;
   let db = build_db config.size in
   Printf.eprintf "JIT pre-warmup (%d/query)...\n%!" config.jit_warmup;
-  warmup_queries config.jit_warmup db;
+  warmup_queries config.jit_warmup selected db;
   Printf.eprintf "Running benchmarks...\n%!";
   List.iter
     (fun query ->
       let ms = bench config (fun () -> query.run db) in
       Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
-    queries;
+    selected;
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 
-let () = main ()
+let () =
+  if Array.mem "--list-queries" Sys.argv then (
+    List.iter (fun query -> Printf.printf "%s\n%!" query.name) queries;
+    exit 0);
+  main ()

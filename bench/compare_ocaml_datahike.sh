@@ -1,7 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: compare_ocaml_datahike.sh [SIZE] [QUERY]
+
+Run OCaml vs Datahike shared query benchmarks.
+
+  SIZE    entity count (default: 2000)
+  QUERY   optional single query name, e.g. q3, qpred1, q-rule
+
+Environment:
+  BENCH_QUERY      same as QUERY positional arg
+  BENCH_WARMUP_MS  warmup duration per benchmark (default: 200, 2000 when FULL=1)
+  BENCH_SAMPLE_MS  sample duration per benchmark (default: 200, 2000 when FULL=1)
+  BENCH_REPEATS    median sample count (default: 2)
+  BENCH_JIT_WARMUP JIT iterations per query before timing (default: 100)
+  FULL=1           use publication timing (2000ms warmup/sample)
+
+Examples:
+  ./compare_ocaml_datahike.sh 2000 q3
+  BENCH_QUERY=qpred1 ./compare_ocaml_datahike.sh
+  dune exec --release bench/datahike_compare.exe -- --size 2000 --query q3 --list-queries
+EOF
+}
+
 SIZE="${1:-2000}"
+QUERY="${BENCH_QUERY:-}"
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -n "${2:-}" ]]; then
+  QUERY="$2"
+fi
+
+if [[ "$SIZE" == "--help" || "$SIZE" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
 if [[ "${FULL:-0}" == "1" ]]; then
   WARMUP_MS="${WARMUP_MS:-2000}"
   SAMPLE_MS="${SAMPLE_MS:-2000}"
@@ -19,6 +59,9 @@ export BENCH_WARMUP_MS="$WARMUP_MS"
 export BENCH_SAMPLE_MS="$SAMPLE_MS"
 export BENCH_REPEATS="$REPEATS"
 export BENCH_JIT_WARMUP="$JIT_WARMUP"
+if [[ -n "$QUERY" ]]; then
+  export BENCH_QUERY="$QUERY"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -53,15 +96,20 @@ run_datahike() {
 }
 
 run_ocaml() {
+  local ocaml_args=(
+    --size "$SIZE"
+    --warmup-ms "$WARMUP_MS"
+    --sample-ms "$SAMPLE_MS"
+    --repeats "$REPEATS"
+    --jit-warmup "$JIT_WARMUP"
+  )
+  if [[ -n "$QUERY" ]]; then
+    ocaml_args+=(--query "$QUERY")
+  fi
   (
     cd "$REPO_ROOT"
     dune build --profile release bench/datahike_compare.exe >/dev/null
-    BENCH_RUNTIME_LABEL=ocaml "$OCAML_BENCH" \
-      --size "$SIZE" \
-      --warmup-ms "$WARMUP_MS" \
-      --sample-ms "$SAMPLE_MS" \
-      --repeats "$REPEATS" \
-      --jit-warmup "$JIT_WARMUP" 2>/dev/null
+    BENCH_RUNTIME_LABEL=ocaml "$OCAML_BENCH" "${ocaml_args[@]}" 2>/dev/null
   )
 }
 
@@ -84,7 +132,11 @@ ratio_cell() {
 
 ensure_datahike_java
 
-echo "=== OCaml vs Datahike query benchmark (${SIZE} entities) ==="
+if [[ -n "$QUERY" ]]; then
+  echo "=== OCaml vs Datahike query benchmark (${SIZE} entities, query=${QUERY}) ==="
+else
+  echo "=== OCaml vs Datahike query benchmark (${SIZE} entities) ==="
+fi
 if [[ "${FULL:-0}" == "1" ]]; then
   echo "Protocol: FULL warmup=${WARMUP_MS}ms sample=${SAMPLE_MS}ms repeats=${REPEATS} jit=${JIT_WARMUP} (set FULL=1)"
 else
@@ -107,6 +159,10 @@ QUERY_ORDER=(
   q1 q2 q2-switch q3 q4 q5 qpred1 qpred2
   q-or q-not q-or-join q-not-join q-pred-range q-5-merge q-rule
 )
+
+if [[ -n "$QUERY" ]]; then
+  QUERY_ORDER=("$QUERY")
+fi
 
 printf "%-14s %12s %12s %12s\n" "benchmark" "datahike(ms)" "ocaml(ms)" "ocaml/dh"
 echo "------------------------------------------------------------"

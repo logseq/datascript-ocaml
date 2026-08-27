@@ -1,4 +1,5 @@
 (require '[benchmark.datascript-bench :as bench]
+         '[clojure.string :as str]
          '[datahike.api :as d]
          '[datahike.query :as q])
 
@@ -12,6 +13,11 @@
 
 (def bench-size
   (some-> (System/getenv "BENCH_SIZE") Integer/parseInt))
+
+(def bench-query
+  (let [value (System/getenv "BENCH_QUERY")]
+    (when (and value (not (str/blank? value)))
+      (keyword value))))
 
 (def warmup-ms (env-double "BENCH_WARMUP_MS" 200.0))
 (def sample-ms (env-double "BENCH_SAMPLE_MS" 200.0))
@@ -39,11 +45,24 @@
         (d/release conn)
         db))))
 
+(defn- query-order []
+  (if bench-query
+    (if (contains? bench/queries bench-query)
+      [bench-query]
+      (throw (ex-info (str "unknown query " bench-query
+                           " (available: "
+                           (str/join ", " (map name bench/query-order))
+                           ")")
+                      {:query bench-query})))
+    bench/query-order))
+
 (println "runtime\tdatahike")
 (println "db-mode\tshared")
 (println "storage\tmemory-persistent-set")
 (when bench-size
   (println (str "size\t" bench-size)))
+(when bench-query
+  (println (str "query\t" (name bench-query))))
 (println (str "warmup-ms\t" (long warmup-ms)))
 (println (str "sample-ms\t" (long sample-ms)))
 (println (str "repeats\t" bench-repeats))
@@ -53,15 +72,16 @@
           bench/*bench-t* (long sample-ms)
           bench/*repeats* bench-repeats]
   (let [size (or bench-size 20000)
-        db (db-with-people size)]
+        db (db-with-people size)
+        selected (query-order)]
     (println (str "JIT pre-warmup (" jit-warmup "/query)..."))
     (when (pos? jit-warmup)
-      (doseq [qname bench/query-order]
+      (doseq [qname selected]
         (let [{:keys [query args]} (get bench/queries qname)
               qargs (or args [])]
           (dotimes [_ jit-warmup]
             (apply d/q query db qargs)))))
-    (doseq [qname bench/query-order]
+    (doseq [qname selected]
       (let [{:keys [query args]} (get bench/queries qname)
             qargs (or args [])
             ms (bench/bench (apply d/q query db qargs))]
