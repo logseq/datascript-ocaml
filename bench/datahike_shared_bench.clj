@@ -6,6 +6,7 @@
 
 (println "runtime\tdatahike")
 (println "db-mode\tshared")
+(println "storage\tmemory-persistent-set")
 
 (let [conn (bench/dh-db-with-people)
       db @conn]

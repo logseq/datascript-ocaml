@@ -9,6 +9,7 @@ val decode_datom_value : string -> datom
 val compare_encoded_keys : index -> string -> string -> int
 val avet_key_attr : string -> string
 val avet_key_value : string -> value
+val decode_avet_key_at : attr -> string -> datom
 
 val encode_schema : schema -> string
 val decode_schema : string -> schema

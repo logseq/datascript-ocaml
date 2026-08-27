@@ -1,6 +1,10 @@
 open Datascript_types
 open Lmdb
 
+type read_session =
+  { txn : Mdb.txn
+  }
+
 type t =
   { path : string
   ; env : Env.t
@@ -9,6 +13,7 @@ type t =
   ; avet : (string, string, [ `Uni ]) Map.t
   ; meta : (string, string, [ `Uni ]) Map.t
   ; mutable closed : bool
+  ; mutable read : read_session option
   }
 
 let default_map_size = 1024 * 1024 * 1024
@@ -31,6 +36,7 @@ let open_db path =
   let env = open_env path in
   { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
   ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; closed = false
+  ; read = None
   }
 
 let open_path path = open_db path
@@ -40,6 +46,11 @@ let ensure_open db =
 
 let close db =
   if not db.closed then (
+    (match db.read with
+     | None -> ()
+     | Some { txn } ->
+       (try Mdb.txn_abort txn with _ -> ()));
+    db.read <- None;
     Map.close db.eavt;
     Map.close db.aevt;
     Map.close db.avet;
@@ -76,6 +87,35 @@ let map_for_index index db =
   | Aevt -> db.aevt
   | Avet -> db.avet
 
+let invalidate_read db =
+  match db.read with
+  | None -> ()
+  | Some { txn } ->
+    (try Mdb.txn_abort txn with _ -> ());
+    db.read <- None
+
+let mdb_env env =
+  (* Lmdb.Env.t is Mdb.env; the public interface hides the alias. *)
+  (Obj.magic env : Mdb.env)
+
+let read_session db =
+  match db.read with
+  | Some session -> session
+  | None ->
+    let txn = Mdb.txn_begin (mdb_env db.env) None Env.Flags.read_only in
+    let session = { txn } in
+    db.read <- Some session;
+    session
+
+let ro_txn mdb_txn =
+  (* Ro Txn.t wraps Mdb.txn; reuse a long-lived read transaction for index scans. *)
+  (Obj.magic mdb_txn : [ `Read ] Txn.t)
+
+let with_read_cursor index db f =
+  let session = read_session db in
+  let map = map_for_index index db in
+  Cursor.go Ro ~txn:(ro_txn session.txn) map f
+
 let meta_get db key =
   ensure_open db;
   try Some (Map.get db.meta key) with Not_found -> None
@@ -89,6 +129,7 @@ let meta_set db key value =
 
 let with_write_txn db f =
   ensure_open db;
+  invalidate_read db;
   ignore
     (Txn.go Rw db.env (fun txn ->
        f txn;
@@ -125,10 +166,9 @@ let fold_index index db f =
 
 let fold_index_prefix index db prefix f =
   ensure_open db;
-  let map = map_for_index index db in
   let prefix_len = String.length prefix in
   (try
-     Cursor.go Ro map (fun cursor ->
+     with_read_cursor index db (fun cursor ->
        (try ignore (Cursor.seek_range cursor prefix) with Not_found -> raise Exit);
        let rec loop () =
          let key, value =
@@ -147,9 +187,8 @@ let fold_index_prefix index db prefix f =
 
 let fold_index_range index db ?from_key ?to_key f =
   ensure_open db;
-  let map = map_for_index index db in
   (try
-     Cursor.go Ro map (fun cursor ->
+     with_read_cursor index db (fun cursor ->
        (match from_key with
         | None -> (
           try ignore (Cursor.first cursor) with Not_found -> raise Exit)
@@ -174,9 +213,8 @@ let fold_index_range index db ?from_key ?to_key f =
 
 let fold_index_range_until index db ?from_key ?stop f =
   ensure_open db;
-  let map = map_for_index index db in
   (try
-     Cursor.go Ro map (fun cursor ->
+     with_read_cursor index db (fun cursor ->
        (match from_key with
         | None -> (
           try ignore (Cursor.first cursor) with Not_found -> raise Exit)

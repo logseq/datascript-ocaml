@@ -1845,9 +1845,28 @@ module Query = struct
     | None, Some stop -> fold_index_range f init db attr ~stop ()
     | Some start, Some stop -> fold_index_range f init db attr ~start ~stop ()
 
-  let collect_avet_predicate_rows db attr ~start ~stop ~post_filter ~row_for_datom =
+  type avet_row_slot = Avet_entity_first | Avet_value_first
+
+  let avet_row_slot find_vars entity_var value_var =
+    match find_vars with
+    | [ var1; var2 ] when var1 = entity_var && var2 = value_var -> Some Avet_entity_first
+    | [ var1; var2 ] when var1 = value_var && var2 = entity_var -> Some Avet_value_first
+    | _ -> None
+
+  let collect_avet_predicate_rows db attr ~start ~stop ~need_post_filter ~post_filter row_slot row_for_datom =
+    let add_row acc datom =
+      match row_slot with
+      | Some Avet_entity_first ->
+          [ Result_entity datom.e; Result_value datom.v ] :: acc
+      | Some Avet_value_first ->
+          [ Result_value datom.v; Result_entity datom.e ] :: acc
+      | None -> row_for_datom datom :: acc
+    in
     fold_index_range_filtered [] db attr start stop (fun acc datom ->
-      if post_filter datom then row_for_datom datom :: acc else acc)
+      if need_post_filter then
+        (if post_filter datom then add_row acc datom else acc)
+      else
+        add_row acc datom)
     |> List.rev
 
   let simple_avet_predicate_rows ?inputs db query =
@@ -1905,8 +1924,9 @@ module Query = struct
               | _ -> (start, stop))
             (None, None) comparisons
         in
+        let need_post_filter = avet_bounds_need_post_filter value_var comparisons in
         let post_filter datom =
-          if avet_bounds_need_post_filter value_var comparisons then
+          if need_post_filter then
             comparisons
             |> List.for_all (function
               | ComparisonPredicate (predicate, left, right) -> (
@@ -1927,8 +1947,10 @@ module Query = struct
             | var when var = value_var -> Result_value datom.v
             | _ -> invalid_arg "unexpected find variable in avet predicate query")
         in
+        let row_slot = avet_row_slot find_vars entity_var value_var in
         let rows =
-          collect_avet_predicate_rows db attr ~start ~stop ~post_filter ~row_for_datom
+          collect_avet_predicate_rows db attr ~start ~stop ~need_post_filter ~post_filter row_slot
+            row_for_datom
         in
         Some rows
 

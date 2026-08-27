@@ -14,12 +14,21 @@ let datom_key t datom = Datascript_lmdb_codec.encode_datom_key t.which datom
 
 let decode_entry index key value =
   let datom = Datascript_lmdb_codec.decode_datom_key index key in
-  let payload = Datascript_lmdb_codec.decode_datom_value value in
-  { datom with v = payload.v }
+  match index with
+  | Avet ->
+      (* AVET keys embed [a v e tx added]; skip Marshal decode of the value blob. *)
+      datom
+  | Eavt | Aevt ->
+      let payload = Datascript_lmdb_codec.decode_datom_value value in
+      { datom with v = payload.v }
 
 let put_datom_txn txn t datom =
   let key = datom_key t datom in
-  let value = Datascript_lmdb_codec.encode_datom_value datom in
+  let value =
+    match t.which with
+    | Avet -> ""
+    | _ -> Datascript_lmdb_codec.encode_datom_value datom
+  in
   Datascript_lmdb_db.put_index_txn t.which txn t.db key value
 
 let empty index db = make index db
@@ -113,14 +122,24 @@ let fold_stored_prefix t attr f acc =
   let prefix = attr ^ "\000" in
   let acc = ref acc in
   Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-    acc := f !acc (decode_entry t.which key value));
+    let datom =
+      match t.which with
+      | Avet -> Datascript_lmdb_codec.decode_avet_key_at attr key
+      | _ -> decode_entry t.which key value
+    in
+    acc := f !acc datom);
   !acc
 
 let fold_stored_attr_value_prefix t attr value f acc =
   let prefix = Datascript_lmdb_codec.encode_index_attr_value_prefix t.which attr value in
   let acc = ref acc in
   Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-    acc := f !acc (decode_entry t.which key value));
+    let datom =
+      match t.which with
+      | Avet -> Datascript_lmdb_codec.decode_avet_key_at attr key
+      | _ -> decode_entry t.which key value
+    in
+    acc := f !acc datom);
   !acc
 
 let avet_attr_prefix attr =
@@ -129,7 +148,7 @@ let avet_attr_prefix attr =
   Buffer.add_char buffer '\000';
   Buffer.contents buffer
 
-let fold_stored_avet_value_range t attr ?start_value ?stop_value compare_value f acc =
+let fold_stored_avet_value_range t attr ?start_value ?stop_value _compare_value f acc =
   let from_key =
     match start_value with
     | Some value -> Datascript_lmdb_codec.encode_index_attr_value_prefix Avet attr value
@@ -145,12 +164,11 @@ let fold_stored_avet_value_range t attr ?start_value ?stop_value compare_value f
         | None -> false
         | Some stop ->
             Datascript_types.Compare.compare_value (Datascript_lmdb_codec.avet_key_value key) stop > 0)
-    (fun key value ->
-      let datom = decode_entry Avet key value in
+    (fun key _value ->
+      let datom = Datascript_lmdb_codec.decode_avet_key_at attr key in
       match start_value with
       | None -> acc := f !acc datom
-      | Some start when compare_value datom.v start >= 0 -> acc := f !acc datom
-      | Some _ -> ());
+      | Some _ -> acc := f !acc datom);
   !acc
 
 let fold_stored_bounded t ?from_ ?to_ cmp f acc =
@@ -210,14 +228,14 @@ let fold_slice f init ?from_ ?to_ ?cmp t =
   match t.which, avet_value_range_bounds from_ to_ with
   | Avet, Some (attr, start_value, stop_value) ->
       fold_stored_avet_value_range t attr ?start_value:start_value ?stop_value:stop_value
-        Datascript_types.Compare.compare_value apply init
+        Datascript_types.Compare.compare_value f init
   | _ -> (
     match from_, to_ with
     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
       && (t.which = Aevt || t.which = Avet) ->
-      fold_stored_prefix t bound.a apply init
+      fold_stored_prefix t bound.a f init
     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-      fold_stored_attr_value_prefix t bound.a bound.v apply init
+      fold_stored_attr_value_prefix t bound.a bound.v f init
     | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init)
 
 let find_first_slice ?from_ ?to_ ?cmp t =

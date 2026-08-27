@@ -328,6 +328,15 @@ let avet_key_value key =
   let value, _offset = decode_value_key key offset in
   value
 
+let decode_avet_key_at attr key =
+  let prefix_len = String.length attr + 1 in
+  let v, offset = decode_value_key key prefix_len in
+  let e, offset = read_int32 key offset in
+  let tx, offset = read_int32 key offset in
+  let added, offset = decode_added key offset in
+  if offset <> String.length key then invalid_arg "trailing avet key bytes";
+  { e; a = attr; v; tx; added }
+
 let compare_encoded_keys index left right =
   Datascript_types.Compare.compare_datom index
     (decode_datom_key index left)

@@ -1011,14 +1011,9 @@ let avet_range_datoms context db attr start stop =
   let from_bound, from_fields, to_bound, to_fields, lower_matches, upper_matches =
     avet_range_bounds context db attr start stop
   in
+  let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
   let indexed =
-    if not (merged_index db) then
-      let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
-      Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
-    else
-      primary_attr_datoms db Avet attr
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-      |> List.to_seq
+    Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
   in
   if not (merged_index db) && not (pending_overlay db) then indexed
   else if not (merged_index db) then
@@ -1027,12 +1022,23 @@ let avet_range_datoms context db attr start stop =
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     in
     merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
-  else
+  else if not (pending_overlay db) then
     let duplicates =
       duplicate_attr_datoms db Avet attr
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     in
     merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
+  else
+    let pending =
+      pending_for_index db Avet
+      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+    in
+    let duplicates =
+      duplicate_attr_datoms db Avet attr
+      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+    in
+    merge_sorted_datom_seqs (Util.compare_datom Avet) indexed
+      (List.to_seq (merge_sorted_datoms Avet pending duplicates))
 
 let indexed_attr_required_message attr =
   "Attribute :" ^ attr ^ " should be marked as :db/index true"
@@ -1250,28 +1256,29 @@ let fold_index_range f init context db attr ?start ?stop () =
     | None -> f acc datom
     | Some pred -> if pred datom then f acc datom else acc
   in
-  if not (merged_index db) && not (pending_overlay db) then
-    let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+  let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+  let acc =
     Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
+  in
+  if not (merged_index db) && not (pending_overlay db) then acc
   else if not (merged_index db) then
-    let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
-    let acc =
-      Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
-    in
     pending_for_index db Avet
     |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     |> List.fold_left fold_with_filter acc
+  else if not (pending_overlay db) then
+    duplicate_attr_datoms db Avet attr
+    |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+    |> List.fold_left fold_with_filter acc
   else
-    let indexed =
-      primary_attr_datoms db Avet attr
+    let pending =
+      pending_for_index db Avet
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     in
     let duplicates =
       duplicate_attr_datoms db Avet attr
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
     in
-    merge_sorted_datoms Avet indexed duplicates
-    |> List.fold_left fold_with_filter init
+    merge_sorted_datoms Avet pending duplicates |> List.fold_left fold_with_filter acc
 
 let diff left right =
   let left_datoms = visible_index_datoms left Eavt in

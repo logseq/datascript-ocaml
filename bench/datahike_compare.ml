@@ -215,6 +215,7 @@ let main () =
   in
   Printf.printf "runtime\t%s\n%!" runtime_label;
   Printf.printf "size\t%d\n%!" config.size;
+  Printf.printf "storage\tlmdb-temp-index\n%!";
   Printf.printf "warmup-ms\t%.0f\n%!" config.warmup_ms;
   Printf.printf "sample-ms\t%.0f\n%!" config.sample_ms;
   Printf.printf "repeats\t%d\n%!" config.repeats;

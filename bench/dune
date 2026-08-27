@@ -21,6 +21,11 @@
  (libraries datascript-ocaml-native))
 
 (executable
+ (name count_avet)
+ (modules count_avet)
+ (libraries datascript-ocaml-native unix))
+
+(executable
  (name datahike_compare)
  (modules datahike_compare)
  (libraries datascript-ocaml-native unix))
