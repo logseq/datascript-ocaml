@@ -13,7 +13,8 @@ type context =
 let serializable db =
   { serializable_schema = db.schema
   ; serializable_datoms =
-      Index.to_list db.eavt_index @ db.duplicate_datoms |> List.sort (Datascript_types.Compare.compare_datom Eavt)
+      Index.to_list db.eavt_index @ db.duplicate_datoms @ db.pending_datoms
+      |> List.sort (Datascript_types.Compare.compare_datom Eavt)
   ; serializable_max_eid = db.max_eid
   ; serializable_max_tx = db.max_tx
   }
@@ -44,6 +45,7 @@ let from_serializable context snapshot =
   ; since_tx = None
   ; history = false
   ; filter_pred = None
+  ; pending_datoms = []
   ; storage_ref
   ; tx_fns = []
   }

@@ -99,7 +99,7 @@ let from_serializable snapshot =
   Serialize.from_serializable serialize_context snapshot
 
 let store ?storage db =
-  Storage.store ?storage db
+  Storage.store ?storage (Db_impl.flush_pending_datoms db)
 
 let memory_storage = Storage.memory_storage
 let storage_addresses = Storage.storage_addresses
@@ -259,6 +259,13 @@ let find_avet_exact db attr value =
   | Some datom when datom.a = attr && value_equal datom.v value -> Some datom
   | _ -> (
     match
+      List.find_opt
+        (fun datom -> datom.a = attr && value_equal datom.v value)
+        db.pending_datoms
+    with
+    | Some datom -> Some datom
+    | None ->
+    match
       List.filter
         (fun datom -> datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
@@ -284,6 +291,13 @@ let find_eavt_exact db entity_id attr value =
   match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.eavt_index with
   | Some datom when datom.e = entity_id && datom.a = attr && value_equal datom.v value -> Some datom
   | _ -> (
+    match
+      List.find_opt
+        (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
+        db.pending_datoms
+    with
+    | Some datom -> Some datom
+    | None ->
     match
       List.filter
         (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)

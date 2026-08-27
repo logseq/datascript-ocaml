@@ -136,6 +136,7 @@ and db =
   ; since_tx : tx option
   ; history : bool
   ; filter_pred : (datom -> bool) option
+  ; pending_datoms : datom list
   ; storage_ref : storage option
   ; tx_fns : (entity_id * (db -> value list -> tx_op list)) list
   }

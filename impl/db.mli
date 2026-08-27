@@ -18,6 +18,7 @@ val normalize_datom_for_schema : schema -> datom -> datom
 val refresh_indexes : db -> db
 val refresh_indexes_with_added_datoms : db -> datom list -> db
 val refresh_indexes_with_tx_data : db -> datom list -> db
+val flush_pending_datoms : db -> db
 val snapshot_db : db -> db
 val basis_tx : db -> tx
 val as_of_t : db -> tx option

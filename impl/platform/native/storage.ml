@@ -82,6 +82,7 @@ let restore context storage =
     ; since_tx = None
     ; history = false
     ; filter_pred = None
+    ; pending_datoms = []
     ; storage_ref = Some storage
     ; tx_fns = []
     }
