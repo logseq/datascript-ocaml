@@ -69,11 +69,6 @@ let of_eavt_datoms ~avet eavt_datoms db =
 let of_bulk index datoms db =
   { db; which = index; additions = datoms; additions_arr = Some (Array.of_list datoms); removals = []; bulk = true }
 
-let additions_array t =
-  match t.additions_arr with
-  | Some arr -> arr
-  | None -> Array.of_list t.additions
-
 let array_find_first cmp bound arr =
   let len = Array.length arr in
   let rec lower lo hi =
@@ -85,36 +80,29 @@ let array_find_first cmp bound arr =
   let index = lower 0 len in
   if index < len && cmp arr.(index) bound = 0 then Some arr.(index) else None
 
-let additions_only t = t.bulk && t.additions <> [] && t.removals = []
-
-let add datom t =
-  if additions_only t then
-    { t with additions = datom :: t.additions; additions_arr = None }
-  else (
-    let key = datom_key t datom in
-    let additions = datom :: List.filter (fun d -> datom_key t d <> key) t.additions in
-    let removals = List.filter (fun d -> datom_key t d <> key) t.removals in
-    { t with additions; removals })
-
-let remove datom t =
-  let key = datom_key t datom in
-  let additions = List.filter (fun d -> datom_key t d <> key) t.additions in
-  let already_removed = List.exists (fun d -> datom_key t d = key) t.removals in
-  let removals =
-    if already_removed || List.exists (fun d -> datom_key t d = key) t.additions then t.removals
-    else datom :: t.removals
+let array_lower_bound cmp bound arr =
+  let len = Array.length arr in
+  let rec lower lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) / 2 in
+      if cmp arr.(mid) bound < 0 then lower (mid + 1) hi else lower lo mid
   in
-  { t with additions; removals }
+  lower 0 len
 
-let overlay_tables t =
-  let removed = Hashtbl.create (List.length t.removals) in
-  List.iter (fun datom -> Hashtbl.add removed (datom_key t datom) ()) t.removals;
-  let added = Hashtbl.create (List.length t.additions) in
-  List.iter (fun datom -> Hashtbl.replace added (datom_key t datom) datom) t.additions;
-  removed, added
+let sorted_bulk_array t =
+  match t.additions_arr with
+  | Some arr -> arr
+  | None ->
+    let arr = Array.of_list t.additions in
+    Array.sort (cmp_for t.which) arr;
+    arr
 
-let stored_visible key removed added =
-  not (Hashtbl.mem removed key || Hashtbl.mem added key)
+let bulk_datoms t =
+  let base = Array.to_list (sorted_bulk_array t) in
+  match t.additions with
+  | [] -> base
+  | overlay -> List.merge (cmp_for t.which) (List.sort (cmp_for t.which) overlay) base
 
 let in_range cmp lower upper datom =
   let above_lower =
@@ -128,6 +116,67 @@ let in_range cmp lower upper datom =
     | Some upper -> cmp datom upper <= 0
   in
   above_lower && below_upper
+
+let array_fold_in_range cmp from_ to_ arr f init =
+  let len = Array.length arr in
+  let start =
+    match from_ with
+    | None -> 0
+    | Some bound -> array_lower_bound cmp bound arr
+  in
+  let rec loop index acc =
+    if index >= len then acc
+    else
+      let datom = arr.(index) in
+      if not (in_range cmp from_ to_ datom) then acc
+      else loop (index + 1) (f acc datom)
+  in
+  loop start init
+
+let array_materialize_range cmp from_ to_ arr =
+  array_fold_in_range cmp from_ to_ arr (fun acc datom -> datom :: acc) [] |> List.rev
+
+let additions_only t =
+  t.bulk && t.removals = [] && (t.additions <> [] || Option.is_some t.additions_arr)
+
+let add datom t =
+  if additions_only t then
+    { t with additions = datom :: t.additions }
+  else (
+    let key = datom_key t datom in
+    let additions = datom :: List.filter (fun d -> datom_key t d <> key) t.additions in
+    let removals = List.filter (fun d -> datom_key t d <> key) t.removals in
+    { t with additions; removals })
+
+let remove datom t =
+  let key = datom_key t datom in
+  let stored_additions =
+    match t.additions_arr with
+    | Some arr -> Array.to_list arr
+    | None -> t.additions
+  in
+  let additions = List.filter (fun d -> datom_key t d <> key) stored_additions in
+  let already_removed = List.exists (fun d -> datom_key t d = key) t.removals in
+  let removals =
+    if already_removed || List.exists (fun d -> datom_key t d = key) stored_additions then t.removals
+    else datom :: t.removals
+  in
+  { t with additions; additions_arr = None; removals }
+
+let overlay_tables t =
+  let stored_additions =
+    match t.additions_arr with
+    | Some arr -> Array.to_list arr
+    | None -> t.additions
+  in
+  let removed = Hashtbl.create (List.length t.removals) in
+  List.iter (fun datom -> Hashtbl.add removed (datom_key t datom) ()) t.removals;
+  let added = Hashtbl.create (List.length stored_additions) in
+  List.iter (fun datom -> Hashtbl.replace added (datom_key t datom) datom) stored_additions;
+  removed, added
+
+let stored_visible key removed added =
+  not (Hashtbl.mem removed key || Hashtbl.mem added key)
 
 let bound_key t = function
   | None -> None
@@ -202,8 +251,16 @@ let fold_stored_bounded t ?from_ ?to_ cmp f acc =
 
 let fold_overlay t f acc = List.fold_left f acc t.additions
 
+let fold_bulk_slice f init ?from_ ?to_ ?cmp t =
+  let cmp = Option.value ~default:(cmp_for t.which) cmp in
+  let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
+  let acc = array_fold_in_range cmp from_ to_ (sorted_bulk_array t) f init in
+  List.fold_left apply acc t.additions
+
 let fold_datoms f init t =
-  if additions_only t then List.fold_left f init t.additions
+  if additions_only t then
+    let acc = Array.fold_left (fun acc datom -> f acc datom) init (sorted_bulk_array t) in
+    List.fold_left f acc t.additions
   else (
     let acc = fold_stored t f init in
     fold_overlay t f acc)
@@ -217,16 +274,15 @@ let clear_index_txn txn index lmdb =
     Datascript_lmdb_db.remove_index_txn index txn lmdb key)
 
 let sync_merged_to_lmdb t target_lmdb =
-  let write_datoms txn datoms =
-    List.iter
-      (fun datom ->
-        let key = datom_key t datom in
-        let value = Datascript_lmdb_codec.encode_datom_value datom in
-        Datascript_lmdb_db.put_index_txn t.which txn target_lmdb key value)
-      datoms
+  let write_datom_txn txn datom =
+    let key = datom_key t datom in
+    let value = Datascript_lmdb_codec.encode_datom_value datom in
+    Datascript_lmdb_db.put_index_txn t.which txn target_lmdb key value
   in
   if additions_only t then
-    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn -> write_datoms txn t.additions)
+    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
+      Array.iter (write_datom_txn txn) (sorted_bulk_array t);
+      List.iter (write_datom_txn txn) t.additions)
   else if overlay_empty t then
     Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
       clear_index_txn txn t.which target_lmdb;
@@ -235,7 +291,7 @@ let sync_merged_to_lmdb t target_lmdb =
     let merged = collect_datoms t in
     Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
       clear_index_txn txn t.which target_lmdb;
-      write_datoms txn merged)
+      List.iter (write_datom_txn txn) merged)
 
 let copy_list xs = List.map (fun x -> x) xs
 
@@ -250,7 +306,7 @@ let flush t =
     { t with additions = []; additions_arr = None; removals = [] })
 
 let to_list t =
-  if additions_only t then t.additions
+  if additions_only t then bulk_datoms t
   else if overlay_empty t then List.rev (fold_stored t (fun acc datom -> datom :: acc) [])
   else collect_datoms t
 
@@ -263,20 +319,28 @@ let lookup t datom =
     (match List.find_opt (fun d -> datom_key t d = key) t.additions with
      | Some datom -> Some datom
      | None -> (
-       match Datascript_lmdb_db.get_index t.which t.db key with
-       | None -> None
-       | Some value -> Some (decode_entry t.which key value)))
+       match t.additions_arr with
+       | Some arr ->
+         let cmp = cmp_for t.which in
+         (match array_find_first cmp datom arr with
+          | Some found when datom_key t found = key -> Some found
+          | _ -> None)
+       | None -> (
+         match Datascript_lmdb_db.get_index t.which t.db key with
+         | None -> None
+         | Some value -> Some (decode_entry t.which key value))))
 
 let fold_slice f init ?from_ ?to_ ?cmp t =
-  let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
-  if additions_only t then List.fold_left apply init t.additions
-  else if not (overlay_empty t) then
-    collect_datoms t
-    |> List.filter (fun datom -> in_range cmp from_ to_ datom)
-    |> List.fold_left f init
+  if additions_only t then fold_bulk_slice f init ?from_ ?to_ ?cmp t
   else
-    match from_, to_ with
+    let cmp = Option.value ~default:(cmp_for t.which) cmp in
+    let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
+    if not (overlay_empty t) then
+      collect_datoms t
+      |> List.filter (fun datom -> in_range cmp from_ to_ datom)
+      |> List.fold_left f init
+    else
+      match from_, to_ with
     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
       && (t.which = Aevt || t.which = Avet) ->
       fold_stored_prefix t bound.a apply init
@@ -294,14 +358,17 @@ let find_first_slice ?from_ ?to_ ?cmp t =
   in
   (try
      if additions_only t then (
+       List.iter consider t.additions;
        match from_, to_ with
        | Some bound, Some bound' when bound == bound' -> (
-         match array_find_first cmp bound (additions_array t) with
-         | Some datom ->
+         match array_find_first cmp bound (sorted_bulk_array t) with
+         | Some datom when !found = None && in_range cmp from_ to_ datom ->
            found := Some datom;
            raise Stop_search
-         | None -> ())
-       | _ -> List.iter consider t.additions)
+         | _ -> ())
+       | _ ->
+         if !found = None then
+           ignore (array_fold_in_range cmp from_ to_ (sorted_bulk_array t) (fun () datom -> consider datom) ()))
      else if not (overlay_empty t) then
        collect_datoms t |> List.iter consider
      else
@@ -317,7 +384,9 @@ let find_first_slice ?from_ ?to_ ?cmp t =
 
 let fold_attr_prefix f init t attr =
   let apply acc datom = if datom.a = attr then f acc datom else acc in
-  if additions_only t then List.fold_left apply init t.additions
+  if additions_only t then
+    let acc = Array.fold_left apply init (sorted_bulk_array t) in
+    List.fold_left apply acc t.additions
   else if not (overlay_empty t) then
     collect_datoms t
     |> List.filter (fun datom -> datom.a = attr)
@@ -326,7 +395,8 @@ let fold_attr_prefix f init t attr =
     fold_stored_prefix t attr apply init
 
 let materialize_range t ?from_ ?to_ cmp =
-  fold_slice (fun acc datom -> datom :: acc) [] ?from_ ?to_ ~cmp t |> List.rev
+  if additions_only t then array_materialize_range cmp from_ to_ (sorted_bulk_array t)
+  else fold_slice (fun acc datom -> datom :: acc) [] ?from_ ?to_ ~cmp t |> List.rev
 
 let make_seq cmp datoms = { cmp; datoms; offset = 0 }
 

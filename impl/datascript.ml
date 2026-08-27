@@ -1090,6 +1090,21 @@ let datoms_by_attr_value db attr value =
       datoms_list db Aevt ~a:attr ()
       |> List.filter datom_value_matches
 
+let entity_ids_by_attr_value db attr value =
+  match resolve_query_value_for_attr db attr value with
+  | None -> Some []
+  | Some value ->
+    let value =
+      if is_tuple_attr db attr then
+        coerce_tuple_lookup_value_db db attr value
+      else
+        normalize_value value
+    in
+    if query_value_uses_avet value && query_attr_uses_avet db attr then
+      Db_access_impl.avet_entity_ids_by_attr_value db attr value
+    else
+      None
+
 let pattern_value_needs_attr_resolution db attr value =
   is_tuple_attr db attr
   ||
@@ -1361,6 +1376,7 @@ module Query_where_impl = Query_where.Make (struct
   let cardinality_one db attr = cardinality db attr = One
   let normalize_value = normalize_value
   let datoms_by_attr_value = datoms_by_attr_value
+  let entity_ids_by_attr_value = entity_ids_by_attr_value
   let query_attr_uses_avet = query_attr_uses_avet
   let query_value_uses_avet = query_value_uses_avet
 end)

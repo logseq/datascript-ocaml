@@ -26,6 +26,7 @@ module Make (Context : sig
   val cardinality_one : db -> attr -> bool
   val normalize_value : value -> value
   val datoms_by_attr_value : db -> attr -> value -> datom list
+  val entity_ids_by_attr_value : db -> attr -> value -> entity_id list option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
 end) = struct
@@ -1053,6 +1054,12 @@ end) = struct
                     (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) (QValue value) datom))
                 |> List.of_seq
           in
+          let avet_entity_ids attr value =
+            if direct_attr attr && query_value_uses_avet value && query_attr_uses_avet source_db attr then
+              entity_ids_by_attr_value source_db attr value
+            else
+              None
+          in
           let constant_datoms =
             constant_patterns
             |> List.map (fun (attr, value) -> attr, value, lazy (datoms_matching attr value))
@@ -1063,10 +1070,43 @@ end) = struct
             |> unique_vars
           in
           let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
-          if List.exists (fun (_, _, datoms) -> Lazy.force datoms = []) constant_datoms then
+          if
+            List.exists
+              (fun (attr, value, datoms) ->
+                match avet_entity_ids attr value with
+                | Some [] -> true
+                | Some _ -> false
+                | None -> Lazy.force datoms = [])
+              constant_datoms
+          then
             Some { attrs; rows = []; lookup_vars; unique_rows = true }
           else
+          let avet_single_entity_rows =
+            match constant_patterns, value_var_patterns, required_patterns, excluded_patterns, relation_comparisons with
+            | [ (attr, value) ], [], [], [], [] -> (
+              match avet_entity_ids attr value with
+              | Some entity_ids -> Some (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids)
+              | None -> None)
+            | _ -> None
+          in
+          if Option.is_some avet_single_entity_rows then
+            Some
+              { attrs
+              ; rows = Option.get avet_single_entity_rows
+              ; lookup_vars
+              ; unique_rows = true
+              }
+          else
           let constant_sets =
+            let set_from_entity_ids entity_ids =
+              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+              List.iter
+                (fun entity_id ->
+                  if entity_id >= 0 && entity_id < Bytes.length entities then
+                    Bytes.set entities entity_id '\001')
+                entity_ids;
+              entities
+            in
             let set_from_datoms datoms =
               let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
               List.iter
@@ -1077,7 +1117,15 @@ end) = struct
               entities
             in
             constant_datoms
-            |> List.map (fun (_, _, datoms) -> set_from_datoms (Lazy.force datoms))
+            |> List.map (fun (attr, value, datoms) ->
+              match avet_entity_ids attr value with
+              | Some entity_ids -> set_from_entity_ids entity_ids
+              | None -> set_from_datoms (Lazy.force datoms))
+          in
+          let constant_count (attr, value, datoms) =
+            match avet_entity_ids attr value with
+            | Some entity_ids -> List.length entity_ids
+            | None -> List.length (Lazy.force datoms)
           in
           let candidate_entities () =
             match constant_datoms with
@@ -1090,10 +1138,12 @@ end) = struct
                | [], [] -> [])
             | datoms_by_constant ->
               datoms_by_constant
-              |> List.sort (fun (_, _, left) (_, _, right) ->
-                compare (List.length (Lazy.force left)) (List.length (Lazy.force right)))
+              |> List.sort (fun left right -> compare (constant_count left) (constant_count right))
               |> function
-                | (_, _, datoms) :: _ -> List.map (fun datom -> datom.e) (Lazy.force datoms)
+                | (attr, value, datoms) :: _ -> (
+                  match avet_entity_ids attr value with
+                  | Some entity_ids -> entity_ids
+                  | None -> List.map (fun datom -> datom.e) (Lazy.force datoms))
                 | [] -> []
           in
           let has_pattern entity_id attr value_term =
@@ -1441,7 +1491,7 @@ end) = struct
                 binding_row attrs binding)
               |> List.of_seq
           in
-          let rows =
+          let compute_default_rows () =
             match value_var_patterns with
             | (scan_value_var, scan_attr) :: remaining_value_vars
               when direct_attr scan_attr
@@ -1471,6 +1521,14 @@ end) = struct
                          [ [ e_var, Result_entity entity_id ] ]
                   in
                   bindings |> List.filter_map (binding_row attrs))
+          in
+          let rows =
+            match constant_patterns, value_var_patterns, required_patterns, excluded_patterns, relation_comparisons with
+            | [ (attr, value) ], [], [], [], [] when value_var_patterns = [] -> (
+              match avet_entity_ids attr value with
+              | Some entity_ids -> List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids
+              | None -> compute_default_rows ())
+            | _ -> compute_default_rows ()
           in
           let unique_rows =
             source_db.duplicate_datoms = []

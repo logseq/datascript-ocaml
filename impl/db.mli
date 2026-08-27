@@ -56,6 +56,7 @@ val fold_datoms :
   unit ->
   'acc
 val datoms_list : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+val avet_entity_ids_by_attr_value : index_context -> db -> attr -> value -> entity_id list option
 val avet_datoms_by_value : index_context -> db -> attr -> value -> datom list
 val avet_datoms_by_value_seq : index_context -> db -> attr -> value -> datom Seq.t
 val datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t

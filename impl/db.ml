@@ -244,9 +244,12 @@ let find_active_datom_by_fact db datom =
     Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity datom.e) ~default:[]
     |> List.filter (fun active -> active.a = datom.a && value_equal active.v datom.v)
   in
-  match Index.slice ~from_:bound ~to_:bound ~cmp db.eavt_index @ duplicate_matches with
-  | [] -> None
-  | matches -> Some (matches |> List.sort (Util.compare_datom Eavt) |> List.hd)
+  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.eavt_index with
+  | Some active when active.e = datom.e && active.a = datom.a && value_equal active.v datom.v -> Some active
+  | _ -> (
+    match duplicate_matches with
+    | [] -> None
+    | matches -> Some (matches |> List.sort (Util.compare_datom Eavt) |> List.hd))
 
 let add_datom_to_indexes db datom =
   { db with
@@ -719,6 +722,19 @@ let exact_prefix_bound index e a v tx =
      | Some a, Some v, Some e, Some tx ->
        Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
      | _ -> None)
+
+let avet_entity_ids_by_attr_value context db attr value =
+  match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
+  | Some entity_ids -> Some entity_ids
+  | None -> (
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some datoms ->
+      let bound = bound_datom ~a:attr ~v:value () in
+      let bound_fields = fields ~a:true ~v:true () in
+      Some
+        (array_attr_value_slice context Avet bound bound_fields datoms
+         |> List.map (fun datom -> datom.e))
+    | None -> None)
 
 let avet_datoms_by_value context db attr value =
   let bound = bound_datom ~a:attr ~v:value () in

@@ -110,6 +110,9 @@ end) = struct
 
   let avet_datoms_by_value_seq db attr value =
     Db.avet_datoms_by_value_seq db_index_context db attr value
+
+  let avet_entity_ids_by_attr_value db attr value =
+    Db.avet_entity_ids_by_attr_value db_index_context db attr value
   
   let datoms_ref db index ?e ?a ?v ?tx () =
     Db.datoms_ref db_index_context db index ?e ?a ?v ?tx ()
