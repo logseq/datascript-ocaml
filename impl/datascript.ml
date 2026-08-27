@@ -2112,11 +2112,301 @@ module Query = struct
             |> List.filter_map (fun entity_id -> row_for_entity entity_id)
             |> fun rows -> Some rows
 
+  let entity_id_table ids =
+    let table = Hashtbl.create (List.length ids) in
+    List.iter (fun id -> Hashtbl.replace table id ()) ids;
+    table
+
+  let value_membership_table values =
+    let table = Hashtbl.create (List.length values) in
+    List.iter (fun value -> Hashtbl.replace table value ()) values;
+    table
+
+  let patterns_only where =
+    List.fold_left
+      (fun patterns clause ->
+        match patterns, clause with
+        | Some patterns, Pattern (QVar entity_var, QAttr attr, value_term) ->
+          Some ((entity_var, attr, value_term) :: patterns)
+        | _ -> None)
+      (Some []) where
+    |> Option.map List.rev
+
+  let join_value_var patterns =
+    match List.find_opt (function _, _, QVar _ -> true | _ -> false) patterns with
+    | Some (_, _, QVar value_var) -> Some value_var
+    | _ -> None
+
+  let find_cross_entity_value_join patterns =
+    let join_var = join_value_var patterns in
+    let constant =
+      match List.find_opt (function _, _, QValue _ -> true | _ -> false) patterns with
+      | Some (filter_entity, filter_attr, QValue filter_value) ->
+        Some (filter_entity, filter_attr, filter_value)
+      | _ -> None
+    in
+    match join_var, constant with
+    | Some join_var, Some (filter_entity, filter_attr, filter_value) ->
+      let join_endpoints =
+        patterns
+        |> List.filter (function
+          | _, _, QVar value_var when value_var = join_var -> true
+          | _ -> false)
+        |> List.map (fun (entity_var, attr, _) -> entity_var, attr)
+      in
+      (match join_endpoints with
+       | [ (left_entity, join_attr); (right_entity, right_attr) ]
+         when left_entity <> right_entity && join_attr = right_attr ->
+         let output_patterns =
+           patterns
+           |> List.filter (function
+             | entity_var, _, QVar value_var when entity_var <> filter_entity && value_var <> join_var ->
+               true
+             | _ -> false)
+           |> List.filter_map (function
+             | entity_var, attr, QVar value_var -> Some (entity_var, attr, value_var)
+             | _ -> None)
+         in
+         if output_patterns = [] then
+           None
+         else
+           let output_entity =
+             if filter_entity = left_entity then
+               right_entity
+             else if filter_entity = right_entity then
+               left_entity
+             else
+               ""
+           in
+           if output_entity = "" then
+             None
+           else if List.for_all (fun (entity_var, _, _) -> entity_var = output_entity) output_patterns then
+             Some
+               ( filter_entity
+               , filter_attr
+               , filter_value
+               , output_entity
+               , join_var
+               , join_attr
+               , output_patterns )
+           else
+             None
+       | _ -> None)
+    | _ -> None
+
+  let simple_cross_entity_value_join_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _ -> None
+    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
+    | false, None, [], [] ->
+      let* patterns = patterns_only query.where in
+      let* _filter_entity, filter_attr, filter_value, output_entity, join_var, join_attr, output_patterns =
+        find_cross_entity_value_join patterns
+      in
+      let* find_vars =
+        query.find
+        |> List.fold_left
+             (fun vars -> function
+               | Find_var var -> Option.map (fun vars -> var :: vars) vars
+               | _ -> None)
+             (Some [])
+        |> Option.map List.rev
+      in
+      let output_vars = List.map (fun (_, _, value_var) -> value_var) output_patterns in
+      if not (List.for_all (fun var -> var = output_entity || var = join_var || List.mem var output_vars) find_vars) then
+        None
+      else
+      let filter_ids =
+        match entity_ids_by_attr_value db filter_attr filter_value with
+        | Some entity_ids -> entity_ids
+        | None -> datoms_by_attr_value db filter_attr filter_value |> List.map (fun datom -> datom.e)
+      in
+      if filter_ids = [] then
+        Some []
+      else
+        let join_ages =
+          filter_ids
+          |> List.filter_map (fun entity_id ->
+            match find_datom db Aevt ~e:entity_id ~a:join_attr () with
+            | None -> None
+            | Some datom -> Some datom.v)
+          |> value_membership_table
+        in
+        let output_tables =
+          output_patterns
+          |> List.map (fun (_, attr, value_var) ->
+            let values = Array.make (db.max_datom_e + 1) None in
+            let fill datom =
+              if datom.e >= 0 && datom.e < Array.length values then
+                values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
+            in
+            (match Hashtbl.find_opt db.aevt_by_attr attr with
+             | Some arr when Array.length arr > 0 ->
+               for index = 0 to Array.length arr - 1 do
+                 fill arr.(index)
+               done
+             | _ -> datoms db Aevt ~a:attr () |> Seq.iter fill);
+            value_var, values)
+        in
+        let rows =
+          datoms db Aevt ~a:join_attr () |> Seq.fold_left
+            (fun rows datom ->
+              if Hashtbl.mem join_ages datom.v then
+                let row =
+                  find_vars
+                  |> List.filter_map (fun var ->
+                    if var = output_entity then
+                      Some (Result_entity datom.e)
+                    else if var = join_var then
+                      Some (Result_value datom.v)
+                    else
+                      match List.assoc_opt var output_tables with
+                      | Some values ->
+                        if datom.e >= 0 && datom.e < Array.length values then
+                          values.(datom.e)
+                        else
+                          None
+                      | None -> None)
+                in
+                if List.length row = List.length find_vars then
+                  row :: rows
+                else
+                  rows
+              else
+                rows)
+            []
+          |> List.rev
+        in
+        Some rows
+
+  let simple_or_join_constant_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _ -> None
+    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
+    | false, None, [], [] ->
+      let split = function
+        | Pattern (QVar entity_var, QAttr seed_attr, QVar value_var) :: [ OrJoin (join_vars, branches) ] ->
+          if List.mem entity_var join_vars && join_vars = [ entity_var ] then
+            let branch_constants =
+              branches
+              |> List.filter_map (function
+                | [ Pattern (QVar branch_entity, QAttr branch_attr, QValue branch_value) ]
+                  when branch_entity = entity_var && branch_attr <> seed_attr ->
+                  Some (branch_attr, branch_value)
+                | _ -> None)
+            in
+            if branch_constants <> [] then
+              Some (entity_var, seed_attr, value_var, branch_constants)
+            else
+              None
+          else
+            None
+        | _ :: _ -> None
+        | [] -> None
+      in
+      let* entity_var, seed_attr, value_var, branch_constants =
+        split query.where
+      in
+      let* find_vars =
+        query.find
+        |> List.fold_left
+             (fun vars -> function
+               | Find_var var -> Option.map (fun vars -> var :: vars) vars
+               | _ -> None)
+             (Some [])
+        |> Option.map List.rev
+      in
+      if find_vars <> [ entity_var; value_var ] then
+        None
+      else
+        let entity_ids =
+          branch_constants
+          |> List.concat_map (fun (attr, value) ->
+            match entity_ids_by_attr_value db attr value with
+            | Some entity_ids -> entity_ids
+            | None -> datoms_by_attr_value db attr value |> List.map (fun datom -> datom.e))
+          |> List.sort_uniq compare
+        in
+        let rows =
+          entity_ids
+          |> List.filter_map (fun entity_id ->
+            match find_datom db Aevt ~e:entity_id ~a:seed_attr () with
+            | None -> None
+            | Some datom ->
+              Some [ Result_entity entity_id; Query_impl.result_of_datom_v datom ])
+        in
+        Some rows
+
+  let simple_not_join_constant_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _ -> None
+    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
+    | false, None, [], [] ->
+      let split = function
+        | Pattern (QVar entity_var, QAttr seed_attr, QVar value_var) :: [ NotJoin (join_vars, clauses) ] ->
+          if join_vars = [ entity_var ] then
+            Some (entity_var, seed_attr, value_var, clauses)
+          else
+            None
+        | _ :: _ -> None
+        | [] -> None
+      in
+      let* entity_var, seed_attr, value_var, clauses =
+        split query.where
+      in
+      let* find_vars =
+        query.find
+        |> List.fold_left
+             (fun vars -> function
+               | Find_var var -> Option.map (fun vars -> var :: vars) vars
+               | _ -> None)
+             (Some [])
+        |> Option.map List.rev
+      in
+      if find_vars <> [ entity_var; value_var ] then
+        None
+      else
+        match clauses with
+        | [ Pattern (QVar clause_entity, QAttr clause_attr, QValue clause_value) ]
+          when clause_entity = entity_var ->
+          let excluded =
+            match entity_ids_by_attr_value db clause_attr clause_value with
+            | Some entity_ids -> entity_id_table entity_ids
+            | None ->
+              datoms_by_attr_value db clause_attr clause_value
+              |> List.map (fun datom -> datom.e)
+              |> entity_id_table
+          in
+          let rows =
+            datoms db Aevt ~a:seed_attr () |> Seq.fold_left
+              (fun rows datom ->
+                if Hashtbl.mem excluded datom.e then
+                  rows
+                else
+                  [ Result_entity datom.e; Query_impl.result_of_datom_v datom ] :: rows)
+              []
+            |> List.rev
+          in
+          Some rows
+        | _ -> None
+
   let q ?inputs db query =
     match simple_avet_predicate_rows ?inputs db query with
     | Some rows -> rows
     | None ->
     match simple_same_entity_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+    match simple_cross_entity_value_join_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+    match simple_or_join_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+    match simple_not_join_constant_rows ?inputs db query with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
 
