@@ -2269,43 +2269,88 @@ module Query = struct
                 let attr_count = Array.length value_attrs in
                 let attr_arrays = Array.map (fun (_, arr) -> arr) value_attrs in
                 let attr_lengths = Array.map Array.length attr_arrays in
-                let cursors = Array.make attr_count 0 in
-                let value_results = Array.make attr_count (Result_value (Int 0)) in
                 match build_slots value_attrs with
                 | None -> None
                 | Some row_slots ->
-                  let advance_to eid attr_index =
-                    let arr = attr_arrays.(attr_index) in
-                    let len = attr_lengths.(attr_index) in
-                    let j = ref cursors.(attr_index) in
-                    while !j < len && arr.(!j).e < eid do
-                      incr j
-                    done;
-                    let at = !j in
-                    cursors.(attr_index) <- at;
-                    if at < len && arr.(at).e = eid then (
-                      value_results.(attr_index) <- Result_value arr.(at).v;
-                      true)
+                  let dense_base =
+                    if attr_count = 0 then None
                     else
-                      false
+                      let first = attr_arrays.(0) in
+                      let len = Array.length first in
+                      if len = 0 then None
+                      else if not (Array.for_all (fun arr -> Array.length arr = len) attr_arrays)
+                      then None
+                      else
+                        let base_e = first.(0).e in
+                        let last_e = first.(len - 1).e in
+                        if last_e <> base_e + len - 1 then None
+                        else
+                          let mid = len / 2 in
+                          let aligned =
+                            let check i =
+                              let e = first.(i).e in
+                              Array.for_all (fun arr -> arr.(i).e = e) attr_arrays
+                            in
+                            check 0 && check mid && check (len - 1)
+                          in
+                          if aligned then Some (base_e, len) else None
                   in
-                  let rows = Array.make entity_count [] in
-                  let row_count = ref 0 in
-                  for i = 0 to entity_count - 1 do
-                    let eid = entities.(i) in
-                    let rec fill attr_index =
-                      if attr_index >= attr_count then true
-                      else if advance_to eid attr_index then fill (attr_index + 1)
-                      else false
-                    in
-                    if fill 0 then (
-                      rows.(!row_count) <- build_row_from row_slots eid value_results;
-                      incr row_count)
-                  done;
-                  let rec rows_to_list i acc =
-                    if i < 0 then acc else rows_to_list (i - 1) (rows.(i) :: acc)
-                  in
-                  Some (rows_to_list (!row_count - 1) [])))
+                  (match dense_base with
+                   | Some (base_e, dense_len) ->
+                     let value_results = Array.make attr_count (Result_value (Int 0)) in
+                     let specialized_find =
+                       let expected =
+                         e_var :: (value_attrs |> Array.to_list |> List.map fst)
+                       in
+                       find_vars = expected
+                     in
+                     let rows = ref [] in
+                     for i = entity_count - 1 downto 0 do
+                       let eid = entities.(i) in
+                       let index = eid - base_e in
+                       if index >= 0 && index < dense_len then
+                         if specialized_find then
+                           let rec vals a acc =
+                             if a < 0 then Result_entity eid :: acc
+                             else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                           in
+                           rows := vals (attr_count - 1) [] :: !rows
+                         else (
+                           for a = 0 to attr_count - 1 do
+                             value_results.(a) <- Result_value attr_arrays.(a).(index).v
+                           done;
+                           rows := build_row_from row_slots eid value_results :: !rows)
+                     done;
+                     Some !rows
+                   | None ->
+                     let cursors = Array.make attr_count 0 in
+                     let value_results = Array.make attr_count (Result_value (Int 0)) in
+                     let advance_to eid attr_index =
+                       let arr = attr_arrays.(attr_index) in
+                       let len = attr_lengths.(attr_index) in
+                       let j = ref cursors.(attr_index) in
+                       while !j < len && arr.(!j).e < eid do
+                         incr j
+                       done;
+                       let at = !j in
+                       cursors.(attr_index) <- at;
+                       if at < len && arr.(at).e = eid then (
+                         value_results.(attr_index) <- Result_value arr.(at).v;
+                         true)
+                       else
+                         false
+                     in
+                     let rows = ref [] in
+                     for i = entity_count - 1 downto 0 do
+                       let eid = entities.(i) in
+                       let rec fill attr_index =
+                         if attr_index >= attr_count then true
+                         else if advance_to eid attr_index then fill (attr_index + 1)
+                         else false
+                       in
+                       if fill 0 then rows := build_row_from row_slots eid value_results :: !rows
+                     done;
+                     Some !rows)))
 
   let value_membership_table values =
     let table = Hashtbl.create (List.length values) in

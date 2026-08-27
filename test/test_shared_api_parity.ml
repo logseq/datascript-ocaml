@@ -329,6 +329,14 @@ let test_rules_wide_5x3 () =
   in
   check_int "rules-wide-5x3 count" 1641 (List.length rows)
 
+let test_rules_wide_7x3 () =
+  let db = wide_db 7 3 in
+  let rows =
+    q_string ~inputs:[ Arg_rules follow_rules_rec ] db
+      "[:find ?e ?e2 :in $ % :where (follows ?e ?e2)]"
+  in
+  check_int "rules-wide-7x3 count" 21324 (List.length rows)
+
 let test_rules_long_10x3 () =
   let db = long_db 10 3 in
   let rows =
@@ -616,6 +624,7 @@ let () =
       , [ test_case "recursive follows exact people fixture" `Quick test_rules_small_exact
         ; test_case "rules-wide-3x3 count" `Quick test_rules_wide_3x3
         ; test_case "rules-wide-5x3 count" `Quick test_rules_wide_5x3
+        ; test_case "rules-wide-7x3 count" `Quick test_rules_wide_7x3
         ; test_case "rules-wide-4x6 count" `Quick test_rules_wide_4x6
         ; test_case "rules-long-10x3 count" `Quick test_rules_long_10x3
         ; test_case "rules-long-30x3 count" `Quick test_rules_long_30x3
