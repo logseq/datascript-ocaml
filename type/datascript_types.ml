@@ -80,14 +80,13 @@ type serializable_db =
 
 type storage_address = string
 
-type storage_payload = Storage_session
+type storage_kind = string
 
-type storage =
-  { storage_store : (storage_address * storage_payload) list -> unit
-  ; storage_restore : storage_address -> storage_payload option
-  ; storage_list_addresses : unit -> storage_address list
-  ; storage_delete : storage_address list -> unit
-  }
+let storage_kind_memory = "memory"
+let storage_kind_lmdb = "lmdb"
+let storage_kind_sqlite = "sqlite"
+
+type storage = Storage_handle of int
 
 type tx_value =
   | One_value of value

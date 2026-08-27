@@ -121,9 +121,9 @@ let invalidate_attr_tables db =
 let view_bounds db =
   { Tx_visibility.view_tx = db.max_tx; since_tx = db.since_tx; history = db.history }
 
-let apply_db_view db datoms = Tx_visibility.apply_view (view_bounds db) datoms
+let apply_db_view db datoms = Tx_visibility.apply_view db.schema (view_bounds db) datoms
 
-let apply_db_view_seq db seq = Tx_visibility.filter_seq (view_bounds db) seq
+let apply_db_view_seq db seq = Tx_visibility.filter_seq db.schema (view_bounds db) seq
 
 let indexes_on_storage db = Option.is_some db.storage_ref
 

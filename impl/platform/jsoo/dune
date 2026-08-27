@@ -3,8 +3,4 @@
  (public_name datascript-ocaml-jsoo)
  (implements datascript)
  (modes byte)
- (libraries
-  js_of_ocaml
-  lmdb_db_native
-  lmdb_index_native
-  storage_lmdb_native))
+ (libraries js_of_ocaml lmdb_db_native lmdb_index_native storage_native))

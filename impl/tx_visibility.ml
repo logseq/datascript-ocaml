@@ -50,12 +50,23 @@ let datoms_filter datoms =
   flush_previous ();
   List.rev !result
 
-let apply_view bounds datoms =
-  let visible = List.filter (visible_at_tx bounds) datoms in
-  if bounds.history then visible else datoms_filter visible
+let schema_has_no_history schema attr =
+  match List.assoc_opt attr schema with
+  | Some { no_history = true; _ } -> true
+  | _ -> false
 
-let filter_seq bounds seq =
+let apply_view schema bounds datoms =
+  let visible = List.filter (visible_at_tx bounds) datoms in
+  if bounds.history then
+    let no_history, historical =
+      List.partition (fun d -> schema_has_no_history schema d.a) visible
+    in
+    datoms_filter no_history @ historical
+  else
+    datoms_filter visible
+
+let filter_seq schema bounds seq =
   let datoms =
     Seq.fold_left (fun acc datom -> datom :: acc) [] seq |> List.rev
   in
-  apply_view bounds datoms |> List.to_seq
+  apply_view schema bounds datoms |> List.to_seq

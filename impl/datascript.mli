@@ -239,12 +239,12 @@ module Storage : sig
   type restore_context = { next_db_uid : unit -> int }
 
   val memory_storage : unit -> storage
+  val ensure_live : storage -> unit
+  val kind_of : storage -> storage_kind
   val store : ?storage:storage -> db -> unit
   val restore_root_snapshot : storage -> serializable_db option
   val restore : restore_context -> storage -> db option
-  val storage_addresses : storage -> storage_address list
   val storage : db -> storage option
-  val addresses : db list -> storage_address list
   val settings : db -> (attr * value) list
   val collect_garbage : storage -> unit
 end
@@ -405,12 +405,13 @@ val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
+val ensure_live : storage -> unit
+val kind_of : storage -> storage_kind
+val storage_of_handle : Datascript_types.storage -> storage
 val store : ?storage:storage -> db -> unit
 val restore : storage -> db option
 val storage : db -> storage option
-val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list
-val storage_addresses : storage -> storage_address list
 val collect_garbage : storage -> unit
 val db_hash : db -> int
 val db_hash_cache_size : unit -> int

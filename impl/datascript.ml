@@ -106,9 +106,11 @@ let store ?storage db =
   Storage.store ?storage (Db_impl.flush_pending_datoms db)
 
 let memory_storage = Storage.memory_storage
-let storage_addresses = Storage.storage_addresses
+let ensure_live = Storage.ensure_live
+let kind_of = Storage.kind_of
+
+let storage_of_handle (handle : Datascript_types.storage) = (handle : storage)
 let storage = Storage.storage
-let addresses = Storage.addresses
 let settings = Storage.settings
 let collect_garbage = Storage.collect_garbage
 

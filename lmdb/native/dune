@@ -15,11 +15,3 @@
  (modes native)
  (modules datascript_lmdb_index)
  (libraries datascript_lmdb_codec lmdb_db_native))
-
-(library
- (name storage_lmdb_native)
- (public_name datascript-ocaml-native.storage-lmdb)
- (wrapped false)
- (modes native)
- (modules datascript_storage_lmdb)
- (libraries datascript_lmdb_codec lmdb_db_native datascript_types))

@@ -4,6 +4,7 @@ type t = index_set
 type 'a seq
 type lmdb
 
+val same_storage_db : storage -> lmdb -> bool
 val create_lmdb : storage option -> lmdb * storage option
 val lmdb_of : lmdb -> lmdb
 val db_of : t -> lmdb

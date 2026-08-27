@@ -1,19 +1,17 @@
+open Alcotest
 open Datascript
 
-let failf fmt = Printf.ksprintf failwith fmt
+let check_bool = Test_alcotest_support.check_bool
 
 let datoms_seq = datoms
 
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
 
-let assert_lmdb_addresses label addresses =
-  if addresses <> [ "lmdb" ] then
-    failf "%s: expected LMDB storage address [lmdb], got [%s]" label (String.concat "," addresses)
-
 let assert_equal_triples label expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
-  if expected <> actual then failf "%s: unexpected datoms" label
+  if expected <> actual then
+    Alcotest.failf "%s: unexpected datoms" label
 
 let indexed =
   { cardinality = One
@@ -39,7 +37,8 @@ let test_storage__test_basics () =
   let storage = memory_storage () in
   let db = small_db () in
   store ~storage db;
-  assert_lmdb_addresses "store writes LMDB storage address" (storage_addresses storage);
+  check_bool "memory storage should use Memory backend" true
+    (kind_of storage = storage_kind_memory);
   (match restore storage with
    | None -> failwith "restore should read stored db"
    | Some restored ->
@@ -47,17 +46,17 @@ let test_storage__test_basics () =
        "restore returns stored facts"
        [ 1, "name", String "Ivan"; 2, "name", String "Oleg"; 3, "name", String "Petr" ]
        (datoms restored Eavt ());
-     if List.assoc_opt "storage" (settings restored) <> Some (Bool true) then
-       failwith "settings should expose storage attachment");
+     check_bool "settings should expose storage attachment" true
+       (List.assoc_opt "storage" (settings restored) = Some (Bool true)));
   let attached_storage = memory_storage () in
   let attached = empty_db ~schema:[ "name", indexed ] ~storage:attached_storage () in
   store attached;
   (match restore attached_storage with
    | None -> failwith "store should use db-attached storage"
    | Some restored ->
-     if schema restored <> [ "name", indexed ] then failwith "restore should preserve schema")
+     check_bool "restore should preserve schema" true (schema restored = [ "name", indexed ]))
 
-let test_storage__test_restored_db_addresses () =
+let test_storage__test_restored_db_has_storage () =
   let storage = memory_storage () in
   let db = small_db () in
   store ~storage db;
@@ -66,12 +65,11 @@ let test_storage__test_restored_db_addresses () =
     | Some db -> db
     | None -> failwith "restore should read stored db"
   in
-  assert_lmdb_addresses "addresses should include restored db live nodes" (addresses [ restored ])
+  check_bool "restored db should remain storage-backed" true (Option.is_some restored.storage_ref)
 
 let test_storage__test_conn () =
   let storage = memory_storage () in
   let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
-  assert_lmdb_addresses "storage-backed create_conn stores LMDB address" (storage_addresses storage);
   ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
   ignore (transact_conn conn [ Add (Entity_id 2, "name", String "Oleg") ]);
   let restored =
@@ -111,23 +109,29 @@ let test_storage__test_multi_tx_incremental_store () =
     datoms restored Eavt ~a:"age" ()
     |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
   in
-  if current_ages <> [ 31 ] then failf "restored db should see current age 31, got %S" (string_of_int (List.hd current_ages));
+  Test_alcotest_support.check_int_list "restored db should see current age 31" [ 31 ] current_ages;
   let past = as_of tx1 restored in
   let past_ages =
     datoms past Eavt ~a:"age" ()
     |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
   in
-  if past_ages <> [ 30 ] then failf "restored as_of should see historical age 30";
+  Test_alcotest_support.check_int_list "restored as_of should see historical age 30" [ 30 ] past_ages;
   let hist_ages =
     datoms (history restored) Eavt ~a:"age" ()
     |> List.filter (fun d -> d.added)
     |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
     |> List.sort compare
   in
-  if hist_ages <> [ 30; 31 ] then failf "restored history should expose both age assertions"
+  Test_alcotest_support.check_int_list "restored history should expose both age assertions" [ 30; 31 ] hist_ages
 
 let () =
-  test_storage__test_basics ();
-  test_storage__test_restored_db_addresses ();
-  test_storage__test_conn ();
-  test_storage__test_multi_tx_incremental_store ()
+  run "storage"
+    [
+      ( "memory"
+      , [
+          test_case "basics" `Quick test_storage__test_basics
+        ; test_case "restored db has storage" `Quick test_storage__test_restored_db_has_storage
+        ; test_case "conn" `Quick test_storage__test_conn
+        ; test_case "multi tx incremental store" `Quick test_storage__test_multi_tx_incremental_store
+        ] )
+    ]

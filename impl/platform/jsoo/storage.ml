@@ -4,25 +4,22 @@ module Index = Index
 
 type restore_context = { next_db_uid : unit -> int }
 
-let memory_storage = Datascript_storage_lmdb.memory_storage
+let memory_storage = Datascript_storage_protocol.memory_storage
+let ensure_live = Datascript_storage_protocol.ensure_live
+let kind_of = Datascript_storage_protocol.kind_of
 
 let store ?storage db =
   match storage, db.storage_ref with
   | Some target_storage, _ | None, Some target_storage ->
-      let target_lmdb = Index.lmdb_for_storage target_storage in
-      if Index.db_of db.eavt_index != target_lmdb then (
-        let _, _, stored_max_tx, _ =
-          Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb target_storage)
-        in
+      if not (Index.same_storage_db target_storage (Index.db_of db.eavt_index)) then (
+        let _, _, stored_max_tx, _ = Datascript_storage_protocol.restore_meta target_storage in
         Index.sync_indexes_to_storage ~since_tx:stored_max_tx db.eavt_index db.aevt_index db.avet_index
           target_storage);
-      Datascript_storage_lmdb.store_db target_storage db
+      Datascript_storage_protocol.store_db target_storage db
   | None, None -> invalid_arg "db has no attached storage"
 
 let restore_root_snapshot storage =
-  let schema, max_eid, max_tx, duplicate_datoms =
-    Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb storage)
-  in
+  let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
   let lmdb, _ = Index.create_lmdb None in
   Index.load_indexes_from_storage storage lmdb;
   Some
@@ -33,9 +30,7 @@ let restore_root_snapshot storage =
     }
 
 let restore context storage =
-  let schema, max_eid, max_tx, duplicate_datoms =
-    Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb storage)
-  in
+  let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
   let schema = Schema.validate_schema schema in
   let lmdb, _ = Index.create_lmdb None in
   Index.load_indexes_from_storage storage lmdb;
@@ -93,18 +88,7 @@ let restore context storage =
     ; tx_fns = []
     }
 
-let storage_addresses storage = storage.storage_list_addresses ()
 let storage (db : db) = db.storage_ref
-
-let storage_root_addresses storage = storage.storage_list_addresses ()
-
-let addresses dbs =
-  dbs
-  |> List.concat_map (fun db ->
-    match db.storage_ref with
-    | None -> []
-    | Some storage -> storage_root_addresses storage)
-  |> List.sort_uniq compare
 
 let settings (_db : db) =
   [ "branching-factor", Int 32

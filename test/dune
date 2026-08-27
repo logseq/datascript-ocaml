@@ -3,6 +3,12 @@
  (modules test_datascript)
  (libraries datascript-ocaml-native unix))
 
+(library
+ (name test_support)
+ (modules test_alcotest_support)
+ (wrapped false)
+ (libraries alcotest))
+
 (executable
  (name debug_cardinality)
  (modules debug_cardinality)
@@ -36,12 +42,12 @@
 (test
  (name test_tx_history)
  (modules test_tx_history)
- (libraries datascript-ocaml-native))
+ (libraries datascript-ocaml-native test_support alcotest))
 
 (test
  (name test_purge)
  (modules test_purge)
- (libraries datascript-ocaml-native))
+ (libraries datascript-ocaml-native test_support alcotest))
 
 (test
  (name test_db)
@@ -151,15 +157,12 @@
 (test
  (name test_sqlite_package)
  (modules test_sqlite_package)
- (libraries
-  datascript-ocaml-native
-  datascript-ocaml-native.sqlite
-  datascript-ocaml-native.logseq-sqlite-storage))
+ (libraries datascript-ocaml-native datascript-ocaml-native-sqlite test_support alcotest))
 
 (test
  (name test_lmdb_package)
  (modules test_lmdb_package)
- (libraries datascript-ocaml-native datascript-ocaml-native.lmdb))
+ (libraries datascript-ocaml-native datascript-ocaml-native-lmdb test_support alcotest))
 
 (test
  (name test_melange_transit_backend)
@@ -209,7 +212,7 @@
 (test
  (name test_storage)
  (modules test_storage)
- (libraries datascript-ocaml-native unix))
+ (libraries datascript-ocaml-native test_support alcotest unix))
 
 (test
  (name test_upsert)

@@ -8,16 +8,11 @@
 
 (library
  (name datascript_lmdb)
- (public_name datascript-ocaml-native.lmdb)
+ (public_name datascript-ocaml-native-lmdb)
  (wrapped false)
  (modes native)
- (modules datascript_lmdb)
- (libraries
-  datascript-ocaml-native
-  datascript_sqlite
-  lmdb_db_native
-  storage_lmdb_native
-  lmdb))
+ (modules datascript_lmdb datascript_storage_lmdb_plugin)
+ (libraries datascript-ocaml-native storage_native lmdb_db_native))
 
 (subdir native)
 (subdir melange)

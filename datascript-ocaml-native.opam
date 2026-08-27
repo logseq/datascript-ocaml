@@ -8,8 +8,8 @@ depends: [
   "ocaml" {>= "5.1.1"}
   "dune" {>= "3.17"}
   "datascript_ocaml" {= version}
-  "sqlite3"
   "lmdb"
+  "alcotest"
   "melange-transit-native" {= "0.1.0"}
   "yojson"
 ]
