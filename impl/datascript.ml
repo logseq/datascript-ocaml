@@ -1499,6 +1499,7 @@ module Query_where_impl = Query_where.Make (struct
   let entity_ids_by_attr_value = entity_ids_by_attr_value
   let query_attr_uses_avet = query_attr_uses_avet
   let query_value_uses_avet = query_value_uses_avet
+  let index_range = index_range
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses

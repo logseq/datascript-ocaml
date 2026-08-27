@@ -35,6 +35,11 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_datahike_queries)
+ (modules test_datahike_queries)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_purge)
  (modules test_purge)
  (libraries datascript-ocaml-native test_support alcotest))

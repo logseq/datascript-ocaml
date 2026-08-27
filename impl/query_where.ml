@@ -29,6 +29,7 @@ module Make (Context : sig
   val entity_ids_by_attr_value : db -> attr -> value -> entity_id list option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
+  val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
 end) = struct
   open Context
 
@@ -936,6 +937,56 @@ end) = struct
       Some { attrs; rows; lookup_vars; unique_rows = false }
     | _ -> None
 
+  let comparison_matches_datom value_var datom = function
+    | ComparisonPredicate (predicate, left_term, right_term) -> (
+      match range_predicate_for_var value_var predicate left_term right_term with
+      | Some (range_predicate, threshold) ->
+          Built_ins.matches_comparison_predicate
+            range_predicate
+            (query_evaluator_context.compare_value datom.v threshold)
+      | None -> false)
+    | _ -> false
+
+  let comparison_targets_var value_var = function
+    | ComparisonPredicate (predicate, left_term, right_term) ->
+        Option.is_some (range_predicate_for_var value_var predicate left_term right_term)
+    | _ -> false
+
+  let relation_of_avet_value_comparisons db source e_var value_var attr comparisons =
+    match source with
+    | Db_source source_db when query_attr_uses_avet source_db attr && not (is_ref_attr source_db attr) ->
+        if
+          comparisons = []
+          || not (List.for_all (comparison_targets_var value_var) comparisons)
+        then
+          None
+        else (
+          let start, stop =
+            List.fold_left
+              (fun (start, stop) -> function
+                | ComparisonPredicate (predicate, left_term, right_term) -> (
+                  match range_predicate_for_var value_var predicate left_term right_term with
+                  | Some (GreaterThan, threshold) | Some (GreaterOrEqual, threshold) ->
+                      (Some threshold, stop)
+                  | Some (LessThan, threshold) | Some (LessOrEqual, threshold) ->
+                      (start, Some threshold)
+                  | _ -> (start, stop))
+                | _ -> (start, stop))
+              (None, None) comparisons
+          in
+          let terms = [ QVar e_var; QAttr attr; QVar value_var ] in
+          let source_context = query_source_context db in
+          let datoms =
+            index_range source_db attr ?start ?stop ()
+            |> Seq.filter (fun datom ->
+              List.for_all (comparison_matches_datom value_var datom) comparisons)
+          in
+          let attrs = unique_vars terms in
+          let lookup_vars = relation_lookup_vars source_db terms in
+          let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
+          Some { attrs; rows; lookup_vars; unique_rows = false })
+    | _ -> None
+
   let relation_of_same_entity_patterns db source clauses =
     let validate_not_order clauses =
       let rec loop bound_vars = function
@@ -1023,16 +1074,28 @@ end) = struct
                 false ))
             value_var_patterns
         in
-        if
-          duplicate_value_var
-          || (relation_comparisons <> [] && constant_patterns = [])
-          || (constant_patterns = []
-              && value_var_patterns = []
-              && required_patterns = []
-              && excluded_patterns = [])
-        then
+        if duplicate_value_var then
           None
         else
+          (let comparison_relation =
+             match
+               constant_patterns, excluded_patterns, value_var_patterns, relation_comparisons
+             with
+             | [], [], [ (value_var, attr) ], comparisons when comparisons <> [] ->
+               relation_of_avet_value_comparisons db source e_var value_var attr comparisons
+             | _ -> None
+           in
+           match comparison_relation with
+           | Some relation -> Some relation
+           | None ->
+               if
+                 constant_patterns = []
+                 && value_var_patterns = []
+                 && required_patterns = []
+                 && excluded_patterns = []
+               then
+                 None
+               else
           let source_context = query_source_context db in
           let direct_attr attr =
             not (query_evaluator_context.is_reverse_ref attr)
@@ -1543,7 +1606,7 @@ end) = struct
                    filter_relation_comparison db relation predicate left_term right_term
                  | _ -> relation)
                relation
-               relation_comparisons)
+               relation_comparisons))
     | _ -> None
 
   let relation_bindings relation =

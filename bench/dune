@@ -21,6 +21,11 @@
  (libraries datascript-ocaml-native))
 
 (executable
+ (name datahike_compare)
+ (modules datahike_compare)
+ (libraries datascript-ocaml-native unix))
+
+(executable
  (name memory_ocaml)
  (modules memory_ocaml)
  (modes exe)
