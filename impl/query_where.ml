@@ -2203,8 +2203,6 @@ end) = struct
     match clauses with
     | [ Or branches ] -> List.for_all (List.for_all relation_prefix_clause) branches
     | [ SourceOr (_, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
-    | [ OrJoin (_, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
-    | [ SourceOrJoin (_, _, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
     | _ -> false
 
   let relation_has_comparison clauses =
@@ -2434,10 +2432,6 @@ end) = struct
       match clauses with
       | [ Or branches ] -> eval_or_branch_relations db sources default_source branches
       | [ SourceOr (source_name, branches) ] ->
-        let default_source = source db sources source_name in
-        eval_or_branch_relations db sources default_source branches
-      | [ OrJoin (_, branches) ] -> eval_or_branch_relations db sources default_source branches
-      | [ SourceOrJoin (source_name, _, branches) ] ->
         let default_source = source db sources source_name in
         eval_or_branch_relations db sources default_source branches
       | _ ->
