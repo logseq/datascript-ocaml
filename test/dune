@@ -35,6 +35,11 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_datahike_parity)
+ (modules test_datahike_parity)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_datahike_queries)
  (modules test_datahike_queries)
  (libraries datascript-ocaml-native test_support alcotest))
@@ -270,3 +275,5 @@
    %{dep:cross_runtime_parity_test.sh}
    %{dep:cross_runtime_ocaml.exe}
    %{dep:../script/cross_runtime_upstream.js})))
+
+

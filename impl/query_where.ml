@@ -1630,7 +1630,8 @@ end) = struct
             | _ -> compute_default_rows ()
           in
           let unique_rows =
-            source_db.duplicate_datoms = []
+            (not source_db.history)
+            && source_db.duplicate_datoms = []
             && List.mem e_var attrs
             && List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns
           in

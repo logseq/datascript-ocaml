@@ -1240,11 +1240,14 @@ let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
 
 let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
   let attr = a in
-  match db.duplicate_datoms, index, e, v, tx with
-  | [], Avet, None, Some value, None ->
+  match temporal_view db, db.duplicate_datoms, index, e, v, tx with
+  | true, _, _, _, _, _ ->
+    (* Temporal views must go through datoms so history/as_of filtering applies. *)
+    datoms db index ?e ~a:attr ?v ?tx ()
+  | false, [], Avet, None, Some value, None ->
     List.to_seq (Db_access_impl.avet_datoms_by_value db attr value)
-  | [], _, _, _, _ -> datoms db index ?e ~a:attr ?v ?tx ()
-  | _ -> primary_attr_datoms_seq db index ?e ~a:attr ?v ?tx ()
+  | false, [], _, _, _, _ -> datoms db index ?e ~a:attr ?v ?tx ()
+  | false, _, _, _, _, _ -> primary_attr_datoms_seq db index ?e ~a:attr ?v ?tx ()
 
 let pattern_datoms db e_term a_term v_term tx_term =
   let e = query_entity_id_term db e_term in
@@ -1335,7 +1338,12 @@ let match_data_pattern_tx db bindings e_term a_term v_term tx_term datom =
 let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term datom =
   let ( let* ) = Option.bind in
   let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
-  match_query_term db op_term (result_of_datom_op datom) bindings
+  (* Datahike/Datomic history patterns use boolean added flags; also accept
+     :db/add / :db/retract keywords for DataScript-style queries. *)
+  match op_term with
+  | QValue (Bool expected) when datom.added = expected -> Some bindings
+  | QValue (Bool _) -> None
+  | _ -> match_query_term db op_term (result_of_datom_op datom) bindings
 
 let query_source_context db : Query.source_context =
   { match_context = query_match_context db
@@ -1927,10 +1935,11 @@ module Query = struct
 
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in
-    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
-    | true, _, _, _ -> None
-    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
-    | false, None, [], [] ->
+    match temporal_view db, db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _, _ -> None
+    | false, true, _, _, _ -> None
+    | false, false, Some _, _, _ | false, false, _, _ :: _, _ | false, false, _, _, _ :: _ -> None
+    | false, false, None, [], [] ->
       let* find_vars =
         query.find
         |> List.fold_left

@@ -520,26 +520,30 @@ let primary_attr_datoms db index attr =
   let pending_attr =
     List.filter (fun d -> d.a = attr) db.pending_datoms |> List.sort (Util.compare_datom index)
   in
+  (* Attr caches are shared across as_of/since/history shallow copies and hold
+     current-basis slices. Temporal views must rebuild from raw indexes so
+     retracted/history facts remain available for apply_db_view. *)
+  let temporal = temporal_view db in
   match index with
   | Aevt ->
-    (match Hashtbl.find_opt db.aevt_by_attr attr with
+    (match (if temporal then None else Hashtbl.find_opt db.aevt_by_attr attr) with
      | Some datoms -> Array.to_list datoms
      | None ->
        let datoms =
          merge_sorted_datoms Aevt (attr_prefix_datoms Aevt db.aevt_index) pending_attr
          |> apply_db_view db
        in
-       Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
+       if not temporal then Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
        datoms)
   | Avet ->
-    (match Hashtbl.find_opt db.avet_by_attr attr with
+    (match (if temporal then None else Hashtbl.find_opt db.avet_by_attr attr) with
      | Some datoms -> Array.to_list datoms
      | None ->
        let datoms =
          merge_sorted_datoms Avet (attr_prefix_datoms Avet db.avet_index) pending_attr
          |> apply_db_view db
        in
-       Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
+       if not temporal then Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
        datoms)
   | Eavt ->
     merge_sorted_datoms Eavt (Index.to_list db.eavt_index) pending_attr |> apply_db_view db
@@ -896,48 +900,61 @@ let exact_prefix_bound index e a v tx =
      | _ -> None)
 
 let avet_entity_ids_by_attr_value context db attr value =
-  match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
-  | Some entity_ids -> Some entity_ids
-  | None -> (
-    match Hashtbl.find_opt db.avet_by_attr attr with
-    | Some datoms ->
-      let bound = bound_datom ~a:attr ~v:value () in
-      let bound_fields = fields ~a:true ~v:true () in
-      Some
-        (array_attr_value_slice context Avet bound bound_fields datoms
-         |> List.map (fun datom -> datom.e))
-    | None -> None)
+  if temporal_view db then
+    Some
+      (primary_attr_datoms db Avet attr
+       |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
+       |> List.map (fun datom -> datom.e))
+  else
+    match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
+    | Some entity_ids -> Some entity_ids
+    | None -> (
+      match Hashtbl.find_opt db.avet_by_attr attr with
+      | Some datoms ->
+        let bound = bound_datom ~a:attr ~v:value () in
+        let bound_fields = fields ~a:true ~v:true () in
+        Some
+          (array_attr_value_slice context Avet bound bound_fields datoms
+           |> List.map (fun datom -> datom.e))
+      | None -> None)
 
 let avet_datoms_by_value context db attr value =
   let bound = bound_datom ~a:attr ~v:value () in
   let bound_fields = fields ~a:true ~v:true () in
-  match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
-  | Some entity_ids -> datoms_of_avet_entities attr value entity_ids
-  | None -> (
-    match Hashtbl.find_opt db.avet_by_attr attr with
-    | Some datoms -> array_attr_value_slice context Avet bound bound_fields datoms
-    | None ->
-      if merged_index db || pending_overlay db then
-        primary_attr_datoms db Avet attr
-        |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
-      else
-        let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
-        Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet)
-        |> Index.seq_to_list)
+  if temporal_view db then
+    primary_attr_datoms db Avet attr
+    |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
+  else
+    match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
+    | Some entity_ids -> datoms_of_avet_entities attr value entity_ids
+    | None -> (
+      match Hashtbl.find_opt db.avet_by_attr attr with
+      | Some datoms -> array_attr_value_slice context Avet bound bound_fields datoms
+      | None ->
+        if merged_index db || pending_overlay db then
+          primary_attr_datoms db Avet attr
+          |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
+        else
+          let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
+          Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet)
+          |> Index.seq_to_list)
 
 let avet_datoms_by_value_seq context db attr value =
   let bound = bound_datom ~a:attr ~v:value () in
   let bound_fields = fields ~a:true ~v:true () in
-  match Hashtbl.find_opt db.avet_by_attr attr with
-  | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
-  | None ->
-    if merged_index db then
-      primary_attr_datoms db Avet attr
-      |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
-      |> List.to_seq
-    else
-      let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
-      Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
+  if temporal_view db then
+    avet_datoms_by_value context db attr value |> List.to_seq
+  else
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
+    | None ->
+      if merged_index db then
+        primary_attr_datoms db Avet attr
+        |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
+        |> List.to_seq
+      else
+        let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
+        Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
 
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
@@ -960,10 +977,10 @@ let exact_prefix_datoms context db index e a v tx =
            | false, Avet, None, Some _, Some _, None ->
              Some (avet_datoms_by_value_seq context db (Option.get a) (Option.get v))
            | false, Aevt, _, Some attr, _, _ -> (
-             match Hashtbl.find_opt db.aevt_by_attr attr with
-             | Some arr ->
+             match temporal_view db, Hashtbl.find_opt db.aevt_by_attr attr with
+             | false, Some arr ->
                Some (List.to_seq (array_exact_prefix_slice cmp bound arr))
-             | None ->
+             | true, _ | _, None ->
                Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Aevt) |> Index.to_seq))
            | false, _, _, _, _, _ ->
              Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq)
@@ -997,9 +1014,9 @@ let exact_prefix_datoms_list context db index e a v tx =
           | Avet, Some attr, Some value, false -> avet_datoms_by_value context db attr value
           | (Aevt | Avet), Some attr, None, true -> primary_attr_datoms db index attr
           | Aevt, Some attr, _, false -> (
-            match Hashtbl.find_opt db.aevt_by_attr attr with
-            | Some arr -> array_exact_prefix_slice cmp bound arr
-            | None ->
+            match temporal_view db, Hashtbl.find_opt db.aevt_by_attr attr with
+            | false, Some arr -> array_exact_prefix_slice cmp bound arr
+            | true, _ | _, None ->
               Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Aevt)
               |> Index.seq_to_list)
           | _ ->
@@ -1108,42 +1125,52 @@ let avet_range_datoms context db attr start stop =
   let from_bound, from_fields, to_bound, to_fields, lower_matches, upper_matches =
     avet_range_bounds context db attr start stop
   in
-  let attr_cache = Hashtbl.find_opt db.avet_by_attr attr in
-  let indexed =
-    match attr_cache with
-    | Some arr ->
-        array_range_seq context Avet from_bound from_fields to_bound to_fields arr
-    | None ->
-        let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
-        Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
-  in
-  if not (merged_index db) && not (pending_overlay db) then indexed
-  else if not (merged_index db) then
-    (match attr_cache with
-     | Some _ -> indexed
-     | None ->
-       let duplicates =
-         pending_for_index db Avet
-         |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-       in
-       merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates))
-  else if not (pending_overlay db) then
-    let duplicates =
-      duplicate_attr_datoms db Avet attr
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    in
-    merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
+  if temporal_view db then
+    let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+    primary_attr_datoms db Avet attr
+    |> List.filter (fun datom ->
+      cmp datom from_bound >= 0
+      && cmp datom to_bound <= 0
+      && lower_matches datom
+      && upper_matches datom)
+    |> List.to_seq
   else
-    let pending =
-      pending_for_index db Avet
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+    let attr_cache = Hashtbl.find_opt db.avet_by_attr attr in
+    let indexed =
+      match attr_cache with
+      | Some arr ->
+          array_range_seq context Avet from_bound from_fields to_bound to_fields arr
+      | None ->
+          let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+          Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
     in
-    let duplicates =
-      duplicate_attr_datoms db Avet attr
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    in
-    merge_sorted_datom_seqs (Util.compare_datom Avet) indexed
-      (List.to_seq (merge_sorted_datoms Avet pending duplicates))
+    if not (merged_index db) && not (pending_overlay db) then indexed
+    else if not (merged_index db) then
+      (match attr_cache with
+       | Some _ -> indexed
+       | None ->
+         let duplicates =
+           pending_for_index db Avet
+           |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+         in
+         merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates))
+    else if not (pending_overlay db) then
+      let duplicates =
+        duplicate_attr_datoms db Avet attr
+        |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+      in
+      merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
+    else
+      let pending =
+        pending_for_index db Avet
+        |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+      in
+      let duplicates =
+        duplicate_attr_datoms db Avet attr
+        |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+      in
+      merge_sorted_datom_seqs (Util.compare_datom Avet) indexed
+        (List.to_seq (merge_sorted_datoms Avet pending duplicates))
 
 let indexed_attr_required_message attr =
   "Attribute :" ^ attr ^ " should be marked as :db/index true"
@@ -1367,38 +1394,51 @@ let fold_index_range f init context db attr ?start ?stop () =
     | None -> f acc datom
     | Some pred -> if pred datom then f acc datom else acc
   in
-  let attr_cache = Hashtbl.find_opt db.avet_by_attr attr in
-  let acc =
-    match attr_cache with
-    | Some arr ->
-        array_range_fold fold_with_filter init context Avet from_bound from_fields to_bound to_fields
-          arr
-    | None ->
-        let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
-        Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
+  let attr_cache =
+    if temporal_view db then None else Hashtbl.find_opt db.avet_by_attr attr
   in
-  if not (merged_index db) && not (pending_overlay db) then acc
-  else if not (merged_index db) then
-    (match attr_cache with
-     | Some _ -> acc
-     | None ->
-       pending_for_index db Avet
-       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-       |> List.fold_left fold_with_filter acc)
-  else if not (pending_overlay db) then
-    duplicate_attr_datoms db Avet attr
-    |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    |> List.fold_left fold_with_filter acc
+  if temporal_view db then
+    (* Rebuild through primary_attr so pending/history facts are visible. *)
+    let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+    primary_attr_datoms db Avet attr
+    |> List.filter (fun datom ->
+      cmp datom from_bound >= 0
+      && cmp datom to_bound <= 0
+      && lower_matches datom
+      && upper_matches datom)
+    |> List.fold_left fold_with_filter init
   else
-    let pending =
-      pending_for_index db Avet
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+    let acc =
+      match attr_cache with
+      | Some arr ->
+          array_range_fold fold_with_filter init context Avet from_bound from_fields to_bound to_fields
+            arr
+      | None ->
+          let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+          Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
     in
-    let duplicates =
+    if not (merged_index db) && not (pending_overlay db) then acc
+    else if not (merged_index db) then
+      (match attr_cache with
+       | Some _ -> acc
+       | None ->
+         pending_for_index db Avet
+         |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+         |> List.fold_left fold_with_filter acc)
+    else if not (pending_overlay db) then
       duplicate_attr_datoms db Avet attr
       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    in
-    merge_sorted_datoms Avet pending duplicates |> List.fold_left fold_with_filter acc
+      |> List.fold_left fold_with_filter acc
+    else
+      let pending =
+        pending_for_index db Avet
+        |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+      in
+      let duplicates =
+        duplicate_attr_datoms db Avet attr
+        |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+      in
+      merge_sorted_datoms Avet pending duplicates |> List.fold_left fold_with_filter acc
 
 let diff left right =
   let left_datoms = visible_index_datoms left Eavt in
