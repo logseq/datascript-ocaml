@@ -83,6 +83,9 @@ let memory_backend lmdb =
 let memory_storage () =
   register_backend (memory_backend (Datascript_lmdb_db.create_temp ())) ()
 
+let benchmark_memory_storage () =
+  register_backend (memory_backend (Datascript_lmdb_db.create_temp ())) ()
+
 let restore_meta storage =
   ensure_live storage;
   (backend_of storage).restore_meta ()

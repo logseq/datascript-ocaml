@@ -1,8 +1,11 @@
 open Datascript_types
 
+type lmdb_env_profile = Default | Benchmark
+
 type t
 
-val create_temp : unit -> t
+val create_temp : ?profile:lmdb_env_profile -> unit -> t
+val create_benchmark_temp : unit -> t
 val open_path : string -> t
 val close : t -> unit
 val sync : t -> unit

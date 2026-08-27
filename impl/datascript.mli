@@ -239,6 +239,7 @@ module Storage : sig
   type restore_context = { next_db_uid : unit -> int }
 
   val memory_storage : unit -> storage
+val benchmark_memory_storage : unit -> storage
   val ensure_live : storage -> unit
   val kind_of : storage -> storage_kind
   val store : ?storage:storage -> db -> unit
@@ -387,6 +388,7 @@ val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
 val empty : db -> db
 val is_db : db -> bool
 val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+val refresh_db_indexes : db -> db
 val filter : db -> (db -> datom -> bool) -> db
 val is_filtered : db -> bool
 val unfiltered_db : db -> db
@@ -405,6 +407,7 @@ val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
+val benchmark_memory_storage : unit -> storage
 val ensure_live : storage -> unit
 val kind_of : storage -> storage_kind
 val storage_of_handle : Datascript_types.storage -> storage

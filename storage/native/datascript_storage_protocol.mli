@@ -33,6 +33,7 @@ type storage_backend = {
 val kind_of : storage -> storage_kind
 val ensure_live : storage -> unit
 val memory_storage : unit -> storage
+val benchmark_memory_storage : unit -> storage
 
 val register_backend : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
 val restore_meta : storage -> schema * entity_id * tx * datom list

@@ -66,7 +66,7 @@ ensure_datahike_java
 
 echo "=== OCaml vs Datahike query benchmark (${SIZE} entities) ==="
 echo "Protocol: warmup=${WARMUP_MS}ms sample=${SAMPLE_MS}ms repeats=${REPEATS}, shared-db (both sides)"
-echo "Storage:  datahike=memory+persistent-set  ocaml=LMDB temp index (see storage row in raw output)"
+echo "Storage:  datahike=memory+persistent-set  ocaml=memory LMDB index (nosync, see storage row in raw output)"
 echo
 
 echo "Running Datahike..."

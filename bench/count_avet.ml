@@ -62,7 +62,9 @@ let build_db schema size =
     | _ -> List.init size random_man
   in
   let schema = if schema = "minimal" then minimal_schema else full_schema in
-  db_with entities (empty_db ~schema ())
+  let storage = benchmark_memory_storage () in
+  let db = db_with entities (empty_db ~schema ~storage ()) in
+  refresh_db_indexes db
 
 let time_ms iterations f =
   let start = Sys.time () in

@@ -183,9 +183,10 @@ let queries =
   ]
 
 let build_db size =
+  let storage = benchmark_memory_storage () in
   let rng = rng 1 in
   let entities = List.init size (fun index -> random_man rng (index + 1)) in
-  let db = db_with entities (empty_db ~schema ()) in
+  let db = db_with entities (empty_db ~schema ~storage ()) in
   let follow_ops =
     List.concat_map
       (fun entity_id ->
@@ -196,7 +197,8 @@ let build_db size =
           [])
       (List.init size (fun index -> index + 1))
   in
-  if follow_ops = [] then db else db_with follow_ops db
+  let db = if follow_ops = [] then db else db_with follow_ops db in
+  refresh_db_indexes db
 
 let warmup_queries db =
   List.iter
@@ -215,7 +217,7 @@ let main () =
   in
   Printf.printf "runtime\t%s\n%!" runtime_label;
   Printf.printf "size\t%d\n%!" config.size;
-  Printf.printf "storage\tlmdb-temp-index\n%!";
+  Printf.printf "storage\tmemory-lmdb-nosync-index\n%!";
   Printf.printf "warmup-ms\t%.0f\n%!" config.warmup_ms;
   Printf.printf "sample-ms\t%.0f\n%!" config.sample_ms;
   Printf.printf "repeats\t%d\n%!" config.repeats;

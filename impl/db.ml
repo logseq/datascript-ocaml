@@ -701,6 +701,36 @@ let array_attr_value_seq context index bound bound_fields arr =
   in
   loop start
 
+let array_range_bounds context index from_bound from_fields to_bound to_fields arr =
+  let below_from left right = compare_bound_fields context from_fields left right index in
+  let above_to left right = compare_bound_fields context to_fields left right index in
+  let len = Array.length arr in
+  let rec lower lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) / 2 in
+      if below_from arr.(mid) from_bound < 0 then lower (mid + 1) hi else lower lo mid
+  in
+  let start = lower 0 len in
+  let rec upper index =
+    if index >= len || above_to arr.(index) to_bound > 0 then index else upper (index + 1)
+  in
+  (start, upper start)
+
+let array_range_fold f init context index from_bound from_fields to_bound to_fields arr =
+  let start, stop = array_range_bounds context index from_bound from_fields to_bound to_fields arr in
+  let rec loop index acc =
+    if index >= stop then acc else loop (index + 1) (f acc arr.(index))
+  in
+  loop start init
+
+let array_range_seq context index from_bound from_fields to_bound to_fields arr =
+  let start, stop = array_range_bounds context index from_bound from_fields to_bound to_fields arr in
+  let rec loop index () =
+    if index >= stop then Seq.Nil else Seq.Cons (arr.(index), loop (index + 1))
+  in
+  loop start
+
 let array_exact_prefix_slice cmp bound arr =
   let len = Array.length arr in
   let rec lower lo hi =
@@ -1011,9 +1041,13 @@ let avet_range_datoms context db attr start stop =
   let from_bound, from_fields, to_bound, to_fields, lower_matches, upper_matches =
     avet_range_bounds context db attr start stop
   in
-  let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
   let indexed =
-    Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some arr ->
+        array_range_seq context Avet from_bound from_fields to_bound to_fields arr
+    | None ->
+        let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+        Index.slice_seq ~from_:from_bound ~to_:to_bound ~cmp db.avet_index |> Index.to_seq
   in
   if not (merged_index db) && not (pending_overlay db) then indexed
   else if not (merged_index db) then
@@ -1256,9 +1290,14 @@ let fold_index_range f init context db attr ?start ?stop () =
     | None -> f acc datom
     | Some pred -> if pred datom then f acc datom else acc
   in
-  let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
   let acc =
-    Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some arr ->
+        array_range_fold fold_with_filter init context Avet from_bound from_fields to_bound to_fields
+          arr
+    | None ->
+        let cmp = slice_cmp context Avet from_bound from_fields to_bound to_fields in
+        Index.fold_slice fold_with_filter init ~from_:from_bound ~to_:to_bound ~cmp db.avet_index
   in
   if not (merged_index db) && not (pending_overlay db) then acc
   else if not (merged_index db) then

@@ -106,6 +106,7 @@ let store ?storage db =
   Storage.store ?storage (Db_impl.flush_pending_datoms db)
 
 let memory_storage = Storage.memory_storage
+let benchmark_memory_storage = Storage.benchmark_memory_storage
 let ensure_live = Storage.ensure_live
 let kind_of = Storage.kind_of
 

@@ -3,6 +3,7 @@ open Datascript_types
 type restore_context = { next_db_uid : unit -> int }
 
 val memory_storage : unit -> storage
+val benchmark_memory_storage : unit -> storage
 val ensure_live : storage -> unit
 val kind_of : storage -> storage_kind
 val store : ?storage:storage -> db -> unit

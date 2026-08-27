@@ -5,6 +5,7 @@ module Index = Index
 type restore_context = { next_db_uid : unit -> int }
 
 let memory_storage = Datascript_storage_protocol.memory_storage
+let benchmark_memory_storage = Datascript_storage_protocol.benchmark_memory_storage
 let ensure_live = Datascript_storage_protocol.ensure_live
 let kind_of = Datascript_storage_protocol.kind_of
 

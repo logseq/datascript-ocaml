@@ -5,6 +5,8 @@ type read_session =
   { txn : Mdb.txn
   }
 
+type lmdb_env_profile = Default | Benchmark
+
 type t =
   { path : string
   ; env : Env.t
@@ -12,6 +14,7 @@ type t =
   ; aevt : (string, string, [ `Uni ]) Map.t
   ; avet : (string, string, [ `Uni ]) Map.t
   ; meta : (string, string, [ `Uni ]) Map.t
+  ; profile : lmdb_env_profile
   ; mutable closed : bool
   ; mutable read : read_session option
   }
@@ -24,22 +27,28 @@ let remove_path path =
   let lock = lock_path path in
   if Sys.file_exists lock then Sys.remove lock
 
-let open_env db_path =
-  Env.(create Rw ~flags:Flags.no_subdir ~map_size:default_map_size ~max_maps:8 db_path)
+let env_flags = function
+  | Default -> Env.Flags.no_subdir
+  | Benchmark ->
+      (* Match in-memory benchmark backends: skip fsync on commit/close. *)
+      Env.Flags.(no_subdir + no_sync + no_meta_sync + write_map)
+
+let open_env db_path profile =
+  Env.(create Rw ~flags:(env_flags profile) ~map_size:default_map_size ~max_maps:8 db_path)
 
 let open_named_map env name =
   try Map.open_existing Nodup ~key:Conv.string ~value:Conv.string ~name env
   with Not_found -> Map.create Nodup ~key:Conv.string ~value:Conv.string ~name env
 
-let open_db path =
+let open_db path profile =
   remove_path path;
-  let env = open_env path in
+  let env = open_env path profile in
   { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
-  ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; closed = false
-  ; read = None
+  ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; profile
+  ; closed = false; read = None
   }
 
-let open_path path = open_db path
+let open_path path = open_db path Default
 
 let ensure_open db =
   if db.closed then invalid_arg ("LMDB database is closed: " ^ db.path)
@@ -55,19 +64,22 @@ let close db =
     Map.close db.aevt;
     Map.close db.avet;
     Map.close db.meta;
-    Env.sync db.env;
+    (match db.profile with
+     | Default -> Env.sync db.env
+     | Benchmark -> ());
     Env.close db.env;
     db.closed <- true)
 
 let temps_created = ref 0
 
-let create_temp () =
+let create_temp ?(profile = Default) () =
   let db =
     open_db
       (Filename.temp_file
          ~temp_dir:(Filename.get_temp_dir_name ())
          "datascript_lmdb"
          ".mdb")
+      profile
   in
   Gc.finalise
     (fun lmdb ->
@@ -77,9 +89,13 @@ let create_temp () =
   if !temps_created mod 64 = 0 then Gc.full_major ();
   db
 
+let create_benchmark_temp () = create_temp ~profile:Benchmark ()
+
 let sync db =
   ensure_open db;
-  Env.sync db.env
+  match db.profile with
+  | Default -> Env.sync db.env
+  | Benchmark -> ()
 
 let map_for_index index db =
   match index with
