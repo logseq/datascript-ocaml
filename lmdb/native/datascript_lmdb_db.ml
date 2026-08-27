@@ -19,7 +19,9 @@ type t =
   ; mutable read : read_session option
   }
 
-let default_map_size = 1024 * 1024 * 1024
+(* Address-space ceiling for no_subdir file envs. Unused pages are not
+   resident; keep headroom for million-entity index files (~1GiB+). *)
+let default_map_size = 8 * 1024 * 1024 * 1024
 let lock_path path = path ^ "-lock"
 
 let remove_path path =

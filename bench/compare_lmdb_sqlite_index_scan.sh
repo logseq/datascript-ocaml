@@ -2,6 +2,10 @@
 # Compare LMDB vs SQLite on narrow Index scan microbenchmarks (disk-backed).
 # Measures cold open/restore + cold/hot point/prefix/range/full scans — not the
 # shared query evaluator.
+#
+# Default sizes: 50k (quick) and 1M (large-index stress).
+#   SIZES=50000 bash bench/compare_lmdb_sqlite_index_scan.sh
+#   SIZES=1000000 WARMUP=5 REPEATS=3 bash bench/compare_lmdb_sqlite_index_scan.sh
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,16 +15,21 @@ if command -v opam >/dev/null 2>&1; then
   eval "$(opam env --switch=5.5 2>/dev/null || opam env 2>/dev/null || true)"
 fi
 
-SIZE="${SIZE:-50000}"
-WARMUP="${WARMUP:-20}"
-REPEATS="${REPEATS:-5}"
+# Prefer SIZES; SIZE remains as a single-size override for convenience.
+if [[ -n "${SIZE:-}" && -z "${SIZES:-}" ]]; then
+  SIZES="$SIZE"
+fi
+SIZES="${SIZES:-50000,1000000}"
+# Defaults tuned for the 1M case; override upward for tighter 50k medians.
+WARMUP="${WARMUP:-5}"
+REPEATS="${REPEATS:-3}"
 DATA_DIR="${DATA_DIR:-$repo_root/_bench_data/index-scan}"
 DROP_CACHES="${DROP_CACHES:-0}"
 BACKENDS="${BACKENDS:-lmdb,sqlite}"
 mkdir -p "$DATA_DIR"
 
 echo "=== LMDB vs SQLite index-scan microbench (disk) ==="
-echo "size=${SIZE} warmup=${WARMUP} repeats=${REPEATS}"
+echo "sizes=${SIZES} warmup=${WARMUP} repeats=${REPEATS}"
 echo "data-dir=${DATA_DIR} backends=${BACKENDS} drop-caches=${DROP_CACHES}"
 echo
 
@@ -34,7 +43,7 @@ fi
 
 dune build bench/index_scan_bench.exe
 dune exec bench/index_scan_bench.exe -- \
-  --size "$SIZE" \
+  --sizes "$SIZES" \
   --data-dir "$DATA_DIR" \
   --warmup "$WARMUP" \
   --repeats "$REPEATS" \
@@ -47,9 +56,12 @@ import sys
 from collections import defaultdict
 
 path = sys.argv[1]
-current = None
-by = defaultdict(dict)
+current_size = None
+current_storage = None
+# by[size][storage][metric] = value
+by = defaultdict(lambda: defaultdict(dict))
 meta = {}
+sizes = []
 order = []
 
 with open(path) as f:
@@ -58,17 +70,23 @@ with open(path) as f:
         if not line or "\t" not in line:
             continue
         k, v = line.split("\t", 1)
-        if k in {"runtime", "size", "data-dir", "warmup", "repeats", "bench", "drop-caches"}:
+        if k in {"runtime", "data-dir", "warmup", "repeats", "bench", "drop-caches"}:
             meta[k] = v
             continue
+        if k == "size":
+            current_size = int(v)
+            if current_size not in sizes:
+                sizes.append(current_size)
+            current_storage = None
+            continue
         if k == "storage":
-            current = v
+            current_storage = v
             if v not in order:
                 order.append(v)
             continue
-        if current is None:
+        if current_size is None or current_storage is None:
             continue
-        by[current][k] = v
+        by[current_size][current_storage][k] = v
 
 metrics = [
     "disk-bytes",
@@ -102,6 +120,8 @@ def fmt_bytes(n):
         n = int(n)
     except Exception:
         return n
+    if n >= 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024 * 1024):.2f} GiB"
     if n >= 1024 * 1024:
         return f"{n / (1024 * 1024):.2f} MiB"
     if n >= 1024:
@@ -109,29 +129,31 @@ def fmt_bytes(n):
     return f"{n} B"
 
 print()
-print(f"size\t{meta.get('size', '?')}")
 print(f"data-dir\t{meta.get('data-dir', '?')}")
 print(f"drop-caches\t{meta.get('drop-caches', '?')}")
-if len(order) < 2:
-    for s in order:
-        print(f"\n[{s}]")
-        for m in metrics:
-            if m in by[s]:
-                val = by[s][m]
-                if m == "disk-bytes":
-                    val = fmt_bytes(val)
-                print(f"  {m}\t{val}")
-    raise SystemExit(0)
+print(f"sizes\t{','.join(str(s) for s in sizes)}")
 
-left, right = order[0], order[1]
-print(f"=== comparison (ratio = {right}/{left}) ===")
-print(f"{'metric':<36} {left:>14} {right:>14} {'ratio':>10}")
-print("-" * 78)
-for m in metrics:
-    lv = by[left].get(m, "?")
-    rv = by[right].get(m, "?")
-    if m == "disk-bytes":
-        print(f"{m:<36} {fmt_bytes(lv):>14} {fmt_bytes(rv):>14} {ratio(lv, rv):>10}")
-    else:
-        print(f"{m:<36} {lv:>14} {rv:>14} {ratio(lv, rv):>10}")
+for size in sizes:
+    print()
+    print(f"=== size {size} (ratio = sqlite/lmdb) ===")
+    if len(order) < 2:
+        for s in order:
+            print(f"[{s}]")
+            for m in metrics:
+                if m in by[size][s]:
+                    val = by[size][s][m]
+                    if m == "disk-bytes":
+                        val = fmt_bytes(val)
+                    print(f"  {m}\t{val}")
+        continue
+    left, right = order[0], order[1]
+    print(f"{'metric':<36} {left:>14} {right:>14} {'ratio':>10}")
+    print("-" * 78)
+    for m in metrics:
+        lv = by[size][left].get(m, "?")
+        rv = by[size][right].get(m, "?")
+        if m == "disk-bytes":
+            print(f"{m:<36} {fmt_bytes(lv):>14} {fmt_bytes(rv):>14} {ratio(lv, rv):>10}")
+        else:
+            print(f"{m:<36} {lv:>14} {rv:>14} {ratio(lv, rv):>10}")
 PY

@@ -1,8 +1,8 @@
 (* Index-scan microbench: measure LMDB vs SQLite storage engines directly.
    Avoids the shared query evaluator so differences are mostly Index I/O + decode.
 
-   Phases per backend:
-   1. build large db on disk, durable sync, close
+   Phases per backend × size:
+   1. build large db on disk (batched tx), durable sync, close
    2. cold open + restore (no prior warmup in this process for that file)
    3. cold single-shot index scans
    4. hot scans after warmup (OS page cache + stmt/cursor warm)
@@ -80,20 +80,20 @@ let next_int rng bound =
 let rand_nth rng values = values.(next_int rng (Array.length values))
 let rand_sex rng = sexes.(next_int rng 997 mod Array.length sexes)
 
-let people size =
-  let r = rng 1 in
-  List.init size (fun index ->
-      let i = index + 1 in
-      Entity
-        { db_id = Some (Temp_id (string_of_int i))
-        ; attrs =
-            [ "name", One_value (String (rand_nth r names))
-            ; "last-name", One_value (String (rand_nth r last_names))
-            ; "sex", One_value (Keyword (rand_sex r))
-            ; "age", One_value (Int (next_int r 100))
-            ; "salary", One_value (Int (next_int r 100_000))
-            ]
-        })
+let person rng i =
+  Entity
+    { db_id = Some (Temp_id (string_of_int i))
+    ; attrs =
+        [ "name", One_value (String (rand_nth rng names))
+        ; "last-name", One_value (String (rand_nth rng last_names))
+        ; "sex", One_value (Keyword (rand_sex rng))
+        ; "age", One_value (Int (next_int rng 100))
+        ; "salary", One_value (Int (next_int rng 100_000))
+        ]
+    }
+
+(* Build in chunks so a 1M entity tx list does not dominate RSS. *)
+let build_chunk_size = 25_000
 
 let consume_seq seq = Seq.fold_left (fun n _ -> n + 1) 0 seq
 
@@ -102,7 +102,7 @@ let blackhole = ref 0
 let consume_count n = blackhole := !blackhole + n
 
 type config =
-  { size : int
+  { sizes : int list
   ; data_dir : string
   ; warmup : int
   ; repeats : int
@@ -111,13 +111,20 @@ type config =
   }
 
 let default_config =
-  { size = 50_000
+  { sizes = [ 50_000 ]
   ; data_dir = Filename.concat (Filename.get_temp_dir_name ()) "datascript-index-scan"
   ; warmup = 20
   ; repeats = 5
   ; drop_caches = false
   ; backends = [ Lmdb; Sqlite ]
   }
+
+let parse_int_list value =
+  value
+  |> String.split_on_char ','
+  |> List.map String.trim
+  |> List.filter (( <> ) "")
+  |> List.map int_of_string
 
 let parse_backends value =
   value
@@ -134,7 +141,10 @@ let parse_args () =
   let rec loop = function
     | [] -> !config
     | "--size" :: v :: rest ->
-        config := { !config with size = int_of_string v };
+        config := { !config with sizes = [ int_of_string v ] };
+        loop rest
+    | "--sizes" :: v :: rest ->
+        config := { !config with sizes = parse_int_list v };
         loop rest
     | "--data-dir" :: v :: rest ->
         config := { !config with data_dir = v };
@@ -216,13 +226,28 @@ let db_path ~data_dir backend size =
   Filename.concat data_dir
     (Printf.sprintf "index-scan-%s-%d.%s" (backend_label backend) size ext)
 
+let build_db ~storage size =
+  let r = rng 1 in
+  let rec loop i db =
+    if i > size then db
+    else
+      let chunk_end = min size (i + build_chunk_size - 1) in
+      let tx = List.init (chunk_end - i + 1) (fun k -> person r (i + k)) in
+      let db = db_with tx db in
+      (* Persist chunk boundaries so Share backends flush index pages and the
+         OCaml db does not retain a giant pending tx history. *)
+      store db;
+      loop (chunk_end + 1) db
+  in
+  loop 1 (empty_db ~schema ~storage ())
+
 let build_on_disk ~data_dir backend size =
   let path = db_path ~data_dir backend size in
   remove_path path;
   let handle, storage = open_backend backend path in
   let build_ms, () =
     time_once (fun () ->
-        let db = db_with (people size) (empty_db ~schema ~storage ()) in
+        let db = build_db ~storage size in
         store db;
         collect_garbage storage;
         ignore db)
@@ -271,14 +296,14 @@ let scans ~size =
     }
   ]
 
-let run_backend config backend =
+let run_backend ~warmup ~repeats ~drop_caches ~data_dir size backend =
   let label = backend_label backend in
   Printf.printf "storage\t%s\n%!" label;
-  let path, build_ms, bytes = build_on_disk ~data_dir:config.data_dir backend config.size in
+  let path, build_ms, bytes = build_on_disk ~data_dir backend size in
   Printf.printf "path\t%s\n%!" path;
   Printf.printf "disk-bytes\t%d\n%!" bytes;
   Printf.printf "build-ms\t%s\n%!" (format_ms build_ms);
-  try_drop_caches config.drop_caches;
+  try_drop_caches drop_caches;
   let open_ms, (handle, db) =
     time_once (fun () ->
         let handle, storage = open_backend backend path in
@@ -299,22 +324,28 @@ let run_backend config backend =
           Printf.printf "cold-%s-ms\t%s\n%!" scan.name (format_ms cold_ms);
           Printf.printf "cold-%s-count\t%d\n%!" scan.name cold_count;
           let hot_ms =
-            time_median ~warmup:config.warmup ~repeats:config.repeats (fun () ->
-                consume_count (scan.run db))
+            time_median ~warmup ~repeats (fun () -> consume_count (scan.run db))
           in
           Printf.printf "hot-%s-ms\t%s\n%!" scan.name (format_ms hot_ms))
-        (scans ~size:config.size))
+        (scans ~size))
+
+let run_size config size =
+  Printf.printf "size\t%d\n%!" size;
+  List.iter
+    (run_backend ~warmup:config.warmup ~repeats:config.repeats
+       ~drop_caches:config.drop_caches ~data_dir:config.data_dir size)
+    config.backends
 
 let main () =
   let config = parse_args () in
+  if config.sizes = [] then invalid_arg "at least one --size / --sizes entry required";
   ensure_dir config.data_dir;
   Printf.printf "runtime\tOCaml\n%!";
-  Printf.printf "size\t%d\n%!" config.size;
   Printf.printf "data-dir\t%s\n%!" config.data_dir;
   Printf.printf "warmup\t%d\n%!" config.warmup;
   Printf.printf "repeats\t%d\n%!" config.repeats;
   Printf.printf "bench\tindex-scan\n%!";
-  List.iter (run_backend config) config.backends;
+  List.iter (run_size config) config.sizes;
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 
 let () = main ()
