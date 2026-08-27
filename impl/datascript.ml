@@ -1754,9 +1754,6 @@ module Query = struct
       let tables = List.map table_of_ids rest in
       List.filter (fun id -> List.for_all (fun table -> Hashtbl.mem table id) tables) smallest
 
-  let should_materialize_value_tables entity_count value_var_attrs =
-    List.length value_var_attrs >= 2 && entity_count > 300
-
   let reverse_comparison_predicate = function
     | GreaterThan -> LessThan
     | GreaterOrEqual -> LessOrEqual
@@ -2040,12 +2037,11 @@ module Query = struct
               values
             in
             let value_slots =
-              if should_materialize_value_tables (List.length entity_ids) value_var_attrs then
+              match value_var_attrs with
+              | [ (value_var, attr) ] -> [ value_var, Simple_value_lookup attr ]
+              | _ ->
                 value_var_attrs
                 |> List.map (fun (value_var, attr) -> value_var, Simple_value_slot (value_table attr))
-              else
-                value_var_attrs
-                |> List.map (fun (value_var, attr) -> value_var, Simple_value_lookup attr)
             in
             let slot_for_find_var var =
               if var = e_var then Some Simple_entity_slot else List.assoc_opt var value_slots
