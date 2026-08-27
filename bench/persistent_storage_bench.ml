@@ -97,7 +97,7 @@ module Sqlite_backend : BACKEND = struct
   let extension = "sqlite3"
   let open_session = Datascript_sqlite.open_session
   let close_session = Datascript_sqlite.close
-  let storage = Datascript_sqlite.storage
+  let storage session = storage_of_handle (Datascript_sqlite.storage session)
   let cleanup _path = ()
 end
 
@@ -108,7 +108,7 @@ module Lmdb_backend : BACKEND = struct
   let extension = "lmdb"
   let open_session = Datascript_lmdb.open_session
   let close_session = Datascript_lmdb.close
-  let storage = Datascript_lmdb.storage
+  let storage session = storage_of_handle (Datascript_lmdb.storage session)
 
   let cleanup path =
     let lock = path ^ "-lock" in

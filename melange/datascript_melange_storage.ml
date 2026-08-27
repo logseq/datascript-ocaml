@@ -368,11 +368,12 @@ let payload_of_transit = function
 let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit
 
-let encode_storage_payload (payload : Ds.storage_payload) =
-  match payload with Storage_session -> encode Compat_session
+(* Legacy Logseq KVS codec helpers (PSS storage payloads are no longer supported). *)
+
+let encode_storage_payload () = encode Compat_session
 
 let decode_storage_payload payload =
   match decode payload with
-  | Compat_session -> Storage_session
+  | Compat_session -> ()
   | Compat_root _ | Compat_node _ | Compat_tail _ ->
       invalid_arg "legacy PSS storage payloads are no longer supported"
