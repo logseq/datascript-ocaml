@@ -60,8 +60,12 @@ let empty_db ?(schema = []) ?storage () =
 
 let empty db = Db_impl.empty db_core_context db
 
+let warm_query_parser = ref (fun _db -> ())
+
 let init_db ?(schema = []) ?storage datoms =
-  Db_impl.init_db db_core_context ~schema ?storage datoms
+  let db = Db_impl.init_db db_core_context ~schema ?storage datoms in
+  !warm_query_parser db;
+  db
 
 let visible_datoms = Db_impl.visible_datoms
 
@@ -1416,7 +1420,22 @@ let parse_with = Parser_impl.parse_with
 let parse_query_return form = Parser_impl.parse_query_return parser_query_context form
 let parse_query_return_map form = Parser_impl.parse_query_return_map parser_query_context form
 let parse_query form = Parser_impl.parse_query parser_query_context form
-let parse_query_string input = Parser_impl.parse_query_string parser_query_context input
+
+let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
+
+let parse_query_string_uncached input =
+  Parser_impl.parse_query_string parser_query_context input
+
+let cached_query_string input =
+  match Hashtbl.find_opt query_string_cache input with
+  | Some query -> query
+  | None ->
+    let query = parse_query_string_uncached input in
+    Hashtbl.replace query_string_cache input query;
+    query
+
+let parse_query_string input = cached_query_string input
+
 let parse_query_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   Parser_impl.parse_query_string_with_pull_context parser_query_context ?default_pull_db ?pull_db_for_source input
 let parse_query_return_string input = Parser_impl.parse_query_return_string parser_query_context input
@@ -1691,9 +1710,24 @@ module Query = struct
         if duplicate_value_var then
           None
         else
+          match find_vars, value_var_attrs, constant_patterns with
+          | [ var ], [], [ (attr, value) ] when var = e_var -> (
+            match entity_ids_by_attr_value db attr value with
+            | Some [] -> Some []
+            | Some entity_ids ->
+              Some (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids)
+            | None -> None)
+          | _ -> None
+          |> function
+          | Some rows -> Some rows
+          | None ->
           let constant_datoms =
             constant_patterns
-            |> List.map (fun (attr, value) -> attr, datoms_by_attr_value db attr value)
+            |> List.map (fun (attr, value) ->
+              match entity_ids_by_attr_value db attr value with
+              | Some entity_ids ->
+                attr, List.map (fun e -> datom ~e ~a:attr ~v:value ()) entity_ids
+              | None -> attr, datoms_by_attr_value db attr value)
           in
           if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
             Some []
@@ -1774,15 +1808,6 @@ module Query = struct
     match simple_same_entity_constant_rows ?inputs db query with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
-
-  let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
-  let cached_query_string input =
-    match Hashtbl.find_opt query_string_cache input with
-    | Some query -> query
-    | None ->
-      let query = parse_query_string input in
-      Hashtbl.replace query_string_cache input query;
-      query
 
   let q_string ?inputs db input =
     if string_includes input "pull" then
@@ -3080,6 +3105,18 @@ end
 
 let q = Query.q
 let q_string = Query.q_string
+
+let () =
+  warm_query_parser :=
+    (let warmed = ref false in
+     fun db ->
+       if not !warmed then (
+         warmed := true;
+         ignore (read_edn "1");
+         ignore (parse_query_string_uncached "[:find ?e :where [?e :name \"warmup\"]]");
+         ignore (parse_query_string_uncached "[:find ?e :where [?e :age 1]]");
+         ignore (q_string db "[:find ?e :where [?e :name \"warmup\"]]")))
+
 let q_with = Query.q_with
 let q_with_string = Query.q_with_string
 let q_sources = Query.q_sources

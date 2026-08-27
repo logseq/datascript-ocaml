@@ -127,11 +127,11 @@ let lmdb_of_db db =
 let group_sorted_datoms_by_attr datoms =
   let table = Hashtbl.create 32 in
   let rec flush attr group = function
-    | [] -> ()
+    | [] -> Hashtbl.replace table attr (Array.of_list (List.rev group))
     | datom :: rest when datom.a = attr ->
       flush attr (datom :: group) rest
     | datom :: rest ->
-      Hashtbl.replace table attr (Array.of_list (List.rev (datom :: group)));
+      Hashtbl.replace table attr (Array.of_list (List.rev group));
       flush datom.a [ datom ] rest
   in
   (match datoms with
@@ -807,15 +807,6 @@ let exact_prefix_datoms_list context db index e a v tx =
      | _ ->
        exact_prefix_datoms context db index e a v tx
        |> Option.map List.of_seq)
-
-let avet_datoms_by_value_seq context db attr value =
-  let bound = bound_datom ~a:attr ~v:value () in
-  let bound_fields = fields ~a:true ~v:true () in
-  match Hashtbl.find_opt db.avet_by_attr attr with
-  | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
-  | None ->
-    let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
-    Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
 
 let lower_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with

@@ -97,6 +97,12 @@ let main () =
     time "build-all-init" (fun () -> init_db ~schema datoms)
   in
   print_timing build_all;
+  let find_name, rows =
+    time "query-name-ivan" (fun () ->
+      q_string db "[:find ?e :where [?e :name \"Ivan\"]]")
+  in
+  print_timing find_name;
+  Printf.printf "query-name-ivan-count\t%d\n%!" (List.length rows);
   Printf.printf "datom-count\t%d\n%!" (entity_count db);
   let scan_name, count =
     time "scan-aevt-name" (fun () ->
@@ -104,12 +110,6 @@ let main () =
   in
   print_timing scan_name;
   Printf.printf "scan-aevt-name-count\t%d\n%!" count;
-  let find_name, rows =
-    time "query-name-ivan" (fun () ->
-      q_string db "[:find ?e :where [?e :name \"Ivan\"]]")
-  in
-  print_timing find_name;
-  Printf.printf "query-name-ivan-count\t%d\n%!" (List.length rows);
   let add_one, db =
     time "add-one-tx" (fun () ->
       db_with [ Add (Entity_id 1, "nickname", String "Vanya") ] db)

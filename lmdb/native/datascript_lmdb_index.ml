@@ -67,7 +67,7 @@ let of_eavt_datoms ~avet eavt_datoms db =
         eavt_datoms))
 
 let of_bulk index datoms db =
-  { db; which = index; additions = datoms; additions_arr = Some (Array.of_list datoms); removals = []; bulk = true }
+  { db; which = index; additions = []; additions_arr = Some (Array.of_list datoms); removals = []; bulk = true }
 
 let array_find_first cmp bound arr =
   let len = Array.length arr in
@@ -135,6 +135,52 @@ let array_fold_in_range cmp from_ to_ arr f init =
 
 let array_materialize_range cmp from_ to_ arr =
   array_fold_in_range cmp from_ to_ arr (fun acc datom -> datom :: acc) [] |> List.rev
+
+let array_fold_attr_prefix f init attr arr index =
+  let cmp = cmp_for index in
+  let bound = { e = 0; a = attr; v = Nil; tx = 0; added = true } in
+  let start = array_lower_bound cmp bound arr in
+  let len = Array.length arr in
+  let rec loop i acc =
+    if i >= len then acc
+    else
+      let datom = arr.(i) in
+      if datom.a <> attr then acc else loop (i + 1) (f acc datom)
+  in
+  loop start init
+
+let values_equal left right =
+  match left, right with
+  | String left, String right
+  | Symbol left, Symbol right
+  | Keyword left, Keyword right
+  | Uuid left, Uuid right
+  | Regex left, Regex right ->
+    left = right
+  | Bool left, Bool right -> left = right
+  | Int left, Int right
+  | Ref left, Ref right
+  | Int left, Ref right
+  | Ref left, Int right ->
+    left = right
+  | Instant left, Instant right -> left = right
+  | Nil, Nil -> true
+  | TxRef, TxRef -> true
+  | _ -> Compare.compare_value left right = 0
+
+let array_fold_attr_value_prefix f init attr value arr index =
+  let cmp = cmp_for index in
+  let bound = { e = 0; a = attr; v = value; tx = 0; added = true } in
+  let start = array_lower_bound cmp bound arr in
+  let len = Array.length arr in
+  let rec loop i acc =
+    if i >= len then acc
+    else
+      let datom = arr.(i) in
+      if datom.a <> attr || not (values_equal datom.v value) then acc
+      else loop (i + 1) (f acc datom)
+  in
+  loop start init
 
 let additions_only t =
   t.bulk && t.removals = [] && (t.additions <> [] || Option.is_some t.additions_arr)
@@ -254,7 +300,13 @@ let fold_overlay t f acc = List.fold_left f acc t.additions
 let fold_bulk_slice f init ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
   let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
-  let acc = array_fold_in_range cmp from_ to_ (sorted_bulk_array t) f init in
+  let arr = sorted_bulk_array t in
+  let acc =
+    match from_, to_ with
+    | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
+      array_fold_attr_value_prefix f init bound.a bound.v arr t.which
+    | _ -> array_fold_in_range cmp from_ to_ arr f init
+  in
   List.fold_left apply acc t.additions
 
 let fold_datoms f init t =
@@ -360,6 +412,15 @@ let find_first_slice ?from_ ?to_ ?cmp t =
      if additions_only t then (
        List.iter consider t.additions;
        match from_, to_ with
+       | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
+         ignore
+           (array_fold_attr_value_prefix
+              (fun () datom -> consider datom)
+              ()
+              bound.a
+              bound.v
+              (sorted_bulk_array t)
+              t.which)
        | Some bound, Some bound' when bound == bound' -> (
          match array_find_first cmp bound (sorted_bulk_array t) with
          | Some datom when !found = None && in_range cmp from_ to_ datom ->
@@ -385,7 +446,8 @@ let find_first_slice ?from_ ?to_ ?cmp t =
 let fold_attr_prefix f init t attr =
   let apply acc datom = if datom.a = attr then f acc datom else acc in
   if additions_only t then
-    let acc = Array.fold_left apply init (sorted_bulk_array t) in
+    let arr = sorted_bulk_array t in
+    let acc = array_fold_attr_prefix f init attr arr t.which in
     List.fold_left apply acc t.additions
   else if not (overlay_empty t) then
     collect_datoms t
