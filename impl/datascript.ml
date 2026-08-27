@@ -1768,19 +1768,17 @@ module Query = struct
     | Simple_value_slot of query_result option array
     | Simple_value_lookup of attr
 
-  let intersect_constant_entities constant_datoms =
-    match
-      constant_datoms
-      |> List.sort (fun (_, left) (_, right) -> compare (List.length left) (List.length right))
-    with
+  let intersect_constant_entity_ids id_lists =
+    let table_of_ids ids =
+      let table = Hashtbl.create (List.length ids) in
+      List.iter (fun id -> Hashtbl.replace table id ()) ids;
+      table
+    in
+    match List.sort (fun left right -> compare (List.length left) (List.length right)) id_lists with
     | [] -> []
-    | (_, smallest) :: rest ->
-      smallest
-      |> List.map (fun datom -> datom.e)
-      |> List.filter (fun entity_id ->
-        List.for_all
-          (fun (_, datoms) -> List.exists (fun datom -> datom.e = entity_id) datoms)
-          rest)
+    | smallest :: rest ->
+      let tables = List.map table_of_ids rest in
+      List.filter (fun id -> List.for_all (fun table -> Hashtbl.mem table id) tables) smallest
 
   let should_materialize_value_tables entity_count value_var_attrs =
     List.length value_var_attrs >= 2 && entity_count > 300
@@ -2021,8 +2019,6 @@ module Query = struct
       in
       if constant_patterns = [] then
         None
-      else if value_var_attrs <> [] then
-        None
       else
         let duplicate_value_var =
           let seen = Hashtbl.create (List.length value_var_attrs) in
@@ -2048,32 +2044,30 @@ module Query = struct
           |> function
           | Some rows -> Some rows
           | None ->
-          let constant_datoms =
+          let constant_entity_ids =
             constant_patterns
             |> List.map (fun (attr, value) ->
               match entity_ids_by_attr_value db attr value with
-              | Some entity_ids ->
-                attr, List.map (fun e -> datom ~e ~a:attr ~v:value ()) entity_ids
-              | None -> attr, datoms_by_attr_value db attr value)
+              | Some entity_ids -> entity_ids
+              | None -> datoms_by_attr_value db attr value |> List.map (fun datom -> datom.e))
           in
-          if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
-            Some []
+          if List.exists (fun ids -> ids = []) constant_entity_ids then Some []
           else
-            let entity_ids = intersect_constant_entities constant_datoms in
+            let entity_ids = intersect_constant_entity_ids constant_entity_ids in
+            if entity_ids = [] then Some []
+            else
             let value_table attr =
               let values = Array.make (db.max_datom_e + 1) None in
+              let fill datom =
+                if datom.e >= 0 && datom.e < Array.length values then
+                  values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
+              in
               (match Hashtbl.find_opt db.aevt_by_attr attr with
-               | Some arr ->
+               | Some arr when Array.length arr > 0 ->
                  for index = 0 to Array.length arr - 1 do
-                   let datom = arr.(index) in
-                   if datom.e >= 0 && datom.e < Array.length values then
-                     values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
+                   fill arr.(index)
                  done
-               | None ->
-                 primary_attr_datoms db Aevt attr
-                 |> List.iter (fun datom ->
-                   if datom.e >= 0 && datom.e < Array.length values then
-                     values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)));
+               | _ -> datoms db Aevt ~a:attr () |> Seq.iter fill);
               values
             in
             let value_slots =
