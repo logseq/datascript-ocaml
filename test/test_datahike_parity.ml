@@ -347,6 +347,23 @@ let test_rules_long_30x3 () =
   (* 3 × (30+29+...+1) = 3 × 465 = 1395 *)
   check_int "rules-long-30x3 count" 1395 (List.length rows)
 
+let test_rules_long_30x5 () =
+  let db = long_db 30 5 in
+  let rows =
+    q_string ~inputs:[ Arg_rules follow_rules_rec ] db
+      "[:find ?e ?e2 :in $ % :where (follows ?e ?e2)]"
+  in
+  (* 5 × 465 = 2325 *)
+  check_int "rules-long-30x5 count" 2325 (List.length rows)
+
+let test_rules_wide_4x6 () =
+  let db = wide_db 4 6 in
+  let rows =
+    q_string ~inputs:[ Arg_rules follow_rules_rec ] db
+      "[:find ?e ?e2 :in $ % :where (follows ?e ?e2)]"
+  in
+  check_int "rules-wide-4x6 count" 5910 (List.length rows)
+
 let test_rules_small_exact () =
   let db = people_db () in
   check_rows "recursive follows exact"
@@ -453,8 +470,17 @@ let test_temporal () =
        "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]");
   check_int "t-hist-q1 names" 3
     (List.length (q_string hist "[:find ?e :where [?e :name]]"));
-  check_bool "t-hist-q2 age+tx non-empty" true
-    (q_string hist "[:find ?e ?a ?tx :where [?e :age ?a ?tx]]" <> []);
+  check_rows "t-hist-q1 name entities"
+    [ [ re 1 ]; [ re 2 ]; [ re 3 ] ]
+    (q_string hist "[:find ?e :where [?e :name]]");
+  check_rows "t-hist-q2 age+tx"
+    [ [ re 1; rv (Int 20); re (basis_tx as_of_db) ]
+    ; [ re 1; rv (Int 20); re (basis_tx current) ]
+    ; [ re 1; rv (Int 21); re (basis_tx current) ]
+    ; [ re 2; rv (Int 30); re (basis_tx as_of_db) ]
+    ; [ re 3; rv (Int 40); re (basis_tx current) ]
+    ]
+    (q_string hist "[:find ?e ?a ?tx :where [?e :age ?a ?tx]]");
   check_rows "t-hist-q3 name+age includes retracted age"
     [ [ re 1; rv (String "Ivan"); rv (Int 20) ]
     ; [ re 1; rv (String "Ivan"); rv (Int 21) ]
@@ -465,6 +491,7 @@ let test_temporal () =
   check_rows "t-hist-retract"
     [ [ re 1; rv (Int 20) ] ]
     (q_string hist "[:find ?e ?a :where [?e :age ?a _ false]]")
+
 
 (* ---------- joins category ---------- *)
 
@@ -589,8 +616,10 @@ let () =
       , [ test_case "recursive follows exact people fixture" `Quick test_rules_small_exact
         ; test_case "rules-wide-3x3 count" `Quick test_rules_wide_3x3
         ; test_case "rules-wide-5x3 count" `Quick test_rules_wide_5x3
+        ; test_case "rules-wide-4x6 count" `Quick test_rules_wide_4x6
         ; test_case "rules-long-10x3 count" `Quick test_rules_long_10x3
         ; test_case "rules-long-30x3 count" `Quick test_rules_long_30x3
+        ; test_case "rules-long-30x5 count" `Quick test_rules_long_30x5
         ] )
     ; ( "aggregates"
       , [ test_case "all aggregate shapes" `Quick test_aggregates ] )

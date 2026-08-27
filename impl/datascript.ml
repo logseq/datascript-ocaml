@@ -1792,11 +1792,11 @@ module Query = struct
     | None -> Some bound
     | Some current -> if compare_value bound current < 0 then Some bound else Some current
 
-  let avet_bounds_need_post_filter value_var comparisons =
+  let avet_bounds_need_post_filter value_var binding comparisons =
     List.exists
       (function
         | ComparisonPredicate (predicate, left, right) -> (
-          match comparison_threshold value_var [] predicate left right with
+          match comparison_threshold value_var binding predicate left right with
           | Some (GreaterThan, Int _) | Some (LessThan, Int _) -> false
           | Some _ -> true
           | None -> true)
@@ -1876,10 +1876,15 @@ module Query = struct
       in
       let* binding =
         if comparisons_need_input_binding value_var comparisons then (
-          let _, input_bindings, _ = initial_query_context db query input_args in
-          match input_bindings with
-          | [ binding ] -> Some binding
-          | _ -> None)
+          match input_args, query.inputs with
+          | [ Arg_scalar (Result_value value) ], [ Input_source_decl _; Input_scalar_decl var ]
+          | [ Arg_scalar (Result_value value) ], [ Input_scalar_decl var ] ->
+            Some [ var, Result_value value ]
+          | _ -> (
+            let _, input_bindings, _ = initial_query_context db query input_args in
+            match input_bindings with
+            | [ binding ] -> Some binding
+            | _ -> None))
         else
           Some []
       in
@@ -1903,7 +1908,7 @@ module Query = struct
               | _ -> (start, stop))
             (None, None) comparisons
         in
-        let need_post_filter = avet_bounds_need_post_filter value_var comparisons in
+        let need_post_filter = avet_bounds_need_post_filter value_var binding comparisons in
         let post_filter datom =
           if need_post_filter then
             comparisons

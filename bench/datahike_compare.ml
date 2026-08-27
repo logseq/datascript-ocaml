@@ -160,6 +160,9 @@ let next_int rng bound =
 
 let rand_nth rng values = values.(next_int rng (Array.length values))
 
+(* See test_datahike_queries.ml: decorrelate sex from name under this LCG. *)
+let rand_sex rng = sexes.(next_int rng 997 mod Array.length sexes)
+
 let random_man rng i =
   Entity
     {
@@ -168,7 +171,7 @@ let random_man rng i =
     ; attrs =
         [ "name", One_value (String (rand_nth rng names))
         ; "last-name", One_value (String (rand_nth rng last_names))
-        ; "sex", One_value (Keyword (rand_nth rng sexes))
+        ; "sex", One_value (Keyword (rand_sex rng))
         ; "age", One_value (Int (next_int rng 100))
         ; "salary", One_value (Int (next_int rng 100_000))
         ]
