@@ -131,7 +131,7 @@ let test_history_survives_entity_retraction () =
   in
   let tx0 = basis_tx db in
   let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
-  let tx1 = basis_tx db in
+  ignore (basis_tx db);
   let db = db_with [ RetractEntity (Entity_id 1) ] db in
   check_string_list "retracted entity absent from current db" []
     (List.map string_of_int (int_values db ~e:1 ~a:"age" ()));
@@ -141,8 +141,8 @@ let test_history_survives_entity_retraction () =
   let past = as_of tx0 hist in
   check_string_list "history + as_of tx0 sees bootstrap age" [ "25" ]
     (List.map string_of_int (int_values past ~e:1 ~a:"age" ()));
-  let delta = since tx1 hist in
-  check_string_list "history + since tx1 sees post-update age only" [ "30" ]
+  let delta = since tx0 hist in
+  check_string_list "history + since tx0 sees post-update age only" [ "30" ]
     (history_asserted_values delta ~e:1 ~a:"age" ())
 
 let test_temporal_views_reject_transact () =
