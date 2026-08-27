@@ -1,5 +1,9 @@
 # Query Planner Implementation Plan
 
+See also `docs/query_implementation_comparison.md` for a side-by-side analysis of
+Datahike's compiled executor versus the current OCaml interpreter (lists, bindings,
+allocation patterns, and per-query-shape gaps).
+
 This plan implements the decision in `docs/adr/query-planner.md`. It is ordered by
 risk and benchmark impact. Each phase has explicit parity and performance gates.
 
