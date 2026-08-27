@@ -106,6 +106,10 @@ let put_index index db key value =
 let remove_index index db key =
   with_write_txn db (fun txn -> remove_index_txn index txn db key)
 
+let get_index index db key =
+  ensure_open db;
+  try Some (Map.get (map_for_index index db) key) with Not_found -> None
+
 let fold_index index db f =
   ensure_open db;
   let map = map_for_index index db in
@@ -118,6 +122,28 @@ let fold_index index db f =
         loop ()
   in
   loop ()
+
+let fold_index_prefix index db prefix f =
+  ensure_open db;
+  let map = map_for_index index db in
+  let prefix_len = String.length prefix in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (try ignore (Cursor.seek_range cursor prefix) with Not_found -> raise Exit);
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         if String.length key < prefix_len || String.sub key 0 prefix_len <> prefix then raise Exit;
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
 
 let fold_index_range index db ?from_key ?to_key f =
   ensure_open db;
@@ -136,6 +162,33 @@ let fold_index_range index db ?from_key ?to_key f =
          in
          (match to_key with
           | Some bound when String.compare key bound > 0 -> raise Exit
+          | _ -> ());
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
+
+let fold_index_range_until index db ?from_key ?stop f =
+  ensure_open db;
+  let map = map_for_index index db in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (match from_key with
+        | None -> (
+          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
+        | Some key -> (
+          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         (match stop with
+          | Some stop when stop key value -> raise Exit
           | _ -> ());
          f key value;
          try

@@ -25,6 +25,9 @@ module Make (Context : sig
   val is_ref_attr : db -> attr -> bool
   val cardinality_one : db -> attr -> bool
   val normalize_value : value -> value
+  val datoms_by_attr_value : db -> attr -> value -> datom list
+  val query_attr_uses_avet : db -> attr -> bool
+  val query_value_uses_avet : value -> bool
 end) = struct
   open Context
 
@@ -1034,15 +1037,21 @@ end) = struct
             not (query_evaluator_context.is_reverse_ref attr)
           in
           let datoms_matching attr value =
-            let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) (QValue value) None in
-            if direct_attr attr then
-              List.of_seq datoms
+            if
+              direct_attr attr && query_value_uses_avet value
+              && query_attr_uses_avet source_db attr
+            then
+              datoms_by_attr_value source_db attr value
             else
-              datoms
-              |> Seq.filter (fun datom ->
-                Option.is_some
-                  (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) (QValue value) datom))
-              |> List.of_seq
+              let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) (QValue value) None in
+              if direct_attr attr then
+                List.of_seq datoms
+              else
+                datoms
+                |> Seq.filter (fun datom ->
+                  Option.is_some
+                    (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) (QValue value) datom))
+                |> List.of_seq
           in
           let constant_datoms =
             constant_patterns

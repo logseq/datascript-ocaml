@@ -29,6 +29,7 @@ let from_serializable context snapshot =
   ; avet_index = Index.empty Avet lmdb
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
+  ; avet_entities_by_attr_value = Hashtbl.create 0
   ; duplicate_datoms = []
   ; duplicate_aevt_datoms = []
   ; duplicate_avet_datoms = []

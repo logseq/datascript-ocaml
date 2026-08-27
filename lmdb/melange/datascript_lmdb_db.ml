@@ -1,53 +1,37 @@
 open Datascript_types
-
-type js = Js.t
-
-external open_root : string -> js = "open"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external open_subdb : js -> string -> js = "openDB"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_get : js -> string -> string Js.nullable = "get"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_put : js -> string -> string -> unit = "put"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_remove : js -> string -> unit = "remove"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_sync : js -> unit = "sync"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_close : js -> unit = "close"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external js_range : js -> (string * string) array = "range"
-  [@@mel.module "./datascript_lmdb_node.js"]
-
-external temp_path : unit -> string = "tempPath"
-  [@@mel.module "./datascript_lmdb_node.js"]
+open Lmdb
 
 type t =
   { path : string
-  ; env : js
-  ; eavt : js
-  ; aevt : js
-  ; avet : js
-  ; meta : js
+  ; env : Env.t
+  ; eavt : (string, string, [ `Uni ]) Map.t
+  ; aevt : (string, string, [ `Uni ]) Map.t
+  ; avet : (string, string, [ `Uni ]) Map.t
+  ; meta : (string, string, [ `Uni ]) Map.t
   ; mutable closed : bool
   }
 
-let remove_path _path = ()
+let default_map_size = 1024 * 1024 * 1024
+let lock_path path = path ^ "-lock"
+
+let remove_path path =
+  if Sys.file_exists path then Sys.remove path;
+  let lock = lock_path path in
+  if Sys.file_exists lock then Sys.remove lock
+
+let open_env db_path =
+  Env.(create Rw ~flags:Flags.no_subdir ~map_size:default_map_size ~max_maps:8 db_path)
+
+let open_named_map env name =
+  try Map.open_existing Nodup ~key:Conv.string ~value:Conv.string ~name env
+  with Not_found -> Map.create Nodup ~key:Conv.string ~value:Conv.string ~name env
 
 let open_db path =
-  let root = open_root path in
-  { path; env = root; eavt = open_subdb root "ds/eavt"; aevt = open_subdb root "ds/aevt"
-  ; avet = open_subdb root "ds/avet"; meta = open_subdb root "ds/meta"; closed = false
+  remove_path path;
+  let env = open_env path in
+  { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
+  ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; closed = false
   }
-
-let create_temp () = open_db (temp_path ())
 
 let open_path path = open_db path
 
@@ -56,71 +40,165 @@ let ensure_open db =
 
 let close db =
   if not db.closed then (
-    js_close db.env;
+    Map.close db.eavt;
+    Map.close db.aevt;
+    Map.close db.avet;
+    Map.close db.meta;
+    Env.sync db.env;
+    Env.close db.env;
     db.closed <- true)
+
+let temps_created = ref 0
+
+let create_temp () =
+  let db =
+    open_db
+      (Filename.temp_file
+         ~temp_dir:(Filename.get_temp_dir_name ())
+         "datascript_lmdb"
+         ".mdb")
+  in
+  Gc.finalise
+    (fun lmdb ->
+      if not lmdb.closed then close lmdb)
+    db;
+  incr temps_created;
+  if !temps_created mod 64 = 0 then Gc.full_major ();
+  db
 
 let sync db =
   ensure_open db;
-  js_sync db.env
+  Env.sync db.env
+
+let map_for_index index db =
+  match index with
+  | Eavt -> db.eavt
+  | Aevt -> db.aevt
+  | Avet -> db.avet
 
 let meta_get db key =
   ensure_open db;
-  match Js.Nullable.toOption (js_get db.meta key) with
-  | None -> None
-  | Some value -> Some value
+  try Some (Map.get db.meta key) with Not_found -> None
 
 let meta_set db key value =
   ensure_open db;
-  js_put db.meta key value
+  ignore
+    (Txn.go Rw db.env (fun txn ->
+       Map.set ~txn db.meta key value;
+       ()))
 
-let with_write db f =
+let with_write_txn db f =
   ensure_open db;
-  f ()
+  ignore
+    (Txn.go Rw db.env (fun txn ->
+       f txn;
+       ()))
 
-let with_write_txn db f = with_write db (fun () -> f ())
+let put_index_txn index txn db key value =
+  Map.set ~txn (map_for_index index db) key value
+
+let remove_index_txn index txn db key =
+  try Map.remove ~txn (map_for_index index db) key with Not_found -> ()
+
+let put_index index db key value =
+  with_write_txn db (fun txn -> put_index_txn index txn db key value)
+
+let remove_index index db key =
+  with_write_txn db (fun txn -> remove_index_txn index txn db key)
+
+let get_index index db key =
+  ensure_open db;
+  try Some (Map.get (map_for_index index db) key) with Not_found -> None
 
 let fold_index index db f =
   ensure_open db;
-  let map =
-    match index with
-    | Eavt -> db.eavt
-    | Aevt -> db.aevt
-    | Avet -> db.avet
+  let map = map_for_index index db in
+  let next = Map.to_dispenser map in
+  let rec loop () =
+    match next () with
+    | None -> ()
+    | Some (key, value) ->
+        f key value;
+        loop ()
   in
-  Array.iter (fun (key, value) -> f key value) (js_range map)
+  loop ()
 
-let put_index index db key value =
+let fold_index_prefix index db prefix f =
   ensure_open db;
-  let map =
-    match index with
-    | Eavt -> db.eavt
-    | Aevt -> db.aevt
-    | Avet -> db.avet
-  in
-  js_put map key value
-
-let remove_index index db key =
-  ensure_open db;
-  let map =
-    match index with
-    | Eavt -> db.eavt
-    | Aevt -> db.aevt
-    | Avet -> db.avet
-  in
-  js_remove map key
-
-let put_index_txn index _txn db key value = put_index index db key value
-
-let remove_index_txn index _txn db key = remove_index index db key
-
-let copy_index_txn index _txn from_db to_db =
-  fold_index index from_db (fun key value -> put_index index to_db key value)
+  let map = map_for_index index db in
+  let prefix_len = String.length prefix in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (try ignore (Cursor.seek_range cursor prefix) with Not_found -> raise Exit);
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         if String.length key < prefix_len || String.sub key 0 prefix_len <> prefix then raise Exit;
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
 
 let fold_index_range index db ?from_key ?to_key f =
-  fold_index index db (fun key value ->
-    match from_key with
-    | Some bound when String.compare key bound < 0 -> ()
-    | _ -> (
-      match to_key with
-      | Some bound when String.compare key bound > 0 -> ()
-      | _ -> f key value))
+  ensure_open db;
+  let map = map_for_index index db in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (match from_key with
+        | None -> (
+          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
+        | Some key -> (
+          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         (match to_key with
+          | Some bound when String.compare key bound > 0 -> raise Exit
+          | _ -> ());
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
+
+let fold_index_range_until index db ?from_key ?stop f =
+  ensure_open db;
+  let map = map_for_index index db in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (match from_key with
+        | None -> (
+          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
+        | Some key -> (
+          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         (match stop with
+          | Some stop when stop key value -> raise Exit
+          | _ -> ());
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
+
+let copy_index_txn index txn from_db to_db =
+  fold_index index from_db (fun key value ->
+    put_index_txn index txn to_db key value)

@@ -31,11 +31,22 @@ let load_indexes_from_storage storage target_lmdb =
 
 let empty index lmdb = Datascript_lmdb_index.empty index lmdb |> inject
 let of_sorted_list index datoms lmdb = Datascript_lmdb_index.of_sorted_list index datoms lmdb |> inject
+let of_sorted_lists index_datoms lmdb = Datascript_lmdb_index.of_sorted_lists index_datoms lmdb
+let of_eavt_datoms ~avet datoms lmdb = Datascript_lmdb_index.of_eavt_datoms ~avet datoms lmdb
+let of_bulk index datoms lmdb = Datascript_lmdb_index.of_bulk index datoms lmdb |> inject
 
 let add datom t = Datascript_lmdb_index.add datom (project t) |> inject
 let remove datom t = Datascript_lmdb_index.remove datom (project t) |> inject
+let lookup t datom = Datascript_lmdb_index.lookup (project t) datom
 let to_list t = Datascript_lmdb_index.to_list (project t)
 let fold f init t = Datascript_lmdb_index.fold f init (project t)
+let fold_slice f init ?from_ ?to_ ?cmp t =
+  Datascript_lmdb_index.fold_slice f init ?from_ ?to_ ?cmp (project t)
+let find_first_slice ?from_ ?to_ ?cmp t =
+  Datascript_lmdb_index.find_first_slice ?from_ ?to_ ?cmp (project t)
+
+let fold_attr_prefix f init t attr =
+  Datascript_lmdb_index.fold_attr_prefix f init (project t) attr
 let slice ?from_ ?to_ ?cmp t = Datascript_lmdb_index.slice ?from_ ?to_ ?cmp (project t)
 let slice_seq ?from_ ?to_ ?cmp t = Datascript_lmdb_index.slice_seq ?from_ ?to_ ?cmp (project t)
 let rslice_seq ?from_ ?to_ ?cmp t = Datascript_lmdb_index.rslice_seq ?from_ ?to_ ?cmp (project t)

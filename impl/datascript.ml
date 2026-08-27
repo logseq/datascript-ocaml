@@ -241,15 +241,17 @@ let find_avet_exact db attr value =
     else if left == bound then -compare_prefix right left
     else Util.compare_datom Avet left right
   in
-  match
-    Index.slice ~from_:bound ~to_:bound ~cmp db.avet_index
-    @ List.filter
+  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.avet_index with
+  | Some datom when datom.a = attr && value_equal datom.v value -> Some datom
+  | _ -> (
+    match
+      List.filter
         (fun datom -> datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
-    |> List.sort (Util.compare_datom Avet)
-  with
-  | datom :: _ -> Some datom
-  | [] -> None
+      |> List.sort (Util.compare_datom Avet)
+    with
+    | datom :: _ -> Some datom
+    | [] -> None)
 
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
@@ -265,15 +267,17 @@ let find_eavt_exact db entity_id attr value =
     else if left == bound then -compare_prefix right left
     else Util.compare_datom Eavt left right
   in
-  match
-    Index.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
-    @ List.filter
+  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.eavt_index with
+  | Some datom when datom.e = entity_id && datom.a = attr && value_equal datom.v value -> Some datom
+  | _ -> (
+    match
+      List.filter
         (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[])
-    |> List.sort (Util.compare_datom Eavt)
-  with
-  | datom :: _ -> Some datom
-  | [] -> None
+      |> List.sort (Util.compare_datom Eavt)
+    with
+    | datom :: _ -> Some datom
+    | [] -> None)
 
 let rec coerce_tuple_lookup_value_db db attr value =
   match schema_attr db attr, value with
@@ -1081,7 +1085,7 @@ let datoms_by_attr_value db attr value =
       | None -> false
     in
     if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms_list db Avet ~a:attr ~v:value ()
+      Db_access_impl.avet_datoms_by_value db attr value
     else
       datoms_list db Aevt ~a:attr ()
       |> List.filter datom_value_matches
@@ -1110,17 +1114,17 @@ let primary_attr_datoms db index attr =
   match index with
   | Aevt ->
     (match Hashtbl.find_opt db.aevt_by_attr attr with
-     | Some datoms -> datoms
+     | Some datoms -> Array.to_list datoms
      | None ->
        let datoms = attr_prefix_datoms Aevt db.aevt_index in
-       Hashtbl.replace db.aevt_by_attr attr datoms;
+       Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
        datoms)
   | Avet ->
     (match Hashtbl.find_opt db.avet_by_attr attr with
-     | Some datoms -> datoms
+     | Some datoms -> Array.to_list datoms
      | None ->
        let datoms = attr_prefix_datoms Avet db.avet_index in
-       Hashtbl.replace db.avet_by_attr attr datoms;
+       Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
        datoms)
   | Eavt -> Index.to_list db.eavt_index
 
@@ -1145,9 +1149,12 @@ let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
       | None -> true)
 
 let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
-  match db.duplicate_datoms with
-  | [] -> datoms db index ?e ~a ?v ?tx ()
-  | _ -> primary_attr_datoms_seq db index ?e ~a ?v ?tx ()
+  let attr = a in
+  match db.duplicate_datoms, index, e, v, tx with
+  | [], Avet, None, Some value, None ->
+    List.to_seq (Db_access_impl.avet_datoms_by_value db attr value)
+  | [], _, _, _, _ -> datoms db index ?e ~a:attr ?v ?tx ()
+  | _ -> primary_attr_datoms_seq db index ?e ~a:attr ?v ?tx ()
 
 let pattern_datoms db e_term a_term v_term tx_term =
   let e = query_entity_id_term db e_term in
@@ -1353,6 +1360,9 @@ module Query_where_impl = Query_where.Make (struct
   let is_ref_attr = is_ref_attr
   let cardinality_one db attr = cardinality db attr = One
   let normalize_value = normalize_value
+  let datoms_by_attr_value = datoms_by_attr_value
+  let query_attr_uses_avet = query_attr_uses_avet
+  let query_value_uses_avet = query_value_uses_avet
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses

@@ -64,9 +64,6 @@ let normalize_datom_for_schema schema d =
 
 let empty_index index lmdb = Index.empty index lmdb
 
-let build_index index lmdb datoms =
-  Index.of_sorted_list index datoms lmdb
-
 let duplicate_datoms datoms =
   let datoms = List.sort (Util.compare_datom Eavt) datoms in
   let rec loop previous duplicates = function
@@ -111,22 +108,15 @@ let duplicate_datoms_by_attr duplicate_datoms =
   Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
   table
 
-
-let datoms_by_attr datoms =
-  let table = Hashtbl.create 1024 in
-  List.iter
-    (fun datom ->
-      let existing = Option.value (Hashtbl.find_opt table datom.a) ~default:[] in
-      Hashtbl.replace table datom.a (datom :: existing))
-    datoms;
-  Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
-  table
-
 let invalidate_attr_tables db =
   if Hashtbl.length db.aevt_by_attr = 0 && Hashtbl.length db.avet_by_attr = 0 then
     db
   else
-    { db with aevt_by_attr = Hashtbl.create 0; avet_by_attr = Hashtbl.create 0 }
+    { db with
+      aevt_by_attr = Hashtbl.create 0
+    ; avet_by_attr = Hashtbl.create 0
+    ; avet_entities_by_attr_value = Hashtbl.create 0
+    }
 
 let lmdb_of_db db =
   try Index.lmdb_of (Index.db_of db.eavt_index)
@@ -134,17 +124,48 @@ let lmdb_of_db db =
     let lmdb, _ = Index.create_lmdb db.storage_ref in
     lmdb
 
+let group_sorted_datoms_by_attr datoms =
+  let table = Hashtbl.create 32 in
+  let rec flush attr group = function
+    | [] -> ()
+    | datom :: rest when datom.a = attr ->
+      flush attr (datom :: group) rest
+    | datom :: rest ->
+      Hashtbl.replace table attr (Array.of_list (List.rev (datom :: group)));
+      flush datom.a [ datom ] rest
+  in
+  (match datoms with
+   | [] -> ()
+   | datom :: rest -> flush datom.a [ datom ] rest);
+  table
+
+let index_avet_entities_by_attr_value avet_sorted =
+  let table = Hashtbl.create 256 in
+  List.iter
+    (fun datom ->
+      let key = (datom.a, datom.v) in
+      let existing = Option.value (Hashtbl.find_opt table key) ~default:[] in
+      Hashtbl.replace table key (datom.e :: existing))
+    avet_sorted;
+  Hashtbl.iter (fun key entity_ids -> Hashtbl.replace table key (List.rev entity_ids)) table;
+  table
+
+let datoms_of_avet_entities attr value entity_ids =
+  List.map (fun e -> { e; a = attr; v = value; tx = tx0; added = true }) entity_ids
+
 let set_indexes_from_datoms db datoms =
   let lmdb = lmdb_of_db db in
   let duplicate_datoms = duplicate_datoms datoms in
-  let eavt_index = build_index Eavt lmdb (primary_datoms Eavt datoms) in
-  let aevt_index = build_index Aevt lmdb (primary_datoms Aevt datoms) in
-  let avet_index =
-    datoms
+  let eavt_datoms = primary_datoms Eavt datoms in
+  let aevt_sorted = List.sort (Util.compare_datom Aevt) eavt_datoms in
+  let avet_sorted =
+    eavt_datoms
     |> List.filter (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
-    |> primary_datoms Avet
-    |> build_index Avet lmdb
+    |> List.sort (Util.compare_datom Avet)
   in
+  let eavt_index = Index.of_bulk Eavt eavt_datoms lmdb in
+  let aevt_index = Index.of_bulk Aevt aevt_sorted lmdb in
+  let avet_index = Index.of_bulk Avet avet_sorted lmdb in
   let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
   let duplicate_avet_datoms =
     duplicate_datoms
@@ -159,8 +180,9 @@ let set_indexes_from_datoms db datoms =
     eavt_index
   ; aevt_index
   ; avet_index
-  ; aevt_by_attr = datoms_by_attr (Index.to_list aevt_index)
-  ; avet_by_attr = datoms_by_attr (Index.to_list avet_index)
+  ; aevt_by_attr = group_sorted_datoms_by_attr aevt_sorted
+  ; avet_by_attr = group_sorted_datoms_by_attr avet_sorted
+  ; avet_entities_by_attr_value = index_avet_entities_by_attr_value avet_sorted
   ; duplicate_datoms
   ; duplicate_aevt_datoms
   ; duplicate_avet_datoms
@@ -283,6 +305,7 @@ let empty_db context ?(schema = []) ?storage () =
   ; avet_index = empty_index Avet lmdb
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
+  ; avet_entities_by_attr_value = Hashtbl.create 0
   ; duplicate_datoms = []
   ; duplicate_aevt_datoms = []
   ; duplicate_avet_datoms = []
@@ -314,6 +337,7 @@ let init_db context ?(schema = []) ?storage datoms =
   ; avet_index = empty_index Avet lmdb
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
+  ; avet_entities_by_attr_value = Hashtbl.create 0
   ; duplicate_datoms = []
   ; duplicate_aevt_datoms = []
   ; duplicate_avet_datoms = []
@@ -420,31 +444,27 @@ let duplicate_attr_datoms db index attr =
   | Eavt -> duplicate_index_datoms db index
 
 let primary_attr_datoms db index attr =
-  let attr_prefix_datoms index index_set =
-    let bound = datom ~e:0 ~a:attr ~v:Nil () in
-    let compare_prefix left right = compare left.a right.a in
-    let cmp left right =
-      if right == bound then compare_prefix left right
-      else if left == bound then -compare_prefix right left
-      else Util.compare_datom index left right
-    in
-    Index.slice ~from_:bound ~to_:bound ~cmp index_set
+  let attr_prefix_datoms _index index_set =
+    Index.fold_attr_prefix (fun acc datom -> datom :: acc) [] index_set attr |> List.rev
+  in
+  let attr_prefix_array index index_set =
+    Array.of_list (attr_prefix_datoms index index_set)
   in
   match index with
   | Aevt ->
     (match Hashtbl.find_opt db.aevt_by_attr attr with
-     | Some datoms -> datoms
+     | Some datoms -> Array.to_list datoms
      | None ->
-       let datoms = attr_prefix_datoms Aevt db.aevt_index in
+       let datoms = attr_prefix_array Aevt db.aevt_index in
        Hashtbl.replace db.aevt_by_attr attr datoms;
-       datoms)
+       Array.to_list datoms)
   | Avet ->
     (match Hashtbl.find_opt db.avet_by_attr attr with
-     | Some datoms -> datoms
+     | Some datoms -> Array.to_list datoms
      | None ->
-       let datoms = attr_prefix_datoms Avet db.avet_index in
+       let datoms = attr_prefix_array Avet db.avet_index in
        Hashtbl.replace db.avet_by_attr attr datoms;
-       datoms)
+       Array.to_list datoms)
   | Eavt -> Index.to_list db.eavt_index
 
 let duplicate_prefix_datoms db index e a =
@@ -452,16 +472,6 @@ let duplicate_prefix_datoms db index e a =
   | Eavt, Some entity_id, _ -> Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[]
   | (Aevt | Avet), _, Some attr -> duplicate_attr_datoms db index attr
   | _ -> duplicate_index_datoms db index
-
-let exact_sorted_slice cmp bound datoms =
-  let rec drop_before = function
-    | datom :: rest when cmp datom bound < 0 -> drop_before rest
-    | datoms -> take_equal [] datoms
-  and take_equal acc = function
-    | datom :: rest when cmp datom bound = 0 -> take_equal (datom :: acc) rest
-    | _ -> List.rev acc
-  in
-  drop_before datoms
 
 let raw_index_datoms_list db index =
   merge_sorted_datoms index (stored_index db index |> Index.to_list) (duplicate_index_datoms db index)
@@ -565,6 +575,61 @@ let compare_bound_fields context fields left right = function
       (compare_bound_e fields left right)
       (compare_bound_tx fields left right)
 
+let array_attr_value_slice context index bound bound_fields arr =
+  let prefix left right = compare_bound_fields context bound_fields left right index in
+  let len = Array.length arr in
+  let rec lower lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) / 2 in
+      if prefix arr.(mid) bound < 0 then lower (mid + 1) hi else lower lo mid
+  in
+  let start = lower 0 len in
+  let rec upper index =
+    if index >= len || prefix arr.(index) bound > 0 then index else upper (index + 1)
+  in
+  let stop = upper start in
+  if start >= stop then []
+  else Array.sub arr start (stop - start) |> Array.to_list
+
+let array_attr_value_seq context index bound bound_fields arr =
+  let prefix left right = compare_bound_fields context bound_fields left right index in
+  let len = Array.length arr in
+  let rec lower lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) / 2 in
+      if prefix arr.(mid) bound < 0 then lower (mid + 1) hi else lower lo mid
+  in
+  let start = lower 0 len in
+  let rec upper index =
+    if index >= len || prefix arr.(index) bound > 0 then index else upper (index + 1)
+  in
+  let stop = upper start in
+  let rec loop index () =
+    if index >= stop then Seq.Nil else Seq.Cons (arr.(index), loop (index + 1))
+  in
+  loop start
+
+let array_exact_prefix_slice cmp bound arr =
+  let len = Array.length arr in
+  let rec lower lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) / 2 in
+      if cmp arr.(mid) bound < 0 then lower (mid + 1) hi else lower lo mid
+  in
+  let start = lower 0 len in
+  let rec upper index =
+    if index >= len || cmp arr.(index) bound <> 0 then index else upper (index + 1)
+  in
+  let stop = upper start in
+  if start >= stop then []
+  else Array.sub arr start (stop - start) |> Array.to_list
+
+let exact_sorted_slice cmp bound datoms =
+  array_exact_prefix_slice cmp bound (Array.of_list datoms)
+
 let slice_cmp context index from_bound from_fields to_bound to_fields left right =
   if right == from_bound then
     compare_bound_fields context from_fields left right index
@@ -655,6 +720,28 @@ let exact_prefix_bound index e a v tx =
        Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
      | _ -> None)
 
+let avet_datoms_by_value context db attr value =
+  let bound = bound_datom ~a:attr ~v:value () in
+  let bound_fields = fields ~a:true ~v:true () in
+  match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
+  | Some entity_ids -> datoms_of_avet_entities attr value entity_ids
+  | None -> (
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some datoms -> array_attr_value_slice context Avet bound bound_fields datoms
+    | None ->
+      let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
+      Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet)
+      |> Index.seq_to_list)
+
+let avet_datoms_by_value_seq context db attr value =
+  let bound = bound_datom ~a:attr ~v:value () in
+  let bound_fields = fields ~a:true ~v:true () in
+  match Hashtbl.find_opt db.avet_by_attr attr with
+  | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
+  | None ->
+    let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
+    Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
+
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
@@ -672,8 +759,11 @@ let exact_prefix_datoms context db index e a v tx =
           let duplicates = duplicate_prefix_datoms db index e a |> exact_sorted_slice cmp bound in
           Some (merge_sorted_datom_seqs (Util.compare_datom index) (List.to_seq indexed) (List.to_seq duplicates))
         | _ ->
-          (match db.duplicate_datoms with
-           | [] -> Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq)
+          (match db.duplicate_datoms, index, e, a, v, tx with
+           | [], Avet, None, Some _, Some _, None ->
+             Some (avet_datoms_by_value_seq context db (Option.get a) (Option.get v))
+           | [], _, _, _, _, _ ->
+             Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq)
            | _ ->
              let indexed = Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq in
              let duplicates = duplicate_prefix_datoms db index e a |> exact_sorted_slice cmp bound in
@@ -684,14 +774,32 @@ let exact_prefix_datoms_list context db index e a v tx =
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = exact_prefix_slice_cmp context index bound bound_fields in
+    let exact_attr_prefix =
+      match index, e, a, v, tx with
+      | Aevt, None, Some _, None, None -> true
+      | _ -> false
+    in
     (match db.duplicate_datoms with
      | [] ->
        Some
-         (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index)
-          |> Index.seq_to_list)
+         (match index, a, v, exact_attr_prefix with
+          | Avet, Some attr, Some value, false -> avet_datoms_by_value context db attr value
+          | (Aevt | Avet), Some attr, None, true -> primary_attr_datoms db index attr
+          | _ ->
+            Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index)
+            |> Index.seq_to_list)
      | _ ->
        exact_prefix_datoms context db index e a v tx
        |> Option.map List.of_seq)
+
+let avet_datoms_by_value_seq context db attr value =
+  let bound = bound_datom ~a:attr ~v:value () in
+  let bound_fields = fields ~a:true ~v:true () in
+  match Hashtbl.find_opt db.avet_by_attr attr with
+  | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
+  | None ->
+    let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
+    Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
 
 let lower_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
@@ -816,6 +924,7 @@ let datoms context db index ?e ?a ?v ?tx () =
   let exact_attr_prefix =
     match index, e, a, v, tx with
     | Aevt, None, Some _, None, None -> exact
+    | Avet, None, Some _, Some _, None -> exact
     | _ -> false
   in
   let datoms =
@@ -859,7 +968,6 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
   match db.duplicate_datoms, exact_prefix_bound index e a prefix_v prefix_tx with
   | [], Some (bound, bound_fields) ->
     let cmp = exact_prefix_slice_cmp context index bound bound_fields in
-    let seq = Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) in
     let fold =
       match exact_attr_prefix || (e, a, v, tx) = (None, None, None, None), db.filter_pred with
       | true, None -> f
@@ -867,7 +975,12 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
       | false, None -> fold_filter
       | false, Some _ -> fold_filter_and_pred
     in
-    Index.fold_seq fold init seq
+    (match exact_attr_prefix, index, a with
+     | true, (Aevt | Avet), Some attr ->
+       List.fold_left fold init (primary_attr_datoms db index attr)
+     | _ ->
+       let seq = Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) in
+       Index.fold_seq fold init seq)
   | [], None when (e, a, v, tx) = (None, None, None, None) ->
     (match db.filter_pred with
      | None -> Index.fold f init (stored_index db index)

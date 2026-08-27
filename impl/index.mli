@@ -13,10 +13,19 @@ val load_indexes_from_storage : storage -> lmdb -> unit
 
 val empty : index -> lmdb -> t
 val of_sorted_list : index -> datom list -> lmdb -> t
+val of_sorted_lists : (index * datom list) list -> lmdb -> unit
+val of_eavt_datoms : avet:(string -> bool) -> datom list -> lmdb -> unit
+val of_bulk : index -> datom list -> lmdb -> t
 val add : datom -> t -> t
 val remove : datom -> t -> t
+val lookup : t -> datom -> datom option
 val to_list : t -> datom list
 val fold : ('acc -> datom -> 'acc) -> 'acc -> t -> 'acc
+val fold_slice :
+  ('acc -> datom -> 'acc) -> 'acc -> ?from_:datom -> ?to_:datom -> ?cmp:(datom -> datom -> int) -> t -> 'acc
+val find_first_slice :
+  ?from_:datom -> ?to_:datom -> ?cmp:(datom -> datom -> int) -> t -> datom option
+val fold_attr_prefix : ('acc -> datom -> 'acc) -> 'acc -> t -> string -> 'acc
 val slice : ?from_:datom -> ?to_:datom -> ?cmp:(datom -> datom -> int) -> t -> datom list
 val slice_seq : ?from_:datom -> ?to_:datom -> ?cmp:(datom -> datom -> int) -> t -> datom seq
 val rslice_seq : ?from_:datom -> ?to_:datom -> ?cmp:(datom -> datom -> int) -> t -> datom seq

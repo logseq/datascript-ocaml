@@ -253,6 +253,7 @@ let restore context storage =
       ; avet_index
       ; aevt_by_attr = Hashtbl.create 0
       ; avet_by_attr = Hashtbl.create 0
+      ; avet_entities_by_attr_value = Hashtbl.create 0
       ; duplicate_datoms
       ; duplicate_aevt_datoms
       ; duplicate_avet_datoms
