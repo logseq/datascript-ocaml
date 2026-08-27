@@ -319,6 +319,15 @@ let decode_datom_value bytes =
   let added, v = Marshal.from_string bytes 0 in
   { e = 0; a = ""; v; tx = 0; added }
 
+let avet_key_attr key =
+  let attr, _offset = read_string key 0 in
+  attr
+
+let avet_key_value key =
+  let _attr, offset = read_string key 0 in
+  let value, _offset = decode_value_key key offset in
+  value
+
 let compare_encoded_keys index left right =
   Datascript_types.Compare.compare_datom index
     (decode_datom_key index left)

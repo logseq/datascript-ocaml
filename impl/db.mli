@@ -79,6 +79,16 @@ val seek_datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -
 val rseek_datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val rseek_datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val index_range : index_context -> db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+val fold_index_range :
+  ('acc -> datom -> 'acc) ->
+  'acc ->
+  index_context ->
+  db ->
+  attr ->
+  ?start:value ->
+  ?stop:value ->
+  unit ->
+  'acc
 
 val hash : db -> int
 val hash_cache_size : unit -> int

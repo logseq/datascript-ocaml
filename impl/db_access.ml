@@ -137,5 +137,8 @@ end) = struct
 
   let index_range db attr ?start ?stop () =
     Db.index_range db_index_context db attr ?start ?stop ()
+
+  let fold_index_range f init db attr ?start ?stop () =
+    Db.fold_index_range f init db_index_context db attr ?start ?stop ()
   
 end

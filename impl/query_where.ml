@@ -29,7 +29,8 @@ module Make (Context : sig
   val entity_ids_by_attr_value : db -> attr -> value -> entity_id list option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
-  val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+  val fold_index_range :
+    ('acc -> datom -> 'acc) -> 'acc -> db -> attr -> ?start:value -> ?stop:value -> unit -> 'acc
 end) = struct
   open Context
 
@@ -1024,6 +1025,13 @@ end) = struct
     | None -> Some bound
     | Some current -> if compare_value bound current < 0 then Some bound else Some current
 
+  let fold_index_range_filtered init db attr start stop f =
+    match start, stop with
+    | None, None -> fold_index_range f init db attr ()
+    | Some start, None -> fold_index_range f init db attr ~start ()
+    | None, Some stop -> fold_index_range f init db attr ~stop ()
+    | Some start, Some stop -> fold_index_range f init db attr ~start ~stop ()
+
   let relation_of_avet_value_comparisons _db source e_var value_var attr comparisons =
     match source with
     | Db_source source_db when query_attr_uses_avet source_db attr && not (is_ref_attr source_db attr) ->
@@ -1056,16 +1064,19 @@ end) = struct
           let terms = [ QVar e_var; QAttr attr; QVar value_var ] in
           let attrs = unique_vars terms in
           let lookup_vars = relation_lookup_vars source_db terms in
-          let datoms =
-            let range = index_range source_db attr ?start ?stop () in
+          let slots = direct_row_slots attrs terms in
+          let build_row datom = build_direct_pattern_row slots datom in
+          let post_filter datom =
             if avet_bounds_need_post_filter value_var comparisons then
-              range
-              |> Seq.filter (fun datom ->
-                List.for_all (comparison_matches_datom value_var datom) comparisons)
+              List.for_all (comparison_matches_datom value_var datom) comparisons
             else
-              range
+              true
           in
-          let rows = collect_direct_pattern_rows attrs terms datoms in
+          let rows =
+            fold_index_range_filtered [] source_db attr start stop (fun acc datom ->
+              if post_filter datom then build_row datom :: acc else acc)
+            |> List.rev
+          in
           Some { attrs; rows; lookup_vars; unique_rows = false })
     | _ -> None
 

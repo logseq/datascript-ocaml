@@ -927,6 +927,7 @@ let seek_datoms_ref = Db_access_impl.seek_datoms_ref
 let rseek_datoms = Db_access_impl.rseek_datoms
 let rseek_datoms_ref = Db_access_impl.rseek_datoms_ref
 let index_range = Db_access_impl.index_range
+let fold_index_range = Db_access_impl.fold_index_range
 
 let diff = Db_impl.diff
 
@@ -1499,7 +1500,7 @@ module Query_where_impl = Query_where.Make (struct
   let entity_ids_by_attr_value = entity_ids_by_attr_value
   let query_attr_uses_avet = query_attr_uses_avet
   let query_value_uses_avet = query_value_uses_avet
-  let index_range = index_range
+  let fold_index_range = fold_index_range
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses
@@ -1823,6 +1824,32 @@ module Query = struct
         | _ -> false)
       comparisons
 
+  let comparisons_need_input_binding value_var comparisons =
+    List.exists
+      (function
+        | ComparisonPredicate (predicate, left, right) -> (
+          match left, right with
+          | QVar var, QVar input_var when var = value_var && input_var <> value_var -> true
+          | QVar input_var, QVar var when var = value_var && input_var <> value_var -> true
+          | _ -> (
+            match comparison_threshold value_var [] predicate left right with
+            | None -> true
+            | Some _ -> false))
+        | _ -> false)
+      comparisons
+
+  let fold_index_range_filtered init db attr start stop f =
+    match start, stop with
+    | None, None -> fold_index_range f init db attr ()
+    | Some start, None -> fold_index_range f init db attr ~start ()
+    | None, Some stop -> fold_index_range f init db attr ~stop ()
+    | Some start, Some stop -> fold_index_range f init db attr ~start ~stop ()
+
+  let collect_avet_predicate_rows db attr ~start ~stop ~post_filter ~row_for_datom =
+    fold_index_range_filtered [] db attr start stop (fun acc datom ->
+      if post_filter datom then row_for_datom datom :: acc else acc)
+    |> List.rev
+
   let simple_avet_predicate_rows ?inputs db query =
     let ( let* ) = Option.bind in
     match db.max_datom_e > 50_000, query.rules, query.with_vars with
@@ -1838,12 +1865,6 @@ module Query = struct
         |> Option.map List.rev
       in
       let input_args = Option.value inputs ~default:[] in
-      let _, input_bindings, _ = initial_query_context db query input_args in
-      let* binding =
-        match input_bindings with
-        | [ binding ] -> Some binding
-        | _ -> None
-      in
       let* entity_var, attr, value_var, comparisons =
         match query.where with
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest ->
@@ -1854,6 +1875,15 @@ module Query = struct
             else
               None
         | _ -> None
+      in
+      let* binding =
+        if comparisons_need_input_binding value_var comparisons then (
+          let _, input_bindings, _ = initial_query_context db query input_args in
+          match input_bindings with
+          | [ binding ] -> Some binding
+          | _ -> None)
+        else
+          Some []
       in
       if List.exists (fun var -> var <> entity_var && var <> value_var) find_vars then
         None
@@ -1875,23 +1905,20 @@ module Query = struct
               | _ -> (start, stop))
             (None, None) comparisons
         in
-        let datoms =
-          let range = index_range db attr ?start ?stop () in
+        let post_filter datom =
           if avet_bounds_need_post_filter value_var comparisons then
-            range
-            |> Seq.filter (fun datom ->
-              comparisons
-              |> List.for_all (function
-                | ComparisonPredicate (predicate, left, right) -> (
-                  match comparison_threshold value_var binding predicate left right with
-                  | Some (range_predicate, threshold) ->
-                      Built_ins.matches_comparison_predicate
-                        range_predicate
-                        (compare_value datom.v threshold)
-                  | None -> false)
-                | _ -> false))
+            comparisons
+            |> List.for_all (function
+              | ComparisonPredicate (predicate, left, right) -> (
+                match comparison_threshold value_var binding predicate left right with
+                | Some (range_predicate, threshold) ->
+                    Built_ins.matches_comparison_predicate
+                      range_predicate
+                      (compare_value datom.v threshold)
+                | None -> false)
+              | _ -> false)
           else
-            range
+            true
         in
         let row_for_datom datom =
           find_vars
@@ -1900,12 +1927,10 @@ module Query = struct
             | var when var = value_var -> Result_value datom.v
             | _ -> invalid_arg "unexpected find variable in avet predicate query")
         in
-        let rec collect acc seq =
-          match seq () with
-          | Seq.Nil -> List.rev acc
-          | Seq.Cons (datom, rest) -> collect (row_for_datom datom :: acc) rest
+        let rows =
+          collect_avet_predicate_rows db attr ~start ~stop ~post_filter ~row_for_datom
         in
-        Some (collect [] datoms)
+        Some rows
 
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in

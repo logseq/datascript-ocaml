@@ -123,22 +123,64 @@ let fold_stored_attr_value_prefix t attr value f acc =
     acc := f !acc (decode_entry t.which key value));
   !acc
 
+let avet_attr_prefix attr =
+  let buffer = Buffer.create (String.length attr + 1) in
+  Buffer.add_string buffer attr;
+  Buffer.add_char buffer '\000';
+  Buffer.contents buffer
+
+let fold_stored_avet_value_range t attr ?start_value ?stop_value compare_value f acc =
+  let from_key =
+    match start_value with
+    | Some value -> Datascript_lmdb_codec.encode_index_attr_value_prefix Avet attr value
+    | None -> avet_attr_prefix attr
+  in
+  let acc = ref acc in
+  Datascript_lmdb_db.fold_index_range_until Avet t.db ~from_key
+    ~stop:(fun key _value ->
+      if Datascript_lmdb_codec.avet_key_attr key <> attr then
+        true
+      else
+        match stop_value with
+        | None -> false
+        | Some stop ->
+            Datascript_types.Compare.compare_value (Datascript_lmdb_codec.avet_key_value key) stop > 0)
+    (fun key value ->
+      let datom = decode_entry Avet key value in
+      match start_value with
+      | None -> acc := f !acc datom
+      | Some start when compare_value datom.v start >= 0 -> acc := f !acc datom
+      | Some _ -> ());
+  !acc
+
 let fold_stored_bounded t ?from_ ?to_ cmp f acc =
   match bound_key t from_ with
   | None -> fold_stored t f acc
   | Some from_key ->
     let acc = ref acc in
     Datascript_lmdb_db.fold_index_range_until t.which t.db ~from_key
-      ~stop:(fun _key _value ->
+      ~stop:(fun key value ->
         match to_ with
         | Some bound ->
-          let datom = decode_entry t.which _key _value in
-          cmp datom bound > 0
+            let datom = decode_entry t.which key value in
+            cmp datom bound > 0
         | None -> false)
       (fun key value ->
         let datom = decode_entry t.which key value in
         if in_range cmp from_ to_ datom then acc := f !acc datom);
     !acc
+
+let avet_value_range_bounds from_ to_ =
+  match from_ with
+  | Some from when from.a <> "" && from.e = 0 ->
+      let start_value = if from.v = Nil then None else Some from.v in
+      let stop_value =
+        match to_ with
+        | Some to_ when to_.a = from.a && to_.e = 0 && to_.v <> Nil -> Some to_.v
+        | _ -> None
+      in
+      Some (from.a, start_value, stop_value)
+  | _ -> None
 
 let sync_append_since_tx ~since_tx t target_lmdb =
   if t.db == target_lmdb then ()
@@ -165,13 +207,18 @@ let lookup t datom =
 let fold_slice f init ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
   let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
-  match from_, to_ with
-  | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
-    && (t.which = Aevt || t.which = Avet) ->
-    fold_stored_prefix t bound.a apply init
-  | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-    fold_stored_attr_value_prefix t bound.a bound.v apply init
-  | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init
+  match t.which, avet_value_range_bounds from_ to_ with
+  | Avet, Some (attr, start_value, stop_value) ->
+      fold_stored_avet_value_range t attr ?start_value:start_value ?stop_value:stop_value
+        Datascript_types.Compare.compare_value apply init
+  | _ -> (
+    match from_, to_ with
+    | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
+      && (t.which = Aevt || t.which = Avet) ->
+      fold_stored_prefix t bound.a apply init
+    | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
+      fold_stored_attr_value_prefix t bound.a bound.v apply init
+    | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init)
 
 let find_first_slice ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
