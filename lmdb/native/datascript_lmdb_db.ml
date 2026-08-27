@@ -134,7 +134,8 @@ let with_read_cursor index db f =
 
 let meta_get db key =
   ensure_open db;
-  try Some (Map.get db.meta key) with Not_found -> None
+  let session = read_session db in
+  try Some (Map.get ~txn:(ro_txn session.txn) db.meta key) with Not_found -> None
 
 let meta_set db key value =
   ensure_open db;
@@ -165,20 +166,27 @@ let remove_index index db key =
 
 let get_index index db key =
   ensure_open db;
-  try Some (Map.get (map_for_index index db) key) with Not_found -> None
+  let session = read_session db in
+  try Some (Map.get ~txn:(ro_txn session.txn) (map_for_index index db) key) with Not_found -> None
 
 let fold_index index db f =
   ensure_open db;
-  let map = map_for_index index db in
-  let next = Map.to_dispenser map in
-  let rec loop () =
-    match next () with
-    | None -> ()
-    | Some (key, value) ->
-        f key value;
-        loop ()
-  in
-  loop ()
+  (try
+     with_read_cursor index db (fun cursor ->
+       (try ignore (Cursor.first cursor) with Not_found -> raise Exit);
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
 
 let fold_index_prefix index db prefix f =
   ensure_open db;

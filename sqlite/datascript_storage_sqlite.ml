@@ -22,10 +22,7 @@ let copy_indexes_to_lmdb from_db to_lmdb =
           Datascript_lmdb_db.put_index_txn index txn to_lmdb key value))
       [ Eavt; Aevt; Avet ])
 
-let decode_entry index key value =
-  let datom = Datascript_lmdb_codec.decode_datom_key index key in
-  let payload = Datascript_lmdb_codec.decode_datom_value value in
-  { datom with v = payload.v }
+let decode_entry index key value = Datascript_lmdb_codec.decode_index_entry index key value
 
 let remove_datom index sqlite_db datom =
   let key = Datascript_lmdb_codec.encode_datom_key index datom in
@@ -37,7 +34,7 @@ let sync_append_since_tx ~since_tx index source_lmdb target_db =
       let datom = decode_entry index key value in
       if datom.tx > since_tx then (
         let key = Datascript_lmdb_codec.encode_datom_key index datom in
-        let value = Datascript_lmdb_codec.encode_datom_value datom in
+        let value = Datascript_lmdb_codec.encode_index_value index datom in
         Datascript_sqlite_db.put_index_txn index target_db key value)))
 
 let remove_datoms datoms target_db =

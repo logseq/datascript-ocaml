@@ -763,6 +763,40 @@ let find_entity_in_aevt_array arr entity_id =
     let index = lower 0 len in
     if index >= len || arr.(index).e <> entity_id then None else Some arr.(index)
 
+let find_datom_in_sorted_array index arr datom =
+  let len = Array.length arr in
+  if len = 0 then None
+  else
+    let cmp = Util.compare_datom index in
+    let rec lower lo hi =
+      if lo >= hi then lo
+      else
+        let mid = (lo + hi) / 2 in
+        if cmp arr.(mid) datom < 0 then lower (mid + 1) hi else lower lo mid
+    in
+    let at = lower 0 len in
+    if at >= len || cmp arr.(at) datom <> 0 then None else Some arr.(at)
+
+let rehydrate_datom_value db index datom =
+  match index with
+  | Avet -> (
+    match Hashtbl.find_opt db.avet_by_attr datom.a with
+    | None -> datom
+    | Some arr ->
+      (match find_datom_in_sorted_array Avet arr datom with
+       | None -> datom
+       | Some cached -> { datom with v = cached.v }))
+  | Aevt -> (
+    match Hashtbl.find_opt db.aevt_by_attr datom.a with
+    | None -> datom
+    | Some arr ->
+      (match find_datom_in_sorted_array Aevt arr datom with
+       | None -> datom
+       | Some cached -> { datom with v = cached.v }))
+  | Eavt -> datom
+
+let rehydrate_datom_seq db index seq = Seq.map (rehydrate_datom_value db index) seq
+
 let find_primary_aevt_entity_attr db entity_id attr =
   match Hashtbl.find_opt db.aevt_by_attr attr with
   | None -> None
@@ -1074,8 +1108,9 @@ let avet_range_datoms context db attr start stop =
   let from_bound, from_fields, to_bound, to_fields, lower_matches, upper_matches =
     avet_range_bounds context db attr start stop
   in
+  let attr_cache = Hashtbl.find_opt db.avet_by_attr attr in
   let indexed =
-    match Hashtbl.find_opt db.avet_by_attr attr with
+    match attr_cache with
     | Some arr ->
         array_range_seq context Avet from_bound from_fields to_bound to_fields arr
     | None ->
@@ -1084,11 +1119,14 @@ let avet_range_datoms context db attr start stop =
   in
   if not (merged_index db) && not (pending_overlay db) then indexed
   else if not (merged_index db) then
-    let duplicates =
-      pending_for_index db Avet
-      |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    in
-    merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates)
+    (match attr_cache with
+     | Some _ -> indexed
+     | None ->
+       let duplicates =
+         pending_for_index db Avet
+         |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+       in
+       merge_sorted_datom_seqs (Util.compare_datom Avet) indexed (List.to_seq duplicates))
   else if not (pending_overlay db) then
     let duplicates =
       duplicate_attr_datoms db Avet attr
@@ -1286,10 +1324,12 @@ let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match lower_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db datoms
+  | Some datoms -> apply_filter_pred db (rehydrate_datom_seq db index datoms)
   | None ->
     datoms context db index ()
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
+    |> rehydrate_datom_seq db index
+    |> apply_filter_pred db
 
 let seek_datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in
@@ -1299,10 +1339,11 @@ let rseek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   match reverse_upper_prefix_datoms context db index e a v tx with
-  | Some datoms -> apply_filter_pred db datoms
+  | Some datoms -> apply_filter_pred db (rehydrate_datom_seq db index datoms)
   | None ->
     reverse_index_datoms_seq db index
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx <= 0)
+    |> rehydrate_datom_seq db index
     |> apply_filter_pred db
 
 let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
@@ -1326,8 +1367,9 @@ let fold_index_range f init context db attr ?start ?stop () =
     | None -> f acc datom
     | Some pred -> if pred datom then f acc datom else acc
   in
+  let attr_cache = Hashtbl.find_opt db.avet_by_attr attr in
   let acc =
-    match Hashtbl.find_opt db.avet_by_attr attr with
+    match attr_cache with
     | Some arr ->
         array_range_fold fold_with_filter init context Avet from_bound from_fields to_bound to_fields
           arr
@@ -1337,9 +1379,12 @@ let fold_index_range f init context db attr ?start ?stop () =
   in
   if not (merged_index db) && not (pending_overlay db) then acc
   else if not (merged_index db) then
-    pending_for_index db Avet
-    |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
-    |> List.fold_left fold_with_filter acc
+    (match attr_cache with
+     | Some _ -> acc
+     | None ->
+       pending_for_index db Avet
+       |> List.filter (fun datom -> lower_matches datom && upper_matches datom)
+       |> List.fold_left fold_with_filter acc)
   else if not (pending_overlay db) then
     duplicate_attr_datoms db Avet attr
     |> List.filter (fun datom -> lower_matches datom && upper_matches datom)

@@ -319,6 +319,19 @@ let decode_datom_value bytes =
   let added, v = Marshal.from_string bytes 0 in
   { e = 0; a = ""; v; tx = 0; added }
 
+let decode_index_entry index key value =
+  let datom = decode_datom_key index key in
+  match index with
+  | Avet -> datom
+  | Eavt | Aevt ->
+      let payload = decode_datom_value value in
+      { datom with v = payload.v }
+
+let encode_index_value index datom =
+  match index with
+  | Avet -> ""
+  | Eavt | Aevt -> encode_datom_value datom
+
 let avet_key_attr key =
   let attr, _offset = read_string key 0 in
   attr

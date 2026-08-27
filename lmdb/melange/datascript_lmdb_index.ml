@@ -12,23 +12,11 @@ let cmp_for index = Datascript_types.Compare.compare_datom index
 
 let datom_key t datom = Datascript_lmdb_codec.encode_datom_key t.which datom
 
-let decode_entry index key value =
-  let datom = Datascript_lmdb_codec.decode_datom_key index key in
-  match index with
-  | Avet ->
-      (* AVET keys embed [a v e tx added]; skip Marshal decode of the value blob. *)
-      datom
-  | Eavt | Aevt ->
-      let payload = Datascript_lmdb_codec.decode_datom_value value in
-      { datom with v = payload.v }
+let decode_entry index key value = Datascript_lmdb_codec.decode_index_entry index key value
 
 let put_datom_txn txn t datom =
   let key = datom_key t datom in
-  let value =
-    match t.which with
-    | Avet -> ""
-    | _ -> Datascript_lmdb_codec.encode_datom_value datom
-  in
+  let value = Datascript_lmdb_codec.encode_index_value t.which datom in
   Datascript_lmdb_db.put_index_txn t.which txn t.db key value
 
 let empty index db = make index db
@@ -215,14 +203,11 @@ let fold_stored_bounded t ?from_ ?to_ cmp f acc =
     !acc
 
 let avet_value_range_bounds from_ to_ =
-  match from_ with
-  | Some from when from.a <> "" && from.e = 0 ->
+  (* Require an upper bound: open-ended AVET seeks must continue across attrs. *)
+  match from_, to_ with
+  | Some from, Some to_ when from.a <> "" && from.e = 0 && to_.a = from.a && to_.e = 0 ->
       let start_value = if from.v = Nil then None else Some from.v in
-      let stop_value =
-        match to_ with
-        | Some to_ when to_.a = from.a && to_.e = 0 && to_.v <> Nil -> Some to_.v
-        | _ -> None
-      in
+      let stop_value = if to_.v = Nil then None else Some to_.v in
       Some (from.a, start_value, stop_value)
   | _ -> None
 
