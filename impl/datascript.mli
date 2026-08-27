@@ -143,6 +143,13 @@ module Db : sig
   val rseek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   val rseek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+  val basis_tx : db -> tx
+  val as_of_t : db -> tx option
+  val since_t : db -> tx option
+  val temporal_view : db -> bool
+  val as_of : tx -> db -> db
+  val since : tx -> db -> db
+  val history : db -> db
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
@@ -380,6 +387,14 @@ val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
 val filter : db -> (db -> datom -> bool) -> db
 val is_filtered : db -> bool
 val unfiltered_db : db -> db
+val basis_tx : db -> tx
+val as_of_t : db -> tx option
+val since_t : db -> tx option
+val temporal_view : db -> bool
+val as_of : tx -> db -> db
+val since : tx -> db -> db
+val history : db -> db
+module Tx_visibility : module type of Tx_visibility
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db

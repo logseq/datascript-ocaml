@@ -290,6 +290,36 @@ let snapshot_db db =
   ; avet_index = Index.copy db.avet_index
   }
 
+let view_bounds db =
+  { Tx_visibility.view_tx = db.max_tx; since_tx = db.since_tx; history = db.history }
+
+let temporal_view db =
+  Option.is_some db.as_of_tx || Option.is_some db.since_tx || db.history
+
+let apply_db_view db datoms = Tx_visibility.apply_view (view_bounds db) datoms
+
+let apply_db_view_seq db seq =
+  if temporal_view db then Tx_visibility.filter_seq (view_bounds db) seq else seq
+
+let basis_tx db = db.max_tx
+
+let as_of_t db = db.as_of_tx
+
+let since_t db = db.since_tx
+
+let as_of tx db =
+  if tx > db.store_max_tx then
+    invalid_arg
+      ("as_of tx "
+       ^ string_of_int tx
+       ^ " is after database basis "
+       ^ string_of_int db.store_max_tx);
+  { db with max_tx = tx; as_of_tx = Some tx }
+
+let since tx db = { db with since_tx = Some tx }
+
+let history db = { db with history = true }
+
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
 
@@ -318,6 +348,10 @@ let empty_db context ?(schema = []) ?storage () =
   ; max_eid = 0
   ; max_datom_e = 0
   ; max_tx = tx0
+  ; store_max_tx = tx0
+  ; as_of_tx = None
+  ; since_tx = None
+  ; history = false
   ; filter_pred = None
   ; storage_ref = storage_ref_of ?storage auto_storage_ref
   ; tx_fns = []
@@ -350,6 +384,10 @@ let init_db context ?(schema = []) ?storage datoms =
   ; max_eid
   ; max_datom_e = 0
   ; max_tx
+  ; store_max_tx = max_tx
+  ; as_of_tx = None
+  ; since_tx = None
+  ; history = false
   ; filter_pred = None
   ; storage_ref = storage_ref_of ?storage auto_storage_ref
   ; tx_fns = []
@@ -941,7 +979,7 @@ let datoms context db index ?e ?a ?v ?tx () =
       datoms
       |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
-  apply_filter_pred db datoms
+  apply_db_view_seq db datoms |> apply_filter_pred db
 
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
@@ -1026,7 +1064,7 @@ let datoms_list context db index ?e ?a ?v ?tx () =
       datoms
       |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
-  apply_filter_pred_list db datoms
+  apply_db_view db datoms |> apply_filter_pred_list db
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in

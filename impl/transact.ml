@@ -1532,6 +1532,7 @@ let apply_tx context tx_ops db =
       schema
     ; max_eid
     ; max_tx = !max_tx_seen
+    ; store_max_tx = !max_tx_seen
     ; tx_fns = !current_tx_fns
     }
   in
@@ -1548,6 +1549,7 @@ let apply_tx context tx_ops db =
              schema = db.schema
            ; max_eid = db.max_eid
            ; max_tx = db.max_tx
+           ; store_max_tx = db.store_max_tx
            ; tx_fns = db.tx_fns
            }
          else

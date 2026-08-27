@@ -76,6 +76,16 @@ let unfiltered_db db = Db_impl.unfiltered db_core_context db
 let filter db pred =
   Db_impl.filter db_core_context db pred
 
+let basis_tx = Db_impl.basis_tx
+let as_of_t = Db_impl.as_of_t
+let since_t = Db_impl.since_t
+let temporal_view = Db_impl.temporal_view
+let as_of = Db_impl.as_of
+let since = Db_impl.since
+let history = Db_impl.history
+
+module Tx_visibility = Tx_visibility
+
 let serializable = Serialize.serializable
 
 let serialize_context : Serialize.context =
@@ -763,6 +773,8 @@ let persist_transact ~tx_meta db =
     | Some storage -> store ~storage db
 
 let transact_report ?(tx_meta = []) db tx_ops =
+  if Db_impl.temporal_view db then
+    invalid_arg "Cannot transact against an as-of/since/history database value";
   let db_before = snapshot_db db in
   let db_after, tempids, tx_data = apply_tx tx_ops db in
   { db_before; db_after; tx_data; tempids; tx_meta }

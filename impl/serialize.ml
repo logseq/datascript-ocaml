@@ -39,6 +39,10 @@ let from_serializable context snapshot =
   ; max_eid = snapshot.serializable_max_eid
   ; max_datom_e = 0
   ; max_tx = snapshot.serializable_max_tx
+  ; store_max_tx = snapshot.serializable_max_tx
+  ; as_of_tx = None
+  ; since_tx = None
+  ; history = false
   ; filter_pred = None
   ; storage_ref
   ; tx_fns = []

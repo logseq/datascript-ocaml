@@ -96,6 +96,10 @@ let restore context storage =
     ; max_eid
     ; max_datom_e = max_eid
     ; max_tx
+    ; store_max_tx = max_tx
+    ; as_of_tx = None
+    ; since_tx = None
+    ; history = false
     ; filter_pred = None
     ; storage_ref = Some storage
     ; tx_fns = []

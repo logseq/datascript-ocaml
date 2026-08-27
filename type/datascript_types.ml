@@ -131,6 +131,10 @@ and db =
   ; max_eid : entity_id
   ; max_datom_e : entity_id
   ; max_tx : tx
+  ; store_max_tx : tx
+  ; as_of_tx : tx option
+  ; since_tx : tx option
+  ; history : bool
   ; filter_pred : (datom -> bool) option
   ; storage_ref : storage option
   ; tx_fns : (entity_id * (db -> value list -> tx_op list)) list
