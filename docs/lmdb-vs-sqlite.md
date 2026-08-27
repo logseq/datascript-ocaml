@@ -26,6 +26,7 @@ tx-visibility read pipeline. Prefer one based on ops and access pattern, not API
 | Key layout | Three BLOB tables/DBIs: EAVT / AEVT / AVET (+ meta) |
 | Temporal views | `as_of` / `since` / `history` use the same visibility filter above the store |
 | Durability | LMDB `sync`; SQLite open defaults `WAL` + `synchronous=NORMAL`, `Storage.sync` forces FULL + WAL checkpoint |
+| Reopen | Both `open_path` / `open_session` reopen existing files without deleting; callers wipe via `remove_path` when they want a fresh env |
 
 ## Package map
 
@@ -35,5 +36,6 @@ tx-visibility read pipeline. Prefer one based on ops and access pattern, not API
 | `datascript-ocaml-native-lmdb` | File LMDB sessions |
 | `datascript-ocaml-native-sqlite` | File SQLite sessions (no direct `lmdb_*` dune deps) |
 
-Benches: `bench/compare_lmdb_sqlite.sh` (persistent store/restore) and
-`bench/compare_lmdb_sqlite_queries.sh` (shared query suite).
+Benches: `bench/compare_lmdb_sqlite.sh` (persistent store/restore),
+`bench/compare_lmdb_sqlite_queries.sh` (shared query suite), and
+`bench/compare_lmdb_sqlite_index_scan.sh` (cold open + narrow Index scans).

@@ -40,8 +40,9 @@ let open_named_map env name =
   try Map.open_existing Nodup ~key:Conv.string ~value:Conv.string ~name env
   with Not_found -> Map.create Nodup ~key:Conv.string ~value:Conv.string ~name env
 
+(* Open (or create) without deleting an existing env. Callers that want a fresh
+   file must call [remove_path] first — same contract as SQLite [open_path]. *)
 let open_db path profile =
-  remove_path path;
   let env = open_env path profile in
   { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
   ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; profile
@@ -73,14 +74,11 @@ let close db =
 let temps_created = ref 0
 
 let create_temp ?(profile = Default) () =
-  let db =
-    open_db
-      (Filename.temp_file
-         ~temp_dir:(Filename.get_temp_dir_name ())
-         "datascript_lmdb"
-         ".mdb")
-      profile
+  let path =
+    Filename.temp_file ~temp_dir:(Filename.get_temp_dir_name ()) "datascript_lmdb" ".mdb"
   in
+  remove_path path;
+  let db = open_db path profile in
   Gc.finalise
     (fun lmdb ->
       if not lmdb.closed then close lmdb)

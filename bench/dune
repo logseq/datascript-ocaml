@@ -58,6 +58,12 @@
  (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
 
 (executable
+ (name index_scan_bench)
+ (modules index_scan_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
  (name persistent_storage_bench)
  (modules persistent_storage_bench)
  (modes exe)

@@ -56,6 +56,31 @@ let test_session_close_blocks_use () =
   Datascript_lmdb.close session;
   expect_invalid_arg_msg "LMDB session is closed" (fun () -> ensure_live storage)
 
+let test_reopen_preserves_data () =
+  let path = temp_db_path "datascript-lmdb-reopen" in
+  let session = Datascript_lmdb.open_session path in
+  let storage = storage_of_handle (Datascript_lmdb.storage session) in
+  let db = empty_db ~schema:[ "todo/id", indexed ] ~storage () in
+  let report =
+    transact db [ Add (Temp_id "todo-1", "todo/id", String "persisted") ]
+  in
+  store ~storage report.db_after;
+  collect_garbage storage;
+  Datascript_lmdb.close session;
+  let session = Datascript_lmdb.open_session path in
+  let storage = storage_of_handle (Datascript_lmdb.storage session) in
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "expected reopen restore"
+  in
+  check_bool "reopen restore shares LMDB index" true
+    (db_shares_storage_index storage restored);
+  (match entity restored (Lookup_ref ("todo/id", String "persisted")) with
+   | Some _ -> ()
+   | None -> failwith "expected persisted entity after reopen");
+  Datascript_lmdb.close session
+
 let () =
   run "lmdb package"
     [
@@ -63,5 +88,6 @@ let () =
       , [
           test_case "storage roundtrip" `Quick test_storage_roundtrip
         ; test_case "session close blocks use" `Quick test_session_close_blocks_use
+        ; test_case "reopen preserves data" `Quick test_reopen_preserves_data
         ] )
     ]
