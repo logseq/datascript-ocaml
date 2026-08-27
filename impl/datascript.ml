@@ -2357,6 +2357,56 @@ module Query = struct
           Some rows
         | _ -> None
 
+  let rules_from_input_args query = function
+    | None -> None
+    | Some args ->
+      let rec collect declarations args =
+        match declarations, args with
+        | [], _ -> Some []
+        | Input_source_decl _ :: rest, args -> collect rest args
+        | Input_rules_decl :: rest, Arg_rules rules :: args ->
+          Option.map (fun rest_rules -> rules @ rest_rules) (collect rest args)
+        | (_ :: rest), (_ :: args) -> collect rest args
+        | _ :: _, [] -> None
+      in
+      collect query.inputs args
+
+  let is_simple_follow_rule = function
+    | { rule_name = "follow"; rule_params = [ e1; e2 ]; rule_body = [ Pattern (QVar p1, QAttr "follows", QVar p2) ] }
+      when p1 = e1 && p2 = e2 ->
+      true
+    | _ -> false
+
+  let simple_follow_rule_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    | true, _, _, _ -> None
+    | false, None, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
+    | false, Some _, [], [] -> (
+      let* rules = rules_from_input_args query inputs in
+      let* rule = (
+        match rules with
+        | [ rule ] when is_simple_follow_rule rule -> Some rule
+        | _ -> None)
+      in
+      let* qe1, qe2 =
+        match query.find, query.where with
+        | [ Find_var qe1; Find_var qe2 ], [ Rule ("follow", [ QVar re1; QVar re2 ]) ] when qe1 = re1 && qe2 = re2 ->
+          Some (qe1, qe2)
+        | _ -> None
+      in
+      ignore (rule, qe1, qe2);
+      let collect acc datom =
+        match datom.v with
+        | Ref target -> [ Result_entity datom.e; Result_entity target ] :: acc
+        | _ -> acc
+      in
+      let follows_datoms =
+        primary_attr_datoms db Aevt "follows"
+        @ Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr "follows") ~default:[]
+      in
+      Some (List.rev (List.fold_left collect [] follows_datoms)))
+
   let q ?inputs db query =
     match simple_avet_predicate_rows ?inputs db query with
     | Some rows -> rows
@@ -2371,6 +2421,9 @@ module Query = struct
     | Some rows -> rows
     | None ->
     match simple_not_join_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+    match simple_follow_rule_rows ?inputs db query with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
 
