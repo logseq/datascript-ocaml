@@ -239,6 +239,10 @@ let encode_index_attr_value_prefix index attr value =
        append_bytes buffer (encode_value_key value));
   Buffer.contents buffer
 
+let append_added buffer added =
+  (* dbval sort order: asserts before retracts at the same [e a v tx]. *)
+  append_byte buffer (if added then 0 else 1)
+
 let encode_datom_key index datom =
   let buffer = Buffer.create 64 in
   (match index with
@@ -246,45 +250,61 @@ let encode_datom_key index datom =
        append_int32 buffer datom.e;
        append_string buffer datom.a;
        append_bytes buffer (encode_value_key datom.v);
-       append_int32 buffer datom.tx
+       append_int32 buffer datom.tx;
+       append_added buffer datom.added
    | Aevt ->
        append_string buffer datom.a;
        append_int32 buffer datom.e;
        append_bytes buffer (encode_value_key datom.v);
-       append_int32 buffer datom.tx
+       append_int32 buffer datom.tx;
+       append_added buffer datom.added
    | Avet ->
        append_string buffer datom.a;
        append_bytes buffer (encode_value_key datom.v);
        append_int32 buffer datom.e;
-       append_int32 buffer datom.tx);
+       append_int32 buffer datom.tx;
+       append_added buffer datom.added);
   Buffer.contents buffer
 
+let decode_added bytes offset =
+  let marker, offset = read_byte bytes offset in
+  let added =
+    match marker with
+    | 0 -> true
+    | 1 -> false
+    | _ -> invalid_arg "invalid datom added key marker"
+  in
+  added, offset
+
 let decode_datom_key index bytes =
-  let e, a, v, tx =
+  let e, a, v, tx, added =
     match index with
     | Eavt ->
         let e, offset = read_int32 bytes 0 in
         let a, offset = read_string bytes offset in
         let v, offset = decode_value_key bytes offset in
         let tx, offset = read_int32 bytes offset in
+        let added, offset = decode_added bytes offset in
         if offset <> String.length bytes then invalid_arg "trailing eavt key bytes";
-        e, a, v, tx
+        e, a, v, tx, added
     | Aevt ->
         let a, offset = read_string bytes 0 in
         let e, offset = read_int32 bytes offset in
         let v, offset = decode_value_key bytes offset in
         let tx, offset = read_int32 bytes offset in
+        let added, offset = decode_added bytes offset in
         if offset <> String.length bytes then invalid_arg "trailing aevt key bytes";
-        e, a, v, tx
+        e, a, v, tx, added
     | Avet ->
         let a, offset = read_string bytes 0 in
         let v, offset = decode_value_key bytes offset in
         let e, offset = read_int32 bytes offset in
         let tx, offset = read_int32 bytes offset in
+        let added, offset = decode_added bytes offset in
         if offset <> String.length bytes then invalid_arg "trailing avet key bytes";
-        e, a, v, tx
+        e, a, v, tx, added
   in
-  { e; a; v; tx; added = true }
+  { e; a; v; tx; added }
 
 let encode_datom_value datom =
   let cache_key = (datom.added, datom.v) in

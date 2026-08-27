@@ -142,7 +142,7 @@ let reset (context : reset_context) ?(tx_meta = []) conn db =
     List.map (fun datom -> { datom with added = false }) (context.datoms conn.db)
     @ context.datoms db
   in
-  let report = { db_before; db_after = db; tx_data; tempids = []; tx_meta } in
+  let report = { db_before; db_after = db; tx_data; tempids = []; tx_meta; purged_datoms = [] } in
   conn.db <- db;
   (match conn.storage with
    | None -> ()

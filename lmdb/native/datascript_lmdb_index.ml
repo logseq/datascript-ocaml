@@ -15,7 +15,7 @@ let datom_key t datom = Datascript_lmdb_codec.encode_datom_key t.which datom
 let decode_entry index key value =
   let datom = Datascript_lmdb_codec.decode_datom_key index key in
   let payload = Datascript_lmdb_codec.decode_datom_value value in
-  { datom with added = payload.added; v = payload.v }
+  { datom with v = payload.v }
 
 let put_datom_txn txn t datom =
   let key = datom_key t datom in
@@ -72,7 +72,19 @@ let append_datoms datoms t = write_datoms t datoms
 
 let add datom t = write_datoms t [ datom ]
 
-let remove _datom t = t
+let remove_datom_txn txn t datom =
+  let key = datom_key t datom in
+  Datascript_lmdb_db.remove_index_txn t.which txn t.db key
+
+let remove datom t =
+  Datascript_lmdb_db.with_write_txn t.db (fun txn -> remove_datom_txn txn t datom);
+  t
+
+let remove_datoms datoms t =
+  if datoms = [] then t
+  else (
+    Datascript_lmdb_db.with_write_txn t.db (fun txn -> List.iter (remove_datom_txn txn t) datoms);
+    t)
 
 let bound_key t = function
   | None -> None

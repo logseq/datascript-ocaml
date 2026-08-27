@@ -13,6 +13,7 @@ val append_datoms : datom list -> t -> t
 val append_tx_data : avet:(string -> bool) -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t
 val remove : datom -> t -> t
+val remove_datoms : datom list -> t -> t
 val flush : t -> t
 val copy : t -> t
 val sync_merged_to_lmdb : t -> Datascript_lmdb_db.t -> unit

@@ -25,6 +25,18 @@ let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
   Datascript_lmdb_index.sync_append_since_tx ~since_tx (project aevt) target;
   Datascript_lmdb_index.sync_append_since_tx ~since_tx (project avet) target
 
+let sync_removals_to_storage removed_datoms _eavt _aevt _avet target_storage =
+  if removed_datoms = [] then ()
+  else
+    let target_lmdb = Datascript_storage_lmdb.lmdb target_storage in
+    let remove index =
+      let t = Datascript_lmdb_index.empty index target_lmdb in
+      ignore (Datascript_lmdb_index.remove_datoms removed_datoms t)
+    in
+    remove Eavt;
+    remove Aevt;
+    remove Avet
+
 let load_indexes_from_storage storage target_lmdb =
   let source = Datascript_storage_lmdb.lmdb storage in
   if source != target_lmdb then Datascript_storage_lmdb.sync_indexes source target_lmdb

@@ -55,6 +55,20 @@ Public API (matches dbval.core):
 
 Transact rejects temporal views with dbval-compatible error message.
 
+## Purge (Datahike-compatible excise)
+
+Physical removal of datoms from current **and** history (GDPR-style), unlike retract:
+
+| Op | EDN | Effect |
+| --- | --- | --- |
+| `Purge` | `[:db/purge e a v]` | Remove one fact from all indices |
+| `PurgeAttr` | `[:db.purge/attribute e a]` | Remove all values of attr on entity |
+| `PurgeEntity` | `[:db.purge/entity e]` | Remove entity + incoming refs + components |
+
+Implementation searches the history view (`history = true`, no `datoms-filter`), then
+`Index.remove` deletes keys from EAVT/AEVT/AVET. Persistent storage sync uses
+`sync_removals_to_storage` on `transact`. Purge does not append to `tx_data`.
+
 ## Read pipeline
 
 For ascending index scans:
@@ -68,6 +82,8 @@ For ascending index scans:
 
 `datoms_filter` follows dbval semantics: consecutive datoms with same `[e,a,v]` cancel
 when a retract follows an add; same-tx add/retract pairs cancel; orphaned retracts are dropped.
+LMDB keys include `[tx, added]` after index components so add/retract pairs for the same fact
+sort adjacently (assert before retract at the same tx).
 
 ## Write pipeline
 
@@ -86,9 +102,9 @@ Single-tx bulk append (`of_bulk` → direct LMDB write batch). No overlay stagin
 
 ## Storage
 
-- **store**: append new datoms for the tx + update meta (`max_tx`, `max_eid`, schema)
-- **restore**: open LMDB env, read meta, rebuild attr caches from filtered scan at `max_tx`
-- Remove `sync_merged_to_lmdb` clear-and-rewrite path
+  - **store**: append new datoms for the tx + update meta (`max_tx`, `max_eid`, schema)
+  - **restore**: open LMDB env, read meta, rebuild attr caches from filtered scan at `max_tx`
+  - Remove `sync_merged_to_lmdb` clear-and-rewrite path; use `sync_append_since_tx` for delta copy when session and storage envs differ
 
 PSS tail replay (`impl/storage_pss.ml`) is the closest in-repo precedent for append-only persistence.
 

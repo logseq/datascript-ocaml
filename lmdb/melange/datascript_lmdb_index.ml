@@ -1,44 +1,36 @@
 open Datascript_types
 
-type t =
-  { db : Datascript_lmdb_db.t
-  ; which : index
-  ; additions : datom list
-  ; removals : datom list
-  }
+type t = { db : Datascript_lmdb_db.t; which : index }
 
 type 'a seq = { cmp : datom -> datom -> int; datoms : datom list; offset : int }
 
+exception Stop_search
+
 let db_of t = t.db
-let make index db = { db; which = index; additions = []; removals = [] }
+let make index db = { db; which = index }
 let cmp_for index = Datascript_types.Compare.compare_datom index
-let overlay_empty t = t.additions = [] && t.removals = []
 
 let datom_key t datom = Datascript_lmdb_codec.encode_datom_key t.which datom
 
 let decode_entry index key value =
   let datom = Datascript_lmdb_codec.decode_datom_key index key in
   let payload = Datascript_lmdb_codec.decode_datom_value value in
-  { datom with added = payload.added; v = payload.v }
+  { datom with v = payload.v }
 
 let put_datom_txn txn t datom =
   let key = datom_key t datom in
   let value = Datascript_lmdb_codec.encode_datom_value datom in
   Datascript_lmdb_db.put_index_txn t.which txn t.db key value
 
-let remove_datom_txn txn t datom =
-  let key = datom_key t datom in
-  Datascript_lmdb_db.remove_index_txn t.which txn t.db key
-
 let empty index db = make index db
 
-let of_sorted_list index datoms db =
-  let t = empty index db in
+let write_datoms t datoms =
   if datoms = [] then t
   else (
-    Datascript_lmdb_db.with_write_txn db (fun txn ->
-      List.iter (put_datom_txn txn t) datoms);
+    Datascript_lmdb_db.with_write_txn t.db (fun txn -> List.iter (put_datom_txn txn t) datoms);
     t)
+
+let of_sorted_list index datoms db = write_datoms (empty index db) datoms
 
 let of_sorted_lists index_datoms db =
   Datascript_lmdb_db.with_write_txn db (fun txn ->
@@ -62,35 +54,41 @@ let of_eavt_datoms ~avet eavt_datoms db =
           if avet datom.a then put_datom_txn txn avet_index datom)
         eavt_datoms))
 
-let of_bulk index datoms db = { db; which = index; additions = datoms; removals = [] }
+let of_bulk index datoms db = of_sorted_list index datoms db
 
-let additions_only t = t.additions <> [] && t.removals = []
+let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
+  if datoms = [] then (eavt, aevt, avet_index)
+  else (
+    Datascript_lmdb_db.with_write_txn eavt.db (fun txn ->
+      List.iter
+        (fun datom ->
+          put_datom_txn txn eavt datom;
+          put_datom_txn txn aevt datom;
+          if is_avet datom.a then put_datom_txn txn avet_index datom)
+        datoms);
+    (eavt, aevt, avet_index))
 
-let add datom t =
+let append_datoms datoms t = write_datoms t datoms
+
+let add datom t = write_datoms t [ datom ]
+
+let remove_datom_txn txn t datom =
   let key = datom_key t datom in
-  let additions = datom :: List.filter (fun d -> datom_key t d <> key) t.additions in
-  let removals = List.filter (fun d -> datom_key t d <> key) t.removals in
-  { t with additions; removals }
+  Datascript_lmdb_db.remove_index_txn t.which txn t.db key
 
 let remove datom t =
-  let key = datom_key t datom in
-  let additions = List.filter (fun d -> datom_key t d <> key) t.additions in
-  let already_removed = List.exists (fun d -> datom_key t d = key) t.removals in
-  let removals =
-    if already_removed || List.exists (fun d -> datom_key t d = key) t.additions then t.removals
-    else datom :: t.removals
-  in
-  { t with additions; removals }
+  Datascript_lmdb_db.with_write_txn t.db (fun txn -> remove_datom_txn txn t datom);
+  t
 
-let overlay_tables t =
-  let removed = Hashtbl.create (List.length t.removals) in
-  List.iter (fun datom -> Hashtbl.add removed (datom_key t datom) ()) t.removals;
-  let added = Hashtbl.create (List.length t.additions) in
-  List.iter (fun datom -> Hashtbl.replace added (datom_key t datom) datom) t.additions;
-  removed, added
+let remove_datoms datoms t =
+  if datoms = [] then t
+  else (
+    Datascript_lmdb_db.with_write_txn t.db (fun txn -> List.iter (remove_datom_txn txn t) datoms);
+    t)
 
-let stored_visible key removed added =
-  not (Hashtbl.mem removed key || Hashtbl.mem added key)
+let bound_key t = function
+  | None -> None
+  | Some datom -> Some (datom_key t datom)
 
 let in_range cmp lower upper datom =
   let above_lower =
@@ -105,97 +103,86 @@ let in_range cmp lower upper datom =
   in
   above_lower && below_upper
 
-let bound_key t = function
-  | None -> None
-  | Some datom -> Some (datom_key t datom)
-
-exception Stop_search
-
 let fold_stored t f acc =
-  if overlay_empty t then
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index t.which t.db (fun key value ->
-      acc := f !acc (decode_entry t.which key value));
-    !acc
-  else
-    let removed, added = overlay_tables t in
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index t.which t.db (fun key value ->
-      if stored_visible key removed added then
-        acc := f !acc (decode_entry t.which key value));
-    !acc
+  let acc = ref acc in
+  Datascript_lmdb_db.fold_index t.which t.db (fun key value ->
+    acc := f !acc (decode_entry t.which key value));
+  !acc
 
 let fold_stored_prefix t attr f acc =
   let prefix = attr ^ "\000" in
-  if overlay_empty t then
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-      acc := f !acc (decode_entry t.which key value));
-    !acc
-  else
-    let removed, added = overlay_tables t in
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-      if stored_visible key removed added then
-        acc := f !acc (decode_entry t.which key value));
-    !acc
+  let acc = ref acc in
+  Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
+    acc := f !acc (decode_entry t.which key value));
+  !acc
 
 let fold_stored_attr_value_prefix t attr value f acc =
   let prefix = Datascript_lmdb_codec.encode_index_attr_value_prefix t.which attr value in
-  if overlay_empty t then
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-      acc := f !acc (decode_entry t.which key value));
-    !acc
-  else
-    let removed, added = overlay_tables t in
-    let acc = ref acc in
-    Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
-      if stored_visible key removed added then
-        acc := f !acc (decode_entry t.which key value));
-    !acc
+  let acc = ref acc in
+  Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
+    acc := f !acc (decode_entry t.which key value));
+  !acc
 
 let fold_stored_bounded t ?from_ ?to_ cmp f acc =
   match bound_key t from_ with
   | None -> fold_stored t f acc
   | Some from_key ->
-    let removed, added =
-      if overlay_empty t then (Hashtbl.create 0, Hashtbl.create 0) else overlay_tables t
-    in
     let acc = ref acc in
     Datascript_lmdb_db.fold_index_range_until t.which t.db ~from_key
-      ~stop:(fun key value ->
-        if not (stored_visible key removed added) then false
-        else
-          match to_ with
-          | Some bound ->
-            let datom = decode_entry t.which key value in
-            cmp datom bound > 0
-          | None -> false)
+      ~stop:(fun _key _value ->
+        match to_ with
+        | Some bound ->
+          let datom = decode_entry t.which _key _value in
+          cmp datom bound > 0
+        | None -> false)
       (fun key value ->
-        if stored_visible key removed added then
-          let datom = decode_entry t.which key value in
-          if in_range cmp from_ to_ datom then acc := f !acc datom);
+        let datom = decode_entry t.which key value in
+        if in_range cmp from_ to_ datom then acc := f !acc datom);
     !acc
 
-let fold_stored_bounded t ?from_ ?to_ cmp f acc =
+let clear_index_txn txn index lmdb =
+  Datascript_lmdb_db.fold_index index lmdb (fun key _ ->
+    Datascript_lmdb_db.remove_index_txn index txn lmdb key)
+
+let sync_merged_to_lmdb t target_lmdb =
+  if t.db == target_lmdb then ()
+  else
+    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
+      clear_index_txn txn t.which target_lmdb;
+      Datascript_lmdb_db.copy_index_txn t.which txn t.db target_lmdb)
+
+let sync_append_since_tx ~since_tx t target_lmdb =
+  if t.db == target_lmdb then ()
+  else
+    let target = make t.which target_lmdb in
+    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
+      fold_stored t (fun () datom ->
+        if datom.tx > since_tx then put_datom_txn txn target datom)
+      ())
+
+let copy t = t
+
+let flush t = t
+
+let to_list t = List.rev (fold_stored t (fun acc datom -> datom :: acc) [])
+
+let fold f init t = fold_stored t f init
+
+let lookup t datom =
+  match Datascript_lmdb_db.get_index t.which t.db (datom_key t datom) with
+  | None -> None
+  | Some value -> Some (decode_entry t.which (datom_key t datom) value)
+
+let fold_slice f init ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
   let apply acc datom = if in_range cmp from_ to_ datom then f acc datom else acc in
-  if not (overlay_empty t) then
-    collect_datoms t
-    |> List.filter (fun datom -> in_range cmp from_ to_ datom)
-    |> List.fold_left f init
-  else
-    let acc =
-      match from_, to_ with
-      | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
-        && (t.which = Aevt || t.which = Avet) ->
-        fold_stored_prefix t bound.a apply init
-      | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-        fold_stored_attr_value_prefix t bound.a bound.v apply init
-      | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init
-    in
-    acc
+  match from_, to_ with
+  | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
+    && (t.which = Aevt || t.which = Avet) ->
+    fold_stored_prefix t bound.a apply init
+  | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
+    fold_stored_attr_value_prefix t bound.a bound.v apply init
+  | _ -> fold_stored_bounded t ?from_ ?to_ cmp apply init
 
 let find_first_slice ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
@@ -206,27 +193,18 @@ let find_first_slice ?from_ ?to_ ?cmp t =
       raise Stop_search)
   in
   (try
-     if not (overlay_empty t) then
-       collect_datoms t |> List.iter consider
-     else
-       match from_, to_ with
-       | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
-         && (t.which = Aevt || t.which = Avet) ->
-         fold_stored_prefix t bound.a (fun () datom -> consider datom) ()
-       | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
-         fold_stored_attr_value_prefix t bound.a bound.v (fun () datom -> consider datom) ()
-       | _ -> fold_stored_bounded t ?from_ ?to_ cmp (fun () datom -> consider datom) ()
+     match from_, to_ with
+     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.e = 0 && bound.v = Nil
+       && (t.which = Aevt || t.which = Avet) ->
+       fold_stored_prefix t bound.a (fun () datom -> consider datom) ()
+     | Some bound, Some bound' when bound == bound' && bound.a <> "" && bound.v <> Nil && bound.e = 0 ->
+       fold_stored_attr_value_prefix t bound.a bound.v (fun () datom -> consider datom) ()
+     | _ -> fold_stored_bounded t ?from_ ?to_ cmp (fun () datom -> consider datom) ()
    with Stop_search -> ());
   !found
 
 let fold_attr_prefix f init t attr =
-  let apply acc datom = if datom.a = attr then f acc datom else acc in
-  if not (overlay_empty t) then
-    collect_datoms t
-    |> List.filter (fun datom -> datom.a = attr)
-    |> List.fold_left f init
-  else
-    fold_stored_prefix t attr apply init
+  fold_stored_prefix t attr (fun acc datom -> if datom.a = attr then f acc datom else acc) init
 
 let materialize_range t ?from_ ?to_ cmp =
   fold_slice (fun acc datom -> datom :: acc) [] ?from_ ?to_ ~cmp t |> List.rev

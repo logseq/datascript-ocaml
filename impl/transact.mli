@@ -55,6 +55,10 @@ type apply_context =
   ; retract_user_attr_with_report : db -> tx -> db -> entity_id -> attr -> value option -> db * datom list
   ; retract_active_datom_with_report : tx -> db -> entity_id -> attr -> value option -> db * datom list
   ; retract_entity_with_report : db -> tx -> db -> entity_id -> db * datom list
+  ; purge_datom_with_report : tx -> db -> entity_id -> attr -> value -> db * datom list
+  ; purge_attr_with_report : tx -> db -> entity_id -> attr -> db * datom list
+  ; purge_entity_with_report : db -> tx -> db -> entity_id -> db * datom list
+  ; resolve_entity_for_purge : db -> entity_ref -> entity_id
   ; compare_and_set_matches : db -> entity_id -> attr -> value option -> bool
   ; compare_and_set_failure_message : db -> entity_id -> attr -> value option -> string
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
@@ -72,7 +76,8 @@ type apply_context =
   ; refresh_tuple_attrs_for_source : db -> tx -> db -> entity_id -> attr -> datom list -> db * datom list
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_indexes_with_tx_data : db -> datom list -> db
+  ; refresh_db_indexes_with_removed_datoms : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 
-val apply_tx : apply_context -> tx_op list -> db -> db * (string * entity_id) list * datom list
+val apply_tx : apply_context -> tx_op list -> db -> db * (string * entity_id) list * datom list * datom list

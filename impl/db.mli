@@ -18,15 +18,19 @@ val normalize_datom_for_schema : schema -> datom -> datom
 val refresh_indexes : db -> db
 val refresh_indexes_with_added_datoms : db -> datom list -> db
 val refresh_indexes_with_tx_data : db -> datom list -> db
+val refresh_indexes_with_removed_datoms : db -> datom list -> db
 val flush_pending_datoms : db -> db
 val snapshot_db : db -> db
 val basis_tx : db -> tx
 val as_of_t : db -> tx option
+val as_of_tx : db -> tx option
 val since_t : db -> tx option
+val since_tx : db -> tx option
 val temporal_view : db -> bool
 val as_of : tx -> db -> db
 val since : tx -> db -> db
 val history : db -> db
+val is_history : db -> bool
 val with_datoms : db -> datom list -> db
 val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
 val empty : core_context -> db -> db

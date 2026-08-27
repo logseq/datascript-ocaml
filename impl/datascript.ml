@@ -53,6 +53,7 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
 let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
+let refresh_db_indexes_with_removed_datoms = Db_impl.refresh_indexes_with_removed_datoms
 let snapshot_db = Db_impl.snapshot_db
 
 let empty_db ?(schema = []) ?storage () =
@@ -83,6 +84,9 @@ let temporal_view = Db_impl.temporal_view
 let as_of = Db_impl.as_of
 let since = Db_impl.since
 let history = Db_impl.history
+let is_history = Db_impl.is_history
+let as_of_tx = Db_impl.as_of_tx
+let since_tx = Db_impl.since_tx
 
 module Tx_visibility = Tx_visibility
 
@@ -621,6 +625,82 @@ and refresh_tuple_attrs_for_source_db schema_db tx db e source_attr tx_data =
          db, tx_data @ tuple_tx_data)
        (db, tx_data)
 
+let history_db db = { db with history = true }
+
+let historical_datoms db ?e ?a ?v () =
+  Db_access_impl.datoms (history_db db) Eavt ?e ?a ?v () |> List.of_seq
+
+let historical_fact_datoms db e a value =
+  historical_datoms db ~e ~a ()
+  |> List.filter (fun datom -> value_equal datom.v value)
+
+let purge_not_found_message entity_ref =
+  "Can't find entity with ID "
+  ^ (match entity_ref with
+     | Entity_id e -> string_of_int e
+     | Temp_id tempid -> tempid
+     | Ident ident -> ":" ^ ident
+     | Lookup_ref (attr, String s) -> "[:" ^ attr ^ " \"" ^ s ^ "\"]"
+     | Lookup_ref (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+     | CurrentTx -> "db/current-tx")
+  ^ " to be purged"
+
+let resolve_entity_for_purge db entity_ref =
+  match Db_access_impl.entid_ref db entity_ref with
+  | Some entity_id -> entity_id
+  | None -> invalid_arg (purge_not_found_message entity_ref)
+
+let unique_historical_datoms datoms =
+  datoms |> List.sort_uniq (Util.compare_datom Eavt)
+
+let purge_datoms_with_report_db _tx db removed_datoms =
+  let removed_datoms = unique_historical_datoms removed_datoms in
+  refresh_db_indexes_with_removed_datoms db removed_datoms, removed_datoms
+
+let purge_datom_with_report_db tx db e a value =
+  let removed = historical_fact_datoms db e a value in
+  if removed = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  purge_datoms_with_report_db tx db removed
+
+let purge_attr_with_report_db tx db e a =
+  let removed = historical_datoms db ~e ~a () in
+  if removed = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  let component_ids =
+    removed
+    |> List.filter (fun datom -> is_component db datom.a)
+    |> List.filter_map (fun datom -> ref_value_id datom.v)
+  in
+  let component_datoms =
+    component_ids
+    |> List.concat_map (fun component_e -> historical_datoms db ~e:component_e ())
+  in
+  purge_datoms_with_report_db tx db (removed @ component_datoms)
+
+let purge_entity_with_report_db schema_db tx db e =
+  let initial_entity_datoms = historical_datoms db ~e () in
+  if initial_entity_datoms = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  let ids = component_entity_closure_db schema_db db [] e in
+  let all_entity_datoms =
+    ids
+    |> List.concat_map (fun entity_id -> historical_datoms db ~e:entity_id ())
+  in
+  let ref_datoms =
+    ids
+    |> List.concat_map (fun entity_id ->
+      incoming_ref_datoms db [ entity_id ]
+      |> List.filter (fun datom -> datom.e <> entity_id))
+  in
+  let component_entity_ids =
+    all_entity_datoms
+    |> List.filter (fun datom -> is_component schema_db datom.a)
+    |> List.filter_map (fun datom -> ref_value_id datom.v)
+  in
+  let component_datoms =
+    component_entity_ids
+    |> List.concat_map (fun component_e -> historical_datoms db ~e:component_e ())
+  in
+  purge_datoms_with_report_db tx db (all_entity_datoms @ ref_datoms @ component_datoms)
+
 let add_user_datom_with_report_db schema_db tx db d =
   let db, tx_data = add_active_datom_with_report_db schema_db tx db d in
   refresh_tuple_attrs_for_source_db schema_db tx db d.e d.a tx_data
@@ -727,6 +807,10 @@ let transact_apply_context : Transact_impl.apply_context =
   ; retract_user_attr_with_report = retract_user_attr_with_report_db
   ; retract_active_datom_with_report = retract_active_datom_with_report_db
   ; retract_entity_with_report = retract_entity_with_report_db
+  ; purge_datom_with_report = purge_datom_with_report_db
+  ; purge_attr_with_report = purge_attr_with_report_db
+  ; purge_entity_with_report = purge_entity_with_report_db
+  ; resolve_entity_for_purge = resolve_entity_for_purge
   ; compare_and_set_matches = compare_and_set_matches_db
   ; compare_and_set_failure_message = compare_and_set_failure_message_db
   ; datom
@@ -754,6 +838,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; refresh_tuple_attrs_for_source = refresh_tuple_attrs_for_source_db
   ; refresh_db_indexes_with_added_datoms
   ; refresh_db_indexes_with_tx_data
+  ; refresh_db_indexes_with_removed_datoms
   ; refresh_db_identity
   }
 
@@ -761,7 +846,7 @@ let apply_tx tx_ops db =
   Transact_impl.apply_tx transact_apply_context tx_ops db
 
 let db_with tx_ops db =
-  let db_after, _, _ = apply_tx tx_ops db in
+  let db_after, _, _, _ = apply_tx tx_ops db in
   db_after
 
 let storage_restore_context : Storage.restore_context = { next_db_uid }
@@ -780,22 +865,25 @@ let tx_meta_skips_store tx_meta =
       | _ -> false)
     tx_meta
 
-let persist_transact ~tx_meta db =
+let persist_transact ~tx_meta db ?(purged_datoms = []) () =
   if not (tx_meta_skips_store tx_meta) then
     match db.storage_ref with
     | None -> ()
-    | Some storage -> store ~storage db
+    | Some storage ->
+      if purged_datoms <> [] then
+        Index.sync_removals_to_storage purged_datoms db.eavt_index db.aevt_index db.avet_index storage;
+      store ~storage db
 
 let transact_report ?(tx_meta = []) db tx_ops =
   if Db_impl.temporal_view db then
     invalid_arg "Cannot transact against an as-of/since/history database value";
   let db_before = snapshot_db db in
-  let db_after, tempids, tx_data = apply_tx tx_ops db in
-  { db_before; db_after; tx_data; tempids; tx_meta }
+  let db_after, tempids, tx_data, purged_datoms = apply_tx tx_ops db in
+  { db_before; db_after; tx_data; tempids; tx_meta; purged_datoms }
 
 let transact ?(tx_meta = []) db tx_ops =
   let report = transact_report ~tx_meta db tx_ops in
-  persist_transact ~tx_meta report.db_after;
+  persist_transact ~tx_meta report.db_after ~purged_datoms:report.purged_datoms ();
   report
 
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops

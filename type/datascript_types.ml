@@ -105,6 +105,9 @@ and tx_op =
   | Retract of entity_ref * attr * value option
   | RetractEntity of entity_ref
   | RetractAttr of entity_ref * attr
+  | Purge of entity_ref * attr * value
+  | PurgeAttr of entity_ref * attr
+  | PurgeEntity of entity_ref
   | CompareAndSet of entity_ref * attr * value option * value
   | Entity of tx_entity
   | Raw_datom of datom
@@ -509,6 +512,7 @@ type tx_report =
   ; tx_data : datom list
   ; tempids : (string * entity_id) list
   ; tx_meta : tx_meta
+  ; purged_datoms : datom list
   }
 module Compare = struct
   let split_keyword keyword =
@@ -787,24 +791,33 @@ module Compare = struct
     else if third <> 0 then third
     else fourth
   
+  let compare_added left right =
+    compare (if left.added then 0 else 1) (if right.added then 0 else 1)
+
   let compare_datom index left right =
+    let tiebreak_added comparison =
+      if comparison <> 0 then comparison else compare_added left right
+    in
     match index with
     | Eavt ->
-      first_nonzero4
-        (compare left.e right.e)
-        (compare left.a right.a)
-        (compare_value left.v right.v)
-        (compare left.tx right.tx)
+      tiebreak_added
+        (first_nonzero4
+           (compare left.e right.e)
+           (compare left.a right.a)
+           (compare_value left.v right.v)
+           (compare left.tx right.tx))
     | Aevt ->
-      first_nonzero4
-        (compare left.a right.a)
-        (compare left.e right.e)
-        (compare_value left.v right.v)
-        (compare left.tx right.tx)
+      tiebreak_added
+        (first_nonzero4
+           (compare left.a right.a)
+           (compare left.e right.e)
+           (compare_value left.v right.v)
+           (compare left.tx right.tx))
     | Avet ->
-      first_nonzero4
-        (compare left.a right.a)
-        (compare_value left.v right.v)
-        (compare left.e right.e)
-        (compare left.tx right.tx)
+      tiebreak_added
+        (first_nonzero4
+           (compare left.a right.a)
+           (compare_value left.v right.v)
+           (compare left.e right.e)
+           (compare left.tx right.tx))
 end

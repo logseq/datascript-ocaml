@@ -286,6 +286,7 @@ let json_of_tx_report report =
     [ "db_before", `String "<db>"
     ; "db_after", `String "<db>"
     ; "tx_data", `List (List.map json_of_datom report.tx_data)
+    ; "purged_datoms", `List (List.map json_of_datom report.purged_datoms)
     ; "tempids", tempids_object report.tempids
     ; "tx_meta", `List (List.map (fun (key, value) -> `List [ `String key; json_of_value value ]) report.tx_meta)
     ]

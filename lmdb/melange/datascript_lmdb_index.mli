@@ -9,11 +9,15 @@ val of_sorted_list : index -> datom list -> Datascript_lmdb_db.t -> t
 val of_sorted_lists : (index * datom list) list -> Datascript_lmdb_db.t -> unit
 val of_eavt_datoms : avet:(string -> bool) -> datom list -> Datascript_lmdb_db.t -> unit
 val of_bulk : index -> datom list -> Datascript_lmdb_db.t -> t
+val append_datoms : datom list -> t -> t
+val append_tx_data : avet:(string -> bool) -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t
 val remove : datom -> t -> t
+val remove_datoms : datom list -> t -> t
 val flush : t -> t
 val copy : t -> t
 val sync_merged_to_lmdb : t -> Datascript_lmdb_db.t -> unit
+val sync_append_since_tx : since_tx:tx -> t -> Datascript_lmdb_db.t -> unit
 val lookup : t -> datom -> datom option
 val to_list : t -> datom list
 val fold : ('acc -> datom -> 'acc) -> 'acc -> t -> 'acc

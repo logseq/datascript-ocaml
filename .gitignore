@@ -9,3 +9,4 @@ tmp/
 /db.sqlite-shm
 /db.sqlite-wal
 /_deps/
+/vendor/

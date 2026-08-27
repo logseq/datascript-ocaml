@@ -283,6 +283,40 @@ let refresh_indexes_with_tx_data db tx_data =
       { db with pending_datoms = db.pending_datoms @ tx_data; max_datom_e }
       |> invalidate_attr_tables
 
+let same_stored_datom left right =
+  left.e = right.e
+  && left.a = right.a
+  && left.tx = right.tx
+  && left.added = right.added
+  && value_equal left.v right.v
+
+let without_stored_datoms removed datoms =
+  List.filter (fun datom -> not (List.exists (same_stored_datom datom) removed)) datoms
+
+let refresh_indexes_with_removed_datoms db removed_datoms =
+  if removed_datoms = [] then db
+  else
+    let remove_from index =
+      List.fold_left (fun index datom -> Index.remove datom index) index removed_datoms
+    in
+    let eavt_index = remove_from db.eavt_index in
+    let aevt_index = remove_from db.aevt_index in
+    let avet_index = remove_from db.avet_index in
+    let duplicate_datoms = without_stored_datoms removed_datoms db.duplicate_datoms in
+    let duplicate_aevt_datoms = without_stored_datoms removed_datoms db.duplicate_aevt_datoms in
+    let duplicate_avet_datoms = without_stored_datoms removed_datoms db.duplicate_avet_datoms in
+    let pending_datoms = without_stored_datoms removed_datoms db.pending_datoms in
+    { db with
+      eavt_index
+    ; aevt_index
+    ; avet_index
+    ; duplicate_datoms
+    ; duplicate_aevt_datoms
+    ; duplicate_avet_datoms
+    ; pending_datoms
+    }
+    |> invalidate_attr_tables
+
 let snapshot_db db = db
 
 let temporal_view db =
@@ -306,6 +340,12 @@ let as_of tx db =
 let since tx db = { db with since_tx = Some tx }
 
 let history db = { db with history = true }
+
+let is_history db = db.history
+
+let as_of_tx = as_of_t
+
+let since_tx = since_t
 
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms

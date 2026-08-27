@@ -145,11 +145,14 @@ module Db : sig
   val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
   val basis_tx : db -> tx
   val as_of_t : db -> tx option
+  val as_of_tx : db -> tx option
   val since_t : db -> tx option
+  val since_tx : db -> tx option
   val temporal_view : db -> bool
   val as_of : tx -> db -> db
   val since : tx -> db -> db
   val history : db -> db
+  val is_history : db -> bool
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
@@ -389,11 +392,14 @@ val is_filtered : db -> bool
 val unfiltered_db : db -> db
 val basis_tx : db -> tx
 val as_of_t : db -> tx option
+val as_of_tx : db -> tx option
 val since_t : db -> tx option
+val since_tx : db -> tx option
 val temporal_view : db -> bool
 val as_of : tx -> db -> db
 val since : tx -> db -> db
 val history : db -> db
+val is_history : db -> bool
 module Tx_visibility : module type of Tx_visibility
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
