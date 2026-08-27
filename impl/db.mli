@@ -43,6 +43,7 @@ val filter : core_context -> db -> (db -> datom -> bool) -> db
 val value_equal : value -> value -> bool
 val same_fact : datom -> datom -> bool
 val primary_attr_datoms : db -> index -> attr -> datom list
+val fold_primary_attr_datoms : ( 'acc -> datom -> 'acc) -> 'acc -> db -> index -> attr -> 'acc
 
 type index_context =
   { is_avet_accessible : db -> attr -> bool

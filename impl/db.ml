@@ -544,6 +544,25 @@ let primary_attr_datoms db index attr =
   | Eavt ->
     merge_sorted_datoms Eavt (Index.to_list db.eavt_index) pending_attr |> apply_db_view db
 
+let fold_primary_attr_datoms f init db index attr =
+  let fold_array arr =
+    let len = Array.length arr in
+    let rec loop index acc =
+      if index >= len then acc else loop (index + 1) (f acc arr.(index))
+    in
+    loop 0 init
+  in
+  match index with
+  | Aevt -> (
+    match Hashtbl.find_opt db.aevt_by_attr attr with
+    | Some arr -> fold_array arr
+    | None -> List.fold_left f init (primary_attr_datoms db index attr))
+  | Avet -> (
+    match Hashtbl.find_opt db.avet_by_attr attr with
+    | Some arr -> fold_array arr
+    | None -> List.fold_left f init (primary_attr_datoms db index attr))
+  | Eavt -> List.fold_left f init (primary_attr_datoms db index attr)
+
 let duplicate_prefix_datoms db index e a =
   match index, e, a with
   | Eavt, Some entity_id, _ -> Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[]
@@ -746,6 +765,19 @@ let array_exact_prefix_slice cmp bound arr =
   let stop = upper start in
   if start >= stop then []
   else Array.sub arr start (stop - start) |> Array.to_list
+
+let array_find_exact_prefix cmp bound arr =
+  let len = Array.length arr in
+  if len = 0 then None
+  else
+    let rec lower lo hi =
+      if lo >= hi then lo
+      else
+        let mid = (lo + hi) / 2 in
+        if cmp arr.(mid) bound < 0 then lower (mid + 1) hi else lower lo mid
+    in
+    let index = lower 0 len in
+    if index >= len || cmp arr.(index) bound <> 0 then None else Some arr.(index)
 
 let exact_sorted_slice cmp bound datoms =
   array_exact_prefix_slice cmp bound (Array.of_list datoms)
@@ -1221,7 +1253,16 @@ let datoms_ref context db index ?e ?a ?v ?tx () =
   datoms context db index ?e ?a ?v ?tx ()
 
 let find_datom context db index ?e ?a ?v ?tx () =
-  datoms context db index ?e ?a ?v ?tx () |> Seq.uncons |> Option.map fst
+  match temporal_view db, db.filter_pred, index, e, a, v, tx with
+  | false, None, Aevt, Some entity_id, Some attr, None, None when not (merged_index db || pending_overlay db) -> (
+    match Hashtbl.find_opt db.aevt_by_attr attr with
+    | Some arr ->
+      let bound = bound_datom ~e:entity_id ~a:attr () in
+      let bound_fields = fields ~e:true ~a:true () in
+      let cmp = exact_prefix_slice_cmp context Aevt bound bound_fields in
+      array_find_exact_prefix cmp bound arr
+    | None -> None)
+  | _ -> datoms context db index ?e ?a ?v ?tx () |> Seq.uncons |> Option.map fst
 
 let find_datom_ref context db index ?e ?a ?v ?tx () =
   datoms_ref context db index ?e ?a ?v ?tx () |> Seq.uncons |> Option.map fst

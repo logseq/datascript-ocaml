@@ -1555,118 +1555,39 @@ end) = struct
                 in
                 collect [] scan_datoms
             | _ ->
-            let value_tables =
-              remaining_value_vars
-              |> List.map (fun (value_var, attr) ->
-                let values = Array.make (source_db.max_datom_e + 1) None in
-                source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) QWildcard None
-                |> Seq.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (result_of_pattern_position datom 2));
-                value_var, values)
+            let scan_datoms =
+              source_context.pattern_datoms source_db (QVar e_var) (QAttr scan_attr) QWildcard None
             in
-            let value_for entity_id values =
-              if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
-            in
-            let scan_datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr scan_attr) QWildcard None in
-            if List.for_all (fun (_, attr) -> direct_attr attr) value_var_patterns then (
-              let slot_of_attr attr =
-                if attr = e_var then
-                  Some `Entity
-                else if attr = scan_value_var then
-                  Some (if is_ref_attr source_db scan_attr then `Scan_ref else `Scan_value)
-                else
-                  Option.map
-                    (fun values -> `Value_table values)
-                    (List.assoc_opt attr value_tables)
-              in
-              let slots =
-                attrs
-                |> List.fold_left
-                     (fun slots attr ->
-                       match slots with
-                       | None -> None
-                       | Some slots -> Option.map (fun slot -> slot :: slots) (slot_of_attr attr))
-                     (Some [])
-                |> Option.map List.rev
-              in
-              match slots with
-              | None -> []
-              | Some slots ->
-                let value_of_slot scan_datom = function
-                  | `Entity -> Some (Result_entity scan_datom.e)
-                  | `Scan_value ->
-                    (match scan_datom.v with
-                     | Ref _ -> Some (result_of_pattern_position scan_datom 2)
-                     | _ -> Some (Result_value scan_datom.v))
-                  | `Scan_ref -> Some (result_of_pattern_position scan_datom 2)
-                  | `Value_table values -> value_for scan_datom.e values
+            scan_datoms
+            |> Seq.filter_map (fun scan_datom ->
+              if not (entity_allowed scan_datom.e) then
+                None
+              else
+                let binding =
+                  (scan_value_var, result_of_pattern_position scan_datom 2)
+                  :: [ e_var, Result_entity scan_datom.e ]
                 in
-                let build_row scan_datom =
-                  match slots with
-                  | [ first; second ] ->
-                    let* first = value_of_slot scan_datom first in
-                    let* second = value_of_slot scan_datom second in
-                    Some [ first; second ]
-                  | [ first; second; third ] ->
-                    let* first = value_of_slot scan_datom first in
-                    let* second = value_of_slot scan_datom second in
-                    let* third = value_of_slot scan_datom third in
-                    Some [ first; second; third ]
-                  | [ first; second; third; fourth ] ->
-                    let* first = value_of_slot scan_datom first in
-                    let* second = value_of_slot scan_datom second in
-                    let* third = value_of_slot scan_datom third in
-                    let* fourth = value_of_slot scan_datom fourth in
-                    Some [ first; second; third; fourth ]
-                  | _ ->
-                    slots
-                    |> List.fold_left
-                         (fun row slot ->
-                           match row with
-                           | None -> None
-                           | Some row -> Option.map (fun value -> value :: row) (value_of_slot scan_datom slot))
-                         (Some [])
-                    |> Option.map List.rev
+                let* binding =
+                  remaining_value_vars
+                  |> List.fold_left
+                       (fun binding (value_var, attr) ->
+                         match binding with
+                         | None -> None
+                         | Some binding ->
+                           single_value_result scan_datom.e attr
+                           |> Option.map (fun value -> (value_var, value) :: binding))
+                       (Some binding)
                 in
-                let rec collect acc seq =
-                  match seq () with
-                  | Seq.Nil -> List.rev acc
-                  | Seq.Cons (scan_datom, rest) ->
-                    if entity_allowed scan_datom.e then
-                      match build_row scan_datom with
-                      | Some row -> collect (row :: acc) rest
-                      | None -> collect acc rest
-                    else
-                      collect acc rest
-                in
-                collect [] scan_datoms)
-            else
-              scan_datoms
-              |> Seq.filter_map (fun scan_datom ->
-                if not (entity_allowed scan_datom.e) then
-                  None
-                else
-                  let binding =
-                    (scan_value_var, result_of_pattern_position scan_datom 2)
-                    :: [ e_var, Result_entity scan_datom.e ]
-                  in
-                  let* binding =
-                    value_tables
-                    |> List.fold_left
-                         (fun binding (value_var, values) ->
-                           match binding with
-                           | None -> None
-                           | Some binding ->
-                             value_for scan_datom.e values
-                             |> Option.map (fun value -> (value_var, value) :: binding))
-                         (Some binding)
-                  in
                 binding_row attrs binding)
-              |> List.of_seq
+            |> List.of_seq
           in
           let compute_default_rows () =
             match value_var_patterns with
+            | (scan_value_var, scan_attr) :: remaining_value_vars
+              when constant_patterns <> []
+                   && List.length value_var_patterns >= 2
+                   && List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns ->
+              rows_from_cardinality_one_value_scan scan_value_var scan_attr remaining_value_vars
             | _ :: _
               when constant_patterns <> []
                    && List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns ->

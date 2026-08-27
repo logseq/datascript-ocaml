@@ -1238,6 +1238,7 @@ let pattern_value_needs_attr_resolution db attr value =
      | _ -> false)
 
 let primary_attr_datoms = Db_impl.primary_attr_datoms
+let fold_primary_attr_datoms = Db_impl.fold_primary_attr_datoms
 
 let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
   let datoms = primary_attr_datoms db index a in
@@ -1739,8 +1740,13 @@ module Query = struct
 
   type simple_row_slot =
     | Simple_entity_slot
-    | Simple_value_slot of query_result option array
+    | Simple_value_from_driver
     | Simple_value_lookup of attr
+
+  let entity_id_table ids =
+    let table = Hashtbl.create (List.length ids) in
+    List.iter (fun id -> Hashtbl.replace table id ()) ids;
+    table
 
   let intersect_constant_entity_ids id_lists =
     let table_of_ids ids =
@@ -2027,60 +2033,95 @@ module Query = struct
             let entity_ids = intersect_constant_entity_ids constant_entity_ids in
             if entity_ids = [] then Some []
             else
-            let value_table attr =
-              let values = Array.make (db.max_datom_e + 1) None in
-              let fill datom =
-                if datom.e >= 0 && datom.e < Array.length values then
-                  values.(datom.e) <- Some (Query_impl.result_of_datom_v datom)
-              in
-              primary_attr_datoms db Aevt attr |> List.iter fill;
-              values
+            let entity_candidate_bytes entity_ids =
+              let allowed = Bytes.make (db.max_datom_e + 1) '\000' in
+              List.iter
+                (fun entity_id ->
+                  if entity_id >= 0 && entity_id < Bytes.length allowed then
+                    Bytes.set allowed entity_id '\001')
+                entity_ids;
+              allowed
             in
-            let value_slots =
-              match value_var_attrs with
-              | [ (value_var, attr) ] -> [ value_var, Simple_value_lookup attr ]
-              | _ ->
-                value_var_attrs
-                |> List.map (fun (value_var, attr) -> value_var, Simple_value_slot (value_table attr))
+            let entity_in_candidates allowed entity_id =
+              entity_id >= 0
+              && entity_id < Bytes.length allowed
+              && Bytes.get allowed entity_id = '\001'
             in
-            let slot_for_find_var var =
+            let slot_for_find_var value_slots var =
               if var = e_var then Some Simple_entity_slot else List.assoc_opt var value_slots
             in
-            let* row_slots =
-              find_vars
-              |> List.fold_left
-                   (fun slots var ->
-                     match slots with
-                     | None -> None
-                     | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var var))
-                   (Some [])
-              |> Option.map List.rev
-            in
-            let value_of_slot entity_id = function
+            let value_of_slot ?scan_datom entity_id = function
               | Simple_entity_slot -> Some (Result_entity entity_id)
-              | Simple_value_slot values ->
-                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+              | Simple_value_from_driver -> (
+                match scan_datom with
+                | Some datom -> Some (Query_impl.result_of_datom_v datom)
+                | None -> None)
               | Simple_value_lookup attr ->
                 Option.map Query_impl.result_of_datom_v (find_datom db Aevt ~e:entity_id ~a:attr ())
             in
-            let row_for_entity entity_id =
+            let row_for_entity ?scan_datom row_slots entity_id =
               row_slots
               |> List.fold_left
                    (fun row slot ->
                      match row with
                      | None -> None
-                     | Some row -> Option.map (fun value -> value :: row) (value_of_slot entity_id slot))
+                     | Some row ->
+                       Option.map (fun value -> value :: row) (value_of_slot ?scan_datom entity_id slot))
                    (Some [])
               |> Option.map List.rev
             in
-            entity_ids
-            |> List.filter_map (fun entity_id -> row_for_entity entity_id)
-            |> fun rows -> Some rows
-
-  let entity_id_table ids =
-    let table = Hashtbl.create (List.length ids) in
-    List.iter (fun id -> Hashtbl.replace table id ()) ids;
-    table
+            let rows_from_slots value_slots entity_rows =
+              match
+                find_vars
+                |> List.fold_left
+                     (fun slots var ->
+                       match slots with
+                       | None -> None
+                       | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var value_slots var))
+                     (Some [])
+                |> Option.map List.rev
+              with
+              | None -> []
+              | Some row_slots ->
+                entity_rows
+                |> List.filter_map (fun (entity_id, scan_datom) ->
+                  row_for_entity ?scan_datom row_slots entity_id)
+            in
+            (match value_var_attrs with
+            | [ (value_var, attr) ] ->
+              let value_slots = [ value_var, Simple_value_lookup attr ] in
+              rows_from_slots value_slots (List.map (fun entity_id -> entity_id, None) entity_ids)
+              |> fun rows -> Some rows
+            | (driver_var, driver_attr) :: remaining_value_attrs ->
+              let value_slots =
+                (driver_var, Simple_value_from_driver)
+                :: List.map (fun (value_var, attr) -> value_var, Simple_value_lookup attr) remaining_value_attrs
+              in
+              let allowed = entity_candidate_bytes entity_ids in
+              (match
+                 find_vars
+                 |> List.fold_left
+                      (fun slots var ->
+                        match slots with
+                        | None -> None
+                        | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var value_slots var))
+                      (Some [])
+                 |> Option.map List.rev
+               with
+               | None -> None
+               | Some row_slots ->
+                 Some
+                   (fold_primary_attr_datoms
+                      (fun rows datom ->
+                        if entity_in_candidates allowed datom.e then
+                          match row_for_entity ~scan_datom:datom row_slots datom.e with
+                          | Some row -> row :: rows
+                          | None -> rows
+                        else
+                          rows)
+                      [] db Aevt driver_attr
+                   |> List.rev))
+            | [] -> Some [])
 
   let value_membership_table values =
     let table = Hashtbl.create (List.length values) in
