@@ -55,6 +55,11 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_history_excise)
+ (modules test_history_excise)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_db)
  (modules test_db)
  (libraries datascript-ocaml-native unix))
