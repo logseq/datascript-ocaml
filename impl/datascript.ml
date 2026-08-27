@@ -281,39 +281,6 @@ let find_avet_exact db attr value =
     | datom :: _ -> Some datom
     | [] -> None)
 
-let find_eavt_exact db entity_id attr value =
-  let bound = datom ~e:entity_id ~a:attr ~v:value () in
-  let compare_prefix left right =
-    first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; compare_value left.v right.v
-      ]
-  in
-  let cmp left right =
-    if right == bound then compare_prefix left right
-    else if left == bound then -compare_prefix right left
-    else Util.compare_datom Eavt left right
-  in
-  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.eavt_index with
-  | Some datom when datom.e = entity_id && datom.a = attr && value_equal datom.v value -> Some datom
-  | _ -> (
-    match
-      List.find_opt
-        (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
-        db.pending_datoms
-    with
-    | Some datom -> Some datom
-    | None ->
-    match
-      List.filter
-        (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
-        (Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[])
-      |> List.sort (Util.compare_datom Eavt)
-    with
-    | datom :: _ -> Some datom
-    | [] -> None)
-
 let rec coerce_tuple_lookup_value_db db attr value =
   match schema_attr db attr, value with
   | Some { tuple_attrs = Some source_attrs; _ }, (List values | Vector values)
@@ -512,12 +479,23 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
     else invalid_arg "cannot modify tuple attributes directly"
   else begin
     if validate_value then validate_datom_value schema_db d;
-    (match find_avet_exact db d.a d.v with
-     | Some existing when is_unique schema_db d.a && existing.e <> d.e ->
-       invalid_arg "unique constraint"
-     | Some _ | None -> ());
+    (* Use the write schema for AVET access: mid-transaction schema updates live in
+       [schema_db] while [db] may still carry the pre-tx schema on the value. *)
+    if is_unique schema_db d.a then
+      (match
+         Db_access_impl.datoms
+           { db with schema = schema_db.schema }
+           Avet
+           ~a:d.a
+           ~v:d.v
+           ()
+         |> Seq.uncons
+       with
+       | Some (existing, _) when existing.e <> d.e -> invalid_arg "unique constraint"
+       | Some _ | None -> ());
     let same_fact_exists =
-      find_eavt_exact db d.e d.a d.v |> Option.is_some
+      entity_attr_datoms_db db d.e d.a
+      |> List.exists (fun datom -> value_equal datom.v d.v)
     in
     if same_fact_exists then
       db, []
@@ -535,7 +513,8 @@ let retract_active_datom_with_report_db tx db e a value =
   let removed =
     match value with
     | Some value ->
-      find_eavt_exact db e a value |> Option.to_list
+      entity_attr_datoms_db db e a
+      |> List.filter (fun datom -> value_equal datom.v value)
     | None -> entity_attr_datoms_db db e a
   in
   let tx_data = sorted_retractions tx removed in

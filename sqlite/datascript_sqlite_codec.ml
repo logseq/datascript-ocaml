@@ -366,7 +366,7 @@ let payload_of_transit = function
 let encode payload = payload |> payload_to_transit |> Transit.to_string ~mode:Transit.Verbose
 let decode content = content |> Transit.of_string |> payload_of_transit
 
-(* Legacy Logseq KVS codec helpers kept for examples/logseq_sqlite_storage.ml *)
+(* Legacy Logseq KVS codec helpers (PSS storage payloads are no longer supported). *)
 
 let encode_storage_payload () = encode Compat_session
 

@@ -37,20 +37,18 @@ Two overlapping implementations:
 2. **`relation_of_same_entity_patterns`** (`impl/query_where.ml`) — relation fast path inside
    `eval_relation_rows`.
 
-Both use entity bitsets for constant intersection. Multi-attr same-entity queries use the
-Datahike entity-group pattern:
+Both use entity bitsets for constant intersection. Same-entity queries with constants use the
+Datahike entity-group pattern: constant slice → candidate entities → in-index lookup per
+value attr. No `(max_e+1)` value arrays.
 
-- **One value var + constants (q2):** constant slice → per-entity `find_datom` lookup.
-- **Multiple value vars + constants (q-5-merge, q4):** constant slice → **driver attr scan**
-  (first value pattern) filtered by candidates → `find_datom` for remaining attrs. No
-  `(max_e+1)` value arrays.
+- **`simple_same_entity_constant_rows`:** caches `aevt_by_attr` arrays, then
+  `find_entity_in_aevt_array` (binary search on entity id) for each candidate × value attr.
+- **`find_datom` / `find_primary_aevt_entity_attr`:** fast Aevt `~e ~a` point reads without
+  Seq materialization.
+- **`relation_of_same_entity_patterns`:** driver scan + lookup when multiple value patterns
+  and constants (general-path fallback).
 
-`simple_same_entity_constant_rows` handles both shapes when `max_datom_e ≤ 50_000`.
-`relation_of_same_entity_patterns` mirrors the same driver + lookup plan (multi-value with
-constants prefers driver scan over candidate-only lookup).
-
-**Gap:** Driver attr is still the first value pattern, not cost-based like Datahike's planner.
-Aevt `~e ~a` point reads use `array_find_exact_prefix` on `aevt_by_attr` (no Seq materialization).
+**Gap:** Driver attr in the relation path is still the first value pattern, not cost-based.
 
 ## OR / NOT (q-or, q-not)
 

@@ -145,11 +145,6 @@
  (libraries datascript-ocaml-native))
 
 (test
- (name test_sqlite_storage)
- (modules test_sqlite_storage)
- (libraries datascript-ocaml-native logseq_sqlite_storage unix sqlite3 melange-transit-native))
-
-(test
  (name test_sqlite_package)
  (modules test_sqlite_package)
  (libraries datascript-ocaml-native datascript-ocaml-native-sqlite test_support alcotest))
@@ -193,11 +188,6 @@
    %{dep:sqlite_cross_runtime_parity.js}
    %{dep:sqlite_cross_runtime_native.exe}
    %{dep:../js/datascript_js.bc.js})))
-
-(test
- (name test_logseq_query_parity)
- (modules test_logseq_query_parity)
- (libraries datascript-ocaml-native logseq_sqlite_storage unix sqlite3))
 
 (test
  (name test_logseq_query_planners)
