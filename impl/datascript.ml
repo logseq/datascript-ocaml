@@ -2128,99 +2128,100 @@ module Query = struct
                     if not e_aligned then
                       None
                     else
-                      match build_slots value_attrs with
-                      | None -> None
-                      | Some row_slots ->
-                        let base_e = const_arr.(0).e in
-                        let dense =
-                          const_arr.(const_len - 1).e = base_e + const_len - 1
-                          && Array.for_all
-                               (fun arr ->
-                                 arr.(0).e = base_e
-                                 && arr.(const_len - 1).e = base_e + const_len - 1)
-                               attr_arrays
+                      let base_e = const_arr.(0).e in
+                      let dense =
+                        const_arr.(const_len - 1).e = base_e + const_len - 1
+                        && Array.for_all
+                             (fun arr ->
+                               arr.(0).e = base_e
+                               && arr.(const_len - 1).e = base_e + const_len - 1)
+                             attr_arrays
+                      in
+                      let specialized_find =
+                        let expected =
+                          e_var :: (value_attrs |> Array.to_list |> List.map fst)
                         in
-                        let value_results = Array.make attr_count (Result_value (Int 0)) in
-                        let specialized_find =
-                          let expected =
-                            e_var :: (value_attrs |> Array.to_list |> List.map fst)
+                        find_vars = expected
+                      in
+                      if dense && specialized_find && attr_count = 4 then
+                        let a0 = attr_arrays.(0) in
+                        let a1 = attr_arrays.(1) in
+                        let a2 = attr_arrays.(2) in
+                        let a3 = attr_arrays.(3) in
+                        let rows = ref [] in
+                        (match entity_ids_array_by_attr_value db const_attr const_value with
+                         | Some ids ->
+                           (* Selective AVET ids + dense AEVT index — no per-row filter. *)
+                           for i = Array.length ids - 1 downto 0 do
+                             let e = ids.(i) in
+                             let index = e - base_e in
+                             rows :=
+                               [ Result_entity e
+                               ; Result_value a0.(index).v
+                               ; Result_value a1.(index).v
+                               ; Result_value a2.(index).v
+                               ; Result_value a3.(index).v
+                               ]
+                               :: !rows
+                           done
+                         | None ->
+                           for i = const_len - 1 downto 0 do
+                             if value_equal const_arr.(i).v const_value then
+                               let e = const_arr.(i).e in
+                               rows :=
+                                 [ Result_entity e
+                                 ; Result_value a0.(i).v
+                                 ; Result_value a1.(i).v
+                                 ; Result_value a2.(i).v
+                                 ; Result_value a3.(i).v
+                                 ]
+                                 :: !rows
+                           done);
+                        Some !rows
+                      else
+                        match build_slots value_attrs with
+                        | None -> None
+                        | Some row_slots ->
+                          let value_results = Array.make attr_count (Result_value (Int 0)) in
+                          let emit_at rows i =
+                            let e = const_arr.(i).e in
+                            if specialized_find then
+                              let rec vals a acc =
+                                if a < 0 then Result_entity e :: acc
+                                else vals (a - 1) (Result_value attr_arrays.(a).(i).v :: acc)
+                              in
+                              vals (attr_count - 1) [] :: rows
+                            else (
+                              for a = 0 to attr_count - 1 do
+                                value_results.(a) <- Result_value attr_arrays.(a).(i).v
+                              done;
+                              build_row_from row_slots e value_results :: rows)
                           in
-                          find_vars = expected
-                        in
-                        let emit_at rows i =
-                          let e = const_arr.(i).e in
-                          if specialized_find then
-                            let rec vals a acc =
-                              if a < 0 then Result_entity e :: acc
-                              else vals (a - 1) (Result_value attr_arrays.(a).(i).v :: acc)
-                            in
-                            vals (attr_count - 1) [] :: rows
-                          else (
-                            for a = 0 to attr_count - 1 do
-                              value_results.(a) <- Result_value attr_arrays.(a).(i).v
-                            done;
-                            build_row_from row_slots e value_results :: rows)
-                        in
-                        if dense && specialized_find && attr_count = 4 then
-                          let a0 = attr_arrays.(0) in
-                          let a1 = attr_arrays.(1) in
-                          let a2 = attr_arrays.(2) in
-                          let a3 = attr_arrays.(3) in
-                          let rows = ref [] in
-                          (match entity_ids_array_by_attr_value db const_attr const_value with
-                           | Some ids ->
-                             for i = Array.length ids - 1 downto 0 do
-                               let e = ids.(i) in
-                               let index = e - base_e in
-                               if index >= 0 && index < const_len then
-                                 rows :=
-                                   [ Result_entity e
-                                   ; Result_value a0.(index).v
-                                   ; Result_value a1.(index).v
-                                   ; Result_value a2.(index).v
-                                   ; Result_value a3.(index).v
-                                   ]
-                                   :: !rows
-                             done
-                           | None ->
-                             for i = const_len - 1 downto 0 do
-                               if value_equal const_arr.(i).v const_value then
-                                 let e = const_arr.(i).e in
-                                 rows :=
-                                   [ Result_entity e
-                                   ; Result_value a0.(i).v
-                                   ; Result_value a1.(i).v
-                                   ; Result_value a2.(i).v
-                                   ; Result_value a3.(i).v
-                                   ]
-                                   :: !rows
-                             done);
-                          Some !rows
-                        else if dense then
-                          match entity_ids_array_by_attr_value db const_attr const_value with
-                          | Some ids ->
-                            let rows = ref [] in
-                            for i = Array.length ids - 1 downto 0 do
-                              let e = ids.(i) in
-                              let index = e - base_e in
-                              if index >= 0 && index < const_len then
-                                rows := emit_at !rows index
-                            done;
-                            Some !rows
-                          | None ->
+                          if dense then
+                            match entity_ids_array_by_attr_value db const_attr const_value with
+                            | Some ids ->
+                              let rows = ref [] in
+                              for i = Array.length ids - 1 downto 0 do
+                                let e = ids.(i) in
+                                let index = e - base_e in
+                                if index >= 0 && index < const_len then
+                                  rows := emit_at !rows index
+                              done;
+                              Some !rows
+                            | None ->
+                              let rows = ref [] in
+                              for i = const_len - 1 downto 0 do
+                                if value_equal const_arr.(i).v const_value then
+                                  rows := emit_at !rows i
+                              done;
+                              Some !rows
+                          else
                             let rows = ref [] in
                             for i = const_len - 1 downto 0 do
                               if value_equal const_arr.(i).v const_value then
                                 rows := emit_at !rows i
                             done;
-                            Some !rows
-                        else
-                          let rows = ref [] in
-                          for i = const_len - 1 downto 0 do
-                            if value_equal const_arr.(i).v const_value then
-                              rows := emit_at !rows i
-                          done;
-                          Some !rows)
+                            Some !rows)
             | _ -> None
           in
           match aligned_constant_rows () with

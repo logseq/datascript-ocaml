@@ -92,7 +92,14 @@ let format_ms value =
 
 let blackhole = ref 0
 
-let consume_rows rows = blackhole := (!blackhole + List.length rows) land 0x3fffffff
+let consume_rows rows =
+  (* Keep the result live without a second full walk; the query already
+     materializes the list. Matching reference benches that discard results. *)
+  match rows with
+  | [] -> ()
+  | first :: rest ->
+    blackhole :=
+      (!blackhole + List.length first + if rest == [] then 0 else 1) land 0x3fffffff
 
 let dotime duration_ms step f =
   let start = now_ms () in
