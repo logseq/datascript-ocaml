@@ -1,4 +1,9 @@
 (executable
+ (name index_compare_20k)
+ (modules index_compare_20k)
+ (libraries datascript-ocaml-native unix))
+
+(executable
  (name bench_ocaml)
  (modules bench_ocaml)
  (modes exe js)

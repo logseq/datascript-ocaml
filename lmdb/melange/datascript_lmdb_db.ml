@@ -77,6 +77,8 @@ let with_write db f =
   ensure_open db;
   f ()
 
+let with_write_txn db f = with_write db (fun () -> f ())
+
 let fold_index index db f =
   ensure_open db;
   let map =
@@ -106,3 +108,19 @@ let remove_index index db key =
     | Avet -> db.avet
   in
   js_remove map key
+
+let put_index_txn index _txn db key value = put_index index db key value
+
+let remove_index_txn index _txn db key = remove_index index db key
+
+let copy_index_txn index _txn from_db to_db =
+  fold_index index from_db (fun key value -> put_index index to_db key value)
+
+let fold_index_range index db ?from_key ?to_key f =
+  fold_index index db (fun key value ->
+    match from_key with
+    | Some bound when String.compare key bound < 0 -> ()
+    | _ -> (
+      match to_key with
+      | Some bound when String.compare key bound > 0 -> ()
+      | _ -> f key value))

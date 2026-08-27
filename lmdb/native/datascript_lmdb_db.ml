@@ -87,6 +87,25 @@ let meta_set db key value =
        Map.set ~txn db.meta key value;
        ()))
 
+let with_write_txn db f =
+  ensure_open db;
+  ignore
+    (Txn.go Rw db.env (fun txn ->
+       f txn;
+       ()))
+
+let put_index_txn index txn db key value =
+  Map.set ~txn (map_for_index index db) key value
+
+let remove_index_txn index txn db key =
+  try Map.remove ~txn (map_for_index index db) key with Not_found -> ()
+
+let put_index index db key value =
+  with_write_txn db (fun txn -> put_index_txn index txn db key value)
+
+let remove_index index db key =
+  with_write_txn db (fun txn -> remove_index_txn index txn db key)
+
 let fold_index index db f =
   ensure_open db;
   let map = map_for_index index db in
@@ -100,16 +119,33 @@ let fold_index index db f =
   in
   loop ()
 
-let put_index index db key value =
+let fold_index_range index db ?from_key ?to_key f =
   ensure_open db;
-  ignore
-    (Txn.go Rw db.env (fun txn ->
-       Map.set ~txn (map_for_index index db) key value;
-       ()))
+  let map = map_for_index index db in
+  (try
+     Cursor.go Ro map (fun cursor ->
+       (match from_key with
+        | None -> (
+          try ignore (Cursor.first cursor) with Not_found -> raise Exit)
+        | Some key -> (
+          try ignore (Cursor.seek_range cursor key) with Not_found -> raise Exit));
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         (match to_key with
+          | Some bound when String.compare key bound > 0 -> raise Exit
+          | _ -> ());
+         f key value;
+         try
+           ignore (Cursor.next cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
 
-let remove_index index db key =
-  ensure_open db;
-  ignore
-    (Txn.go Rw db.env (fun txn ->
-       (try Map.remove ~txn (map_for_index index db) key with Not_found -> ());
-       ()))
+let copy_index_txn index txn from_db to_db =
+  fold_index index from_db (fun key value ->
+    put_index_txn index txn to_db key value)

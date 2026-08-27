@@ -90,17 +90,12 @@ let restore_meta lmdb =
   schema, max_eid, max_tx, duplicate_datoms
 
 let sync_indexes from_lmdb to_lmdb =
-  let clear_index index db =
-    let keys = ref [] in
-    Datascript_lmdb_db.fold_index index db (fun key _ -> keys := key :: !keys);
-    List.iter (fun key -> Datascript_lmdb_db.remove_index index db key) !keys
-  in
-  List.iter (fun index -> clear_index index to_lmdb) [ Eavt; Aevt; Avet ];
-  List.iter
-    (fun index ->
-      Datascript_lmdb_db.fold_index index from_lmdb (fun key value ->
-        Datascript_lmdb_db.put_index index to_lmdb key value))
-    [ Eavt; Aevt; Avet ]
+  if from_lmdb != to_lmdb then
+    Datascript_lmdb_db.with_write_txn to_lmdb (fun txn ->
+      List.iter
+        (fun index ->
+          Datascript_lmdb_db.copy_index_txn index txn from_lmdb to_lmdb)
+        [ Eavt; Aevt; Avet ])
 
 let store_db storage db =
   store_meta (lmdb storage) db
