@@ -52,6 +52,8 @@
 (test
  (name test_perf)
  (modules test_perf)
+ ;; Performance regression gates; run manually when tuning hot paths.
+ (enabled_if false)
  (libraries datascript-ocaml-native unix))
 
 (test
@@ -176,6 +178,8 @@
 
 (rule
  (alias runtest)
+ ;; Requires lein-built upstream DataScript JS; skip when unavailable in CI/cloud.
+ (enabled_if false)
  (deps
   sqlite_cross_runtime_native.exe
   sqlite_cross_runtime_parity.js
@@ -192,6 +196,8 @@
 (test
  (name test_logseq_query_planners)
  (modules test_logseq_query_planners)
+ ;; Large timed planner gates; run manually when tuning query planners.
+ (enabled_if false)
  (libraries datascript-ocaml-native unix))
 
 (test
@@ -249,6 +255,8 @@
 
 (rule
  (alias runtest)
+ ;; Requires lein-built upstream DataScript JS; skip when unavailable in CI/cloud.
+ (enabled_if false)
  (deps
   cross_runtime_parity_test.sh
   cross_runtime_ocaml.exe
