@@ -37,13 +37,20 @@ Two overlapping implementations:
 2. **`relation_of_same_entity_patterns`** (`impl/query_where.ml`) — relation fast path inside
    `eval_relation_rows`.
 
-Both use entity bitsets for constant intersection. Multi-attr same-entity queries with ≥2
-value patterns are handled only in `relation_of_same_entity_patterns` (`impl/query_where.ml`):
-driver attr scan plus per-entity attr lookup (`single_value_result`), matching Datahike's
-entity-group scan + in-index lookup. The `simple_same_entity_constant_rows` shortcut in
-`impl/datascript.ml` handles simpler shapes only (≤1 value var).
+Both use entity bitsets for constant intersection. Multi-attr same-entity queries use the
+Datahike entity-group pattern:
+
+- **One value var + constants (q2):** constant slice → per-entity `find_datom` lookup.
+- **Multiple value vars + constants (q-5-merge, q4):** constant slice → **driver attr scan**
+  (first value pattern) filtered by candidates → `find_datom` for remaining attrs. No
+  `(max_e+1)` value arrays.
+
+`simple_same_entity_constant_rows` handles both shapes when `max_datom_e ≤ 50_000`.
+`relation_of_same_entity_patterns` mirrors the same driver + lookup plan (multi-value with
+constants prefers driver scan over candidate-only lookup).
 
 **Gap:** Driver attr is still the first value pattern, not cost-based like Datahike's planner.
+Aevt `~e ~a` point reads use `array_find_exact_prefix` on `aevt_by_attr` (no Seq materialization).
 
 ## OR / NOT (q-or, q-not)
 
