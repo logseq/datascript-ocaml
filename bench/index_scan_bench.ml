@@ -260,7 +260,7 @@ let scans ~size =
   ; { name = "seek-eavt-mid-take-100"
     ; run =
         (fun db ->
-          datoms db Eavt ~e:mid ()
+          seek_datoms db Eavt ~e:mid ()
           |> Seq.take 100
           |> consume_seq)
     }
