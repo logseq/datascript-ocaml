@@ -2,168 +2,92 @@
 
 ## Status
 
-Accepted
+Accepted — Datahike-aligned logical/physical IR is live; relational interpreter
+remains the permanent fallback. `datascript.ml` shape-gate `simple_*` bypasses
+were removed.
 
 ## Context
 
-The query engine today evaluates `:where` clauses through a hybrid interpreter in
-`impl/query_where.ml`. Simple shapes already take dedicated fast paths — same-entity
-pattern fusion, AVET range scans for value predicates, hash-join for cross-entity
-patterns, and direct relation-to-find projection in `impl/query_api.ml`. This works
-well for many upstream DataScript queries and keeps semantics aligned with the public
-Clojure/ClojureScript engine.
+The query engine evaluates `:where` clauses through a hybrid interpreter in
+`impl/query_where.ml` (relation `{ attrs; rows }` path, then binding path).
+That interpreter is the Datahike-style **relational fallback**: it must remain
+for ineligible shapes (recursive rules, exotic callables, multi-source cases,
+DataScript error-order for `not`, etc.).
 
-However, the interpreter model has structural limits:
+Previously, `Datascript.q` also tried six benchmark-shaped `simple_*` gates that
+duplicated `query_where` logic and drifted from it. Those gates are removed.
 
-1. **No compile/execute split.** Each query re-derives index choices and clause
-   ordering from scratch. There is no reusable plan for repeated execution inside
-   benchmarks, reactive queries, or application hot loops.
+The planner mirrors Datahike's pipeline at the IR level:
 
-2. **Shape-gated fast paths.** Optimizations are tied to specific clause sequences.
-   Equivalent queries with reordered clauses or slightly different surface syntax can
-   miss the fast path and fall back to binding-based evaluation.
+```
+classify / build logical → lower (cost + readiness) → execute via relation ops
+  ↳ on ineligible / non-executable plans: relational interpreter
+```
 
-3. **Intermediate materialization.** Even when index access is narrow, many paths
-   build full `{ attrs; rows }` relations before projection. For large selective
-   scans (predicate/range queries over indexed attributes), row construction and
-   list allocation dominate runtime.
+Observable **results** stay DataScript-compatible. **Execution architecture**
+follows Datahike (explicit divergence from “implementation details match
+DataScript”).
 
-4. **No cost model.** Clause order follows source order or ad hoc heuristics. A
-   constant lookup followed by a wide scan can be chosen when the reverse order would
-   probe far fewer datoms.
-
-5. **Rule and join overhead.** Non-recursive rules and multi-clause joins still
-   round-trip through binding lists even when the rule body is a single indexed
-   pattern.
-
-Industry Datalog engines that compile queries to index plans share a common shape:
-analyze clauses into a logical plan, estimate access cost, order joins, lower to
-physical operators (range scan, merge scan, hash probe), and stream results without
-materializing full binding maps. The OCaml port should converge on that architecture
-while preserving DataScript semantics and the existing public query API (`q`, `q`,
-inputs, rules, temporal views).
-
-Performance is a hard requirement: native OCaml must lead tracked benchmark suites,
-and `js_of_ocaml` must stay at least on par with upstream DataScript JavaScript.
-Planner work is incomplete if it regresses those targets.
+Performance remains a hard requirement: native OCaml must lead tracked
+benchmarks; `js_of_ocaml` must stay at least on par with upstream DataScript JS.
 
 ## Decision
 
-Introduce a **compiled query planner** behind the existing query entry points. The
-planner will not add new public APIs. Parsed queries will optionally compile to a
-small logical plan IR, optimize clause order, lower to physical operators, and
-execute with streaming index access.
-
-### Logical plan IR
-
-Represent `:where` clauses as a tree of logical nodes:
+### Logical IR (`impl/query_plan.ml`)
 
 | Node | Meaning |
 | --- | --- |
-| `Scan` | Single pattern on one index (EAVT, AEVT, AVET, or VAET-equivalent path) |
-| `RangeScan` | AVET slice with optional open/closed bounds on value |
-| `MergeScan` | Same-entity multi-pattern intersection via synchronized cursors |
-| `HashJoin` | Cross-entity or cross-variable join on shared keys |
-| `Filter` | Comparison, equality, or callable predicate on bound columns |
-| `AntiJoin` | `not` / `not-join` exclusion |
-| `Union` | `or` / `or-join` branches |
-| `RuleExpand` | Inline non-recursive rule heads |
+| `LScan` | Single pattern |
+| `LEntityJoin` | Same-entity scans + foldable anti-scans + attached filters |
+| `LFilter` | Comparison / equality predicates |
+| `LUnion` | `or` / `or-join` |
+| `LAntiJoin` | `not` / `not-join` not folded into an entity group |
+| `LRuleExpand` | Non-recursive rule (usually inlined before lower) |
+| `LPassthrough` | Force relational fallback for that clause |
 
-Each node carries:
+### Lowering
 
-- bound and free variables
-- chosen index and prefix fields (e, a, v, tx)
-- estimated row count (cardinality hint)
-- source (`$` or named DB)
+- Index preference from ground components (EAVT / AEVT / AVET).
+- Entity-group legs ordered cheapest-first.
+- Filters attached when their vars ⊆ one entity group.
+- Readiness-aware schedule among physical ops.
+- Queries containing any `not` / `not-join` **keep source clause order** so
+  DataScript unbound-var errors remain observable.
 
-### Analysis phase
+### Execution
 
-1. **Constant propagation** — substitute single-value bindings from inputs and prior
-   nodes (same as upstream `substitute-constants`).
-2. **Index selection** — for each pattern, pick the narrowest index: AVET when attr
-   and value bounds exist; AEVT when only attr is ground; EAVT when entity is
-   ground; reverse-ref via VAET path.
-3. **Predicate pushdown** — move comparison clauses onto `RangeScan` bounds when the
-   compared variable is the pattern value and the attribute is AVET-indexed.
-4. **Same-entity detection** — collapse consecutive same-entity patterns into one
-   `MergeScan` node instead of sequential hash joins.
+Physical ops lower back to ordered clauses consumed by existing operators:
 
-### Optimization phase
+- `relation_of_same_entity_patterns`, `relation_of_pattern`, AVET range helpers
+- `hash_join`, `anti_join`, `union_relations`
+- Find projection in `query_api.ml`
 
-Use dynamic programming (Selinger-style) over join ordering for up to a small fixed
-number of logical nodes (typically ≤ 8, matching practical DataScript query size):
+Entry: `Datascript.q` → `Query_impl.q` → `q_sources_raw` → `eval_relation_rows`
+(with `plan_ordered_clauses`) → binding interpreter if needed.
 
-- **Cost estimates** from index cardinality hints: schema `:db/cardinality`, AVET
-  slice width, constant lookup size, and `max_datom_e` fallbacks.
-- **Join algorithm choice**: entity-key merge for same-entity; hash probe for
-  cross-entity when build side is smaller.
-- **Left-deep bias** for selective scans, mirroring upstream `query_v3` behavior.
+### Non-goals (deferred)
 
-Keep the current fast paths as **recognized plan shapes** during a transition period
-so behavior and performance do not regress while the generic planner matures.
-
-### Physical execution
-
-Lower logical nodes to streaming operators:
-
-1. **Range scan iterator** — walk AVET/AEVT slice; apply tight bounds (strict `>` /
-   `<` on integers uses `n±1` bounds to avoid post-filters).
-2. **Merge scan iterator** — seekGE + step for each same-entity leg; intersect on
-   entity id without building entity bitsets when all legs are direct indexed attrs.
-3. **Hash probe join** — build side from smaller relation; probe with entity or value
-   keys; reuse open-addressing tables keyed by `int` entity ids where possible.
-4. **Direct find projection** — when `:find` variables match scan column order, emit
-   result rows without `(var . result)` binding lists.
-
-Results flow as lazy `Seq.t` until the final `:find` projection; materialize only
-when deduplication, sorting, or aggregates require it.
-
-### Integration
-
-- **Entry**: `Query_api.q_sources_raw` tries `compile_and_execute` first; on
-  unsupported shapes, fall back to the current interpreter (no behavior change).
-- **Temporal views**: planner receives the same `source_context` as today (`as_of`,
-  `since`, filtered DBs) so index iterators read through existing `fold_datoms` /
-  `index_range` hooks.
-- **Rules**: non-recursive rules compile to `RuleExpand` + body subplan; recursive
-  rules stay on the interpreter until a fixed-point operator is added.
-- **Tests**: golden result counts per benchmark query at fixed seed/size; no
-  observable difference from interpreter path.
+- Full fused cursor pipelines / Selinger DP / count-slice cardinality
+- Semi-naive recursive fixpoint / stratum aggregates / prepared-query cache
+- Deleting the relational interpreter
 
 ## Consequences
 
 ### Positive
 
-- Repeated queries amortize analysis cost; benchmarks and app hot loops benefit.
-- Predicate and same-entity queries stream from index cursors with minimal
-  allocation.
-- Clause reordering becomes cost-driven instead of source-order dependent.
-- A single execution model replaces growing special-case branches in
-  `query_where.ml`.
+- One planner + one fallback (Datahike shape); no duplicate `simple_*` gates.
+- Logical entity grouping matches Datahike’s `LEntityJoin` model.
+- Dead stub IR (`left_deep_join` discarded, unused `RangeScan` constructors) replaced.
 
-### Negative / risks
+### Risks
 
-- Two execution paths until fallback coverage is complete; must keep parity tests
-  strict.
-- Planner bugs can be subtle (wrong join order, missed pushdown); need exhaustive
-  query fixtures.
-- `js_of_ocaml` code size may grow slightly; monitor bundle size.
-
-### Non-goals (initial phases)
-
-- SQL-style cost hints or user-provided plan overrides.
-- Parallel index scans.
-- New public planner or EXPLAIN APIs.
-
-## Implementation phases
-
-See `docs/query_planner_plan.md` for the step-by-step rollout, benchmarks gates,
-and file-level ownership.
+- Planner reordering must not change DataScript error surfaces (mitigated by
+  source-order preserve on NOT).
+- Cost estimates are still heuristic until real slice counts land.
 
 ## References
 
-- `docs/query_planner.md` — upstream DataScript v3 planner notes and current OCaml
-  relation evaluator status.
-- `impl/query_where.ml` — current interpreter and shape-gated fast paths.
-- `impl/query_api.ml` — relation-to-find direct projection.
-- Upstream `query_v3.cljc` — logical plan and collapse-rels model.
+- Datahike `doc/query-engine.md`, `src/datahike/query/*`
+- `docs/datahike-query-alignment.md`
+- `docs/query_implementation_comparison.md`
+- `impl/query_plan.ml`, `impl/query_where.ml`
