@@ -660,6 +660,24 @@ end) = struct
       in
       { attrs; rows; lookup_vars; unique_rows = false }
 
+  let union_relations left right =
+    if left.attrs <> right.attrs then
+      None
+    else
+      let lookup_vars =
+        List.fold_left
+          (fun lookup_vars ((var, _) as lookup_var) ->
+            if List.mem_assoc var lookup_vars then lookup_vars else lookup_var :: lookup_vars)
+          left.lookup_vars
+          right.lookup_vars
+      in
+      Some
+        { attrs = left.attrs
+        ; rows = left.rows @ right.rows
+        ; lookup_vars
+        ; unique_rows = left.unique_rows && right.unique_rows
+        }
+
   let anti_join left right =
     let common = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
     match common with
@@ -1649,6 +1667,10 @@ end) = struct
           in
           let compute_default_rows () =
             match value_var_patterns with
+            | _ :: _
+              when constant_patterns <> []
+                   && List.for_all (fun (_, attr) -> cardinality_one source_db attr) value_var_patterns ->
+              rows_from_cardinality_one_candidates value_var_patterns
             | (scan_value_var, scan_attr) :: remaining_value_vars
               when direct_attr scan_attr
                    && List.for_all
@@ -2167,6 +2189,14 @@ end) = struct
   let relation_only_clauses clauses =
     List.for_all relation_prefix_clause clauses
 
+  let relation_query_clauses clauses =
+    relation_only_clauses clauses
+    ||
+    match clauses with
+    | [ Or branches ] -> List.for_all (List.for_all relation_prefix_clause) branches
+    | [ SourceOr (_, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
+    | _ -> false
+
   let relation_has_comparison clauses =
     List.exists
       (function
@@ -2257,7 +2287,7 @@ end) = struct
     in
     List.for_all (fun var -> List.mem var relation.attrs) value_vars
 
-  let eval_relation_from_empty db sources default_source clauses =
+  let rec eval_relation_from_empty db sources default_source clauses =
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
@@ -2389,12 +2419,34 @@ end) = struct
       when (relation.rows <> [] || not (relation_prefix_has_multiple_clauses clauses))
            && relation_value_vars_covered relation clauses ->
         Some relation
-    | _ ->
-        apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses
+    | _ -> (
+      match clauses with
+      | [ Or branches ] -> eval_or_branch_relations db sources default_source branches
+      | [ SourceOr (source_name, branches) ] ->
+        let default_source = source db sources source_name in
+        eval_or_branch_relations db sources default_source branches
+      | _ ->
+        apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses)
+
+  and eval_or_branch_relations db sources default_source branches =
+    Query.ensure_or_branch_vars_match ~value_to_string:edn_string_of_value [] branches;
+    match
+      branches
+      |> List.filter_map (fun branch_clauses -> eval_relation_from_empty db sources default_source branch_clauses)
+    with
+    | [] -> Some { attrs = []; rows = []; lookup_vars = []; unique_rows = true }
+    | first :: rest ->
+      Some
+        (List.fold_left
+           (fun acc rel ->
+             match union_relations acc rel with
+             | Some merged -> merged
+             | None -> acc)
+           first rest)
 
   let eval_relation_rows db sources rules bindings clauses =
     let default_source = source db sources "$" in
-    match rules, bindings, relation_only_clauses clauses with
+    match rules, bindings, relation_query_clauses clauses with
     | [], [ [] ], true ->
       eval_relation_from_empty db sources default_source clauses
       |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)

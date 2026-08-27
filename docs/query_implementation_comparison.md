@@ -37,22 +37,13 @@ Two overlapping implementations:
 2. **`relation_of_same_entity_patterns`** (`impl/query_where.ml`) — relation fast path inside
    `eval_relation_rows`.
 
-Both use:
+Both use entity bitsets for constant intersection. Multi-attr same-entity queries with ≥2
+value patterns are handled only in `relation_of_same_entity_patterns` (`impl/query_where.ml`):
+driver attr scan plus per-entity attr lookup (`single_value_result`), matching Datahike's
+entity-group scan + in-index lookup. The `simple_same_entity_constant_rows` shortcut in
+`impl/datascript.ml` handles simpler shapes only (≤1 value var).
 
-- **Entity bitsets** (`Bytes`) for constant intersection (good).
-- **Full AEVT attr scans** to build `Array.make (max_datom_e + 1)` value tables when
-  `entity_count > 300` and ≥2 value attrs (`should_materialize_value_tables`).
-- Or **per-entity `find_datom`** when below that threshold.
-
-**Gap:** For q-5-merge @ 2000 entities (~1000 males), materialization runs **four full
-`primary_attr_datoms` scans** plus four `(max_e+1)` arrays, even though only ~1000 rows
-are needed. Datahike does one selective scan + O(1) merges per entity per attr.
-
-**Target fix (general, not a new fast path):**
-
-- Driver attr scan filtered by constant bitset.
-- Remaining attrs via `find_datom` / fused merge when `|candidates| ≪ max_e`.
-- Shared helper used by relation engine and same-entity shortcut; no duplicate logic.
+**Gap:** Driver attr is still the first value pattern, not cost-based like Datahike's planner.
 
 ## OR / NOT (q-or, q-not)
 
@@ -63,15 +54,12 @@ are needed. Datahike does one selective scan + O(1) merges per entity per attr.
 
 ### OCaml
 
-- `eval_clauses` on `(Or branches)` → `List.concat_map` per branch over **binding lists**
-  (`impl/query_where.ml` ~2842, ~3829).
-- Each branch re-runs full clause eval; results concatenated; dedupe/sort at end.
-- **No `relation_of_or`** in `eval_relation_from_empty` — OR never uses relation algebra.
+- `eval_relation_rows` / `eval_relation_from_empty` union OR branches via `union_relations`
+  (relation-level, Datahike `sum-rel` style).
+- `eval_clauses` on embedded `(Or branches)` still uses binding `List.concat_map` for non-relation
+  query shapes.
 
-**Gap:** Binding round-trips and list copying where Datahike unions tuple streams.
-
-**Target fix:** Add `union_relations` and handle `(Or …)` in `eval_relation_from_empty` /
-`eval_relation_rows` for pattern-only branches.
+**Gap:** OR inside larger clause lists (not Or-only relation queries) still round-trips bindings.
 
 ## Cross-entity / value join (q5)
 
@@ -137,7 +125,8 @@ are needed. Datahike does one selective scan + O(1) merges per entity per attr.
 Current `datascript.q` tries six shape gates before `Query_impl.q`. These are useful for
 parity work but **do not replace** a compiled executor:
 
-- Large DBs (`max_datom_e > 50_000`) always hit the general path for same-entity shapes.
+- Large DBs no longer bypass the same-entity fast path solely on `max_datom_e`; lookup
+  strategy avoids `(max_e+1)` arrays when the graph is large.
 - Duplicated logic between `datascript.ml` and `query_where.ml` drifts (e.g. value tables).
 - Benchmark wins on q5/q-or/q-rule came from bypassing the interpreter, not fixing it.
 
