@@ -258,6 +258,29 @@ let test_seek_respects_as_of_view () =
   check_string_list "seek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int seek_ages);
   check_string_list "rseek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int rseek_ages)
 
+let test_attr_caches_detach_and_preserve_untouched () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      ]
+      (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
+  in
+  (* Warm current-fact caches. *)
+  ignore (datoms_list db Aevt ~a:"name" ());
+  ignore (datoms_list db Aevt ~a:"age" ());
+  check_int "name cache warmed" 1 (if Hashtbl.mem db.aevt_by_attr "name" then 1 else 0);
+  check_int "age cache warmed" 1 (if Hashtbl.mem db.aevt_by_attr "age" then 1 else 0);
+  let tx0 = basis_tx db in
+  let past = as_of tx0 db in
+  check_int "as_of detaches attr caches" 0 (Hashtbl.length past.aevt_by_attr);
+  check_int "live name cache survives as_of" 1 (if Hashtbl.mem db.aevt_by_attr "name" then 1 else 0);
+  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  check_int "untouched name cache survives age write" 1 (if Hashtbl.mem db.aevt_by_attr "name" then 1 else 0);
+  check_int "touched age cache invalidated" 0 (if Hashtbl.mem db.aevt_by_attr "age" then 1 else 0);
+  check_string_list "name still readable after selective invalidate" [ "Alice"; "Bob" ]
+    (string_values db ~a:"name" ())
+
 let test_public_api_aliases () =
   let db =
     db_with [ Add (Entity_id 1, "name", String "Alice") ] (empty_db ~schema:[ "name", indexed ] ())
@@ -291,6 +314,8 @@ let () =
         ; test_case "temporal views preserve index parity" `Quick test_temporal_views_preserve_index_parity
         ; test_case "history cardinality many" `Quick test_history_cardinality_many
         ; test_case "seek and rseek respect as_of" `Quick test_seek_respects_as_of_view
+        ; test_case "attr caches detach and preserve untouched" `Quick
+            test_attr_caches_detach_and_preserve_untouched
         ; test_case "public api aliases" `Quick test_public_api_aliases
         ] )
     ]

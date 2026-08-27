@@ -108,15 +108,51 @@ let duplicate_datoms_by_attr duplicate_datoms =
   Hashtbl.iter (fun attr datoms -> Hashtbl.replace table attr (List.rev datoms)) table;
   table
 
-let invalidate_attr_tables db =
-  if Hashtbl.length db.aevt_by_attr = 0 && Hashtbl.length db.avet_by_attr = 0 then
-    db
-  else
+(** Copy-on-write drop of cache entries for attributes touched by [datoms].
+    Unaffected attr slices stay warm across append-only transactions. *)
+let invalidate_attr_tables_for_datoms datoms db =
+  let attrs =
+    datoms
+    |> List.map (fun d -> d.a)
+    |> List.sort_uniq String.compare
+  in
+  match attrs with
+  | [] -> db
+  | attrs ->
+    let drop_attr attr = List.mem attr attrs in
+    let copy_attr_table src =
+      if Hashtbl.length src = 0 then Hashtbl.create 0
+      else
+        let dst = Hashtbl.create (Hashtbl.length src) in
+        Hashtbl.iter
+          (fun attr value -> if not (drop_attr attr) then Hashtbl.replace dst attr value)
+          src;
+        dst
+    in
+    let copy_avet_entities src =
+      if Hashtbl.length src = 0 then Hashtbl.create 0
+      else
+        let dst = Hashtbl.create (Hashtbl.length src) in
+        Hashtbl.iter
+          (fun ((attr, _) as key) value ->
+            if not (drop_attr attr) then Hashtbl.replace dst key value)
+          src;
+        dst
+    in
     { db with
-      aevt_by_attr = Hashtbl.create 0
-    ; avet_by_attr = Hashtbl.create 0
-    ; avet_entities_by_attr_value = Hashtbl.create 0
+      aevt_by_attr = copy_attr_table db.aevt_by_attr
+    ; avet_by_attr = copy_attr_table db.avet_by_attr
+    ; avet_entities_by_attr_value = copy_avet_entities db.avet_entities_by_attr_value
     }
+
+(** Temporal shallow copies must not share mutable current-fact caches with the
+    live DB; history/as_of reads rebuild slices from raw indexes instead. *)
+let detach_attr_caches db =
+  { db with
+    aevt_by_attr = Hashtbl.create 0
+  ; avet_by_attr = Hashtbl.create 0
+  ; avet_entities_by_attr_value = Hashtbl.create 0
+  }
 
 let view_bounds db =
   { Tx_visibility.view_tx = db.max_tx; since_tx = db.since_tx; history = db.history }
@@ -272,10 +308,10 @@ let refresh_indexes_with_added_datoms db added_datoms =
     ; duplicate_avet_by_attr = db.duplicate_avet_by_attr
     ; max_datom_e
     }
-    |> invalidate_attr_tables
+    |> invalidate_attr_tables_for_datoms added_datoms
   else
     { db with pending_datoms = db.pending_datoms @ added_datoms; max_datom_e }
-    |> invalidate_attr_tables
+    |> invalidate_attr_tables_for_datoms added_datoms
 
 let refresh_indexes_with_tx_data db tx_data =
   if tx_data = [] then db
@@ -287,10 +323,10 @@ let refresh_indexes_with_tx_data db tx_data =
         Index.append_tx_data ~avet tx_data db.eavt_index db.aevt_index db.avet_index
       in
       { db with eavt_index; aevt_index; avet_index; max_datom_e }
-      |> invalidate_attr_tables
+      |> invalidate_attr_tables_for_datoms tx_data
     else
       { db with pending_datoms = db.pending_datoms @ tx_data; max_datom_e }
-      |> invalidate_attr_tables
+      |> invalidate_attr_tables_for_datoms tx_data
 
 let same_stored_datom left right =
   left.e = right.e
@@ -324,7 +360,7 @@ let refresh_indexes_with_removed_datoms db removed_datoms =
     ; duplicate_avet_datoms
     ; pending_datoms
     }
-    |> invalidate_attr_tables
+    |> invalidate_attr_tables_for_datoms removed_datoms
 
 let snapshot_db db = db
 
@@ -344,11 +380,11 @@ let as_of tx db =
        ^ string_of_int tx
        ^ " is after database basis "
        ^ string_of_int db.store_max_tx);
-  { db with max_tx = tx; as_of_tx = Some tx }
+  detach_attr_caches { db with max_tx = tx; as_of_tx = Some tx }
 
-let since tx db = { db with since_tx = Some tx }
+let since tx db = detach_attr_caches { db with since_tx = Some tx }
 
-let history db = { db with history = true }
+let history db = detach_attr_caches { db with history = true }
 
 let is_history db = db.history
 
@@ -522,6 +558,21 @@ let duplicate_attr_datoms db index attr =
   | Avet -> Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[]
   | Eavt -> duplicate_index_datoms db index
 
+let cache_avet_entities_for_attr db attr datoms =
+  let by_value = Hashtbl.create 16 in
+  List.iter
+    (fun datom ->
+      let existing = Option.value (Hashtbl.find_opt by_value datom.v) ~default:[] in
+      Hashtbl.replace by_value datom.v (datom.e :: existing))
+    datoms;
+  Hashtbl.iter
+    (fun value entity_ids ->
+      Hashtbl.replace
+        db.avet_entities_by_attr_value
+        (attr, value)
+        (Array.of_list (List.rev entity_ids)))
+    by_value
+
 let primary_attr_datoms db index attr =
   let attr_prefix_datoms _index index_set =
     Index.fold_attr_prefix (fun acc datom -> datom :: acc) [] index_set attr |> List.rev
@@ -552,7 +603,9 @@ let primary_attr_datoms db index attr =
          merge_sorted_datoms Avet (attr_prefix_datoms Avet db.avet_index) pending_attr
          |> apply_db_view db
        in
-       if not temporal then Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
+       if not temporal then (
+         Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
+         cache_avet_entities_for_attr db attr datoms);
        datoms)
   | Eavt ->
     merge_sorted_datoms Eavt (Index.to_list db.eavt_index) pending_attr |> apply_db_view db
