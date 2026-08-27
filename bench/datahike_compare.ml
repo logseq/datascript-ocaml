@@ -2,16 +2,36 @@ open Datascript
 
 (* Align with Datahike benchmark.datascript-bench: 20k people, query suite, timing protocol. *)
 
-type config = { size : int; warmup_ms : float; sample_ms : float; repeats : int; step : int }
+type config =
+  { size : int; warmup_ms : float; sample_ms : float; repeats : int; step : int; jit_warmup : int }
 
-let default_config = { size = 20_000; warmup_ms = 2000.; sample_ms = 2000.; repeats = 5; step = 10 }
+let default_config = { size = 20_000; warmup_ms = 200.; sample_ms = 200.; repeats = 2; step = 10; jit_warmup = 100 }
+
+let int_from_env name default =
+  match Sys.getenv_opt name with
+  | Some value -> int_of_string value
+  | None -> default
+
+let float_from_env name default =
+  match Sys.getenv_opt name with
+  | Some value -> float_of_string value
+  | None -> default
+
+let config_from_env base =
+  { base with
+    warmup_ms = float_from_env "BENCH_WARMUP_MS" base.warmup_ms
+  ; sample_ms = float_from_env "BENCH_SAMPLE_MS" base.sample_ms
+  ; repeats = int_from_env "BENCH_REPEATS" base.repeats
+  ; jit_warmup = int_from_env "BENCH_JIT_WARMUP" base.jit_warmup
+  }
 
 let parse_args () =
-  let config = ref default_config in
+  let config = ref (config_from_env default_config) in
   let set_size value = config := { !config with size = int_of_string value } in
   let set_warmup value = config := { !config with warmup_ms = float_of_string value } in
   let set_sample_ms value = config := { !config with sample_ms = float_of_string value } in
   let set_repeats value = config := { !config with repeats = int_of_string value } in
+  let set_jit_warmup value = config := { !config with jit_warmup = int_of_string value } in
   let rec loop = function
     | [] -> !config
     | "--size" :: value :: rest ->
@@ -25,6 +45,9 @@ let parse_args () =
       loop rest
     | "--repeats" :: value :: rest ->
       set_repeats value;
+      loop rest
+    | "--jit-warmup" :: value :: rest ->
+      set_jit_warmup value;
       loop rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
@@ -200,13 +223,15 @@ let build_db size =
   let db = if follow_ops = [] then db else db_with follow_ops db in
   refresh_db_indexes db
 
-let warmup_queries db =
-  List.iter
-    (fun query ->
-      for _ = 1 to 500 do
-        query.run db
-      done)
-    queries
+let warmup_queries jit_warmup db =
+  if jit_warmup <= 0 then ()
+  else
+    List.iter
+      (fun query ->
+        for _ = 1 to jit_warmup do
+          query.run db
+        done)
+      queries
 
 let main () =
   let config = parse_args () in
@@ -221,11 +246,12 @@ let main () =
   Printf.printf "warmup-ms\t%.0f\n%!" config.warmup_ms;
   Printf.printf "sample-ms\t%.0f\n%!" config.sample_ms;
   Printf.printf "repeats\t%d\n%!" config.repeats;
+  Printf.printf "jit-warmup\t%d\n%!" config.jit_warmup;
   Printf.printf "db-mode\tshared\n%!";
   Printf.eprintf "Building shared database (%d entities)...\n%!" config.size;
   let db = build_db config.size in
-  Printf.eprintf "JIT pre-warmup...\n%!";
-  warmup_queries db;
+  Printf.eprintf "JIT pre-warmup (%d/query)...\n%!" config.jit_warmup;
+  warmup_queries config.jit_warmup db;
   Printf.eprintf "Running benchmarks...\n%!";
   List.iter
     (fun query ->

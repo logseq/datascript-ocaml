@@ -904,6 +904,12 @@ let exact_prefix_datoms context db index e a v tx =
           (match merged_index db || pending_overlay db, index, e, a, v, tx with
            | false, Avet, None, Some _, Some _, None ->
              Some (avet_datoms_by_value_seq context db (Option.get a) (Option.get v))
+           | false, Aevt, _, Some attr, _, _ -> (
+             match Hashtbl.find_opt db.aevt_by_attr attr with
+             | Some arr ->
+               Some (List.to_seq (array_exact_prefix_slice cmp bound arr))
+             | None ->
+               Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Aevt) |> Index.to_seq))
            | false, _, _, _, _, _ ->
              Some (Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq)
            | true, _, _, _, _, _ ->
@@ -935,6 +941,12 @@ let exact_prefix_datoms_list context db index e a v tx =
          (match index, a, v, exact_attr_prefix with
           | Avet, Some attr, Some value, false -> avet_datoms_by_value context db attr value
           | (Aevt | Avet), Some attr, None, true -> primary_attr_datoms db index attr
+          | Aevt, Some attr, _, false -> (
+            match Hashtbl.find_opt db.aevt_by_attr attr with
+            | Some arr -> array_exact_prefix_slice cmp bound arr
+            | None ->
+              Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Aevt)
+              |> Index.seq_to_list)
           | _ ->
             Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index)
             |> Index.seq_to_list)
