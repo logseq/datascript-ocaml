@@ -24,28 +24,35 @@ let exec_sql t sql =
   ensure_open t;
   check t sql (Sqlite3.exec t.db sql)
 
+let apply_open_pragmas t =
+  exec_sql t "PRAGMA journal_mode=WAL;";
+  exec_sql t "PRAGMA synchronous=NORMAL;";
+  exec_sql t "PRAGMA busy_timeout=5000;";
+  exec_sql t "PRAGMA foreign_keys=ON;"
+
 let ensure_schema db =
   List.iter
     (fun index ->
       exec_sql db
         (Printf.sprintf
-           "CREATE TABLE IF NOT EXISTS %s (key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL);"
+           "CREATE TABLE IF NOT EXISTS %s (\n\
+           \  key BLOB PRIMARY KEY NOT NULL,\n\
+           \  value BLOB NOT NULL\n\
+            ) WITHOUT ROWID;"
            (table_name index)))
     [ Eavt; Aevt; Avet ];
   exec_sql db
-    "CREATE TABLE IF NOT EXISTS ds_meta (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL);"
+    "CREATE TABLE IF NOT EXISTS ds_meta (\n\
+    \  key TEXT PRIMARY KEY NOT NULL,\n\
+    \  value BLOB NOT NULL\n\
+     ) WITHOUT ROWID;"
 
-let remove_path path =
-  if Sys.file_exists path then Sys.remove path
-
-let open_db path =
-  remove_path path;
+let open_path path =
   let db = Sqlite3.db_open path in
   let t = { path; db; closed = false } in
+  apply_open_pragmas t;
   ensure_schema t;
   t
-
-let open_path path = open_db path
 
 let temps_created = ref 0
 
@@ -56,7 +63,7 @@ let close t =
 
 let create_temp () =
   let t =
-    open_db
+    open_path
       (Filename.temp_file ~temp_dir:(Filename.get_temp_dir_name ()) "datascript_sqlite" ".sqlite")
   in
   Gc.finalise
@@ -69,7 +76,9 @@ let create_temp () =
 
 let sync t =
   ensure_open t;
-  exec_sql t "PRAGMA synchronous = FULL;"
+  exec_sql t "PRAGMA synchronous=FULL;";
+  exec_sql t "PRAGMA wal_checkpoint(FULL);";
+  exec_sql t "PRAGMA synchronous=NORMAL;"
 
 let meta_get db key =
   ensure_open db;
@@ -202,6 +211,37 @@ let fold_index_range_until index db ?from_key ?stop f =
     ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
     (fun () ->
       (match from_key with
+       | None -> ()
+       | Some key -> check db sql (Sqlite3.bind_blob stmt 1 key));
+      let rec loop () =
+        match Sqlite3.step stmt with
+        | Sqlite3.Rc.ROW ->
+            let key = Sqlite3.column_blob stmt 0 in
+            let value = Sqlite3.column_blob stmt 1 in
+            (match stop with
+             | Some stop when stop key value -> ()
+             | _ ->
+                 f key value;
+                 loop ())
+        | Sqlite3.Rc.DONE -> ()
+        | rc -> check db sql rc
+      in
+      loop ())
+
+let fold_index_range_desc_until index db ?hi_key ?stop f =
+  ensure_open db;
+  let sql =
+    match hi_key with
+    | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key DESC;" (table_name index)
+    | Some _ ->
+      Printf.sprintf "SELECT key, value FROM %s WHERE key <= ? ORDER BY key DESC;"
+        (table_name index)
+  in
+  let stmt = Sqlite3.prepare db.db sql in
+  Fun.protect
+    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
+    (fun () ->
+      (match hi_key with
        | None -> ()
        | Some key -> check db sql (Sqlite3.bind_blob stmt 1 key));
       let rec loop () =

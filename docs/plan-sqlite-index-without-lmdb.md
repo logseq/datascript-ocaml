@@ -187,8 +187,8 @@ Rename for honesty (can be gradual):
 
 - [x] Implement Index surface over `Datascript_sqlite_db` (codec reused).
 - [x] Wire native Index dispatch `Lmdb | Sqlite`.
-- [ ] Optional: rename codec package to neutral `datascript_index_codec` (follow-up).
-- [ ] Optional: SQL `ORDER BY key DESC` for rslice (parity still uses materialize+rev like LMDB).
+- [x] Rename codec package to neutral `datascript_index_codec`.
+- [x] SQL `ORDER BY key DESC` for rslice via `fold_index_range_desc_until`.
 
 **Exit:** SQLite Index round-trips without constructing an LMDB mirror for Share sessions.
 
@@ -203,19 +203,17 @@ Rename for honesty (can be gradual):
 
 ### Phase 4 — Hardening & parity
 
-1. Tx-filter / history / as-of / since: apply the same read pipeline as LMDB (`design-tx-filter-history.md`); store remains SQLite tables.
-2. WAL / synchronous pragmas: align with dbval defaults where safe (`WAL`, `synchronous=NORMAL` for bench; durable sync for `Storage.sync`).
-3. Optional schema tweak: `WITHOUT ROWID` like dbval (benchmark before adopting).
-4. Reverse scan + large-range streaming: avoid full-table materialization where LMDB uses cursors.
-5. Document operator choice: LMDB for mmap/perf, SQLite for single-file / ops simplicity.
+1. [x] Tx-filter / history / as-of / since on SQLite Share path (same read pipeline; covered by sqlite temporal tests).
+2. [x] WAL / synchronous pragmas: open `WAL` + `NORMAL`; `Storage.sync` → FULL + wal_checkpoint.
+3. [x] `WITHOUT ROWID` on index/meta tables (dbval-style).
+4. [x] Reverse scan via `fold_index_range_desc_until` for `rslice_seq`.
+5. [x] Document operator choice: `docs/lmdb-vs-sqlite.md`.
+6. [x] Codec rename: `Datascript_index_codec` / `datascript-ocaml-native.index-codec`.
+7. [x] `open_path` no longer deletes existing files (reopen persistence).
 
 ### Phase 5 (optional) — Tuple_store extraction
 
-If LMDB and SQLite Index duplication hurts:
-
-- Extract internal `Index_kv` signature: `put` / `remove` / `with_write_txn` / `fold_range ~reverse`.
-- Single `Datascript_index` functor or shared module.
-- Do **not** require a single physical table or dbval blob store unless product needs it.
+Deferred: LMDB and SQLite Index duplication is acceptable for now; revisit if a third backend lands.
 
 ## Package / dependency matrix (target)
 

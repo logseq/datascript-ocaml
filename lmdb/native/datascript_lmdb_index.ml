@@ -10,13 +10,13 @@ let db_of t = t.db
 let make index db = { db; which = index }
 let cmp_for index = Datascript_types.Compare.compare_datom index
 
-let datom_key t datom = Datascript_lmdb_codec.encode_datom_key t.which datom
+let datom_key t datom = Datascript_index_codec.encode_datom_key t.which datom
 
-let decode_entry index key value = Datascript_lmdb_codec.decode_index_entry index key value
+let decode_entry index key value = Datascript_index_codec.decode_index_entry index key value
 
 let put_datom_txn txn t datom =
   let key = datom_key t datom in
-  let value = Datascript_lmdb_codec.encode_index_value t.which datom in
+  let value = Datascript_index_codec.encode_index_value t.which datom in
   Datascript_lmdb_db.put_index_txn t.which txn t.db key value
 
 let empty index db = make index db
@@ -135,7 +135,7 @@ let fold_stored_prefix t attr f acc =
   Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
     let datom =
       match t.which with
-      | Avet -> Datascript_lmdb_codec.decode_avet_key_at attr key
+      | Avet -> Datascript_index_codec.decode_avet_key_at attr key
       | _ -> decode_entry t.which key value
     in
     acc := f !acc datom);
@@ -145,12 +145,12 @@ let fold_attr_exact_prefix f init t attr =
   fold_stored_prefix t attr (fun acc datom -> if datom.a = attr then f acc datom else acc) init
 
 let fold_stored_attr_value_prefix t attr value f acc =
-  let prefix = Datascript_lmdb_codec.encode_index_attr_value_prefix t.which attr value in
+  let prefix = Datascript_index_codec.encode_index_attr_value_prefix t.which attr value in
   let acc = ref acc in
   Datascript_lmdb_db.fold_index_prefix t.which t.db prefix (fun key value ->
     let datom =
       match t.which with
-      | Avet -> Datascript_lmdb_codec.decode_avet_key_at attr key
+      | Avet -> Datascript_index_codec.decode_avet_key_at attr key
       | _ -> decode_entry t.which key value
     in
     acc := f !acc datom);
@@ -165,21 +165,21 @@ let avet_attr_prefix attr =
 let fold_stored_avet_value_range t attr ?start_value ?stop_value _compare_value f acc =
   let from_key =
     match start_value with
-    | Some value -> Datascript_lmdb_codec.encode_index_attr_value_prefix Avet attr value
+    | Some value -> Datascript_index_codec.encode_index_attr_value_prefix Avet attr value
     | None -> avet_attr_prefix attr
   in
   let acc = ref acc in
   Datascript_lmdb_db.fold_index_range_until Avet t.db ~from_key
     ~stop:(fun key _value ->
-      if Datascript_lmdb_codec.avet_key_attr key <> attr then
+      if Datascript_index_codec.avet_key_attr key <> attr then
         true
       else
         match stop_value with
         | None -> false
         | Some stop ->
-            Datascript_types.Compare.compare_value (Datascript_lmdb_codec.avet_key_value key) stop > 0)
+            Datascript_types.Compare.compare_value (Datascript_index_codec.avet_key_value key) stop > 0)
     (fun key _value ->
-      let datom = Datascript_lmdb_codec.decode_avet_key_at attr key in
+      let datom = Datascript_index_codec.decode_avet_key_at attr key in
       match start_value with
       | None -> acc := f !acc datom
       | Some _ -> acc := f !acc datom);

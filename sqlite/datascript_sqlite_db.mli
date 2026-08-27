@@ -26,5 +26,12 @@ val fold_index_range_until :
   ?stop:(string -> string -> bool) ->
   (string -> string -> unit) ->
   unit
+val fold_index_range_desc_until :
+  index ->
+  t ->
+  ?hi_key:string ->
+  ?stop:(string -> string -> bool) ->
+  (string -> string -> unit) ->
+  unit
 
 val copy_index : index -> t -> t -> unit

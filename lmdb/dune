@@ -1,9 +1,9 @@
 (library
- (name datascript_lmdb_codec)
- (public_name datascript-ocaml-native.lmdb-codec)
+ (name datascript_index_codec)
+ (public_name datascript-ocaml-native.index-codec)
  (wrapped false)
  (modes native melange byte)
- (modules datascript_lmdb_codec)
+ (modules datascript_index_codec)
  (libraries datascript_types))
 
 (library

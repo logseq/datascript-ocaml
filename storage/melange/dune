@@ -9,4 +9,4 @@
   datascript_storage_meta
   datascript_storage_lmdb
   datascript_storage_protocol)
- (libraries datascript_lmdb_codec lmdb_db_melange lmdb_index_melange datascript_types))
+ (libraries datascript_index_codec lmdb_db_melange lmdb_index_melange datascript_types))

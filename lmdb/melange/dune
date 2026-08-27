@@ -6,7 +6,7 @@
  (wrapped false)
  (modes melange byte)
  (modules datascript_lmdb_db)
- (libraries datascript_lmdb_codec))
+ (libraries datascript_index_codec))
 
 (library
  (name lmdb_index_melange)
@@ -14,4 +14,4 @@
  (wrapped false)
  (modes melange byte)
  (modules datascript_lmdb_index)
- (libraries datascript_lmdb_codec lmdb_db_melange))
+ (libraries datascript_index_codec lmdb_db_melange))

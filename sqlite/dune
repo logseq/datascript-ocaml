@@ -12,7 +12,7 @@
  (wrapped false)
  (modes native)
  (modules datascript_sqlite_index)
- (libraries datascript_lmdb_codec sqlite_db_native datascript_types))
+ (libraries datascript_index_codec sqlite_db_native datascript_types))
 
 (library
  (name datascript_sqlite)
@@ -26,7 +26,7 @@
  (libraries
   datascript-ocaml-native
   storage_native
-  datascript_lmdb_codec
+  datascript_index_codec
   sqlite_db_native
   sqlite_index_native
   melange-transit-native))
