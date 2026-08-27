@@ -92,7 +92,42 @@ let test_storage__test_conn () =
        [ 1, "name", String "Ivan"; 2, "name", String "Oleg" ]
        (datoms restored_db Eavt ()))
 
+let test_storage__test_multi_tx_incremental_store () =
+  let storage = memory_storage () in
+  let db =
+    empty_db ~schema:[ "name", indexed; "age", indexed ] ()
+    |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 30) ]
+  in
+  let tx1 = basis_tx db in
+  store ~storage db;
+  let db = db_with [ Add (Entity_id 1, "age", Int 31) ] db in
+  store ~storage db;
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "restore should read incrementally stored db"
+  in
+  let current_ages =
+    datoms restored Eavt ~a:"age" ()
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  in
+  if current_ages <> [ 31 ] then failf "restored db should see current age 31, got %S" (string_of_int (List.hd current_ages));
+  let past = as_of tx1 restored in
+  let past_ages =
+    datoms past Eavt ~a:"age" ()
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  in
+  if past_ages <> [ 30 ] then failf "restored as_of should see historical age 30";
+  let hist_ages =
+    datoms (history restored) Eavt ~a:"age" ()
+    |> List.filter (fun d -> d.added)
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.sort compare
+  in
+  if hist_ages <> [ 30; 31 ] then failf "restored history should expose both age assertions"
+
 let () =
   test_storage__test_basics ();
   test_storage__test_restored_db_addresses ();
-  test_storage__test_conn ()
+  test_storage__test_conn ();
+  test_storage__test_multi_tx_incremental_store ()

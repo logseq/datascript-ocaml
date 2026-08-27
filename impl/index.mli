@@ -8,7 +8,7 @@ val create_lmdb : storage option -> lmdb * storage option
 val lmdb_of : lmdb -> lmdb
 val db_of : t -> lmdb
 val lmdb_for_storage : storage -> lmdb
-val sync_indexes_to_storage : t -> t -> t -> storage -> unit
+val sync_indexes_to_storage : since_tx:tx -> t -> t -> t -> storage -> unit
 val load_indexes_from_storage : storage -> lmdb -> unit
 
 val empty : index -> lmdb -> t

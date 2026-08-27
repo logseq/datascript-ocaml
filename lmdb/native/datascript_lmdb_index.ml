@@ -139,6 +139,15 @@ let sync_merged_to_lmdb t target_lmdb =
       clear_index_txn txn t.which target_lmdb;
       Datascript_lmdb_db.copy_index_txn t.which txn t.db target_lmdb)
 
+let sync_append_since_tx ~since_tx t target_lmdb =
+  if t.db == target_lmdb then ()
+  else
+    let target = make t.which target_lmdb in
+    Datascript_lmdb_db.with_write_txn target_lmdb (fun txn ->
+      fold_stored t (fun () datom ->
+        if datom.tx > since_tx then put_datom_txn txn target datom)
+      ())
+
 let copy t = t
 
 let flush t = t

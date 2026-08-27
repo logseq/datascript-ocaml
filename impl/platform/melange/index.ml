@@ -19,11 +19,11 @@ let db_of t = Datascript_lmdb_index.db_of (project t)
 
 let lmdb_for_storage storage = Datascript_storage_lmdb.lmdb storage
 
-let sync_indexes_to_storage eavt aevt avet target_storage =
+let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
   let target = Datascript_storage_lmdb.lmdb target_storage in
-  Datascript_lmdb_index.sync_merged_to_lmdb (project eavt) target;
-  Datascript_lmdb_index.sync_merged_to_lmdb (project aevt) target;
-  Datascript_lmdb_index.sync_merged_to_lmdb (project avet) target
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project eavt) target;
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project aevt) target;
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project avet) target
 
 let load_indexes_from_storage storage target_lmdb =
   let source = Datascript_storage_lmdb.lmdb storage in

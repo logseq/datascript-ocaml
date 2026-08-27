@@ -9,7 +9,13 @@ let memory_storage = Datascript_storage_lmdb.memory_storage
 let store ?storage db =
   match storage, db.storage_ref with
   | Some target_storage, _ | None, Some target_storage ->
-      Index.sync_indexes_to_storage db.eavt_index db.aevt_index db.avet_index target_storage;
+      let target_lmdb = Index.lmdb_for_storage target_storage in
+      if Index.db_of db.eavt_index != target_lmdb then (
+        let _, _, stored_max_tx, _ =
+          Datascript_storage_lmdb.restore_meta (Datascript_storage_lmdb.lmdb target_storage)
+        in
+        Index.sync_indexes_to_storage ~since_tx:stored_max_tx db.eavt_index db.aevt_index db.avet_index
+          target_storage);
       Datascript_storage_lmdb.store_db target_storage db
   | None, None -> invalid_arg "db has no attached storage"
 
