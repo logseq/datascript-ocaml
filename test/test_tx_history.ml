@@ -281,6 +281,34 @@ let test_attr_caches_detach_and_preserve_untouched () =
   check_string_list "name still readable after selective invalidate" [ "Alice"; "Bob" ]
     (string_values db ~a:"name" ())
 
+let test_as_of_instant_and_purge_history_before () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "age", indexed ] ()
+    |> fun db ->
+    (transact
+       ~tx_meta:[ "db/txInstant", Instant 1_000 ]
+       db
+       [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]).db_after
+  in
+  let tx0 = basis_tx db in
+  let db =
+    (transact
+       ~tx_meta:[ "db/txInstant", Instant 2_000 ]
+       db
+       [ Add (Entity_id 1, "age", Int 30) ]).db_after
+  in
+  let past = as_of_instant (Instant 1_500) db in
+  check_int "as_of_instant resolves to first tx" tx0 (basis_tx past);
+  check_string_list "as_of_instant sees age 25" [ "25" ]
+    (List.map string_of_int (int_values past ~e:1 ~a:"age" ()));
+  let db2, removed = purge_history_before (basis_tx db) db in
+  check_int "purge_history_before removes superseded history" 1 (if removed <> [] then 1 else 0);
+  check_string_list "current age remains after purge-before" [ "30" ]
+    (List.map string_of_int (int_values db2 ~e:1 ~a:"age" ()));
+  check_string_list "purged history no longer exposes old age" []
+    (history_asserted_values db2 ~a:"age" ~e:1 ()
+     |> List.filter (fun s -> s = "25"))
+
 let test_public_api_aliases () =
   let db =
     db_with [ Add (Entity_id 1, "name", String "Alice") ] (empty_db ~schema:[ "name", indexed ] ())
@@ -316,6 +344,8 @@ let () =
         ; test_case "seek and rseek respect as_of" `Quick test_seek_respects_as_of_view
         ; test_case "attr caches detach and preserve untouched" `Quick
             test_attr_caches_detach_and_preserve_untouched
+        ; test_case "as_of_instant and purge_history_before" `Quick
+            test_as_of_instant_and_purge_history_before
         ; test_case "public api aliases" `Quick test_public_api_aliases
         ] )
     ]

@@ -125,4 +125,6 @@ let settings (db : db) =
   ; "storage", Bool (Option.is_some db.storage_ref)
   ]
 
-let collect_garbage _storage = ()
+let collect_garbage storage =
+  let lmdb = Datascript_storage_lmdb.lmdb storage in
+  Datascript_storage_lmdb.sync lmdb

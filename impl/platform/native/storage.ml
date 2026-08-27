@@ -97,4 +97,10 @@ let settings (_db : db) =
   ; "storage", Bool (Option.is_some _db.storage_ref)
   ]
 
-let collect_garbage _storage = ()
+let collect_garbage storage =
+  ensure_live storage;
+  match kind_of storage with
+  | k when k = storage_kind_lmdb || k = storage_kind_memory ->
+    (try Datascript_lmdb_db.sync (Datascript_storage_protocol.db_for_storage storage) with
+     | Invalid_argument _ -> ())
+  | _ -> ()

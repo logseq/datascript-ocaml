@@ -150,9 +150,12 @@ module Db : sig
   val since_tx : db -> tx option
   val temporal_view : db -> bool
   val as_of : tx -> db -> db
+  val as_of_instant : value -> db -> db
   val since : tx -> db -> db
   val history : db -> db
   val is_history : db -> bool
+  val resolve_tx_at_instant : value -> db -> tx
+  val purge_history_before : tx -> db -> db * datom list
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
@@ -399,9 +402,12 @@ val since_t : db -> tx option
 val since_tx : db -> tx option
 val temporal_view : db -> bool
 val as_of : tx -> db -> db
+val as_of_instant : value -> db -> db
 val since : tx -> db -> db
 val history : db -> db
 val is_history : db -> bool
+val resolve_tx_at_instant : value -> db -> tx
+val purge_history_before : tx -> db -> db * datom list
 module Tx_visibility : module type of Tx_visibility
 module Query_plan : sig
   type index_choice =

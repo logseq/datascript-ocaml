@@ -82,9 +82,12 @@ let as_of_t = Db_impl.as_of_t
 let since_t = Db_impl.since_t
 let temporal_view = Db_impl.temporal_view
 let as_of = Db_impl.as_of
+let as_of_instant = Db_impl.as_of_instant
 let since = Db_impl.since
 let history = Db_impl.history
 let is_history = Db_impl.is_history
+let resolve_tx_at_instant = Db_impl.resolve_tx_at_instant
+let purge_history_before = Db_impl.purge_history_before
 let as_of_tx = Db_impl.as_of_tx
 let since_tx = Db_impl.since_tx
 
@@ -862,6 +865,15 @@ let transact_report ?(tx_meta = []) db tx_ops =
     invalid_arg "Cannot transact against an as-of/since/history database value";
   let db_before = snapshot_db db in
   let db_after, tempids, tx_data, purged_datoms = apply_tx tx_ops db in
+  let db_after, tx_data =
+    match List.assoc_opt "db/txInstant" tx_meta with
+    | None -> db_after, tx_data
+    | Some (Instant _ as instant) ->
+      let tx = db_after.max_tx in
+      let stamped = datom ~tx ~e:tx ~a:"db/txInstant" ~v:instant () in
+      Db_impl.refresh_indexes_with_tx_data db_after [ stamped ], tx_data @ [ stamped ]
+    | Some _ -> invalid_arg ":db/txInstant must be an Instant value"
+  in
   { db_before; db_after; tx_data; tempids; tx_meta; purged_datoms }
 
 let transact ?(tx_meta = []) db tx_ops =

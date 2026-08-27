@@ -654,6 +654,65 @@ let reverse_index_datoms_seq db index =
       indexed
       duplicates
 
+let instant_millis = function
+  | Instant ms -> Some ms
+  | _ -> None
+
+(** Resolve the latest transaction whose [:db/txInstant] is <= [instant]. *)
+let resolve_tx_at_instant instant db =
+  let target =
+    match instant with
+    | Instant ms -> ms
+    | _ -> invalid_arg "as_of_instant requires Instant value"
+  in
+  let best = ref None in
+  let consider datom =
+    match instant_millis datom.v with
+    | Some ms when ms <= target && datom.added ->
+      (match !best with
+       | None -> best := Some (datom.e, ms)
+       | Some (_, best_ms) when ms >= best_ms -> best := Some (datom.e, ms)
+       | Some _ -> ())
+    | _ -> ()
+  in
+  (match primary_attr_datoms db Aevt "db/txInstant" with
+   | [] ->
+     List.iter
+       (fun d -> if d.a = "db/txInstant" then consider d)
+       (raw_index_datoms_list db Eavt)
+   | datoms -> List.iter consider datoms);
+  match !best with
+  | Some (tx, _) -> tx
+  | None ->
+    invalid_arg "as_of_instant: no :db/txInstant at or before the given Instant"
+
+let as_of_instant instant db = as_of (resolve_tx_at_instant instant db) db
+
+(** Physically drop history facts with [tx < before] while keeping the current
+    projection and all datoms at or after [before]. *)
+let purge_history_before before db =
+  if temporal_view db then
+    invalid_arg "Cannot purge history against an as-of/since/history database value";
+  if before > db.store_max_tx then
+    invalid_arg
+      ("purge_history_before tx "
+       ^ string_of_int before
+       ^ " is after database basis "
+       ^ string_of_int db.store_max_tx);
+  let raw = raw_index_datoms_list db Eavt in
+  let visible = apply_db_view db raw in
+  let visible_keys = Hashtbl.create (List.length visible) in
+  List.iter
+    (fun d -> Hashtbl.replace visible_keys (d.e, d.a, d.v, d.tx, d.added) ())
+    visible;
+  let keep d =
+    d.tx >= before || Hashtbl.mem visible_keys (d.e, d.a, d.v, d.tx, d.added)
+  in
+  let kept = List.filter keep raw in
+  let removed = List.filter (fun d -> not (keep d)) raw in
+  if removed = [] then db, []
+  else set_indexes_from_datoms db kept, removed
+
 let apply_filter_pred db seq =
   match db.filter_pred with
   | None -> seq

@@ -28,9 +28,12 @@ val since_t : db -> tx option
 val since_tx : db -> tx option
 val temporal_view : db -> bool
 val as_of : tx -> db -> db
+val as_of_instant : value -> db -> db
 val since : tx -> db -> db
 val history : db -> db
 val is_history : db -> bool
+val resolve_tx_at_instant : value -> db -> tx
+val purge_history_before : tx -> db -> db * datom list
 val with_datoms : db -> datom list -> db
 val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
 val empty : core_context -> db -> db
