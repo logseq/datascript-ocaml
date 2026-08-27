@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Compare LMDB vs SQLite persistent storage benchmarks side-by-side.
+# Both backends write durable files under DATA_DIR (default: repo _bench_data).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,9 +13,12 @@ fi
 SIZES="${SIZES:-100,1000,5000}"
 RAW_ONLY="${RAW_ONLY:-0}"
 INPUT_FILE="${INPUT_FILE:-}"
+DATA_DIR="${DATA_DIR:-$repo_root/_bench_data/persistent}"
+mkdir -p "$DATA_DIR"
 
-echo "=== LMDB vs SQLite persistent storage bench ==="
+echo "=== LMDB vs SQLite persistent storage bench (disk only) ==="
 echo "sizes=${SIZES}"
+echo "data-dir=${DATA_DIR}"
 echo
 
 RAW="$(mktemp)"
@@ -26,7 +30,10 @@ elif [[ "$RAW_ONLY" == "1" ]]; then
   cat > "$RAW"
 else
   dune build bench/persistent_storage_bench.exe
-  dune exec bench/persistent_storage_bench.exe -- --sizes "$SIZES" | tee "$RAW"
+  dune exec bench/persistent_storage_bench.exe -- \
+    --disk-only \
+    --data-dir "$DATA_DIR" \
+    --sizes "$SIZES" | tee "$RAW"
 fi
 
 python3 - "$RAW" <<'PY'
@@ -38,6 +45,7 @@ sqlite = defaultdict(dict)
 lmdb = defaultdict(dict)
 sizes = []
 size = None
+meta = {}
 
 with open(path) as f:
     for line in f:
@@ -45,6 +53,9 @@ with open(path) as f:
         if not line or "\t" not in line:
             continue
         key, val = line.split("\t", 1)
+        if key in {"data-dir", "disk-only"}:
+            meta[key] = val
+            continue
         if key == "size":
             size = int(val)
             sizes.append(size)
@@ -77,11 +88,11 @@ def ratio(sv, lv):
     try:
         s = float(sv)
         l = float(lv)
-        if s == 0:
-            return "?"
-        return f"{l / s:.2f}x"
     except Exception:
         return "?"
+    if s == 0:
+        return "?"
+    return f"{l / s:.2f}x"
 
 def fmt_bytes(n):
     try:
@@ -94,6 +105,8 @@ def fmt_bytes(n):
         return f"{n / 1024:.1f} KiB"
     return f"{n} B"
 
+print(f"data-dir\t{meta.get('data-dir', '?')}")
+print(f"disk-only\t{meta.get('disk-only', '?')}")
 print()
 print("=== timing (ms; ratio = lmdb/sqlite; <1x means LMDB faster) ===")
 print(f"{'size':<8} {'metric':<42} {'sqlite':>12} {'lmdb':>12} {'ratio':>10}")
@@ -105,7 +118,7 @@ for s in sizes:
         print(f"{s:<8} {metric:<42} {sv:>12} {lv:>12} {ratio(sv, lv):>10}")
     print()
 
-print("=== file size (ratio = lmdb/sqlite; <1x means LMDB smaller) ===")
+print("=== on-disk footprint (ratio = lmdb/sqlite; <1x means LMDB smaller) ===")
 print(f"{'size':<8} {'metric':<42} {'sqlite':>14} {'lmdb':>14} {'ratio':>10}")
 print("-" * 92)
 for s in sizes:

@@ -16,6 +16,7 @@ type config =
   ; jit_warmup : int
   ; query : string option
   ; storages : storage_backend list
+  ; data_dir : string
   }
 
 let default_config =
@@ -27,6 +28,7 @@ let default_config =
   ; jit_warmup = 100
   ; query = None
   ; storages = [ Memory_lmdb_nosync ]
+  ; data_dir = Filename.get_temp_dir_name ()
   }
 
 let storage_label = function
@@ -92,6 +94,7 @@ let parse_args () =
            | other -> parse_storage_list other)
       }
   in
+  let set_data_dir value = config := { !config with data_dir = value } in
   let rec loop = function
     | [] -> !config
     | "--size" :: value :: rest ->
@@ -114,6 +117,9 @@ let parse_args () =
       loop rest
     | "--storage" :: value :: rest ->
       set_storage value;
+      loop rest
+    | "--data-dir" :: value :: rest ->
+      set_data_dir value;
       loop rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
@@ -295,8 +301,20 @@ let select_queries = function
 
 let remove_path path =
   if Sys.file_exists path then Sys.remove path;
-  let lock = path ^ "-lock" in
-  if Sys.file_exists lock then Sys.remove lock
+  List.iter
+    (fun suffix ->
+      let sibling = path ^ suffix in
+      if Sys.file_exists sibling then Sys.remove sibling)
+    [ "-wal"; "-shm"; "-lock" ]
+
+let file_size path =
+  if Sys.file_exists path then (Unix.stat path).st_size else 0
+
+let disk_footprint path =
+  List.fold_left
+    (fun total suffix -> total + file_size (if suffix = "" then path else path ^ suffix))
+    0
+    [ ""; "-wal"; "-shm"; "-lock" ]
 
 let people_and_follows size =
   let rng = rng 1 in
@@ -324,6 +342,7 @@ let build_db_with_storage ~storage ~persist size =
   else
     let store_started = now_ms () in
     store db;
+    collect_garbage storage;
     let restored =
       match restore storage with
       | Some db -> db
@@ -337,23 +356,22 @@ type prepared_db =
   ; db : db
   ; build_ms : float
   ; restore_ms : float
+  ; path : string option
   ; cleanup : unit -> unit
   }
 
-let prepare_backend backend size =
+let prepare_backend ~data_dir backend size =
   match backend with
   | Memory_lmdb_nosync ->
     let storage = benchmark_memory_storage () in
     let db, build_ms, restore_ms =
       build_db_with_storage ~storage ~persist:false size
     in
-    { label = storage_label backend; db; build_ms; restore_ms; cleanup = Fun.id }
+    { label = storage_label backend; db; build_ms; restore_ms; path = None; cleanup = Fun.id }
   | Lmdb_file ->
     let path =
-      Filename.temp_file
-        ~temp_dir:(Filename.get_temp_dir_name ())
-        "datascript-query-bench-lmdb"
-        ".mdb"
+      Filename.concat data_dir
+        (Printf.sprintf "datascript-query-bench-lmdb-%d.mdb" size)
     in
     remove_path path;
     let session = Datascript_lmdb.open_session path in
@@ -365,6 +383,7 @@ let prepare_backend backend size =
     ; db
     ; build_ms
     ; restore_ms
+    ; path = Some path
     ; cleanup =
         (fun () ->
           Datascript_lmdb.close session;
@@ -372,10 +391,8 @@ let prepare_backend backend size =
     }
   | Sqlite_file ->
     let path =
-      Filename.temp_file
-        ~temp_dir:(Filename.get_temp_dir_name ())
-        "datascript-query-bench-sqlite"
-        ".sqlite3"
+      Filename.concat data_dir
+        (Printf.sprintf "datascript-query-bench-sqlite-%d.sqlite3" size)
     in
     remove_path path;
     let session = Datascript_sqlite.open_session path in
@@ -387,6 +404,7 @@ let prepare_backend backend size =
     ; db
     ; build_ms
     ; restore_ms
+    ; path = Some path
     ; cleanup =
         (fun () ->
           Datascript_sqlite.close session;
@@ -405,6 +423,11 @@ let warmup_queries jit_warmup selected db =
 
 let run_backend config selected prepared =
   Printf.printf "storage\t%s\n%!" prepared.label;
+  (match prepared.path with
+   | Some path ->
+       Printf.printf "path\t%s\n%!" path;
+       Printf.printf "disk-bytes\t%d\n%!" (disk_footprint path)
+   | None -> Printf.printf "path\tmemory\n%!");
   Printf.printf "build-ms\t%s\n%!" (format_ms prepared.build_ms);
   if prepared.restore_ms > 0. then
     Printf.printf "store-restore-ms\t%s\n%!" (format_ms prepared.restore_ms);
@@ -420,9 +443,20 @@ let run_backend config selected prepared =
       Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
     selected
 
+let ensure_dir path =
+  let rec loop dir =
+    if dir = "" || dir = Filename.current_dir_name || Sys.file_exists dir then ()
+    else (
+      loop (Filename.dirname dir);
+      try Unix.mkdir dir 0o755 with
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+  in
+  loop path
+
 let main () =
   let config = parse_args () in
   let selected = select_queries config.query in
+  ensure_dir config.data_dir;
   let runtime_label =
     match Sys.getenv_opt "BENCH_RUNTIME_LABEL" with
     | Some label -> label
@@ -434,6 +468,7 @@ let main () =
   Printf.printf "sample-ms\t%.0f\n%!" config.sample_ms;
   Printf.printf "repeats\t%d\n%!" config.repeats;
   Printf.printf "jit-warmup\t%d\n%!" config.jit_warmup;
+  Printf.printf "data-dir\t%s\n%!" config.data_dir;
   Printf.printf "db-mode\tshared\n%!";
   Printf.printf "query-cases\t%d\n%!" (List.length selected);
   (match config.query with
@@ -442,10 +477,11 @@ let main () =
   List.iter
     (fun backend ->
       Printf.eprintf
-        "Building database (%d entities, storage=%s)...\n%!"
+        "Building database (%d entities, storage=%s, data-dir=%s)...\n%!"
         config.size
-        (storage_label backend);
-      let prepared = prepare_backend backend config.size in
+        (storage_label backend)
+        config.data_dir;
+      let prepared = prepare_backend ~data_dir:config.data_dir backend config.size in
       Fun.protect ~finally:prepared.cleanup (fun () -> run_backend config selected prepared))
     config.storages;
   Printf.eprintf "blackhole=%d\n%!" !blackhole

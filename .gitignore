@@ -10,3 +10,4 @@ tmp/
 /db.sqlite-wal
 /_deps/
 /vendor/
+_bench_data/

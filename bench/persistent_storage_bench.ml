@@ -76,9 +76,28 @@ let seq_length seq = Seq.fold_left (fun count _ -> count + 1) 0 seq
 let file_size path =
   if Sys.file_exists path then (Unix.stat path).st_size else 0
 
-let remove_if_exists path = if Sys.file_exists path then Sys.remove path
+let disk_footprint path =
+  let siblings =
+    [ path
+    ; path ^ "-wal"
+    ; path ^ "-shm"
+    ; path ^ "-lock"
+    ]
+  in
+  List.fold_left (fun total sibling -> total + file_size sibling) 0 siblings
+
+let remove_file path = if Sys.file_exists path then Sys.remove path
+
+let remove_if_exists path =
+  remove_file path;
+  List.iter remove_file [ path ^ "-wal"; path ^ "-shm"; path ^ "-lock" ]
 
 let row_count _storage = 1
+
+let flush_to_disk storage = collect_garbage storage
+
+let data_dir = ref (Filename.get_temp_dir_name ())
+let include_memory = ref true
 
 module type BACKEND = sig
   val name : string
@@ -118,8 +137,7 @@ end
 let run_backend (module B : BACKEND) size tx =
   let prefix = B.name ^ "-" in
   let db_path =
-    Filename.concat
-      (Filename.get_temp_dir_name ())
+    Filename.concat !data_dir
       (Printf.sprintf "datascript-persistent-%s-%d.%s" B.name size B.extension)
   in
   remove_if_exists db_path;
@@ -135,13 +153,14 @@ let run_backend (module B : BACKEND) size tx =
         time "snapshot-build-and-store" (fun () ->
             let db = db_with tx (empty_db ~schema ~storage ()) in
             store db;
+            flush_to_disk storage;
             db)
       in
       print_timing prefix persistent_build;
       Printf.printf "%ssnapshot-build-datoms\t%d\n%!" prefix
         (seq_length (datoms persistent_db Eavt ()));
       Printf.printf "%ssnapshot-kvs-rows-after-build\t%d\n%!" prefix (row_count storage);
-      Printf.printf "%ssnapshot-file-size-after-build\t%d\n%!" prefix (file_size db_path);
+      Printf.printf "%ssnapshot-file-size-after-build\t%d\n%!" prefix (disk_footprint db_path);
       let restore_timing, restored_db =
         time "snapshot-restore" (fun () ->
             match restore storage with
@@ -157,25 +176,26 @@ let run_backend (module B : BACKEND) size tx =
                 restored_db
             in
             store db;
+            flush_to_disk storage;
             db)
       in
       print_timing prefix persistent_add;
       Printf.printf "%ssnapshot-kvs-rows-after-add\t%d\n%!" prefix (row_count storage);
-      Printf.printf "%ssnapshot-file-size-after-add\t%d\n%!" prefix (file_size db_path);
+      Printf.printf "%ssnapshot-file-size-after-add\t%d\n%!" prefix (disk_footprint db_path);
       let persistent_update, restored_db =
         time "snapshot-update-one-and-store-after-add" (fun () ->
             let db = db_with (update_content_tx "block-00001" "Edited") restored_db in
             store db;
+            flush_to_disk storage;
             db)
       in
       print_timing prefix persistent_update;
       Printf.printf "%ssnapshot-kvs-rows-after-update\t%d\n%!" prefix (row_count storage);
-      Printf.printf "%ssnapshot-file-size-after-update\t%d\n%!" prefix (file_size db_path);
+      Printf.printf "%ssnapshot-file-size-after-update\t%d\n%!" prefix (disk_footprint db_path);
       Printf.printf "%ssnapshot-datoms\t%d\n%!" prefix
         (seq_length (datoms restored_db Eavt ()));
       let conn_db_path =
-        Filename.concat
-          (Filename.get_temp_dir_name ())
+        Filename.concat !data_dir
           (Printf.sprintf "datascript-persistent-%s-conn-%d.%s" B.name size B.extension)
       in
       remove_if_exists conn_db_path;
@@ -191,13 +211,14 @@ let run_backend (module B : BACKEND) size tx =
             time "conn-build" (fun () ->
                 let conn = create_conn ~schema ~storage () in
                 ignore (transact_conn conn tx);
+                flush_to_disk storage;
                 conn)
           in
           print_timing prefix conn_build;
           Printf.printf "%sconn-build-datoms\t%d\n%!" prefix
             (seq_length (datoms (db conn) Eavt ()));
           Printf.printf "%sconn-kvs-rows-after-build\t%d\n%!" prefix (row_count storage);
-          Printf.printf "%sconn-file-size-after-build\t%d\n%!" prefix (file_size conn_db_path);
+          Printf.printf "%sconn-file-size-after-build\t%d\n%!" prefix (disk_footprint conn_db_path);
           let conn_restore, conn =
             time "conn-restore" (fun () ->
                 match restore_conn storage with
@@ -207,23 +228,27 @@ let run_backend (module B : BACKEND) size tx =
           print_timing prefix conn_restore;
           let conn_add, _report =
             time "conn-add-one-after-restore" (fun () ->
-                transact_conn conn (add_block_tx "conn-new" (Float.of_int (size + 1))))
+                let report =
+                  transact_conn conn (add_block_tx "conn-new" (Float.of_int (size + 1)))
+                in
+                flush_to_disk storage;
+                report)
           in
           print_timing prefix conn_add;
           Printf.printf "%sconn-kvs-rows-after-add\t%d\n%!" prefix (row_count storage);
-          Printf.printf "%sconn-file-size-after-add\t%d\n%!" prefix (file_size conn_db_path);
+          Printf.printf "%sconn-file-size-after-add\t%d\n%!" prefix (disk_footprint conn_db_path);
           let conn_update, _report =
             time "conn-update-one-after-add" (fun () ->
-                transact_conn conn (update_content_tx "block-00001" "Edited"))
+                let report = transact_conn conn (update_content_tx "block-00001" "Edited") in
+                flush_to_disk storage;
+                report)
           in
           print_timing prefix conn_update;
           Printf.printf "%sconn-kvs-rows-after-update\t%d\n%!" prefix (row_count storage);
-          Printf.printf "%sconn-file-size-after-update\t%d\n%!" prefix (file_size conn_db_path);
+          Printf.printf "%sconn-file-size-after-update\t%d\n%!" prefix (disk_footprint conn_db_path);
           Printf.printf "%sconn-datoms\t%d\n%!" prefix (seq_length (datoms (db conn) Eavt ()))))
 
-let run_size size =
-  Printf.printf "size\t%d\n%!" size;
-  let tx = block_tx size in
+let run_memory size tx =
   let memory_build, memory_db =
     time "memory-build" (fun () -> db_with tx (empty_db ~schema ()))
   in
@@ -238,11 +263,16 @@ let run_size size =
         db_with (update_content_tx "block-00001" "Edited") memory_db)
   in
   print_timing "" _memory_update;
-  Printf.printf "memory-datoms\t%d\n%!" (seq_length (datoms memory_db Eavt ()));
+  Printf.printf "memory-datoms\t%d\n%!" (seq_length (datoms memory_db Eavt ()))
+
+let run_size size =
+  Printf.printf "size\t%d\n%!" size;
+  let tx = block_tx size in
+  if !include_memory then run_memory size tx;
   run_backend (module Sqlite_backend) size tx;
   run_backend (module Lmdb_backend) size tx
 
-let parse_sizes () =
+let parse_args () =
   let rec loop sizes = function
     | [] -> List.rev sizes
     | "--size" :: size :: rest -> loop (int_of_string size :: sizes) rest
@@ -254,10 +284,31 @@ let parse_sizes () =
           |> List.map int_of_string
         in
         loop (List.rev_append parsed sizes) rest
+    | "--disk-only" :: rest ->
+        include_memory := false;
+        loop sizes rest
+    | "--data-dir" :: dir :: rest ->
+        data_dir := dir;
+        loop sizes rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
   match loop [] (Sys.argv |> Array.to_list |> List.tl) with
   | [] -> [ 100; 1000; 5000 ]
   | sizes -> sizes
 
-let () = List.iter run_size (parse_sizes ())
+let ensure_dir path =
+  let rec loop dir =
+    if dir = "" || dir = Filename.current_dir_name || Sys.file_exists dir then ()
+    else (
+      loop (Filename.dirname dir);
+      try Unix.mkdir dir 0o755 with
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+  in
+  loop path
+
+let () =
+  let sizes = parse_args () in
+  ensure_dir !data_dir;
+  Printf.printf "data-dir\t%s\n%!" !data_dir;
+  Printf.printf "disk-only\t%b\n%!" (not !include_memory);
+  List.iter run_size sizes

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Compare LMDB vs SQLite on the full shared query suite (15 cases).
+# Compare LMDB vs SQLite on the full shared query suite.
+# STORAGE=compare uses on-disk LMDB and SQLite files only (no in-memory).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,11 +15,14 @@ WARMUP_MS="${WARMUP_MS:-200}"
 SAMPLE_MS="${SAMPLE_MS:-200}"
 REPEATS="${REPEATS:-2}"
 JIT_WARMUP="${JIT_WARMUP:-100}"
-STORAGE="${STORAGE:-compare}" # compare => lmdb + sqlite
+STORAGE="${STORAGE:-compare}" # compare => lmdb + sqlite on disk
+DATA_DIR="${DATA_DIR:-$repo_root/_bench_data/queries}"
+mkdir -p "$DATA_DIR"
 
-echo "=== LMDB vs SQLite shared query suite ==="
+echo "=== LMDB vs SQLite shared query suite (disk-backed) ==="
 echo "size=${SIZE} warmup=${WARMUP_MS}ms sample=${SAMPLE_MS}ms repeats=${REPEATS} jit=${JIT_WARMUP}"
 echo "storage=${STORAGE}"
+echo "data-dir=${DATA_DIR}"
 echo
 
 RAW="$(mktemp)"
@@ -32,6 +36,7 @@ dune exec bench/shared_query_bench.exe -- \
   --repeats "$REPEATS" \
   --jit-warmup "$JIT_WARMUP" \
   --storage "$STORAGE" \
+  --data-dir "$DATA_DIR" \
   | tee "$RAW"
 
 python3 - "$RAW" <<'PY'
@@ -50,7 +55,7 @@ with open(path) as f:
         if not line or "\t" not in line:
             continue
         k, v = line.split("\t", 1)
-        if k in {"runtime", "size", "warmup-ms", "sample-ms", "repeats", "jit-warmup", "db-mode", "query-cases", "query"}:
+        if k in {"runtime", "size", "warmup-ms", "sample-ms", "repeats", "jit-warmup", "db-mode", "query-cases", "query", "data-dir"}:
             meta[k] = v
             continue
         if k == "storage":
@@ -62,7 +67,7 @@ with open(path) as f:
             continue
         by_storage[current][k] = v
 
-setup = ["build-ms", "store-restore-ms"]
+setup = ["path", "disk-bytes", "build-ms", "store-restore-ms"]
 queries = [
     "q1", "q2", "q2-switch", "q3", "q4", "q5",
     "qpred1", "qpred2", "q-or", "q-not", "q-or-join", "q-not-join",
@@ -79,6 +84,7 @@ def ratio(a, b):
         return "?"
 
 print()
+print(f"data-dir\t{meta.get('data-dir', '?')}")
 print(f"=== comparison (ms; ratio = second/first; storages={','.join(order)}) ===")
 if len(order) < 2:
     print("Need at least two storages for a ratio table.")
@@ -95,7 +101,10 @@ print("-" * 60)
 for metric in setup + queries:
     lv = by_storage[left].get(metric, "?")
     rv = by_storage[right].get(metric, "?")
-    print(f"{metric:<22} {lv:>12} {rv:>12} {ratio(lv, rv):>10}")
+    if metric in {"path"}:
+        print(f"{metric:<22} {lv:>12} {rv:>12} {'':>10}")
+    else:
+        print(f"{metric:<22} {lv:>12} {rv:>12} {ratio(lv, rv):>10}")
 print()
 print(f"query-cases\t{meta.get('query-cases', '?')}")
 print(f"size\t{meta.get('size', '?')}")
