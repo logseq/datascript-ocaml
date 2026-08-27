@@ -8,7 +8,7 @@ sample_ms="${BENCH_SAMPLE_MS:-500}"
 samples="${BENCH_SAMPLES:-5}"
 upstream_datascript_js="${UPSTREAM_DATASCRIPT_JS:-}"
 ocaml_native="${BENCH_OCAML_NATIVE:-$repo_root/_build/default/bench/bench_ocaml.exe}"
-ocaml_js="${BENCH_OCAML_JS:-$repo_root/_build/default/bench/bench_ocaml.bc.js}"
+ocaml_js="${BENCH_OCAML_JS:-$repo_root/_build/default/bench/bench_ocaml_js.bc.js}"
 
 if [ -z "$upstream_datascript_js" ]; then
   echo "Set UPSTREAM_DATASCRIPT_JS to the upstream DataScript JS bundle." >&2
@@ -21,7 +21,7 @@ if [ ! -f "$upstream_datascript_js" ]; then
 fi
 
 if [ "${BENCH_SKIP_BUILD:-0}" != "1" ]; then
-  dune build --profile release bench/bench_ocaml.exe bench/bench_ocaml.bc.js
+  dune build --profile release bench/bench_ocaml.exe bench/bench_ocaml_js.bc.js
 fi
 
 args=(--size "$size" --warmup-ms "$warmup_ms" --sample-ms "$sample_ms" --samples "$samples")
