@@ -202,6 +202,51 @@ end) = struct
 
   let row_binding attrs row = List.combine attrs row
 
+  type direct_row_slot =
+    | Direct_entity
+    | Direct_attr
+    | Direct_value
+    | Direct_tx
+    | Direct_op
+
+  let direct_row_slot_of_term_index index =
+    match index with
+    | 0 -> Direct_entity
+    | 1 -> Direct_attr
+    | 2 -> Direct_value
+    | 3 -> Direct_tx
+    | 4 -> Direct_op
+    | _ -> invalid_arg "invalid datom pattern position"
+
+  let direct_row_slots attrs terms =
+    List.map
+      (fun attr ->
+        let rec find index = function
+          | [] -> invalid_arg "pattern variable is missing from row"
+          | QVar var :: _ when var = attr -> direct_row_slot_of_term_index index
+          | _ :: rest -> find (index + 1) rest
+        in
+        find 0 terms)
+      attrs
+
+  let value_of_direct_row_slot datom = function
+    | Direct_entity -> Query.result_of_datom_e datom
+    | Direct_attr -> Query.result_of_datom_a datom
+    | Direct_value -> Query.result_of_ref (Query.result_of_datom_v datom)
+    | Direct_tx -> Query.result_of_datom_tx datom
+    | Direct_op -> Query.result_of_datom_op datom
+
+  let build_direct_pattern_row slots datom = List.map (value_of_direct_row_slot datom) slots
+
+  let collect_direct_pattern_rows attrs terms datoms =
+    let slots = direct_row_slots attrs terms in
+    let rec loop acc seq =
+      match seq () with
+      | Seq.Nil -> List.rev acc
+      | Seq.Cons (datom, rest) -> loop (build_direct_pattern_row slots datom :: acc) rest
+    in
+    loop [] datoms
+
   let direct_pattern_row attrs terms datom =
     attrs
     |> List.map (fun attr ->
@@ -272,17 +317,11 @@ end) = struct
     if can_direct || can_direct_dynamic_attr then
       match terms with
       | [ e_term; a_term; v_term ] ->
-        datoms
-        |> Seq.map (direct_pattern_row attrs [ e_term; a_term; v_term ])
-        |> List.of_seq
+        collect_direct_pattern_rows attrs [ e_term; a_term; v_term ] datoms
       | [ e_term; a_term; v_term; tx_term ] ->
-        datoms
-        |> Seq.map (direct_pattern_row attrs [ e_term; a_term; v_term; tx_term ])
-        |> List.of_seq
+        collect_direct_pattern_rows attrs [ e_term; a_term; v_term; tx_term ] datoms
       | [ e_term; a_term; v_term; tx_term; op_term ] ->
-        datoms
-        |> Seq.map (direct_pattern_row attrs [ e_term; a_term; v_term; tx_term; op_term ])
-        |> List.of_seq
+        collect_direct_pattern_rows attrs [ e_term; a_term; v_term; tx_term; op_term ] datoms
       | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
     else
       match terms with
@@ -952,7 +991,40 @@ end) = struct
         Option.is_some (range_predicate_for_var value_var predicate left_term right_term)
     | _ -> false
 
-  let relation_of_avet_value_comparisons db source e_var value_var attr comparisons =
+  let avet_index_start predicate threshold =
+    match predicate, threshold with
+    | GreaterThan, Int n -> Some (Int (n + 1))
+    | GreaterOrEqual, value | GreaterThan, value -> Some value
+    | _ -> None
+
+  let avet_index_stop predicate threshold =
+    match predicate, threshold with
+    | LessThan, Int n when n > min_int -> Some (Int (n - 1))
+    | LessOrEqual, value | LessThan, value -> Some value
+    | _ -> None
+
+  let avet_bounds_need_post_filter value_var comparisons =
+    List.exists
+      (function
+        | ComparisonPredicate (predicate, left, right) -> (
+          match range_predicate_for_var value_var predicate left right with
+          | Some (GreaterThan, Int _) | Some (LessThan, Int _) -> false
+          | Some _ -> true
+          | None -> true)
+        | _ -> false)
+      comparisons
+
+  let merge_avet_start compare_value start bound =
+    match start with
+    | None -> Some bound
+    | Some current -> if compare_value bound current > 0 then Some bound else Some current
+
+  let merge_avet_stop compare_value stop bound =
+    match stop with
+    | None -> Some bound
+    | Some current -> if compare_value bound current < 0 then Some bound else Some current
+
+  let relation_of_avet_value_comparisons _db source e_var value_var attr comparisons =
     match source with
     | Db_source source_db when query_attr_uses_avet source_db attr && not (is_ref_attr source_db attr) ->
         if
@@ -961,29 +1033,39 @@ end) = struct
         then
           None
         else (
+          let compare_value = query_evaluator_context.compare_value in
           let start, stop =
             List.fold_left
               (fun (start, stop) -> function
                 | ComparisonPredicate (predicate, left_term, right_term) -> (
                   match range_predicate_for_var value_var predicate left_term right_term with
-                  | Some (GreaterThan, threshold) | Some (GreaterOrEqual, threshold) ->
-                      (Some threshold, stop)
-                  | Some (LessThan, threshold) | Some (LessOrEqual, threshold) ->
-                      (start, Some threshold)
+                  | Some (GreaterThan as p, threshold) | Some (GreaterOrEqual as p, threshold) ->
+                      let bound =
+                        Option.value (avet_index_start p threshold) ~default:threshold
+                      in
+                      (merge_avet_start compare_value start bound, stop)
+                  | Some (LessThan as p, threshold) | Some (LessOrEqual as p, threshold) ->
+                      let bound =
+                        Option.value (avet_index_stop p threshold) ~default:threshold
+                      in
+                      (start, merge_avet_stop compare_value stop bound)
                   | _ -> (start, stop))
                 | _ -> (start, stop))
               (None, None) comparisons
           in
           let terms = [ QVar e_var; QAttr attr; QVar value_var ] in
-          let source_context = query_source_context db in
-          let datoms =
-            index_range source_db attr ?start ?stop ()
-            |> Seq.filter (fun datom ->
-              List.for_all (comparison_matches_datom value_var datom) comparisons)
-          in
           let attrs = unique_vars terms in
           let lookup_vars = relation_lookup_vars source_db terms in
-          let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
+          let datoms =
+            let range = index_range source_db attr ?start ?stop () in
+            if avet_bounds_need_post_filter value_var comparisons then
+              range
+              |> Seq.filter (fun datom ->
+                List.for_all (comparison_matches_datom value_var datom) comparisons)
+            else
+              range
+          in
+          let rows = collect_direct_pattern_rows attrs terms datoms in
           Some { attrs; rows; lookup_vars; unique_rows = false })
     | _ -> None
 
@@ -2155,6 +2237,15 @@ end) = struct
         |> List.exists (fun var -> List.mem var binding_vars)
       | _ -> false)
 
+  let relation_value_vars_covered relation clauses =
+    let value_vars =
+      clauses
+      |> List.filter_map (function
+        | Pattern (QVar entity_var, QAttr _, QVar value_var) when value_var <> entity_var -> Some value_var
+        | _ -> None)
+    in
+    List.for_all (fun var -> List.mem var relation.attrs) value_vars
+
   let eval_relation_from_empty db sources default_source clauses =
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
@@ -2283,8 +2374,12 @@ end) = struct
       | _ -> None
     in
     match relation_of_same_entity_patterns db default_source clauses with
-    | Some relation -> Some relation
-    | None -> apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses
+    | Some relation
+      when (relation.rows <> [] || not (relation_prefix_has_multiple_clauses clauses))
+           && relation_value_vars_covered relation clauses ->
+        Some relation
+    | _ ->
+        apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses
 
   let eval_relation_rows db sources rules bindings clauses =
     let default_source = source db sources "$" in

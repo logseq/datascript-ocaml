@@ -89,61 +89,80 @@ let follow_rules =
                [ QueryFormSymbol "?e1"; QueryFormKeyword "follows"; QueryFormSymbol "?e2" ]
            ] ])
 
-let count_rows db query =
-  List.length (q_string db query)
+let count_rows db query = List.length (q_string db query)
 
-let count_rows_inputs db query inputs =
-  List.length (q_string ~inputs db query)
+let count_rows_inputs db query inputs = List.length (q_string ~inputs db query)
 
 (* Golden counts for size=2000, rng seed=1 — aligned with bench/datahike_compare.ml *)
 let db = lazy (build_db 2000)
 
-let test_q1 () =
-  check_int "q1 Ivan count" 250 (count_rows (Lazy.force db) "[:find ?e :where [?e :name \"Ivan\"]]")
+let check_count name expected query =
+  check_int name expected (count_rows (Lazy.force db) query)
 
-let test_qpred1 () =
-  let rows =
-    count_rows (Lazy.force db) "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"
-  in
-  check_int "qpred1 result count" 997 rows
-
-let test_qpred2 () =
-  let rows =
-    count_rows_inputs
-      (Lazy.force db)
-      "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
-      [ Arg_scalar (Result_value (Int 50_000)) ]
-  in
-  check_int "qpred2 result count" 997 rows
-
-let test_q_pred_range () =
-  let rows =
-    count_rows
-      (Lazy.force db)
-      "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)] [(< ?s 80000)]]"
-  in
-  check_int "q-pred-range result count" 616 rows
-
-let test_q_rule () =
-  let rows =
-    count_rows_inputs
-      (Lazy.force db)
-      "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
-      [ Arg_rules follow_rules ]
-  in
-  if rows <= 0 then
-    failwith "q-rule should return follow edges";
-  ()
+let check_count_inputs name expected query inputs =
+  check_int name expected (count_rows_inputs (Lazy.force db) query inputs)
 
 let () =
   Alcotest.run "datahike query parity"
     [
       ( "queries"
       , [
-          test_case "q1 name lookup" `Quick test_q1
-        ; test_case "qpred1 salary predicate" `Quick test_qpred1
-        ; test_case "qpred2 salary predicate with input" `Quick test_qpred2
-        ; test_case "q-pred-range salary range" `Quick test_q_pred_range
-        ; test_case "q-rule non-recursive" `Quick test_q_rule
+          test_case "q1 name lookup" `Quick
+            (fun () -> check_count "q1" 250 "[:find ?e :where [?e :name \"Ivan\"]]")
+        ; test_case "q2 name and age" `Quick
+            (fun () ->
+              check_count "q2" 250 "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]")
+        ; test_case "q2-switch clause order" `Quick
+            (fun () ->
+              check_count "q2-switch" 250
+                "[:find ?e ?a :where [?e :age ?a] [?e :name \"Ivan\"]]")
+        ; test_case "q3 name age sex" `Quick
+            (fun () ->
+              check_count "q3" 0
+                "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]")
+        ; test_case "q4 name last-name age sex" `Quick
+            (fun () ->
+              check_count "q4" 0
+                "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]")
+        ; test_case "q5 cross-entity age join" `Quick
+            (fun () ->
+              check_count "q5" 1000
+                "[:find ?e1 ?l ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e1 :age ?a] [?e1 :last-name ?l]]")
+        ; test_case "qpred1 salary predicate" `Quick
+            (fun () ->
+              check_count "qpred1" 997 "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]")
+        ; test_case "qpred2 salary predicate with input" `Quick
+            (fun () ->
+              check_count_inputs "qpred2" 997
+                "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
+                [ Arg_scalar (Result_value (Int 50_000)) ])
+        ; test_case "q-or names" `Quick
+            (fun () ->
+              check_count "q-or" 500
+                "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]")
+        ; test_case "q-not not male" `Quick
+            (fun () ->
+              check_count "q-not" 1000 "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]")
+        ; test_case "q-or-join names" `Quick
+            (fun () ->
+              check_count "q-or-join" 500
+                "[:find ?e ?a :where [?e :age ?a] (or-join [?e] [?e :name \"Ivan\"] [?e :name \"Petr\"])]")
+        ; test_case "q-not-join not male" `Quick
+            (fun () ->
+              check_count "q-not-join" 1000
+                "[:find ?e ?a :where [?e :age ?a] (not-join [?e] [?e :sex :male])]")
+        ; test_case "q-pred-range salary range" `Quick
+            (fun () ->
+              check_count "q-pred-range" 616
+                "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)] [(< ?s 80000)]]")
+        ; test_case "q-5-merge male attrs" `Quick
+            (fun () ->
+              check_count "q-5-merge" 1000
+                "[:find ?e ?n ?l ?a ?s :where [?e :name ?n] [?e :last-name ?l] [?e :age ?a] [?e :salary ?s] [?e :sex :male]]")
+        ; test_case "q-rule non-recursive" `Quick
+            (fun () ->
+              check_count_inputs "q-rule" 667
+                "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
+                [ Arg_rules follow_rules ])
         ] )
     ]

@@ -1765,6 +1765,148 @@ module Query = struct
     | Simple_entity_slot
     | Simple_value_slot of query_result option array
 
+  let reverse_comparison_predicate = function
+    | GreaterThan -> LessThan
+    | GreaterOrEqual -> LessOrEqual
+    | LessThan -> GreaterThan
+    | LessOrEqual -> GreaterOrEqual
+
+  let avet_index_start predicate threshold =
+    match predicate, threshold with
+    | GreaterThan, Int n -> Some (Int (n + 1))
+    | GreaterOrEqual, value | GreaterThan, value -> Some value
+    | _ -> None
+
+  let avet_index_stop predicate threshold =
+    match predicate, threshold with
+    | LessThan, Int n when n > min_int -> Some (Int (n - 1))
+    | LessOrEqual, value | LessThan, value -> Some value
+    | _ -> None
+
+  let comparison_threshold value_var binding predicate left right =
+    let value_from_binding var =
+      match List.assoc_opt var binding with
+      | Some (Result_value value) -> Some value
+      | _ -> None
+    in
+    match left, right with
+    | QVar var, QValue threshold when var = value_var -> Some (predicate, threshold)
+    | QValue threshold, QVar var when var = value_var -> Some (reverse_comparison_predicate predicate, threshold)
+    | QVar var, QVar input_var when var = value_var -> (
+      match value_from_binding input_var with
+      | Some threshold -> Some (predicate, threshold)
+      | None -> None)
+    | QVar input_var, QVar var when var = value_var -> (
+      match value_from_binding input_var with
+      | Some threshold -> Some (reverse_comparison_predicate predicate, threshold)
+      | None -> None)
+    | _ -> None
+
+  let merge_avet_start compare_value start bound =
+    match start with
+    | None -> Some bound
+    | Some current -> if compare_value bound current > 0 then Some bound else Some current
+
+  let merge_avet_stop compare_value stop bound =
+    match stop with
+    | None -> Some bound
+    | Some current -> if compare_value bound current < 0 then Some bound else Some current
+
+  let avet_bounds_need_post_filter value_var comparisons =
+    List.exists
+      (function
+        | ComparisonPredicate (predicate, left, right) -> (
+          match comparison_threshold value_var [] predicate left right with
+          | Some (GreaterThan, Int _) | Some (LessThan, Int _) -> false
+          | Some _ -> true
+          | None -> true)
+        | _ -> false)
+      comparisons
+
+  let simple_avet_predicate_rows ?inputs db query =
+    let ( let* ) = Option.bind in
+    match db.max_datom_e > 50_000, query.rules, query.with_vars with
+    | true, _, _ | _, _ :: _, _ | _, _, _ :: _ -> None
+    | false, [], [] ->
+      let* find_vars =
+        query.find
+        |> List.fold_left
+             (fun vars -> function
+               | Find_var var -> Option.map (fun vars -> var :: vars) vars
+               | _ -> None)
+             (Some [])
+        |> Option.map List.rev
+      in
+      let input_args = Option.value inputs ~default:[] in
+      let _, input_bindings, _ = initial_query_context db query input_args in
+      let* binding =
+        match input_bindings with
+        | [ binding ] -> Some binding
+        | _ -> None
+      in
+      let* entity_var, attr, value_var, comparisons =
+        match query.where with
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest ->
+            if is_reverse_ref attr || not (query_attr_uses_avet db attr) || is_ref_attr db attr then
+              None
+            else if List.for_all (function ComparisonPredicate _ -> true | _ -> false) rest then
+              Some (entity_var, attr, value_var, rest)
+            else
+              None
+        | _ -> None
+      in
+      if List.exists (fun var -> var <> entity_var && var <> value_var) find_vars then
+        None
+      else if not (List.mem entity_var find_vars && List.mem value_var find_vars) then
+        None
+      else
+        let start, stop =
+          List.fold_left
+            (fun (start, stop) -> function
+              | ComparisonPredicate (predicate, left, right) -> (
+                match comparison_threshold value_var binding predicate left right with
+                | Some (GreaterThan as p, threshold) | Some (GreaterOrEqual as p, threshold) ->
+                    let bound = Option.value (avet_index_start p threshold) ~default:threshold in
+                    (merge_avet_start compare_value start bound, stop)
+                | Some (LessThan as p, threshold) | Some (LessOrEqual as p, threshold) ->
+                    let bound = Option.value (avet_index_stop p threshold) ~default:threshold in
+                    (start, merge_avet_stop compare_value stop bound)
+                | None -> (start, stop))
+              | _ -> (start, stop))
+            (None, None) comparisons
+        in
+        let datoms =
+          let range = index_range db attr ?start ?stop () in
+          if avet_bounds_need_post_filter value_var comparisons then
+            range
+            |> Seq.filter (fun datom ->
+              comparisons
+              |> List.for_all (function
+                | ComparisonPredicate (predicate, left, right) -> (
+                  match comparison_threshold value_var binding predicate left right with
+                  | Some (range_predicate, threshold) ->
+                      Built_ins.matches_comparison_predicate
+                        range_predicate
+                        (compare_value datom.v threshold)
+                  | None -> false)
+                | _ -> false))
+          else
+            range
+        in
+        let row_for_datom datom =
+          find_vars
+          |> List.map (function
+            | var when var = entity_var -> Result_entity datom.e
+            | var when var = value_var -> Result_value datom.v
+            | _ -> invalid_arg "unexpected find variable in avet predicate query")
+        in
+        let rec collect acc seq =
+          match seq () with
+          | Seq.Nil -> List.rev acc
+          | Seq.Cons (datom, rest) -> collect (row_for_datom datom :: acc) rest
+        in
+        Some (collect [] datoms)
+
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in
     match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
@@ -1812,6 +1954,8 @@ module Query = struct
           | None, _, _ -> None)
       in
       if constant_patterns = [] then
+        None
+      else if value_var_attrs <> [] then
         None
       else
         let duplicate_value_var =
@@ -1922,6 +2066,9 @@ module Query = struct
             |> fun rows -> Some rows
 
   let q ?inputs db query =
+    match simple_avet_predicate_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
     match simple_same_entity_constant_rows ?inputs db query with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
