@@ -2112,12 +2112,99 @@ end) = struct
   let relation_only_clauses clauses =
     List.for_all relation_prefix_clause clauses
 
+  let subst_rule_term mapping = function
+    | QVar name -> (match List.assoc_opt name mapping with Some term -> term | None -> QVar name)
+    | term -> term
+
+  let subst_rule_clause mapping = function
+    | Pattern (e, a, v) ->
+      Some (Pattern (subst_rule_term mapping e, subst_rule_term mapping a, subst_rule_term mapping v))
+    | PatternTx (e, a, v, tx) ->
+      Some
+        (PatternTx
+           ( subst_rule_term mapping e
+           , subst_rule_term mapping a
+           , subst_rule_term mapping v
+           , subst_rule_term mapping tx ))
+    | PatternTxOp (e, a, v, tx, op) ->
+      Some
+        (PatternTxOp
+           ( subst_rule_term mapping e
+           , subst_rule_term mapping a
+           , subst_rule_term mapping v
+           , subst_rule_term mapping tx
+           , subst_rule_term mapping op ))
+    | Not [ Pattern (e, a, v) ] ->
+      Some (Not [ Pattern (subst_rule_term mapping e, subst_rule_term mapping a, subst_rule_term mapping v) ])
+    | NotJoin (vars, clauses) ->
+      let clauses =
+        clauses
+        |> List.map (function
+          | Pattern (e, a, v) ->
+            Some (Pattern (subst_rule_term mapping e, subst_rule_term mapping a, subst_rule_term mapping v))
+          | _ -> None)
+      in
+      if List.for_all Option.is_some clauses then
+        Some (NotJoin (vars, List.filter_map Fun.id clauses))
+      else
+        None
+    | ComparisonPredicate (predicate, left, right) ->
+      Some
+        (ComparisonPredicate
+           (predicate, subst_rule_term mapping left, subst_rule_term mapping right))
+    | _ -> None
+
+  (** Inline a non-recursive rule whose body is relation-only patterns/not. *)
+  let inline_rule_clauses rules name terms =
+    let arity = List.length terms in
+    let candidates =
+      List.filter (fun rule -> rule.rule_name = name && List.length rule.rule_params = arity) rules
+    in
+    match candidates with
+    | [ { rule_params; rule_body; _ } ]
+      when rule_body <> []
+           && List.for_all relation_prefix_clause rule_body
+           && not (List.exists Query.has_rule_clause rule_body) ->
+      let mapping = List.combine rule_params terms in
+      let inlined = List.map (subst_rule_clause mapping) rule_body in
+      if List.for_all Option.is_some inlined then Some (List.filter_map Fun.id inlined) else None
+    | _ -> None
+
+  let expand_inline_rules rules clauses =
+    let rec expand acc = function
+      | [] -> Some (List.rev acc)
+      | Rule (name, terms) :: rest ->
+        (match inline_rule_clauses rules name terms with
+         | Some inlined -> expand acc (inlined @ rest)
+         | None -> None)
+      | SourceRule (source_name, name, terms) :: rest ->
+        (match inline_rule_clauses rules name terms with
+         | Some inlined ->
+           let sourced =
+             List.map
+               (function
+                 | Pattern (e, a, v) -> SourcePattern (source_name, e, a, v)
+                 | PatternTx (e, a, v, tx) -> SourcePatternTx (source_name, e, a, v, tx)
+                 | PatternTxOp (e, a, v, tx, op) -> SourcePatternTxOp (source_name, e, a, v, tx, op)
+                 | Not clauses -> SourceNot (source_name, clauses)
+                 | NotJoin (vars, clauses) -> SourceNotJoin (source_name, vars, clauses)
+                 | clause -> SourceClause (source_name, clause))
+               inlined
+           in
+           expand acc (sourced @ rest)
+         | None -> None)
+      | clause :: rest -> expand (clause :: acc) rest
+    in
+    if rules = [] then Some clauses else expand [] clauses
+
   let relation_query_clauses clauses =
     relation_only_clauses clauses
     ||
     match clauses with
     | [ Or branches ] -> List.for_all (List.for_all relation_prefix_clause) branches
     | [ SourceOr (_, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
+    | [ OrJoin (_, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
+    | [ SourceOrJoin (_, _, branches) ] -> List.for_all (List.for_all relation_prefix_clause) branches
     | _ -> false
 
   let relation_has_comparison clauses =
@@ -2349,6 +2436,10 @@ end) = struct
       | [ SourceOr (source_name, branches) ] ->
         let default_source = source db sources source_name in
         eval_or_branch_relations db sources default_source branches
+      | [ OrJoin (_, branches) ] -> eval_or_branch_relations db sources default_source branches
+      | [ SourceOrJoin (source_name, _, branches) ] ->
+        let default_source = source db sources source_name in
+        eval_or_branch_relations db sources default_source branches
       | _ ->
         apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses)
 
@@ -2370,15 +2461,18 @@ end) = struct
 
   let eval_relation_rows db sources rules bindings clauses =
     let default_source = source db sources "$" in
-    match rules, bindings, relation_query_clauses clauses with
-    | [], [ [] ], true ->
-      eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
-    | [], [ binding ], true ->
-      let clauses = List.map (bound_relation_clause binding) clauses in
-      eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
-    | _ -> None
+    match expand_inline_rules rules clauses with
+    | None -> None
+    | Some clauses ->
+      (match bindings, relation_query_clauses clauses with
+       | [ [] ], true ->
+         eval_relation_from_empty db sources default_source clauses
+         |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
+       | [ binding ], true ->
+         let clauses = List.map (bound_relation_clause binding) clauses in
+         eval_relation_from_empty db sources default_source clauses
+         |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
+       | _ -> None)
 
   let eval_relation_clauses ?(allow_initial_bindings = false) db sources default_source bindings clauses =
     let bound_relation_pattern_terms = function

@@ -2667,41 +2667,58 @@ module Query = struct
       in
       collect query.inputs args
 
-  let is_simple_follow_rule = function
-    | { rule_name = "follow"; rule_params = [ e1; e2 ]; rule_body = [ Pattern (QVar p1, QAttr "follows", QVar p2) ] }
-      when p1 = e1 && p2 = e2 ->
+  let is_simple_single_pattern_rule = function
+    | { rule_params; rule_body = [ Pattern (QVar p1, QAttr _, QVar p2) ]; _ }
+      when List.length rule_params = 2 && List.hd rule_params = p1 && List.nth rule_params 1 = p2 ->
+      true
+    | { rule_params; rule_body = [ Pattern (QVar p1, QAttr _, QValue _) ]; _ }
+      when List.length rule_params = 1 && List.hd rule_params = p1 ->
       true
     | _ -> false
 
-  let simple_follow_rule_rows ?inputs db query =
+  let simple_single_pattern_rule_rows ?inputs db query =
     let ( let* ) = Option.bind in
     match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
     | true, _, _, _ -> None
     | false, None, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
     | false, Some _, [], [] -> (
       let* rules = rules_from_input_args query inputs in
-      let* rule = (
-        match rules with
-        | [ rule ] when is_simple_follow_rule rule -> Some rule
-        | _ -> None)
-      in
-      let* qe1, qe2 =
-        match query.find, query.where with
-        | [ Find_var qe1; Find_var qe2 ], [ Rule ("follow", [ QVar re1; QVar re2 ]) ] when qe1 = re1 && qe2 = re2 ->
-          Some (qe1, qe2)
+      let* rule =
+        match rules, query.where with
+        | [ rule ], [ Rule (name, terms) ]
+          when rule.rule_name = name
+               && is_simple_single_pattern_rule rule
+               && List.length rule.rule_params = List.length terms ->
+          Some (rule, terms)
         | _ -> None
       in
-      ignore (rule, qe1, qe2);
-      let collect acc datom =
-        match datom.v with
-        | Ref target -> [ Result_entity datom.e; Result_entity target ] :: acc
-        | _ -> acc
-      in
-      let follows_datoms =
-        primary_attr_datoms db Aevt "follows"
-        @ Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr "follows") ~default:[]
-      in
-      Some (List.rev (List.fold_left collect [] follows_datoms)))
+      let rule, terms = rule in
+      match rule.rule_body, terms, query.find with
+      | [ Pattern (QVar _, QAttr attr, QVar _) ], [ QVar e1; QVar e2 ], [ Find_var f1; Find_var f2 ]
+        when f1 = e1 && f2 = e2 ->
+        let collect acc datom =
+          match datom.v with
+          | Ref target -> [ Result_entity datom.e; Result_entity target ] :: acc
+          | _ -> acc
+        in
+        let datoms =
+          primary_attr_datoms db Aevt attr
+          @ Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+        in
+        Some (List.rev (List.fold_left collect [] datoms))
+      | [ Pattern (QVar _, QAttr attr, QValue value) ], [ QVar e ], [ Find_var f ] when f = e ->
+        let collect acc datom =
+          if Compare.compare_value datom.v value = 0 then
+            [ Result_entity datom.e ] :: acc
+          else
+            acc
+        in
+        let datoms =
+          primary_attr_datoms db Aevt attr
+          @ Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+        in
+        Some (List.rev (List.fold_left collect [] datoms))
+      | _ -> None)
 
   let q ?inputs db query =
     match simple_avet_predicate_rows ?inputs db query with
@@ -2719,7 +2736,7 @@ module Query = struct
     match simple_not_join_constant_rows ?inputs db query with
     | Some rows -> rows
     | None ->
-    match simple_follow_rule_rows ?inputs db query with
+    match simple_single_pattern_rule_rows ?inputs db query with
     | Some rows -> rows
     | None -> Query_impl.q query_context ?inputs db query
 

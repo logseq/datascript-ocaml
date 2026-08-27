@@ -94,6 +94,15 @@ let follow_rules =
                [ QueryFormSymbol "?e1"; QueryFormKeyword "follows"; QueryFormSymbol "?e2" ]
            ] ])
 
+let friend_rules =
+  Parser.parse_rules
+    (QueryFormVector
+       [ QueryFormVector
+           [ QueryFormVector [ QueryFormSymbol "friend"; QueryFormSymbol "?e1"; QueryFormSymbol "?e2" ]
+           ; QueryFormVector
+               [ QueryFormSymbol "?e1"; QueryFormKeyword "follows"; QueryFormSymbol "?e2" ]
+           ] ])
+
 let sort_rows rows =
   List.sort
     (fun left right ->
@@ -250,5 +259,10 @@ let () =
               check_query_inputs "q-rule" 667 "d1c7c5173bb8c5ff34ecbeeed24acc17"
                 "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
                 [ Arg_rules follow_rules ])
+        ; test_case "q-rule renamed single-pattern" `Quick
+            (fun () ->
+              check_query_inputs "q-rule-friend" 667 "d1c7c5173bb8c5ff34ecbeeed24acc17"
+                "[:find ?e1 ?e2 :in $ % :where (friend ?e1 ?e2)]"
+                [ Arg_rules friend_rules ])
         ] )
     ]
