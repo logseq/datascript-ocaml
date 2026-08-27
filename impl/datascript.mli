@@ -403,6 +403,42 @@ val since : tx -> db -> db
 val history : db -> db
 val is_history : db -> bool
 module Tx_visibility : module type of Tx_visibility
+module Query_plan : sig
+  type index_choice =
+    | Prefer_eavt
+    | Prefer_aevt
+    | Prefer_avet
+
+  type pattern_access =
+    { entity : query_term
+    ; attr : query_term
+    ; value : query_term
+    ; tx : query_term option
+    ; index : index_choice
+    ; estimated_rows : int
+    }
+
+  type logical_node =
+    | Scan of pattern_access
+    | RangeScan of pattern_access * comparison_predicate
+    | MergeScan of pattern_access list
+    | HashJoin of logical_node * logical_node
+    | Filter of logical_node * query_clause
+    | AntiJoin of logical_node * logical_node
+    | Union of logical_node list
+    | RuleExpand of string * query_term list * logical_node
+    | Unsupported of query_clause
+
+  type plan =
+    { nodes : logical_node list
+    ; ordered_where : query_clause list
+    }
+
+  val estimate_pattern_cost : ?max_datom_e:int -> query_term -> query_term -> query_term -> int
+  val choose_index : query_term -> query_term -> query_term -> index_choice
+  val analyze : ?max_datom_e:int -> query -> plan option
+  val order_where_clauses : ?max_datom_e:int -> query_clause list -> query_clause list
+end
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db

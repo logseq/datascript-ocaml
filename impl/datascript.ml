@@ -89,6 +89,7 @@ let as_of_tx = Db_impl.as_of_tx
 let since_tx = Db_impl.since_tx
 
 module Tx_visibility = Tx_visibility
+module Query_plan = Query_plan
 
 let serializable = Serialize.serializable
 

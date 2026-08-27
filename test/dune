@@ -40,6 +40,11 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_query_plan)
+ (modules test_query_plan)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_shared_queries)
  (modules test_shared_queries)
  (libraries datascript-ocaml-native test_support alcotest))

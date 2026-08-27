@@ -1728,6 +1728,7 @@ end) = struct
     promote [] clauses
 
   let rec eval_relation_from_relation db sources default_source relation clauses =
+    let clauses = Query_plan.order_where_clauses ~max_datom_e:db.max_datom_e clauses in
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
@@ -2210,6 +2211,7 @@ end) = struct
     List.for_all (fun var -> List.mem var relation.attrs) value_vars
 
   let rec eval_relation_from_empty db sources default_source clauses =
+    let clauses = Query_plan.order_where_clauses ~max_datom_e:db.max_datom_e clauses in
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
