@@ -7,6 +7,14 @@
  (libraries sqlite3 datascript_types))
 
 (library
+ (name sqlite_index_native)
+ (public_name datascript-ocaml-native-sqlite.index)
+ (wrapped false)
+ (modes native)
+ (modules datascript_sqlite_index)
+ (libraries datascript_lmdb_codec sqlite_db_native datascript_types))
+
+(library
  (name datascript_sqlite)
  (public_name datascript-ocaml-native-sqlite)
  (wrapped false)
