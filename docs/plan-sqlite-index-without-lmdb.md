@@ -171,46 +171,35 @@ Rename for honesty (can be gradual):
 
 - [x] Document current Separate_index mirror and LMDB hard deps.
 - [x] Choose Option A; document dbval takeaways and non-goals.
-- [ ] Agree: SQLite package must build/link **without** `lmdb` / `lmdb_*` libraries.
+- [x] Agree: SQLite package must build/link **without** direct `lmdb_*` libraries
+      (transitive LMDB via `datascript-ocaml-native` for the default memory engine remains until a later optional-backend split).
 
 ### Phase 1 — Decouple protocol types from concrete LMDB
 
-1. Introduce an abstract or variant `index_db` in the native storage protocol (and Index platform shim) so callbacks are not `Datascript_lmdb_db.t`-only.
-2. Keep LMDB behavior bit-identical: memory/file LMDB stay `Share_index_db`.
-3. Leave SQLite as `Separate_index_db` until Phase 2 (no behavior change yet).
-4. Rename Index entry points away from `create_lmdb` where cheap; update call sites in `impl/db.ml` / platform storage.
+1. [x] Introduce `index_db = Lmdb | Sqlite` in the native storage protocol.
+2. [x] Keep LMDB behavior for memory/file Share path (cross-env sync lives in Index).
+3. [x] Rename Index entry points (`create_index_db`, `index_db`, aliases kept).
+4. [x] `empty_db` / `init_db` / `restore` pass storage into `create_index_db`.
 
-**Exit:** native + tests green; SQLite still mirrors via temp LMDB.
+**Exit:** native + tests green.
 
 ### Phase 2 — `Datascript_sqlite_index`
 
-Implement Index surface used by `impl/db.ml` / storage against `Datascript_sqlite_db`:
+- [x] Implement Index surface over `Datascript_sqlite_db` (codec reused).
+- [x] Wire native Index dispatch `Lmdb | Sqlite`.
+- [ ] Optional: rename codec package to neutral `datascript_index_codec` (follow-up).
+- [ ] Optional: SQL `ORDER BY key DESC` for rslice (parity still uses materialize+rev like LMDB).
 
-| API group | Notes |
-| --- | --- |
-| empty / of_sorted_list / of_sorted_lists / of_eavt_datoms / of_bulk | Batch write txn |
-| add / remove / append_datoms / append_tx_data | Same AVET gating as LMDB |
-| lookup / fold / fold_slice / find_first_slice / fold_attr_prefix | SQL range + codec decode |
-| slice / slice_seq / seq / seek | Prefer streaming stmt where possible; list materialization OK if matches LMDB semantics initially |
-| **rslice_seq** | Add `fold_index_range_desc` (or scan with `ORDER BY key DESC`) — dbval `-scan` reverse |
-| flush / copy | Handle semantics: same sqlite db share; copy may be no-op or connection policy TBD |
-
-Reuse `Datascript_lmdb_codec` **or** rename to a neutral `datascript_index_codec` (move out of `lmdb/` package so sqlite does not depend on an `lmdb_*` findlib name). Codec bytes must stay identical.
-
-**Exit:** unit tests can open a sqlite Index handle and round-trip datoms / slices without constructing LMDB. Package may still link LMDB until Phase 3.
+**Exit:** SQLite Index round-trips without constructing an LMDB mirror for Share sessions.
 
 ### Phase 3 — SQLite plugin becomes Share_index_db
 
-1. `backend_of_sqlite`: `index_db = Share_index_db sqlite`.
-2. `create_index_db` for sqlite storage returns the shared sqlite handle (no temp LMDB).
-3. `load_indexes_from_storage` / `sync_indexes_to_storage` / `sync_removals_to_storage`: no-ops for shared sqlite (indexes already live in the file); keep meta store/restore.
-4. Remove `copy_indexes_to_lmdb` and LMDB-typed sync helpers from the sqlite package (or leave dead code one PR, then delete).
-5. Drop `lmdb_db_native` / `lmdb_index_native` from `sqlite/dune`; keep only codec (renamed) + sqlite + core types.
-6. Ensure core “memory empty_db” can remain LMDB-backed without forcing sqlite users to install LMDB **when they only depend on `datascript-ocaml-native-sqlite`**. If core always links LMDB today, either:
-   - make LMDB an optional/runtime-selected backend, or
-   - provide a sqlite-linked product that uses sqlite for the default `empty_db` temp store as well.
+1. [x] Plugin: `Share_index_db (Sqlite sqlite)`; sync/load no-ops for shared handle.
+2. [x] Drop `copy_indexes_to_lmdb` / LMDB-typed mirror helpers from sqlite storage.
+3. [x] Drop direct `lmdb_db_native` / `lmdb_index_native` from `sqlite/dune`.
+4. [x] Tests assert `db_shares_storage_index` for empty_db and restore.
 
-**Exit:** `opam install` / dune build of sqlite package **without** LMDB system library; shared query suite and persistent sqlite benches pass vs LMDB within agreed tolerance.
+**Exit:** sqlite package has no direct `lmdb_*` dune deps; Share path verified.
 
 ### Phase 4 — Hardening & parity
 

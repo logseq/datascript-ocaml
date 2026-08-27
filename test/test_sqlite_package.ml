@@ -26,6 +26,8 @@ let test_storage_roundtrip () =
   let session = Datascript_sqlite.open_session path in
   let storage = storage_of_handle (Datascript_sqlite.storage session) in
   let db = empty_db ~schema:[ "todo/id", indexed ] ~storage () in
+  check_bool "empty_db shares SQLite index handle" true
+    (db_shares_storage_index storage db);
   let report =
     transact
       db
@@ -39,6 +41,8 @@ let test_storage_roundtrip () =
     | Some db -> db
     | None -> failwith "expected SQLite storage to restore a database"
   in
+  check_bool "restore shares SQLite index handle" true
+    (db_shares_storage_index storage restored);
   let entity =
     match entity restored (Lookup_ref ("todo/id", String "todo-1")) with
     | Some entity -> entity

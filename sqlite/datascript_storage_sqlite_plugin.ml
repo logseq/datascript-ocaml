@@ -3,17 +3,13 @@ open Datascript_types
 let backend_of_sqlite sqlite =
   let restore_meta () = Datascript_storage_sqlite.restore_meta sqlite in
   let store_meta db = Datascript_storage_sqlite.store_meta sqlite db in
-  let sync_indexes_to_storage ~since_tx eavt aevt avet =
-    Datascript_storage_sqlite.sync_append_since_tx ~since_tx Eavt (Datascript_lmdb_index.db_of eavt) sqlite;
-    Datascript_storage_sqlite.sync_append_since_tx ~since_tx Aevt (Datascript_lmdb_index.db_of aevt) sqlite;
-    Datascript_storage_sqlite.sync_append_since_tx ~since_tx Avet (Datascript_lmdb_index.db_of avet) sqlite
-  in
+  (* Share path: live indexes use this SQLite db, so mirror sync is unnecessary. *)
+  let sync_indexes_to_storage ~since_tx = ignore since_tx in
   let sync_removals_to_storage removed_datoms =
-    Datascript_storage_sqlite.remove_datoms removed_datoms sqlite
+    (* Removals already applied to the shared SQLite indexes during purge. *)
+    ignore removed_datoms
   in
-  let load_indexes_from_storage target_lmdb =
-    Datascript_storage_sqlite.copy_indexes_to_lmdb sqlite target_lmdb
-  in
+  let load_indexes_from_storage _target = () in
   {
     Datascript_storage_protocol.kind = storage_kind_sqlite
   ; restore_meta
@@ -21,7 +17,7 @@ let backend_of_sqlite sqlite =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Separate_index_db
+  ; index_db = Share_index_db (Sqlite sqlite)
   }
 
 let wrap_sqlite ?check_live db =

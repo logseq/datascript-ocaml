@@ -8,12 +8,7 @@ type storage_backend = {
   kind : storage_kind
   ; restore_meta : unit -> schema * entity_id * tx * datom list
   ; store_meta : db -> unit
-  ; sync_indexes_to_storage :
-      since_tx:tx ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      unit
+  ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
   ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
   ; index_db : storage_index_db
@@ -53,11 +48,7 @@ let kind_of storage = (backend_of storage).kind
 let memory_backend lmdb =
   let restore_meta () = Datascript_storage_lmdb.restore_meta lmdb in
   let store_meta db = Datascript_storage_lmdb.store_meta lmdb db in
-  let sync_indexes_to_storage ~since_tx eavt aevt avet =
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx eavt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx aevt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx avet lmdb
-  in
+  let sync_indexes_to_storage ~since_tx = ignore since_tx in
   let sync_removals_to_storage removed_datoms =
     let remove index =
       let t = Datascript_lmdb_index.empty index lmdb in
@@ -94,9 +85,9 @@ let store_db storage db =
   ensure_live storage;
   (backend_of storage).store_meta db
 
-let sync_indexes_to_storage ~since_tx eavt aevt avet storage =
+let sync_indexes_to_storage ~since_tx storage =
   ensure_live storage;
-  (backend_of storage).sync_indexes_to_storage ~since_tx eavt aevt avet
+  (backend_of storage).sync_indexes_to_storage ~since_tx
 
 let sync_removals_to_storage removed_datoms storage =
   ensure_live storage;
@@ -131,11 +122,7 @@ let create_index_db storage =
 let backend_of_lmdb lmdb =
   let restore_meta () = Datascript_storage_lmdb.restore_meta lmdb in
   let store_meta db = Datascript_storage_lmdb.store_meta lmdb db in
-  let sync_indexes_to_storage ~since_tx eavt aevt avet =
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx eavt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx aevt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx avet lmdb
-  in
+  let sync_indexes_to_storage ~since_tx = ignore since_tx in
   let sync_removals_to_storage removed_datoms =
     let remove index =
       let t = Datascript_lmdb_index.empty index lmdb in

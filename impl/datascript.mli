@@ -453,6 +453,7 @@ val benchmark_memory_storage : unit -> storage
 val ensure_live : storage -> unit
 val kind_of : storage -> storage_kind
 val storage_of_handle : Datascript_types.storage -> storage
+val db_shares_storage_index : storage -> db -> bool
 val store : ?storage:storage -> db -> unit
 val restore : storage -> db option
 val storage : db -> storage option

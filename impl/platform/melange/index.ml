@@ -1,40 +1,50 @@
 open Datascript_types
 
-(* Native LMDB indexes use identity coercions because [index_set] stays abstract in
+(* Platform indexes use identity coercions because [index_set] stays abstract in
    [Datascript_types] while this module owns the concrete LMDB representation. *)
 external inject : Datascript_lmdb_index.t -> index_set = "%identity"
 external project : index_set -> Datascript_lmdb_index.t = "%identity"
 
 type t = index_set
 type 'a seq = 'a Datascript_lmdb_index.seq
-type lmdb = Datascript_lmdb_db.t
+type index_db = Datascript_lmdb_db.t
+type lmdb = index_db
 
-let same_storage_db storage index_lmdb =
-  Datascript_storage_protocol.same_storage_db storage index_lmdb
+let same_storage_db storage index_db =
+  Datascript_storage_protocol.same_storage_db storage index_db
 
-let create_lmdb storage = Datascript_storage_protocol.create_index_db storage
+let create_index_db storage = Datascript_storage_protocol.create_index_db storage
+let create_lmdb = create_index_db
 
-let lmdb_of lmdb = lmdb
+let index_db_of index_db = index_db
+let lmdb_of = index_db_of
 let db_of t = Datascript_lmdb_index.db_of (project t)
 
-let lmdb_for_storage storage = Datascript_storage_protocol.db_for_storage storage
+let index_db_for_storage storage = Datascript_storage_protocol.db_for_storage storage
+let lmdb_for_storage = index_db_for_storage
 
 let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
-  Datascript_storage_protocol.sync_indexes_to_storage ~since_tx (project eavt) (project aevt)
-    (project avet) target_storage
+  let target = Datascript_storage_protocol.db_for_storage target_storage in
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project eavt) target;
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project aevt) target;
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project avet) target
 
 let sync_removals_to_storage removed_datoms eavt aevt avet target_storage =
   ignore (eavt, aevt, avet);
   Datascript_storage_protocol.sync_removals_to_storage removed_datoms target_storage
 
-let load_indexes_from_storage storage target_lmdb =
-  Datascript_storage_protocol.load_indexes_from_storage storage target_lmdb
+let load_indexes_from_storage storage target =
+  Datascript_storage_protocol.load_indexes_from_storage storage target
 
-let empty index lmdb = Datascript_lmdb_index.empty index lmdb |> inject
-let of_sorted_list index datoms lmdb = Datascript_lmdb_index.of_sorted_list index datoms lmdb |> inject
-let of_sorted_lists index_datoms lmdb = Datascript_lmdb_index.of_sorted_lists index_datoms lmdb
-let of_eavt_datoms ~avet datoms lmdb = Datascript_lmdb_index.of_eavt_datoms ~avet datoms lmdb
-let of_bulk index datoms lmdb = Datascript_lmdb_index.of_bulk index datoms lmdb |> inject
+let empty index index_db = Datascript_lmdb_index.empty index index_db |> inject
+let of_sorted_list index datoms index_db =
+  Datascript_lmdb_index.of_sorted_list index datoms index_db |> inject
+let of_sorted_lists index_datoms index_db =
+  Datascript_lmdb_index.of_sorted_lists index_datoms index_db
+let of_eavt_datoms ~avet datoms index_db =
+  Datascript_lmdb_index.of_eavt_datoms ~avet datoms index_db
+let of_bulk index datoms index_db =
+  Datascript_lmdb_index.of_bulk index datoms index_db |> inject
 
 let append_tx_data ~avet:is_avet datoms eavt_index aevt_index avet_index =
   let eavt, aevt, avet_index' =

@@ -26,8 +26,7 @@
  (libraries
   datascript-ocaml-native
   storage_native
-  lmdb_db_native
-  lmdb_index_native
   datascript_lmdb_codec
   sqlite_db_native
+  sqlite_index_native
   melange-transit-native))

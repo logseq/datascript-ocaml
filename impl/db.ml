@@ -190,11 +190,13 @@ let flush_pending_datoms db =
     in
     { db with pending_datoms = []; eavt_index; aevt_index; avet_index }
 
-let lmdb_of_db db =
-  try Index.lmdb_of (Index.db_of db.eavt_index)
+let index_db_of_db db =
+  try Index.index_db_of (Index.db_of db.eavt_index)
   with Invalid_argument _ ->
-    let lmdb, _ = Index.create_lmdb db.storage_ref in
-    lmdb
+    let index_db, _ = Index.create_index_db db.storage_ref in
+    index_db
+
+let lmdb_of_db = index_db_of_db
 
 let group_sorted_datoms_by_attr datoms =
   let table = Hashtbl.create 32 in
@@ -402,12 +404,12 @@ let storage_ref_of ?storage auto_storage_ref =
 
 let empty_db context ?(schema = []) ?storage () =
   let schema = Schema.validate_schema schema in
-  let lmdb, auto_storage_ref = Index.create_lmdb None in
+  let index_db, auto_storage_ref = Index.create_index_db storage in
   { db_uid = context.next_db_uid ()
   ; schema
-  ; eavt_index = empty_index Eavt lmdb
-  ; aevt_index = empty_index Aevt lmdb
-  ; avet_index = empty_index Avet lmdb
+  ; eavt_index = empty_index Eavt index_db
+  ; aevt_index = empty_index Aevt index_db
+  ; avet_index = empty_index Avet index_db
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
   ; avet_entities_by_attr_value = Hashtbl.create 0
@@ -439,12 +441,12 @@ let init_db context ?(schema = []) ?storage datoms =
     List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0 datoms
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
-  let lmdb, auto_storage_ref = Index.create_lmdb None in
+  let index_db, auto_storage_ref = Index.create_index_db storage in
   { db_uid = context.next_db_uid ()
   ; schema
-  ; eavt_index = empty_index Eavt lmdb
-  ; aevt_index = empty_index Aevt lmdb
-  ; avet_index = empty_index Avet lmdb
+  ; eavt_index = empty_index Eavt index_db
+  ; aevt_index = empty_index Aevt index_db
+  ; avet_index = empty_index Avet index_db
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
   ; avet_entities_by_attr_value = Hashtbl.create 0

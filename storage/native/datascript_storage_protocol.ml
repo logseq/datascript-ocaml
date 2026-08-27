@@ -1,8 +1,13 @@
 open Datascript_types
 
-(** How a storage backend relates to the in-memory LMDB index layer. *)
+(** Shared index database handle for a storage backend. *)
+type index_db =
+  | Lmdb of Datascript_lmdb_db.t
+  | Sqlite of Datascript_sqlite_db.t
+
+(** How a storage backend relates to the live index layer. *)
 type storage_index_db =
-  | Share_index_db of Datascript_lmdb_db.t
+  | Share_index_db of index_db
   | Separate_index_db
 
 (** Callback bundle for a pluggable storage backend (LMDB file, SQLite, PostgreSQL, ...). *)
@@ -10,14 +15,9 @@ type storage_backend = {
   kind : storage_kind
   ; restore_meta : unit -> schema * entity_id * tx * datom list
   ; store_meta : db -> unit
-  ; sync_indexes_to_storage :
-      since_tx:tx ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      unit
+  ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
-  ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
+  ; load_indexes_from_storage : index_db -> unit
   ; index_db : storage_index_db
 }
 
@@ -55,11 +55,8 @@ let kind_of storage = (backend_of storage).kind
 let memory_backend lmdb =
   let restore_meta () = Datascript_storage_lmdb.restore_meta lmdb in
   let store_meta db = Datascript_storage_lmdb.store_meta lmdb db in
-  let sync_indexes_to_storage ~since_tx eavt aevt avet =
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx eavt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx aevt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx avet lmdb
-  in
+  (* Share path: live indexes use this LMDB env, so delta sync is unnecessary. *)
+  let sync_indexes_to_storage ~since_tx = ignore since_tx in
   let sync_removals_to_storage removed_datoms =
     let remove index =
       let t = Datascript_lmdb_index.empty index lmdb in
@@ -69,8 +66,11 @@ let memory_backend lmdb =
     remove Aevt;
     remove Avet
   in
-  let load_indexes_from_storage target_lmdb =
-    if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+  let load_indexes_from_storage target =
+    match target with
+    | Lmdb target_lmdb when lmdb != target_lmdb ->
+        Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+    | Lmdb _ | Sqlite _ -> ()
   in
   {
     kind = storage_kind_memory
@@ -79,7 +79,7 @@ let memory_backend lmdb =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Share_index_db lmdb
+  ; index_db = Share_index_db (Lmdb lmdb)
   }
 
 let memory_storage () =
@@ -96,39 +96,41 @@ let store_db storage db =
   ensure_live storage;
   (backend_of storage).store_meta db
 
-let sync_indexes_to_storage ~since_tx eavt aevt avet storage =
+let sync_indexes_to_storage ~since_tx storage =
   ensure_live storage;
-  (backend_of storage).sync_indexes_to_storage ~since_tx eavt aevt avet
+  (backend_of storage).sync_indexes_to_storage ~since_tx
 
 let sync_removals_to_storage removed_datoms storage =
   ensure_live storage;
   (backend_of storage).sync_removals_to_storage removed_datoms
 
-let load_indexes_from_storage storage target_lmdb =
+let load_indexes_from_storage storage target =
   ensure_live storage;
-  (backend_of storage).load_indexes_from_storage target_lmdb
+  (backend_of storage).load_indexes_from_storage target
 
 let db_for_storage storage =
   ensure_live storage;
   match (backend_of storage).index_db with
   | Share_index_db db -> db
   | Separate_index_db ->
-      invalid_arg "storage backend uses a separate index db, expected shared LMDB index db"
+      invalid_arg "storage backend uses a separate index db, expected shared index db"
 
-let same_storage_db storage index_lmdb =
+let same_storage_db storage index_db =
   ensure_live storage;
-  match (backend_of storage).index_db with
-  | Share_index_db db -> db == index_lmdb
-  | Separate_index_db -> false
+  match (backend_of storage).index_db, index_db with
+  | Share_index_db (Lmdb a), Lmdb b -> a == b
+  | Share_index_db (Sqlite a), Sqlite b -> a == b
+  | Share_index_db _, _ -> false
+  | Separate_index_db, _ -> false
 
 let create_index_db storage =
   match storage with
-  | None -> (Datascript_lmdb_db.create_temp (), None)
+  | None -> (Lmdb (Datascript_lmdb_db.create_temp ()), None)
   | Some storage ->
       ensure_live storage;
       (match (backend_of storage).index_db with
        | Share_index_db db -> (db, Some storage)
-       | Separate_index_db -> (Datascript_lmdb_db.create_temp (), Some storage))
+       | Separate_index_db -> (Lmdb (Datascript_lmdb_db.create_temp ()), Some storage))
 
 (** Backwards-compatible alias. *)
 let register_plugin = register_backend

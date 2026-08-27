@@ -8,12 +8,7 @@ type storage_backend = {
   kind : storage_kind
   ; restore_meta : unit -> schema * entity_id * tx * datom list
   ; store_meta : db -> unit
-  ; sync_indexes_to_storage :
-      since_tx:tx ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      unit
+  ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
   ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
   ; index_db : storage_index_db
@@ -26,8 +21,7 @@ val benchmark_memory_storage : unit -> storage
 val register_backend : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
 val restore_meta : storage -> schema * entity_id * tx * datom list
 val store_db : storage -> db -> unit
-val sync_indexes_to_storage :
-  since_tx:tx -> Datascript_lmdb_index.t -> Datascript_lmdb_index.t -> Datascript_lmdb_index.t -> storage -> unit
+val sync_indexes_to_storage : since_tx:tx -> storage -> unit
 val sync_removals_to_storage : datom list -> storage -> unit
 val load_indexes_from_storage : storage -> Datascript_lmdb_db.t -> unit
 val db_for_storage : storage -> Datascript_lmdb_db.t

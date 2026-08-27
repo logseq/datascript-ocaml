@@ -3,11 +3,8 @@ open Datascript_types
 let backend_of_lmdb lmdb =
   let restore_meta () = Datascript_storage_lmdb.restore_meta lmdb in
   let store_meta db = Datascript_storage_lmdb.store_meta lmdb db in
-  let sync_indexes_to_storage ~since_tx eavt aevt avet =
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx eavt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx aevt lmdb;
-    Datascript_lmdb_index.sync_append_since_tx ~since_tx avet lmdb
-  in
+  (* Share path: live indexes use this LMDB env, so delta sync is unnecessary. *)
+  let sync_indexes_to_storage ~since_tx = ignore since_tx in
   let sync_removals_to_storage removed_datoms =
     let remove index =
       let t = Datascript_lmdb_index.empty index lmdb in
@@ -17,8 +14,11 @@ let backend_of_lmdb lmdb =
     remove Aevt;
     remove Avet
   in
-  let load_indexes_from_storage target_lmdb =
-    if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+  let load_indexes_from_storage target =
+    match target with
+    | Datascript_storage_protocol.Lmdb target_lmdb when lmdb != target_lmdb ->
+        Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+    | Datascript_storage_protocol.Lmdb _ | Datascript_storage_protocol.Sqlite _ -> ()
   in
   {
     Datascript_storage_protocol.kind = storage_kind_lmdb
@@ -27,7 +27,7 @@ let backend_of_lmdb lmdb =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Share_index_db lmdb
+  ; index_db = Share_index_db (Lmdb lmdb)
   }
 
 let wrap_lmdb ?check_live db =

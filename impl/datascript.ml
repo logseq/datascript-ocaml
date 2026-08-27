@@ -115,6 +115,10 @@ let ensure_live = Storage.ensure_live
 let kind_of = Storage.kind_of
 
 let storage_of_handle (handle : Datascript_types.storage) = (handle : storage)
+
+let db_shares_storage_index storage db =
+  Index.same_storage_db storage (Index.db_of db.eavt_index)
+
 let storage = Storage.storage
 let settings = Storage.settings
 let collect_garbage = Storage.collect_garbage

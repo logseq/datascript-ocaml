@@ -21,11 +21,11 @@ let store ?storage db =
 
 let restore_root_snapshot storage =
   let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
-  let lmdb, _ = Index.create_lmdb None in
-  Index.load_indexes_from_storage storage lmdb;
+  let index_db, _ = Index.create_index_db (Some storage) in
+  Index.load_indexes_from_storage storage index_db;
   Some
     { serializable_schema = schema
-    ; serializable_datoms = Index.to_list (Index.empty Eavt lmdb) @ duplicate_datoms
+    ; serializable_datoms = Index.to_list (Index.empty Eavt index_db) @ duplicate_datoms
     ; serializable_max_eid = max_eid
     ; serializable_max_tx = max_tx
     }
@@ -33,8 +33,8 @@ let restore_root_snapshot storage =
 let restore context storage =
   let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
   let schema = Schema.validate_schema schema in
-  let lmdb, _ = Index.create_lmdb None in
-  Index.load_indexes_from_storage storage lmdb;
+  let index_db, _ = Index.create_index_db (Some storage) in
+  Index.load_indexes_from_storage storage index_db;
   let duplicate_eavt_by_entity =
     let table = Hashtbl.create 1024 in
     List.iter
@@ -64,9 +64,9 @@ let restore context storage =
   Some
     { db_uid = context.next_db_uid ()
     ; schema
-    ; eavt_index = Index.empty Eavt lmdb
-    ; aevt_index = Index.empty Aevt lmdb
-    ; avet_index = Index.empty Avet lmdb
+    ; eavt_index = Index.empty Eavt index_db
+    ; aevt_index = Index.empty Aevt index_db
+    ; avet_index = Index.empty Avet index_db
     ; aevt_by_attr = Hashtbl.create 0
     ; avet_by_attr = Hashtbl.create 0
     ; avet_entities_by_attr_value = Hashtbl.create 0
@@ -101,6 +101,15 @@ let collect_garbage storage =
   ensure_live storage;
   match kind_of storage with
   | k when k = storage_kind_lmdb || k = storage_kind_memory ->
-    (try Datascript_lmdb_db.sync (Datascript_storage_protocol.db_for_storage storage) with
-     | Invalid_argument _ -> ())
+    (try
+       match Datascript_storage_protocol.db_for_storage storage with
+       | Datascript_storage_protocol.Lmdb lmdb -> Datascript_lmdb_db.sync lmdb
+       | Datascript_storage_protocol.Sqlite _ -> ()
+     with Invalid_argument _ -> ())
+  | k when k = storage_kind_sqlite ->
+    (try
+       match Datascript_storage_protocol.db_for_storage storage with
+       | Datascript_storage_protocol.Sqlite sqlite -> Datascript_sqlite_db.sync sqlite
+       | Datascript_storage_protocol.Lmdb _ -> ()
+     with Invalid_argument _ -> ())
   | _ -> ()

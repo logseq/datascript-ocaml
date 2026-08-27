@@ -2,22 +2,26 @@ open Datascript_types
 
 type t = index_set
 type 'a seq
-type lmdb
+type index_db
+type lmdb = index_db
 
-val same_storage_db : storage -> lmdb -> bool
-val create_lmdb : storage option -> lmdb * storage option
-val lmdb_of : lmdb -> lmdb
-val db_of : t -> lmdb
-val lmdb_for_storage : storage -> lmdb
+val same_storage_db : storage -> index_db -> bool
+val create_index_db : storage option -> index_db * storage option
+val create_lmdb : storage option -> index_db * storage option
+val index_db_of : index_db -> index_db
+val lmdb_of : index_db -> index_db
+val db_of : t -> index_db
+val index_db_for_storage : storage -> index_db
+val lmdb_for_storage : storage -> index_db
 val sync_indexes_to_storage : since_tx:tx -> t -> t -> t -> storage -> unit
 val sync_removals_to_storage : datom list -> t -> t -> t -> storage -> unit
-val load_indexes_from_storage : storage -> lmdb -> unit
+val load_indexes_from_storage : storage -> index_db -> unit
 
-val empty : index -> lmdb -> t
-val of_sorted_list : index -> datom list -> lmdb -> t
-val of_sorted_lists : (index * datom list) list -> lmdb -> unit
-val of_eavt_datoms : avet:(string -> bool) -> datom list -> lmdb -> unit
-val of_bulk : index -> datom list -> lmdb -> t
+val empty : index -> index_db -> t
+val of_sorted_list : index -> datom list -> index_db -> t
+val of_sorted_lists : (index * datom list) list -> index_db -> unit
+val of_eavt_datoms : avet:(string -> bool) -> datom list -> index_db -> unit
+val of_bulk : index -> datom list -> index_db -> t
 val append_datoms : datom list -> t -> t
 val append_tx_data : avet:(attr -> bool) -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t

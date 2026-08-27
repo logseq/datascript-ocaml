@@ -1,13 +1,18 @@
 open Datascript_types
 
-(** How a storage backend relates to the in-memory LMDB index layer.
+(** Shared index database handle for a storage backend. *)
+type index_db =
+  | Lmdb of Datascript_lmdb_db.t
+  | Sqlite of Datascript_sqlite_db.t
 
-    - [Share_index_db lmdb]: index datoms live in the same LMDB env as storage
-      (memory and file LMDB backends).
-    - [Separate_index_db]: storage keeps its own index tables and copies into a
-      temp LMDB index on restore (SQLite and similar backends). *)
+(** How a storage backend relates to the live index layer.
+
+    - [Share_index_db handle]: index datoms live in the same store as storage
+      (memory/file LMDB and SQLite backends).
+    - [Separate_index_db]: storage keeps its own tables and copies into a
+      temporary index on restore (legacy mirror backends). *)
 type storage_index_db =
-  | Share_index_db of Datascript_lmdb_db.t
+  | Share_index_db of index_db
   | Separate_index_db
 
 (** Callback bundle for a pluggable storage backend.
@@ -19,14 +24,9 @@ type storage_backend = {
   kind : storage_kind
   ; restore_meta : unit -> schema * entity_id * tx * datom list
   ; store_meta : db -> unit
-  ; sync_indexes_to_storage :
-      since_tx:tx ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      Datascript_lmdb_index.t ->
-      unit
+  ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
-  ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
+  ; load_indexes_from_storage : index_db -> unit
   ; index_db : storage_index_db
 }
 
@@ -38,13 +38,12 @@ val benchmark_memory_storage : unit -> storage
 val register_backend : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
 val restore_meta : storage -> schema * entity_id * tx * datom list
 val store_db : storage -> db -> unit
-val sync_indexes_to_storage :
-  since_tx:tx -> Datascript_lmdb_index.t -> Datascript_lmdb_index.t -> Datascript_lmdb_index.t -> storage -> unit
+val sync_indexes_to_storage : since_tx:tx -> storage -> unit
 val sync_removals_to_storage : datom list -> storage -> unit
-val load_indexes_from_storage : storage -> Datascript_lmdb_db.t -> unit
-val db_for_storage : storage -> Datascript_lmdb_db.t
-val same_storage_db : storage -> Datascript_lmdb_db.t -> bool
-val create_index_db : storage option -> Datascript_lmdb_db.t * storage option
+val load_indexes_from_storage : storage -> index_db -> unit
+val db_for_storage : storage -> index_db
+val same_storage_db : storage -> index_db -> bool
+val create_index_db : storage option -> index_db * storage option
 
 (** Backwards-compatible aliases. *)
 type plugin = storage_backend
