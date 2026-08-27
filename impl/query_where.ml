@@ -1727,8 +1727,30 @@ end) = struct
     in
     promote [] clauses
 
+  let rec clauses_contain_not = function
+    | [] -> false
+    | (Not _ | NotJoin _ | SourceNot _ | SourceNotJoin _) :: _ -> true
+    | Or branches :: rest | OrJoin (_, branches) :: rest | OrJoinRequired (_, _, branches) :: rest ->
+      List.exists clauses_contain_not branches || clauses_contain_not rest
+    | SourceOr (_, branches) :: rest
+    | SourceOrJoin (_, _, branches) :: rest
+    | SourceOrJoinRequired (_, _, _, branches) :: rest ->
+      List.exists clauses_contain_not branches || clauses_contain_not rest
+    | _ :: rest -> clauses_contain_not rest
+
+  let plan_ordered_clauses ~max_datom_e clauses =
+    (* Keep source order when any NOT is present so DataScript unbound-var errors
+       stay observable; relational fallback / same-entity fusion still apply. *)
+    if clauses_contain_not clauses then
+      clauses
+    else
+      match Query_plan.compile ~max_datom_e clauses with
+      | Some plan when Query_plan.plan_is_executable plan -> Query_plan.clauses_of_plan plan
+      | _ -> clauses
+
   let rec eval_relation_from_relation db sources default_source relation clauses =
-    let clauses = Query_plan.order_where_clauses ~max_datom_e:db.max_datom_e clauses in
+    (* Planner orders eligible clauses; relational fallback keeps source order. *)
+    let clauses = plan_ordered_clauses ~max_datom_e:db.max_datom_e clauses in
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
@@ -2296,7 +2318,8 @@ end) = struct
     List.for_all (fun var -> List.mem var relation.attrs) value_vars
 
   let rec eval_relation_from_empty db sources default_source clauses =
-    let clauses = Query_plan.order_where_clauses ~max_datom_e:db.max_datom_e clauses in
+    (* Planner orders eligible clauses; relational fallback keeps source order. *)
+    let clauses = plan_ordered_clauses ~max_datom_e:db.max_datom_e clauses in
     let clauses = promote_attr_binding_clauses clauses in
     let rec apply relation = function
       | [] -> Some relation
