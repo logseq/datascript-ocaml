@@ -187,16 +187,44 @@ end) = struct
            last_plan := Some plan;
            Some plan)
 
+  (* cached_query_string reuses the same find list object across calls. *)
+  let last_find : find_spec list ref = ref []
+  let last_find_vars : string list option ref = ref None
+
+  let find_var_names_cached find =
+    if !last_find == find then
+      !last_find_vars
+    else (
+      last_find := find;
+      let vars = find_var_names find in
+      last_find_vars := vars;
+      vars)
+
   let q_sources_raw ?(inputs = []) db sources query =
     let finish_relation_rows rules input_bindings where find =
       let try_planned_execute () =
-        if input_bindings = [ [] ] && rules = [] then
-          match compile_plan db.max_datom_e where with
-          | Some plan when Query_plan.plan_is_fused_execute plan ->
-            execute_plan db sources rules input_bindings plan
-          | _ -> None
-        else
+        (* Prefer Datahike execute for single fused entity-group / ground scan.
+           Multi-op Union and open scans still use relational fallback until
+           probe-join / union execute matches those paths. *)
+        if input_bindings <> [ [] ] then
           None
+        else
+          let plan =
+            match rules with
+            | [] -> compile_plan db.max_datom_e where
+            | rules -> Query_plan.compile ~max_datom_e:db.max_datom_e ~rules where
+          in
+          match plan with
+          | Some plan when Query_plan.plan_is_fused_execute plan -> (
+            match plan.ops with
+            | [ Query_plan.OpScan { clause; _ } ] -> (
+              (* Only ground AVET-style scans are competitive on the execute path. *)
+              match Query_plan.pattern_scan clause with
+              | Some { entity = QVar _; attr = QAttr _; value = QValue _; tx = None; _ } ->
+                execute_plan db sources [] input_bindings plan
+              | _ -> None)
+            | _ -> execute_plan db sources [] input_bindings plan)
+          | _ -> None
       in
     let relation_result =
       match try_planned_execute () with
@@ -206,7 +234,7 @@ end) = struct
     match relation_result with
       | Some (attrs, rows, unique_rows) -> (
         (* Hot path: find vars already match relation attrs (entity-group emit). *)
-        match find_var_names find with
+        match find_var_names_cached find with
         | Some find_vars when find_vars = attrs ->
           if unique_rows then rows else sort_uniq_presorted compare rows
         | _ ->

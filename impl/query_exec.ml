@@ -345,6 +345,70 @@ end) = struct
     in
     loop (count - 1) []
 
+  (* Resolved Datahike-style pipelines, keyed by entity-group physical identity
+     (plan cache reuses the same group object across calls). *)
+  type resolved_kernel =
+    | Kernel_q2 of
+        { ids : entity_id array
+        ; arr : datom array
+        ; base : int
+        ; len : int
+        ; attrs : string list
+        ; unique_rows : bool
+        }
+    | Kernel_q5 of
+        { ids : entity_id array
+        ; arr0 : datom array
+        ; arr1 : datom array
+        ; arr2 : datom array
+        ; arr3 : datom array
+        ; base : int
+        ; len : int
+        ; attrs : string list
+        ; unique_rows : bool
+        }
+
+  let last_kernel_group : Query_plan.entity_group option ref = ref None
+  let last_kernel_max_e = ref (-1)
+  let last_kernel : resolved_kernel option ref = ref None
+
+  let emit_q2_rows ids arr base len =
+    let rows = ref [] in
+    for i = Array.length ids - 1 downto 0 do
+      let e = ids.(i) in
+      let index = e - base in
+      if index >= 0 && index < len then
+        rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
+    done;
+    !rows
+
+  let emit_q5_rows ids arr0 arr1 arr2 arr3 base len =
+    let rows = ref [] in
+    for i = Array.length ids - 1 downto 0 do
+      let e = ids.(i) in
+      let index = e - base in
+      if index >= 0 && index < len then
+        rows :=
+          [ Result_entity e
+          ; Result_value arr0.(index).v
+          ; Result_value arr1.(index).v
+          ; Result_value arr2.(index).v
+          ; Result_value arr3.(index).v
+          ]
+          :: !rows
+    done;
+    !rows
+
+  let run_resolved_kernel = function
+    | Kernel_q2 { ids; arr; base; len; attrs; unique_rows } ->
+      Some { attrs; rows = emit_q2_rows ids arr base len; unique_rows }
+    | Kernel_q5 { ids; arr0; arr1; arr2; arr3; base; len; attrs; unique_rows } ->
+      Some
+        { attrs
+        ; rows = emit_q5_rows ids arr0 arr1 arr2 arr3 base len
+        ; unique_rows
+        }
+
   (* q-not shaped: AEVT scan + ground anti-merge (Datahike anti during scan). *)
   let execute_scan_anti_ground source_db e_var attrs (scan : Query_plan.l_scan) anti_attr anti_value =
     match scan.entity, scan.attr, scan.value with
@@ -701,12 +765,32 @@ end) = struct
       done;
       Some (rows_of_array_rev rows !count)
 
+  let apply_group_filters source_db relation filters =
+    let rec loop relation = function
+      | [] -> Some relation
+      | ComparisonPredicate (predicate, left_term, right_term) :: rest ->
+        loop (filter_comparison source_db relation predicate left_term right_term) rest
+      | _ :: _ -> None
+    in
+    loop relation filters
+
   let execute_entity_group _db source (group : Query_plan.entity_group) =
     match source with
     | Db_source source_db -> (
-      if group.filters <> [] then
-        None
-      else
+      let finish relation =
+        match group.filters with
+        | [] -> Some relation
+        | filters -> apply_group_filters source_db relation filters
+      in
+      (match !last_kernel_group with
+       | Some g when g == group && !last_kernel_max_e = source_db.max_datom_e && group.filters = [] -> (
+         match !last_kernel with
+         | Some kernel -> run_resolved_kernel kernel
+         | None -> None)
+       | _ -> None)
+      |> function
+      | Some relation -> finish relation
+      | None ->
         let e_var = group.entity_var in
         let (scan : Query_plan.l_scan) = group.scan in
         (* Specialized q2: [?e :attr const] [?e :attr2 ?v] — Datahike sorted-merge N=1. *)
@@ -721,18 +805,16 @@ end) = struct
              | Some ids, Some arr -> (
                match dense_base arr with
                | Some (base, len) ->
-                 let rows = ref [] in
-                 for i = Array.length ids - 1 downto 0 do
-                   let e = ids.(i) in
-                   let index = e - base in
-                   if index >= 0 && index < len then
-                     rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
-                 done;
-                 Some
-                   { attrs = [ e_var; v ]
-                   ; rows = !rows
-                   ; unique_rows = unique_rows_flag source_db [ e_var; v ] e_var
-                   }
+                 let attrs = [ e_var; v ] in
+                 let unique_rows = unique_rows_flag source_db attrs e_var in
+                 let kernel =
+                   Kernel_q2 { ids; arr; base; len; attrs; unique_rows }
+                 in
+                 if group.filters = [] then (
+                   last_kernel_group := Some group;
+                   last_kernel_max_e := source_db.max_datom_e;
+                   last_kernel := Some kernel);
+                 run_resolved_kernel kernel
                | None -> None)
              | _ -> None)
            | _ -> None)
@@ -759,28 +841,23 @@ end) = struct
                match dense_base arr0, dense_base arr1, dense_base arr2, dense_base arr3 with
                | Some (base, len), Some (b1, l1), Some (b2, l2), Some (b3, l3)
                  when base = b1 && base = b2 && base = b3 && len = l1 && len = l2 && len = l3 ->
-                 let rows = ref [] in
-                 for i = Array.length ids - 1 downto 0 do
-                   let e = ids.(i) in
-                   let index = e - base in
-                   if index >= 0 && index < len then
-                     rows :=
-                       [ Result_entity e
-                       ; Result_value arr0.(index).v
-                       ; Result_value arr1.(index).v
-                       ; Result_value arr2.(index).v
-                       ; Result_value arr3.(index).v
-                       ]
-                       :: !rows
-                 done;
                  let attrs = [ e_var; v0; v1; v2; v3 ] in
-                 Some { attrs; rows = !rows; unique_rows = unique_rows_flag source_db attrs e_var }
+                 let unique_rows = unique_rows_flag source_db attrs e_var in
+                 let kernel =
+                   Kernel_q5
+                     { ids; arr0; arr1; arr2; arr3; base; len; attrs; unique_rows }
+                 in
+                 if group.filters = [] then (
+                   last_kernel_group := Some group;
+                   last_kernel_max_e := source_db.max_datom_e;
+                   last_kernel := Some kernel);
+                 run_resolved_kernel kernel
                | _ -> None)
              | _ -> None)
            | _ -> None)
          | _ -> None)
         |> function
-        | Some _ as result -> result
+        | Some relation -> finish relation
         | None -> (
           match scan.entity with
           | QVar ev when ev = e_var ->
@@ -788,7 +865,7 @@ end) = struct
             (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
              | None -> None
              | Some rows ->
-               Some { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
+               finish { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
           | _ -> None))
     | _ -> None
 

@@ -28,14 +28,18 @@ analyze → logical.cljc → lower.cljc → execute.cljc → find project
 OCaml today:
 
 ```
-query_plan.compile → OpEntityGroup/OpScan
-         ↳ query_exec (Datahike-like drive + lookup/dense merge + anti)
-         ↳ else query_where relational fallback (hash_join / anti_join)
+query_plan.compile → OpEntityGroup/OpScan (ground) / EntityGroup+filters
+         ↳ query_exec resolved kernels (q2 / q-5-merge) + drive/merge/anti
+         ↳ else query_where relational fallback (multi-op Union, open scans, …)
 ```
 
 The planner IR matches Datahike. Entity-group **execute** now follows
 `execute-group-direct` / sorted-merge / anti-merge semantics (AEVT
 forward-seek or dense index ≈ seekGE), not Datascript `simple_*` gates.
+Resolved kernels are cached by entity-group physical identity (plan cache
+reuses the same group object) to avoid re-matching merges on every call.
+Multi-op Union / open-pattern scans stay on the relational fallback until
+probe-join execute is competitive.
 
 ## Module-by-module notes
 
