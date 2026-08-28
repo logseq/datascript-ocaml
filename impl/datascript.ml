@@ -1816,7 +1816,7 @@ module Query = struct
 
   let debug_log msg =
     if query_debug_enabled then
-      Printf.eprintf "[datascript %.3f] %s\n%!" (Unix.gettimeofday ()) msg
+      Printf.eprintf "[datascript %.3f] %s\n%!" (Platform.now_seconds ()) msg
 
   let entity_ids_with_attr db attr =
     let rec collect previous acc = function
