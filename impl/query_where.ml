@@ -1322,13 +1322,13 @@ end) = struct
               match constant_patterns, value_var_patterns, required_patterns, excluded_patterns, relation_comparisons with
               | [ (const_attr, const_value) ], value_vars, [], [], []
                 when value_vars <> []
-                     && List.length value_vars <= 2
                      && not (query_evaluator_context.is_reverse_ref const_attr)
                      && List.for_all
                           (fun (_, attr) ->
                             not (query_evaluator_context.is_reverse_ref attr)
                             && cardinality_one source_db attr)
                           value_vars ->
+                let value_vars = List.rev value_vars in
                 (match aevt_attr_array source_db const_attr with
                  | None -> None
                  | Some const_arr ->
@@ -1867,6 +1867,127 @@ end) = struct
                   let no_extra_filters =
                     required_patterns = [] && excluded_patterns = [] && List.length constant_patterns <= 1
                   in
+                  (* Const-first aligned gather (old aligned_constant_rows): use constant attr
+                     AEVT array as alignment reference — required for q-5-merge where the
+                     constant attr array may share length but differs from value-array base_e. *)
+                  let try_const_arr_aligned_rows =
+                    match constant_patterns with
+                    | [ (const_attr, const_value) ] when specialized_find ->
+                      (match aevt_attr_array source_db const_attr with
+                       | None -> None
+                       | Some const_arr ->
+                         let const_len = Array.length const_arr in
+                         if const_len = 0 then None
+                         else if not (Array.for_all (fun arr -> Array.length arr = const_len) attr_arrays)
+                         then
+                           None
+                         else
+                           let mid = const_len / 2 in
+                           let e_aligned =
+                             let check i =
+                               let e = const_arr.(i).e in
+                               Array.for_all (fun arr -> arr.(i).e = e) attr_arrays
+                             in
+                             check 0 && check mid && check (const_len - 1)
+                           in
+                           if not e_aligned then
+                             None
+                           else
+                             let base_e = const_arr.(0).e in
+                             let dense =
+                               const_arr.(const_len - 1).e = base_e + const_len - 1
+                               && Array.for_all
+                                    (fun arr ->
+                                      arr.(0).e = base_e && arr.(const_len - 1).e = base_e + const_len - 1)
+                                    attr_arrays
+                             in
+                             if not dense then
+                               None
+                             else
+                               let rows = ref [] in
+                               (match attr_count with
+                                | 4 ->
+                                  let a0 = attr_arrays.(0) in
+                                  let a1 = attr_arrays.(1) in
+                                  let a2 = attr_arrays.(2) in
+                                  let a3 = attr_arrays.(3) in
+                                  (match avet_entity_ids_array const_attr const_value with
+                                   | Some ids ->
+                                     for i = Array.length ids - 1 downto 0 do
+                                       let e = ids.(i) in
+                                       let index = e - base_e in
+                                       if index >= 0 && index < const_len then
+                                         rows :=
+                                           [ Result_entity e
+                                           ; Result_value a0.(index).v
+                                           ; Result_value a1.(index).v
+                                           ; Result_value a2.(index).v
+                                           ; Result_value a3.(index).v
+                                           ]
+                                           :: !rows
+                                     done
+                                   | None ->
+                                     for i = const_len - 1 downto 0 do
+                                       if query_evaluator_context.compare_value const_arr.(i).v const_value = 0
+                                       then
+                                         let e = const_arr.(i).e in
+                                         rows :=
+                                           [ Result_entity e
+                                           ; Result_value a0.(i).v
+                                           ; Result_value a1.(i).v
+                                           ; Result_value a2.(i).v
+                                           ; Result_value a3.(i).v
+                                           ]
+                                           :: !rows
+                                     done)
+                                | 1 ->
+                                  let a0 = attr_arrays.(0) in
+                                  (match avet_entity_ids_array const_attr const_value with
+                                   | Some ids ->
+                                     for i = Array.length ids - 1 downto 0 do
+                                       let e = ids.(i) in
+                                       let index = e - base_e in
+                                       if index >= 0 && index < const_len then
+                                         rows :=
+                                           [ Result_entity e; Result_value a0.(index).v ] :: !rows
+                                     done
+                                   | None ->
+                                     for i = const_len - 1 downto 0 do
+                                       if query_evaluator_context.compare_value const_arr.(i).v const_value = 0
+                                       then
+                                         rows :=
+                                           [ Result_entity const_arr.(i).e; Result_value a0.(i).v ] :: !rows
+                                     done)
+                                | _ ->
+                                  (match avet_entity_ids_array const_attr const_value with
+                                   | Some ids ->
+                                     for i = Array.length ids - 1 downto 0 do
+                                       let e = ids.(i) in
+                                       let index = e - base_e in
+                                       if index >= 0 && index < const_len then
+                                         let rec vals a acc =
+                                           if a < 0 then Result_entity e :: acc
+                                           else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                                         in
+                                         rows := vals (attr_count - 1) [] :: !rows
+                                     done
+                                   | None ->
+                                     for i = const_len - 1 downto 0 do
+                                       if query_evaluator_context.compare_value const_arr.(i).v const_value = 0
+                                       then
+                                         let e = const_arr.(i).e in
+                                         let rec vals a acc =
+                                           if a < 0 then Result_entity e :: acc
+                                           else vals (a - 1) (Result_value attr_arrays.(a).(i).v :: acc)
+                                         in
+                                         rows := vals (attr_count - 1) [] :: !rows
+                                     done));
+                               Some !rows)
+                    | _ -> None
+                  in
+                  match try_const_arr_aligned_rows with
+                  | Some rows -> Some rows
+                  | None ->
                   let dense_base =
                     if attr_count = 0 then None
                     else
