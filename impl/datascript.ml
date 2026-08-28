@@ -1482,6 +1482,10 @@ module Query_where_impl = Query_where.Make (struct
   let query_attr_uses_avet = query_attr_uses_avet
   let query_value_uses_avet = query_value_uses_avet
   let fold_index_range = fold_index_range
+  let find_entity_attr_value db entity_id attr =
+    match Db.find_primary_aevt_entity_attr db entity_id attr with
+    | None -> None
+    | Some datom -> Some (Query.result_of_ref (Query.result_of_datom_v datom))
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses
