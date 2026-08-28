@@ -34,6 +34,7 @@ module Make (Context : sig
     ('acc -> datom -> 'acc) -> 'acc -> db -> attr -> ?start:value -> ?stop:value -> unit -> 'acc
   val find_entity_attr_value : db -> entity_id -> attr -> query_result option
   val aevt_attr_array : db -> attr -> datom array option
+  val aevt_duplicate_datoms : db -> attr -> datom list
   val find_entity_in_aevt_array : datom array -> entity_id -> datom option
 end) = struct
   open Context
@@ -354,23 +355,69 @@ end) = struct
         |> List.of_seq
       | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
 
+  let relation_of_aevt_var_var_pattern source_db e_var attr v_var =
+    (* Datahike-like OpScan on AEVT: walk attr arrays once, emit rows without Seq→list. *)
+    if query_evaluator_context.is_reverse_ref attr then
+      None
+    else
+      match aevt_attr_array source_db attr with
+      | None -> None
+      | Some primary ->
+        let attrs = unique_vars [ QVar e_var; QAttr attr; QVar v_var ] in
+        let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QAttr attr; QVar v_var ] in
+        let emit_datom rows datom =
+          let value = result_of_pattern_position datom 2 in
+          match attrs with
+          | [ left; right ] when left = e_var && right = v_var ->
+            [ Result_entity datom.e; value ] :: rows
+          | [ left; right ] when left = v_var && right = e_var ->
+            [ value; Result_entity datom.e ] :: rows
+          | _ ->
+            (match binding_row attrs [ e_var, Result_entity datom.e; v_var, value ] with
+             | Some row -> row :: rows
+             | None -> rows)
+        in
+        let rows = ref [] in
+        for i = Array.length primary - 1 downto 0 do
+          rows := emit_datom !rows primary.(i)
+        done;
+        List.iter (fun datom -> rows := emit_datom !rows datom) (aevt_duplicate_datoms source_db attr);
+        Some
+          { attrs
+          ; rows = !rows
+          ; lookup_vars
+          ; unique_rows = (not source_db.history) && source_db.duplicate_datoms = []
+          }
+
   let relation_of_pattern db source terms =
     match source with
     | Relation_source _ -> None
     | Db_source source_db ->
-      let source_context = query_source_context db in
-      let attrs = unique_vars terms in
-      let lookup_vars = relation_lookup_vars source_db terms in
-      let datoms =
-        match terms with
-        | [ e_term; a_term; v_term ] -> source_context.pattern_datoms source_db e_term a_term v_term None
-        | [ e_term; a_term; v_term; tx_term ]
-        | [ e_term; a_term; v_term; tx_term; _ ] ->
-          source_context.pattern_datoms source_db e_term a_term v_term (Some tx_term)
-        | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
-      in
-      let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
-      Some { attrs; rows; lookup_vars; unique_rows = false }
+      (match terms with
+       | [ QVar e_var; QAttr attr; QVar v_var ] when e_var <> v_var ->
+         (match relation_of_aevt_var_var_pattern source_db e_var attr v_var with
+          | Some relation -> Some relation
+          | None ->
+            let source_context = query_source_context db in
+            let attrs = unique_vars terms in
+            let lookup_vars = relation_lookup_vars source_db terms in
+            let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) (QVar v_var) None in
+            let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
+            Some { attrs; rows; lookup_vars; unique_rows = false })
+       | _ ->
+         let source_context = query_source_context db in
+         let attrs = unique_vars terms in
+         let lookup_vars = relation_lookup_vars source_db terms in
+         let datoms =
+           match terms with
+           | [ e_term; a_term; v_term ] -> source_context.pattern_datoms source_db e_term a_term v_term None
+           | [ e_term; a_term; v_term; tx_term ]
+           | [ e_term; a_term; v_term; tx_term; _ ] ->
+             source_context.pattern_datoms source_db e_term a_term v_term (Some tx_term)
+           | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
+         in
+         let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
+         Some { attrs; rows; lookup_vars; unique_rows = false })
 
   let reverse_comparison_predicate = function
     | GreaterThan -> LessThan
@@ -1320,30 +1367,33 @@ end) = struct
               ; unique_rows = true
               }
           else
+          let set_from_entity_ids entity_ids =
+            let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+            List.iter
+              (fun entity_id ->
+                if entity_id >= 0 && entity_id < Bytes.length entities then
+                  Bytes.unsafe_set entities entity_id '\001')
+              entity_ids;
+            entities
+          in
+          let set_from_datoms datoms =
+            let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+            List.iter
+              (fun datom ->
+                if datom.e >= 0 && datom.e < Bytes.length entities then
+                  Bytes.unsafe_set entities datom.e '\001')
+              datoms;
+            entities
+          in
+          (* Defer (max_e+1) constant bitsets until a fallback path needs them.
+             Dense AVET→AEVT gathers only need entity id arrays. *)
           let constant_sets =
-            let set_from_entity_ids entity_ids =
-              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
-              List.iter
-                (fun entity_id ->
-                  if entity_id >= 0 && entity_id < Bytes.length entities then
-                    Bytes.set entities entity_id '\001')
-                entity_ids;
-              entities
-            in
-            let set_from_datoms datoms =
-              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
-              List.iter
-                (fun datom ->
-                  if datom.e >= 0 && datom.e < Bytes.length entities then
-                    Bytes.set entities datom.e '\001')
-                datoms;
-              entities
-            in
-            constant_datoms
-            |> List.map (fun (attr, value, datoms) ->
-              match avet_entity_ids attr value with
-              | Some entity_ids -> set_from_entity_ids entity_ids
-              | None -> set_from_datoms (Lazy.force datoms))
+            lazy
+              (constant_datoms
+               |> List.map (fun (attr, value, datoms) ->
+                 match avet_entity_ids attr value with
+                 | Some entity_ids -> set_from_entity_ids entity_ids
+                 | None -> set_from_datoms (Lazy.force datoms)))
           in
           let constant_count (attr, value, datoms) =
             match avet_entity_ids attr value with
@@ -1382,23 +1432,36 @@ end) = struct
           let excluded_sets =
             excluded_patterns
             |> List.map (fun (_, attr, value_term) ->
-              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
-              let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) value_term None in
-              let mark datom =
-                if datom.e >= 0 && datom.e < Bytes.length entities then
-                  Bytes.set entities datom.e '\001'
-              in
-              if direct_attr attr then
-                datoms |> Seq.iter mark
-              else
-                datoms
-                |> Seq.iter (fun datom ->
-                  if
-                    Option.is_some
-                      (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) value_term datom)
-                  then
-                    mark datom);
-              entities)
+              match value_term with
+              | QValue value
+                when direct_attr attr && query_value_uses_avet value && query_attr_uses_avet source_db attr -> (
+                match avet_entity_ids attr value with
+                | Some entity_ids -> set_from_entity_ids entity_ids
+                | None ->
+                  let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+                  datoms_matching attr value
+                  |> List.iter (fun datom ->
+                    if datom.e >= 0 && datom.e < Bytes.length entities then
+                      Bytes.unsafe_set entities datom.e '\001');
+                  entities)
+              | _ ->
+                let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+                let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) value_term None in
+                let mark datom =
+                  if datom.e >= 0 && datom.e < Bytes.length entities then
+                    Bytes.unsafe_set entities datom.e '\001'
+                in
+                if direct_attr attr then
+                  datoms |> Seq.iter mark
+                else
+                  datoms
+                  |> Seq.iter (fun datom ->
+                    if
+                      Option.is_some
+                        (source_context.match_data_pattern source_db [] (QVar e_var) (QAttr attr) value_term datom)
+                    then
+                      mark datom);
+                entities)
           in
           let matches_required =
             match required_patterns with
@@ -1409,27 +1472,35 @@ end) = struct
                 patterns |> List.for_all (fun attr -> has_pattern entity_id attr QWildcard)
           in
           let constant_matches entity_id =
-            constant_sets
+            Lazy.force constant_sets
             |> List.for_all (fun entities ->
               entity_id >= 0
               && entity_id < Bytes.length entities
-              && Bytes.get entities entity_id = '\001')
+              && Bytes.unsafe_get entities entity_id = '\001')
           in
           let matches_constants =
-            match constant_sets with
+            match constant_patterns with
             | [] -> fun _ -> true
-            | [ entities ] ->
+            | [ _ ] ->
+              (* Prefer AVET id membership via candidate_entities / dense emit; when a
+                 fallback still consults the bitset, build it once. *)
               fun entity_id ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001'
-            | [ left; right ] ->
+                (match Lazy.force constant_sets with
+                 | [ entities ] ->
+                   entity_id >= 0
+                   && entity_id < Bytes.length entities
+                   && Bytes.unsafe_get entities entity_id = '\001'
+                 | _ -> constant_matches entity_id)
+            | [ _; _ ] ->
               fun entity_id ->
-                entity_id >= 0
-                && entity_id < Bytes.length left
-                && Bytes.get left entity_id = '\001'
-                && entity_id < Bytes.length right
-                && Bytes.get right entity_id = '\001'
+                (match Lazy.force constant_sets with
+                 | [ left; right ] ->
+                   entity_id >= 0
+                   && entity_id < Bytes.length left
+                   && Bytes.unsafe_get left entity_id = '\001'
+                   && entity_id < Bytes.length right
+                   && Bytes.unsafe_get right entity_id = '\001'
+                 | _ -> constant_matches entity_id)
             | _ -> constant_matches
           in
           let matches_excluded =
@@ -1439,19 +1510,23 @@ end) = struct
               fun entity_id ->
                 entity_id >= 0
                 && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001'
+                && Bytes.unsafe_get entities entity_id = '\001'
             | sets ->
               fun entity_id ->
                 sets
                 |> List.exists (fun entities ->
                   entity_id >= 0
                   && entity_id < Bytes.length entities
-                  && Bytes.get entities entity_id = '\001')
+                  && Bytes.unsafe_get entities entity_id = '\001')
           in
           let entity_allowed =
-            match excluded_sets with
-            | [] -> fun entity_id -> matches_constants entity_id && matches_required entity_id
-            | _ ->
+            match excluded_sets, constant_patterns with
+            | [], [] -> fun entity_id -> matches_required entity_id
+            | [], [ _ ] ->
+              (* Single constant: dense/AVET paths filter membership; required-only here. *)
+              fun entity_id -> matches_required entity_id && matches_constants entity_id
+            | [], _ -> fun entity_id -> matches_constants entity_id && matches_required entity_id
+            | _, _ ->
               fun entity_id ->
                 matches_constants entity_id && matches_required entity_id && not (matches_excluded entity_id)
           in
@@ -1569,7 +1644,7 @@ end) = struct
                   in
                   let value_results = Array.make attr_count (Result_value (Int 0)) in
                   let no_extra_filters =
-                    required_patterns = [] && excluded_patterns = [] && List.length constant_sets <= 1
+                    required_patterns = [] && excluded_patterns = [] && List.length constant_patterns <= 1
                   in
                   let dense_base =
                     if attr_count = 0 then None
@@ -1751,27 +1826,21 @@ end) = struct
               | [ entity_attr; value_attr ]
                 when entity_attr = e_var && value_attr = scan_value_var ->
                 let rows = ref [] in
-                let use_ref = is_ref_attr source_db scan_attr in
                 for i = Array.length scan_arr - 1 downto 0 do
                   let datom = scan_arr.(i) in
                   if entity_allowed datom.e then
-                    let value =
-                      if use_ref then value_result_of_datom datom else Result_value datom.v
-                    in
-                    rows := [ Result_entity datom.e; value ] :: !rows
+                    rows :=
+                      [ Result_entity datom.e; value_result_of_datom datom ] :: !rows
                 done;
                 Some !rows
               | [ value_attr; entity_attr ]
                 when entity_attr = e_var && value_attr = scan_value_var ->
                 let rows = ref [] in
-                let use_ref = is_ref_attr source_db scan_attr in
                 for i = Array.length scan_arr - 1 downto 0 do
                   let datom = scan_arr.(i) in
                   if entity_allowed datom.e then
-                    let value =
-                      if use_ref then value_result_of_datom datom else Result_value datom.v
-                    in
-                    rows := [ value; Result_entity datom.e ] :: !rows
+                    rows :=
+                      [ value_result_of_datom datom; Result_entity datom.e ] :: !rows
                 done;
                 Some !rows
               | _ ->
@@ -1799,20 +1868,20 @@ end) = struct
             | Some rows -> rows
             | None ->
             let direct_allowed_entity_set () =
-              match constant_sets with
+              match Lazy.force constant_sets with
               | [] | [ _ ] -> None
               | first :: rest ->
                 let allowed = Bytes.copy first in
                 for index = 0 to Bytes.length allowed - 1 do
                   if
-                    Bytes.get allowed index = '\001'
-                    && List.exists (fun entities -> Bytes.get entities index <> '\001') rest
+                    Bytes.unsafe_get allowed index = '\001'
+                    && List.exists (fun entities -> Bytes.unsafe_get entities index <> '\001') rest
                   then
-                    Bytes.set allowed index '\000'
+                    Bytes.unsafe_set allowed index '\000'
                 done;
                 Some allowed
             in
-            match remaining_value_vars, attrs, constant_sets with
+            match remaining_value_vars, attrs, Lazy.force constant_sets with
             | [], [ entity_attr; value_attr ], _ :: _ :: _
               when direct_attr scan_attr && entity_attr = e_var && value_attr = scan_value_var ->
               let scan_datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr scan_attr) QWildcard None in
@@ -1844,7 +1913,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ Result_entity scan_datom.e; Result_value scan_datom.v ] :: acc) rest
+                      collect ([ Result_entity scan_datom.e; result_of_pattern_position scan_datom 2 ] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -1880,7 +1949,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ Result_value scan_datom.v; Result_entity scan_datom.e ] :: acc) rest
+                      collect ([ result_of_pattern_position scan_datom 2; Result_entity scan_datom.e ] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -3044,13 +3113,11 @@ end) = struct
           eval_or_branch_relations db sources default_source branches
         | [ OrJoin (vars, branches) ] ->
           Query.ensure_or_join_branches_cover_listed_vars [] vars branches;
-          let* relation = eval_or_branch_relations db sources default_source branches in
-          Some (project_relation vars relation)
+          eval_or_join_relations db sources default_source vars branches
         | [ SourceOrJoin (source_name, vars, branches) ] ->
           let default_source = source db sources source_name in
           Query.ensure_or_join_branches_cover_listed_vars [] vars branches;
-          let* relation = eval_or_branch_relations db sources default_source branches in
-          Some (project_relation vars relation)
+          eval_or_join_relations db sources default_source vars branches
         | _ ->
           apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses)))
 
@@ -3058,65 +3125,52 @@ end) = struct
     | [ Pattern (QVar branch_e, QAttr _, QValue _) ] when branch_e = e_var -> true
     | _ -> false
 
-  and eval_selective_or_join_value_pattern db sources default_source clauses =
+  and eval_selective_or_join_value_pattern _db _sources default_source clauses =
     let try_shape e_var attr value_term branches =
       match value_term, default_source with
       | QVar value_var, Db_source source_db
         when value_var <> e_var && List.for_all (or_join_constant_entity_branch e_var) branches ->
-        let branch_relations =
+        let branch_constants =
           branches
-          |> List.filter_map (fun branch_clauses ->
-            eval_relation_from_empty db sources default_source branch_clauses)
+          |> List.filter_map (function
+            | [ Pattern (QVar branch_entity, QAttr branch_attr, QValue branch_value) ]
+              when branch_entity = e_var && branch_attr <> attr ->
+              Some (branch_attr, branch_value)
+            | _ -> None)
         in
-        (match branch_relations with
-         | [] ->
-           let attrs = unique_vars [ QVar e_var; QAttr attr; QVar value_var ] in
-           let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
-           Some { attrs; rows = []; lookup_vars; unique_rows = true }
-         | first :: rest ->
-           let united_rows =
-             List.fold_left
-               (fun acc rel ->
-                 if rel.attrs <> first.attrs then acc else List.rev_append rel.rows acc)
-               (List.rev first.rows)
-               rest
-             |> List.rev
-           in
-           let e_index_opt =
-             let rec loop index = function
-               | [] -> None
-               | candidate :: _ when candidate = e_var -> Some index
-               | _ :: rest -> loop (index + 1) rest
-             in
-             loop 0 first.attrs
-           in
-           match e_index_opt with
-           | None -> None
-           | Some e_index ->
-             let seen = Hashtbl.create (List.length united_rows) in
-             let entity_ids =
-               united_rows
-               |> List.filter_map (fun row ->
-                 match row_value row e_index with
-                 | Result_entity entity_id ->
-                   if Hashtbl.mem seen entity_id then
-                     None
-                   else (
-                     Hashtbl.add seen entity_id ();
-                     Some entity_id)
-                 | _ -> None)
-             in
-             let attrs = unique_vars [ QVar e_var; QAttr attr; QVar value_var ] in
-             let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
-             let rows =
-               entity_ids
-               |> List.filter_map (fun entity_id ->
-                 match find_entity_attr_value source_db entity_id attr with
-                 | None -> None
-                 | Some value ->
-                   binding_row attrs [ e_var, Result_entity entity_id; value_var, value ])
-             in
-             Some { attrs; rows; lookup_vars; unique_rows = true })
+        if branch_constants = [] then
+          None
+        else
+          let entity_ids =
+            branch_constants
+            |> List.concat_map (fun (branch_attr, branch_value) ->
+              match entity_ids_by_attr_value source_db branch_attr branch_value with
+              | Some ids -> ids
+              | None ->
+                datoms_by_attr_value source_db branch_attr branch_value
+                |> List.map (fun datom -> datom.e))
+            |> List.sort_uniq compare
+          in
+          let attrs = unique_vars [ QVar e_var; QAttr attr; QVar value_var ] in
+          let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
+          if entity_ids = [] then
+            Some { attrs; rows = []; lookup_vars; unique_rows = true }
+          else
+            let rows =
+              entity_ids
+              |> List.filter_map (fun entity_id ->
+                match find_entity_attr_value source_db entity_id attr with
+                | None -> None
+                | Some value ->
+                  match attrs with
+                  | [ left; right ] when left = e_var && right = value_var ->
+                    Some [ Result_entity entity_id; value ]
+                  | [ left; right ] when left = value_var && right = e_var ->
+                    Some [ value; Result_entity entity_id ]
+                  | _ ->
+                    binding_row attrs [ e_var, Result_entity entity_id; value_var, value ])
+            in
+            Some { attrs; rows; lookup_vars; unique_rows = true }
       | _ -> None
     in
     match clauses with
@@ -3128,8 +3182,41 @@ end) = struct
       try_shape e_var attr value_term branches
     | _ -> None
 
-  and eval_or_branch_relations db sources default_source branches =
-    Query.ensure_or_branch_vars_match ~value_to_string:edn_string_of_value [] branches;
+  and eval_or_join_relations db sources default_source vars branches =
+    match
+      branches
+      |> List.filter_map (fun branch_clauses ->
+        eval_relation_from_empty db sources default_source branch_clauses
+        |> Option.map (project_relation vars))
+    with
+    | [] -> Some { attrs = vars; rows = []; lookup_vars = []; unique_rows = true }
+    | first :: rest ->
+      let rows =
+        List.fold_left
+          (fun acc rel -> List.rev_append rel.rows acc)
+          (List.rev first.rows)
+          rest
+        |> List.rev
+      in
+      let lookup_vars =
+        List.fold_left
+          (fun lookup_vars rel ->
+            List.fold_left
+              (fun lookup_vars ((var, _) as lookup_var) ->
+                if List.mem_assoc var lookup_vars then lookup_vars else lookup_var :: lookup_vars)
+              lookup_vars
+              rel.lookup_vars)
+          first.lookup_vars
+          rest
+      in
+      let unique_rows =
+        List.fold_left (fun unique rel -> unique && rel.unique_rows) first.unique_rows rest
+      in
+      Some { attrs = vars; rows; lookup_vars; unique_rows }
+
+  and eval_or_branch_relations ?(require_matching_vars = true) db sources default_source branches =
+    if require_matching_vars then
+      Query.ensure_or_branch_vars_match ~value_to_string:edn_string_of_value [] branches;
     match
       branches
       |> List.filter_map (fun branch_clauses -> eval_relation_from_empty db sources default_source branch_clauses)
