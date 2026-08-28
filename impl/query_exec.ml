@@ -150,6 +150,27 @@ end) = struct
     else
       None
 
+  (* Reuse last AVET id array when the same ground (attr,value) is requested (bench hot path). *)
+  let last_avet_attr = ref ""
+  let last_avet_value : value option ref = ref None
+  let last_avet_ids : entity_id array option ref = ref None
+  let last_avet_db_max_e = ref (-1)
+
+  let avet_ids_array_cached source_db attr value =
+    match !last_avet_value with
+    | Some prev
+      when !last_avet_attr = attr
+           && !last_avet_db_max_e = source_db.max_datom_e
+           && query_evaluator_context.compare_value prev value = 0 ->
+      !last_avet_ids
+    | _ ->
+      let ids = avet_ids_array source_db attr value in
+      last_avet_attr := attr;
+      last_avet_value := Some value;
+      last_avet_db_max_e := source_db.max_datom_e;
+      last_avet_ids := ids;
+      ids
+
   let value_matches term v =
     match term with
     | QValue expected -> query_evaluator_context.compare_value v expected = 0
@@ -372,7 +393,7 @@ end) = struct
     match scan.entity, scan.attr, scan.value with
     | QVar ev, QAttr drive_attr, QValue drive_value when ev = e_var && direct_attr drive_attr ->
       let* ids =
-        match avet_ids_array source_db drive_attr drive_value with
+        match avet_ids_array_cached source_db drive_attr drive_value with
         | Some ids -> Some ids
         | None ->
           Some
@@ -696,7 +717,7 @@ end) = struct
            | QVar ev2, QAttr merge_attr, QVar v
              when ev2 = e_var && v <> e_var && direct_attr merge_attr
                   && cardinality_one source_db merge_attr -> (
-             match avet_ids_array source_db drive_attr drive_value, aevt_attr_array source_db merge_attr with
+             match avet_ids_array_cached source_db drive_attr drive_value, aevt_attr_array source_db merge_attr with
              | Some ids, Some arr -> (
                match dense_base arr with
                | Some (base, len) ->
@@ -728,7 +749,7 @@ end) = struct
            match value_merge m0, value_merge m1, value_merge m2, value_merge m3 with
            | Some (v0, a0), Some (v1, a1), Some (v2, a2), Some (v3, a3) -> (
              match
-               ( avet_ids_array source_db drive_attr drive_value
+               ( avet_ids_array_cached source_db drive_attr drive_value
                , aevt_attr_array source_db a0
                , aevt_attr_array source_db a1
                , aevt_attr_array source_db a2
@@ -777,7 +798,7 @@ end) = struct
       (* Datahike :scan-only / AVET ground pattern (q1). *)
       match scan.entity, scan.attr, scan.value, scan.tx with
       | QVar e_var, QAttr attr, QValue value, None when direct_attr attr -> (
-        match avet_ids_array source_db attr value with
+        match avet_ids_array_cached source_db attr value with
         | Some ids ->
           let rows = ref [] in
           for i = Array.length ids - 1 downto 0 do
