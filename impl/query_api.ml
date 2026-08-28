@@ -156,8 +156,10 @@ end) = struct
       |> List.sort_uniq (fun (left, _) (right, _) -> compare left right)
       |> List.map snd
 
-  let plan_cache : (int * query_clause list, Query_plan.physical_plan) Hashtbl.t = Hashtbl.create 32
-  (* Hot path: cached_query_string reuses the same where list object. *)
+  (* Do not Hashtbl-key by query_clause list: clauses may embed function
+     values, and structural hashing/compare raises
+     Invalid_argument("compare: functional value"). Physical equality on
+     the reused where list (cached_query_string) is enough for the hot path. *)
   let last_plan_where : query_clause list ref = ref []
   let last_plan_max_e = ref (-1)
   let last_plan : Query_plan.physical_plan option ref = ref None
@@ -165,27 +167,12 @@ end) = struct
   let compile_plan max_datom_e where =
     if !last_plan_max_e = max_datom_e && !last_plan_where == where then
       !last_plan
-    else
-      let key = max_datom_e, where in
-      match Hashtbl.find_opt plan_cache key with
-      | Some plan ->
-        last_plan_where := where;
-        last_plan_max_e := max_datom_e;
-        last_plan := Some plan;
-        Some plan
-      | None ->
-        (match Query_plan.compile ~max_datom_e where with
-         | None ->
-           last_plan_where := where;
-           last_plan_max_e := max_datom_e;
-           last_plan := None;
-           None
-         | Some plan ->
-           Hashtbl.add plan_cache key plan;
-           last_plan_where := where;
-           last_plan_max_e := max_datom_e;
-           last_plan := Some plan;
-           Some plan)
+    else (
+      let plan = Query_plan.compile ~max_datom_e where in
+      last_plan_where := where;
+      last_plan_max_e := max_datom_e;
+      last_plan := plan;
+      plan)
 
   (* cached_query_string reuses the same find list object across calls. *)
   let last_find : find_spec list ref = ref []
