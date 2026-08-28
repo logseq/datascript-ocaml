@@ -381,7 +381,9 @@ end) = struct
         for i = Array.length primary - 1 downto 0 do
           rows := emit_datom !rows primary.(i)
         done;
-        List.iter (fun datom -> rows := emit_datom !rows datom) (aevt_duplicate_datoms source_db attr);
+        (match aevt_duplicate_datoms source_db attr with
+         | [] -> ()
+         | duplicates -> List.iter (fun datom -> rows := emit_datom !rows datom) duplicates);
         Some
           { attrs
           ; rows = !rows
@@ -1296,7 +1298,73 @@ end) = struct
                  && excluded_patterns = []
                then
                  None
-               else
+               else (
+          let attrs =
+            patterns
+            |> List.concat_map (fun (e_var, attr, value_term) -> [ QVar e_var; QAttr attr; value_term ])
+            |> unique_vars
+          in
+          let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
+          let try_not_single_value_aevt_scan =
+            if not has_not then
+              None
+            else
+              match value_var_patterns, constant_patterns, required_patterns, excluded_patterns, relation_comparisons with
+              | [ (value_var, seed_attr) ], [], [], [ (_, clause_attr, QValue clause_value) ], []
+                when not (query_evaluator_context.is_reverse_ref seed_attr)
+                     && not (query_evaluator_context.is_reverse_ref clause_attr) ->
+                (match aevt_attr_array source_db seed_attr with
+                 | None -> None
+                 | Some seed_arr ->
+                   let max_entity = source_db.max_datom_e + 1 in
+                   let excluded = Bytes.make max_entity '\000' in
+                   let mark_excluded entity_id =
+                     if entity_id >= 0 && entity_id < max_entity then
+                       Bytes.unsafe_set excluded entity_id '\001'
+                   in
+                   (match entity_ids_by_attr_value source_db clause_attr clause_value with
+                    | Some entity_ids -> List.iter mark_excluded entity_ids
+                    | None ->
+                      datoms_by_attr_value source_db clause_attr clause_value
+                      |> List.iter (fun datom -> mark_excluded datom.e));
+                   let rows = ref [] in
+                   let emit datom =
+                     if
+                       datom.e >= 0
+                       && datom.e < max_entity
+                       && Bytes.unsafe_get excluded datom.e = '\000'
+                     then
+                       let value = Query.result_of_datom_v datom in
+                       match attrs with
+                       | [ entity_attr; value_attr ]
+                         when entity_attr = e_var && value_attr = value_var ->
+                         rows := [ Result_entity datom.e; value ] :: !rows
+                       | [ value_attr; entity_attr ]
+                         when entity_attr = e_var && value_attr = value_var ->
+                         rows := [ value; Result_entity datom.e ] :: !rows
+                       | _ ->
+                         (match binding_row attrs [ e_var, Result_entity datom.e; value_var, value ] with
+                          | Some row -> rows := row :: !rows
+                          | None -> ())
+                   in
+                   for i = Array.length seed_arr - 1 downto 0 do
+                     emit seed_arr.(i)
+                   done;
+                   (match aevt_duplicate_datoms source_db seed_attr with
+                    | [] -> ()
+                    | duplicates -> List.iter emit duplicates);
+                   let unique_rows =
+                     (not source_db.history)
+                     && source_db.duplicate_datoms = []
+                     && List.mem e_var attrs
+                     && cardinality_one source_db seed_attr
+                   in
+                   Some { attrs; rows = !rows; lookup_vars; unique_rows })
+              | _ -> None
+          in
+          match try_not_single_value_aevt_scan with
+          | Some relation -> Some relation
+          | None ->
           let source_context = query_source_context db in
           let direct_attr attr =
             not (query_evaluator_context.is_reverse_ref attr)
@@ -1334,12 +1402,6 @@ end) = struct
             constant_patterns
             |> List.map (fun (attr, value) -> attr, value, lazy (datoms_matching attr value))
           in
-          let attrs =
-            patterns
-            |> List.concat_map (fun (e_var, attr, value_term) -> [ QVar e_var; QAttr attr; value_term ])
-            |> unique_vars
-          in
-          let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
           if
             List.exists
               (fun (attr, value, datoms) ->
@@ -1716,59 +1778,110 @@ end) = struct
                       in
                       (match avet_entity_ids_array const_attr const_value with
                        | Some ids ->
-                         for i = Array.length ids - 1 downto 0 do
+                         for i = 0 to Array.length ids - 1 do
                            let e = ids.(i) in
                            let index = e - base_e in
                            if index >= 0 && index < dense_len then emit_at index
                          done
                        | None ->
-                         for i = dense_len - 1 downto 0 do
+                         for i = 0 to dense_len - 1 do
                            if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
                              emit_at i
                          done);
-                      Some !rows
+                      Some (List.rev !rows)
                     | _ ->
-                      let entity_ids = candidate_entities () in
-                      let rows =
-                        entity_ids
-                        |> List.filter_map (fun entity_id ->
-                          let index = entity_id - base_e in
-                          if index < 0 || index >= dense_len then None
-                          else if not (entity_allowed entity_id) then None
-                          else if specialized_find then
-                            let rec vals a acc =
-                              if a < 0 then Result_entity entity_id :: acc
-                              else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
-                            in
-                            Some (vals (attr_count - 1) [])
+                      let rows = ref [] in
+                      let emit entity_id =
+                        let index = entity_id - base_e in
+                        if
+                          index >= 0 && index < dense_len
+                          && (no_extra_filters || entity_allowed entity_id)
+                        then
+                          if specialized_find then
+                            match attr_count with
+                            | 1 ->
+                              rows :=
+                                [ Result_entity entity_id; Result_value attr_arrays.(0).(index).v ]
+                                :: !rows
+                            | 2 ->
+                              rows :=
+                                [ Result_entity entity_id
+                                ; Result_value attr_arrays.(0).(index).v
+                                ; Result_value attr_arrays.(1).(index).v
+                                ]
+                                :: !rows
+                            | 4 ->
+                              rows :=
+                                [ Result_entity entity_id
+                                ; Result_value attr_arrays.(0).(index).v
+                                ; Result_value attr_arrays.(1).(index).v
+                                ; Result_value attr_arrays.(2).(index).v
+                                ; Result_value attr_arrays.(3).(index).v
+                                ]
+                                :: !rows
+                            | _ ->
+                              let rec vals a acc =
+                                if a < 0 then Result_entity entity_id :: acc
+                                else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                              in
+                              rows := vals (attr_count - 1) [] :: !rows
                           else (
                             for a = 0 to attr_count - 1 do
                               value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
                             done;
-                            Some (build_row_from_slots row_slots entity_id value_results)))
+                            rows := build_row_from_slots row_slots entity_id value_results :: !rows)
                       in
-                      Some rows)
+                      (match avet_entity_ids_array const_attr const_value with
+                       | Some ids ->
+                         for i = 0 to Array.length ids - 1 do
+                           emit ids.(i)
+                         done
+                       | None -> List.iter emit (candidate_entities ()));
+                      Some (List.rev !rows))
                   | Some (base_e, dense_len), _ ->
-                    let entity_ids = candidate_entities () in
-                    let rows =
-                      entity_ids
-                      |> List.filter_map (fun entity_id ->
-                        let index = entity_id - base_e in
-                        if index < 0 || index >= dense_len then None
-                        else if not (entity_allowed entity_id) then None
-                        else if specialized_find then
-                          let rec vals a acc =
-                            if a < 0 then Result_entity entity_id :: acc
-                            else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
-                          in
-                          Some (vals (attr_count - 1) [])
+                    let rows = ref [] in
+                    let emit entity_id =
+                      let index = entity_id - base_e in
+                      if
+                        index >= 0 && index < dense_len
+                        && (no_extra_filters || entity_allowed entity_id)
+                      then
+                        if specialized_find then
+                          match attr_count with
+                          | 1 ->
+                            rows :=
+                              [ Result_entity entity_id; Result_value attr_arrays.(0).(index).v ]
+                              :: !rows
+                          | 2 ->
+                            rows :=
+                              [ Result_entity entity_id
+                              ; Result_value attr_arrays.(0).(index).v
+                              ; Result_value attr_arrays.(1).(index).v
+                              ]
+                              :: !rows
+                          | 4 ->
+                            rows :=
+                              [ Result_entity entity_id
+                              ; Result_value attr_arrays.(0).(index).v
+                              ; Result_value attr_arrays.(1).(index).v
+                              ; Result_value attr_arrays.(2).(index).v
+                              ; Result_value attr_arrays.(3).(index).v
+                              ]
+                              :: !rows
+                          | _ ->
+                            let rec vals a acc =
+                              if a < 0 then Result_entity entity_id :: acc
+                              else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                            in
+                            rows := vals (attr_count - 1) [] :: !rows
                         else (
                           for a = 0 to attr_count - 1 do
                             value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
                           done;
-                          Some (build_row_from_slots row_slots entity_id value_results)))
+                          rows := build_row_from_slots row_slots entity_id value_results :: !rows)
                     in
-                    Some rows
+                    List.iter emit (candidate_entities ());
+                    Some (List.rev !rows)
                   | None, _ ->
                     let entity_ids = candidate_entities () in
                     let rows =
@@ -2052,7 +2165,7 @@ end) = struct
                    filter_relation_comparison db relation predicate left_term right_term
                  | _ -> relation)
                relation
-               relation_comparisons))
+               relation_comparisons)))
     | _ -> None
 
   let relation_of_cross_entity_value_join _db source clauses =
@@ -3267,6 +3380,37 @@ end) = struct
 
   let eval_relation_rows db sources rules bindings clauses =
     let default_source = source db sources "$" in
+    let try_single_pattern_rule_rows =
+      match bindings, clauses with
+      | [ [] ], [ Rule (name, terms) ] -> (
+        match inline_rule_clauses rules name terms with
+        | Some [ Pattern (QVar _, QAttr attr, QVar _) ] -> (
+          match default_source with
+          | Db_source source_db -> (
+            match aevt_attr_array source_db attr with
+            | None -> None
+            | Some arr ->
+              let attrs = List.map (function QVar var -> var | _ -> "") terms in
+              let rows = ref [] in
+              let collect datom =
+                match datom.v with
+                | Ref target -> rows := [ Result_entity datom.e; Result_entity target ] :: !rows
+                | _ -> ()
+              in
+              for i = Array.length arr - 1 downto 0 do
+                collect arr.(i)
+              done;
+              (match aevt_duplicate_datoms source_db attr with
+               | [] -> ()
+               | duplicates -> List.iter collect duplicates);
+              Some (attrs, !rows, true))
+          | _ -> None)
+        | _ -> None)
+      | _ -> None
+    in
+    match try_single_pattern_rule_rows with
+    | Some result -> Some result
+    | None ->
     match expand_inline_rules rules clauses with
     | None -> None
     | Some clauses ->
