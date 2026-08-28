@@ -1529,6 +1529,8 @@ end) = struct
           (* Dense / binary-search gather: fill card-one value attrs from AEVT arrays
              without per-entity pattern_datoms Seq. *)
           let rows_from_dense_aevt_gather value_vars =
+            (* value_var_patterns is reverse-cons'd; restore pattern/attrs order. *)
+            let value_vars = List.rev value_vars in
             if
               value_vars = []
               || not
@@ -1559,17 +1561,8 @@ end) = struct
                     attrs = expected
                   in
                   let value_results = Array.make attr_count (Result_value (Int 0)) in
-                  let emit entity_id fill_values =
-                    if not (entity_allowed entity_id) then None
-                    else if not (fill_values ()) then None
-                    else if specialized_find then
-                      let rec vals a acc =
-                        if a < 0 then Result_entity entity_id :: acc
-                        else vals (a - 1) (value_results.(a) :: acc)
-                      in
-                      Some (vals (attr_count - 1) [])
-                    else
-                      Some (build_row_from_slots row_slots entity_id value_results)
+                  let no_extra_filters =
+                    required_patterns = [] && excluded_patterns = [] && List.length constant_sets <= 1
                   in
                   let dense_base =
                     if attr_count = 0 then None
@@ -1594,29 +1587,6 @@ end) = struct
                           in
                           if aligned then Some (base_e, len) else None
                   in
-                  let fill_from_dense base_e dense_len entity_id =
-                    let index = entity_id - base_e in
-                    if index < 0 || index >= dense_len then false
-                    else (
-                      for a = 0 to attr_count - 1 do
-                        value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
-                      done;
-                      true)
-                  in
-                  let fill_from_bsearch entity_id =
-                    let rec loop a =
-                      if a >= attr_count then true
-                      else
-                        match find_entity_in_aevt_array attr_arrays.(a) entity_id with
-                        | None -> false
-                        | Some datom ->
-                          value_results.(a) <- value_result_of_datom datom;
-                          loop (a + 1)
-                    in
-                    loop 0
-                  in
-                  (* Prefer AVET candidates when constants present; dense index or bsearch. *)
-                  let entity_ids = candidate_entities () in
                   match dense_base, constant_patterns with
                   | Some (base_e, dense_len), [ (const_attr, const_value) ] -> (
                     match aevt_attr_array source_db const_attr with
@@ -1625,57 +1595,101 @@ end) = struct
                            && const_arr.(0).e = base_e
                            && const_arr.(dense_len - 1).e = base_e + dense_len - 1 ->
                       let rows = ref [] in
+                      let emit_at index =
+                        let e = base_e + index in
+                        if no_extra_filters || entity_allowed e then
+                          if specialized_find then
+                            let rec vals a acc =
+                              if a < 0 then Result_entity e :: acc
+                              else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                            in
+                            rows := vals (attr_count - 1) [] :: !rows
+                          else (
+                            for a = 0 to attr_count - 1 do
+                              value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
+                            done;
+                            rows := build_row_from_slots row_slots e value_results :: !rows)
+                      in
                       (match avet_entity_ids const_attr const_value with
                        | Some ids ->
                          List.iter
                            (fun e ->
                              let index = e - base_e in
-                             if index >= 0 && index < dense_len then
-                               match
-                                 emit e (fun () ->
-                                   for a = 0 to attr_count - 1 do
-                                     value_results.(a) <-
-                                       value_result_of_datom attr_arrays.(a).(index)
-                                   done;
-                                   true)
-                               with
-                               | Some row -> rows := row :: !rows
-                               | None -> ())
+                             if index >= 0 && index < dense_len then emit_at index)
                            ids
                        | None ->
                          for i = 0 to dense_len - 1 do
                            if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
-                             match
-                               emit const_arr.(i).e (fun () ->
-                                 for a = 0 to attr_count - 1 do
-                                   value_results.(a) <-
-                                     value_result_of_datom attr_arrays.(a).(i)
-                                 done;
-                                 true)
-                             with
-                             | Some row -> rows := row :: !rows
-                             | None -> ()
+                             emit_at i
                          done);
                       Some (List.rev !rows)
                     | _ ->
+                      let entity_ids = candidate_entities () in
                       let rows =
                         entity_ids
                         |> List.filter_map (fun entity_id ->
-                          emit entity_id (fun () -> fill_from_dense base_e dense_len entity_id))
+                          let index = entity_id - base_e in
+                          if index < 0 || index >= dense_len then None
+                          else if not (entity_allowed entity_id) then None
+                          else if specialized_find then
+                            let rec vals a acc =
+                              if a < 0 then Result_entity entity_id :: acc
+                              else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                            in
+                            Some (vals (attr_count - 1) [])
+                          else (
+                            for a = 0 to attr_count - 1 do
+                              value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
+                            done;
+                            Some (build_row_from_slots row_slots entity_id value_results)))
                       in
                       Some rows)
                   | Some (base_e, dense_len), _ ->
+                    let entity_ids = candidate_entities () in
                     let rows =
                       entity_ids
                       |> List.filter_map (fun entity_id ->
-                        emit entity_id (fun () -> fill_from_dense base_e dense_len entity_id))
+                        let index = entity_id - base_e in
+                        if index < 0 || index >= dense_len then None
+                        else if not (entity_allowed entity_id) then None
+                        else if specialized_find then
+                          let rec vals a acc =
+                            if a < 0 then Result_entity entity_id :: acc
+                            else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                          in
+                          Some (vals (attr_count - 1) [])
+                        else (
+                          for a = 0 to attr_count - 1 do
+                            value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
+                          done;
+                          Some (build_row_from_slots row_slots entity_id value_results)))
                     in
                     Some rows
                   | None, _ ->
+                    let entity_ids = candidate_entities () in
                     let rows =
                       entity_ids
                       |> List.filter_map (fun entity_id ->
-                        emit entity_id (fun () -> fill_from_bsearch entity_id))
+                        if not (entity_allowed entity_id) then None
+                        else
+                          let rec fill a =
+                            if a >= attr_count then true
+                            else
+                              match find_entity_in_aevt_array attr_arrays.(a) entity_id with
+                              | None -> false
+                              | Some datom ->
+                                value_results.(a) <- value_result_of_datom datom;
+                                fill (a + 1)
+                          in
+                          if not (fill 0) then None
+                          else if specialized_find then
+                            let rec vals a acc =
+                              if a < 0 then Result_entity entity_id :: acc
+                              else vals (a - 1) (value_results.(a) :: acc)
+                            in
+                            Some (vals (attr_count - 1) [])
+                          else
+                            Some (build_row_from_slots row_slots entity_id value_results))
                     in
                     Some rows
           in
