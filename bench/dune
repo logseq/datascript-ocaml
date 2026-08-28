@@ -70,6 +70,12 @@
  (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
 
 (executable
+ (name storage_rss_bench)
+ (modules storage_rss_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe)
