@@ -3,6 +3,22 @@ open Datascript_types
 type bindings = (string * query_result) list
 type rule_call_key = string * string * query_result option list
 
+(** Which engine finished the last [q] relation path (for tests / diagnostics). *)
+type query_exec_path =
+  | Fused_execute
+  | Relation_fallback
+  | Binding_interpreter
+
+let force_relation_fallback = ref false
+let last_path = ref Relation_fallback
+
+let last_query_exec_path () = !last_path
+
+let with_force_relation_fallback f =
+  let previous = !force_relation_fallback in
+  force_relation_fallback := true;
+  Fun.protect ~finally:(fun () -> force_relation_fallback := previous) f
+
 module Make (Context : sig
   val empty_db : unit -> db
   val validate_rule_arities : query_rule list -> query_rule list
@@ -193,7 +209,7 @@ end) = struct
         (* Prefer Datahike execute for single fused entity-group / ground scan.
            Multi-op Union and open scans still use relational fallback until
            probe-join / union execute matches those paths. *)
-        if input_bindings <> [ [] ] then
+        if !force_relation_fallback || input_bindings <> [ [] ] then
           None
         else
           let plan =
@@ -213,12 +229,21 @@ end) = struct
             | _ -> execute_plan db sources [] input_bindings plan)
           | _ -> None
       in
-    let relation_result =
-      match try_planned_execute () with
-      | Some result -> Some result
-      | None -> eval_relation_rows db sources rules input_bindings where
-    in
-    match relation_result with
+      let relation_result =
+        match try_planned_execute () with
+        | Some result ->
+          last_path := Fused_execute;
+          Some result
+        | None -> (
+          match eval_relation_rows db sources rules input_bindings where with
+          | Some result ->
+            last_path := Relation_fallback;
+            Some result
+          | None ->
+            last_path := Binding_interpreter;
+            None)
+      in
+      match relation_result with
       | Some (attrs, rows, unique_rows) -> (
         (* Hot path: find vars already match relation attrs (entity-group emit). *)
         match find_var_names_cached find with
@@ -262,6 +287,7 @@ end) = struct
       then
         finish_relation_rows rules input_bindings where query.find
       else (
+        last_path := Binding_interpreter;
         let bindings = eval_clauses ~callables db sources rules input_bindings where in
         if has_aggregates query.find then
           if query.with_vars = [] then
@@ -277,6 +303,7 @@ end) = struct
           |> List.sort_uniq compare)
   
   let q_with_raw ?(inputs = []) db with_vars query =
+    last_path := Binding_interpreter;
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
     let rules, where = query_rules_and_where query input_rules in
     let bindings = eval_clauses ~callables db [] rules input_bindings where in

@@ -43,6 +43,7 @@ let test_analyze_same_entity_merge () =
   match Query_plan.analyze query with
   | None -> failwith "expected a plan"
   | Some plan ->
+    check_bool "same-entity plan is fused execute" true (Query_plan.plan_is_fused_execute plan);
     (match plan.ops with
      | [ Query_plan.OpEntityGroup { clauses; _ } ] ->
        check_int "entity group collapses same-entity legs" 2 (List.length clauses)

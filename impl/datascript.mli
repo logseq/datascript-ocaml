@@ -500,6 +500,7 @@ module Query_plan : sig
     ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule list -> query_clause list -> physical_plan option
   val analyze : ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule list -> query -> physical_plan option
   val plan_is_executable : physical_plan -> bool
+  val plan_is_fused_execute : physical_plan -> bool
   val clauses_of_plan : physical_plan -> query_clause list
 end
 val serializable : db -> serializable_db
@@ -590,6 +591,18 @@ val parse_query_return_map_string_with_pull_context :
   ?pull_db_for_source:(string -> db) ->
   string ->
   query_return * query_return_map option * query
+
+(** Which engine finished the last [q] / [q_string] relation path.
+    Intended for tests that pin fused execute vs relational fallback. *)
+type query_exec_path =
+  | Fused_execute
+  | Relation_fallback
+  | Binding_interpreter
+
+val last_query_exec_path : unit -> query_exec_path
+
+(** Run [f] with fused [Query_exec] disabled so [q] uses the relational fallback. *)
+val with_force_relation_fallback : (unit -> 'a) -> 'a
 
 module Query : sig
   type query_callables =

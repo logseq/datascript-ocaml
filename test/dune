@@ -45,6 +45,11 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_query_exec_parity)
+ (modules test_query_exec_parity)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_shared_queries)
  (modules test_shared_queries)
  (libraries datascript-ocaml-native test_support alcotest))

@@ -1705,6 +1705,14 @@ module Query_api_impl = Query_api.Make (struct
   let compare_value = compare_value
 end)
 
+type query_exec_path = Query_api.query_exec_path =
+  | Fused_execute
+  | Relation_fallback
+  | Binding_interpreter
+
+let last_query_exec_path = Query_api.last_query_exec_path
+let with_force_relation_fallback = Query_api.with_force_relation_fallback
+
 module Query_impl = Query
 
 let query_context = Query_api_impl.query_context
