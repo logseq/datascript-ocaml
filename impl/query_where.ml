@@ -2963,11 +2963,35 @@ end) = struct
     in
     List.for_all (fun var -> List.mem var relation.attrs) value_vars
 
+  let same_entity_fused_relation db default_source clauses =
+    match relation_of_same_entity_patterns db default_source clauses with
+    | Some relation
+      when (relation.rows <> [] || not (relation_prefix_has_multiple_clauses clauses))
+           && relation_value_vars_covered relation clauses ->
+      Some relation
+    | _ -> None
+
+  let relation_of_single_aevt_var_var _db default_source clauses =
+    match clauses, default_source with
+    | [ Pattern (QVar e_var, QAttr attr, QVar v_var) ], Db_source source_db when e_var <> v_var ->
+      relation_of_aevt_var_var_pattern source_db e_var attr v_var
+    | _ -> None
+
   let rec eval_relation_from_empty db sources default_source clauses =
-    (* Planner orders eligible clauses; relational fallback keeps source order. *)
-    let clauses = plan_ordered_clauses ~max_datom_e:db.max_datom_e clauses in
-    let clauses = promote_attr_binding_clauses clauses in
-    let rec apply relation = function
+    let fused_empty_relation clauses =
+      match same_entity_fused_relation db default_source clauses with
+      | Some _ as relation -> relation
+      | None -> (
+        match relation_of_single_aevt_var_var db default_source clauses with
+        | Some _ as relation -> relation
+        | None -> (
+          match relation_of_cross_entity_value_join db default_source clauses with
+          | Some relation when relation_value_vars_covered relation clauses -> Some relation
+          | _ -> eval_selective_or_join_value_pattern db sources default_source clauses))
+    in
+    let run_interpreter clauses =
+      let clauses = promote_attr_binding_clauses clauses in
+      let rec apply relation = function
       | [] -> Some relation
       | _ when relation.rows = [] -> Some { relation with rows = []; unique_rows = true }
       | Pattern (e_term, a_term, v_term) :: ComparisonPredicate (predicate, left_term, right_term) :: rest ->
@@ -3091,22 +3115,17 @@ end) = struct
         let* relation = anti_join relation excluded in
         apply relation rest
       | _ -> None
+      in
+      apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses
     in
-    match relation_of_same_entity_patterns db default_source clauses with
-    | Some relation
-      when (relation.rows <> [] || not (relation_prefix_has_multiple_clauses clauses))
-           && relation_value_vars_covered relation clauses ->
-        Some relation
-    | _ -> (
-      match relation_of_cross_entity_value_join db default_source clauses with
-      | Some relation when relation_value_vars_covered relation clauses -> Some relation
-      | _ -> (
-      match
-        eval_selective_or_join_value_pattern db sources default_source clauses
-      with
+    match fused_empty_relation clauses with
+    | Some relation -> Some relation
+    | None -> (
+      let planned = plan_ordered_clauses ~max_datom_e:db.max_datom_e clauses in
+      match fused_empty_relation planned with
       | Some relation -> Some relation
       | None -> (
-        match clauses with
+        match planned with
         | [ Or branches ] -> eval_or_branch_relations db sources default_source branches
         | [ SourceOr (source_name, branches) ] ->
           let default_source = source db sources source_name in
@@ -3118,8 +3137,7 @@ end) = struct
           let default_source = source db sources source_name in
           Query.ensure_or_join_branches_cover_listed_vars [] vars branches;
           eval_or_join_relations db sources default_source vars branches
-        | _ ->
-          apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses)))
+        | _ -> run_interpreter planned))
 
   and or_join_constant_entity_branch e_var = function
     | [ Pattern (QVar branch_e, QAttr _, QValue _) ] when branch_e = e_var -> true
