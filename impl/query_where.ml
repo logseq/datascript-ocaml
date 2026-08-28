@@ -27,6 +27,7 @@ module Make (Context : sig
   val normalize_value : value -> value
   val datoms_by_attr_value : db -> attr -> value -> datom list
   val entity_ids_by_attr_value : db -> attr -> value -> entity_id list option
+  val entity_ids_array_by_attr_value : db -> attr -> value -> entity_id array option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
   val fold_index_range :
@@ -1276,6 +1277,12 @@ end) = struct
             else
               None
           in
+          let avet_entity_ids_array attr value =
+            if direct_attr attr && query_value_uses_avet value && query_attr_uses_avet source_db attr then
+              entity_ids_array_by_attr_value source_db attr value
+            else
+              None
+          in
           let constant_datoms =
             constant_patterns
             |> List.map (fun (attr, value) -> attr, value, lazy (datoms_matching attr value))
@@ -1598,31 +1605,53 @@ end) = struct
                       let emit_at index =
                         let e = base_e + index in
                         if no_extra_filters || entity_allowed e then
-                          if specialized_find then
-                            let rec vals a acc =
-                              if a < 0 then Result_entity e :: acc
-                              else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
-                            in
-                            rows := vals (attr_count - 1) [] :: !rows
+                          if specialized_find then (
+                            match attr_count with
+                            | 1 ->
+                              rows :=
+                                [ Result_entity e; Result_value attr_arrays.(0).(index).v ]
+                                :: !rows
+                            | 2 ->
+                              rows :=
+                                [ Result_entity e
+                                ; Result_value attr_arrays.(0).(index).v
+                                ; Result_value attr_arrays.(1).(index).v
+                                ]
+                                :: !rows
+                            | 4 ->
+                              rows :=
+                                [ Result_entity e
+                                ; Result_value attr_arrays.(0).(index).v
+                                ; Result_value attr_arrays.(1).(index).v
+                                ; Result_value attr_arrays.(2).(index).v
+                                ; Result_value attr_arrays.(3).(index).v
+                                ]
+                                :: !rows
+                            | _ ->
+                              let rec vals a acc =
+                                if a < 0 then Result_entity e :: acc
+                                else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                              in
+                              rows := vals (attr_count - 1) [] :: !rows)
                           else (
                             for a = 0 to attr_count - 1 do
                               value_results.(a) <- value_result_of_datom attr_arrays.(a).(index)
                             done;
                             rows := build_row_from_slots row_slots e value_results :: !rows)
                       in
-                      (match avet_entity_ids const_attr const_value with
+                      (match avet_entity_ids_array const_attr const_value with
                        | Some ids ->
-                         List.iter
-                           (fun e ->
-                             let index = e - base_e in
-                             if index >= 0 && index < dense_len then emit_at index)
-                           ids
+                         for i = Array.length ids - 1 downto 0 do
+                           let e = ids.(i) in
+                           let index = e - base_e in
+                           if index >= 0 && index < dense_len then emit_at index
+                         done
                        | None ->
-                         for i = 0 to dense_len - 1 do
+                         for i = dense_len - 1 downto 0 do
                            if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
                              emit_at i
                          done);
-                      Some (List.rev !rows)
+                      Some !rows
                     | _ ->
                       let entity_ids = candidate_entities () in
                       let rows =
@@ -1722,37 +1751,46 @@ end) = struct
               | [ entity_attr; value_attr ]
                 when entity_attr = e_var && value_attr = scan_value_var ->
                 let rows = ref [] in
-                Array.iter
-                  (fun datom ->
-                    if entity_allowed datom.e then
-                      rows :=
-                        [ Result_entity datom.e; value_result_of_datom datom ] :: !rows)
-                  scan_arr;
-                Some (List.rev !rows)
+                let use_ref = is_ref_attr source_db scan_attr in
+                for i = Array.length scan_arr - 1 downto 0 do
+                  let datom = scan_arr.(i) in
+                  if entity_allowed datom.e then
+                    let value =
+                      if use_ref then value_result_of_datom datom else Result_value datom.v
+                    in
+                    rows := [ Result_entity datom.e; value ] :: !rows
+                done;
+                Some !rows
               | [ value_attr; entity_attr ]
                 when entity_attr = e_var && value_attr = scan_value_var ->
                 let rows = ref [] in
-                Array.iter
-                  (fun datom ->
-                    if entity_allowed datom.e then
-                      rows :=
-                        [ value_result_of_datom datom; Result_entity datom.e ] :: !rows)
-                  scan_arr;
-                Some (List.rev !rows)
+                let use_ref = is_ref_attr source_db scan_attr in
+                for i = Array.length scan_arr - 1 downto 0 do
+                  let datom = scan_arr.(i) in
+                  if entity_allowed datom.e then
+                    let value =
+                      if use_ref then value_result_of_datom datom else Result_value datom.v
+                    in
+                    rows := [ value; Result_entity datom.e ] :: !rows
+                done;
+                Some !rows
               | _ ->
                 match gather_slots_for attrs [ (scan_value_var, scan_attr) ] with
                 | None -> None
                 | Some row_slots ->
                   let value_results = [| Result_value (Int 0) |] in
                   let rows = ref [] in
-                  Array.iter
-                    (fun datom ->
-                      if entity_allowed datom.e then (
-                        value_results.(0) <- value_result_of_datom datom;
-                        rows := build_row_from_slots row_slots datom.e value_results :: !rows))
-                    scan_arr;
-                  Some (List.rev !rows))
-            | _ :: _, Some _ when List.for_all (fun (_, attr) -> direct_attr attr && cardinality_one source_db attr) ((scan_value_var, scan_attr) :: remaining_value_vars) ->
+                  for i = Array.length scan_arr - 1 downto 0 do
+                    let datom = scan_arr.(i) in
+                    if entity_allowed datom.e then (
+                      value_results.(0) <- value_result_of_datom datom;
+                      rows := build_row_from_slots row_slots datom.e value_results :: !rows)
+                  done;
+                  Some !rows)
+            | _ :: _, Some _
+              when List.for_all
+                     (fun (_, attr) -> direct_attr attr && cardinality_one source_db attr)
+                     ((scan_value_var, scan_attr) :: remaining_value_vars) ->
               rows_from_dense_aevt_gather ((scan_value_var, scan_attr) :: remaining_value_vars)
             | _ -> None
           in
