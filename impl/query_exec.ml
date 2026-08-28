@@ -328,24 +328,42 @@ end) = struct
   let execute_scan_anti_ground source_db e_var attrs (scan : Query_plan.l_scan) anti_attr anti_value =
     match scan.entity, scan.attr, scan.value with
     | QVar ev, QAttr seed_attr, QVar v
-      when ev = e_var && v <> e_var && direct_attr seed_attr && cardinality_one source_db seed_attr
-           && ((attrs = [ e_var; v ]) || (attrs = [ v; e_var ])) ->
+      when ev = e_var && v <> e_var && direct_attr seed_attr && cardinality_one source_db seed_attr ->
       let* seed_arr = aevt_attr_array source_db seed_attr in
-      let excluded = anti_excluded_bitset source_db anti_attr anti_value in
-      let max_entity = Bytes.length excluded in
-      let rows = ref [] in
-      let emit_e_v eid value =
-        if eid >= 0 && eid < max_entity && Bytes.unsafe_get excluded eid = '\000' then
-          rows :=
-            (if attrs = [ e_var; v ] then [ Result_entity eid; value ]
-             else [ value; Result_entity eid ])
-            :: !rows
+      let max_entity = source_db.max_datom_e + 1 in
+      let excluded = Bytes.make max_entity '\000' in
+      let mark_excluded entity_id =
+        if entity_id >= 0 && entity_id < max_entity then Bytes.unsafe_set excluded entity_id '\001'
       in
-      for i = Array.length seed_arr - 1 downto 0 do
-        let d = seed_arr.(i) in
-        emit_e_v d.e (Result_value d.v)
-      done;
-      List.iter (fun d -> emit_e_v d.e (Result_value d.v)) (aevt_duplicate_datoms source_db seed_attr);
+      (match entity_ids_by_attr_value source_db anti_attr anti_value with
+       | Some entity_ids -> List.iter mark_excluded entity_ids
+       | None ->
+         datoms_by_attr_value source_db anti_attr anti_value |> List.iter (fun datom -> mark_excluded datom.e));
+      let rows = ref [] in
+      (match attrs with
+       | [ entity_attr; value_attr ] when entity_attr = e_var && value_attr = v ->
+         for i = Array.length seed_arr - 1 downto 0 do
+           let datom = seed_arr.(i) in
+           if datom.e >= 0 && datom.e < max_entity && Bytes.unsafe_get excluded datom.e = '\000' then
+             rows := [ Result_entity datom.e; Query.result_of_datom_v datom ] :: !rows
+         done;
+         List.iter
+           (fun datom ->
+             if datom.e >= 0 && datom.e < max_entity && Bytes.unsafe_get excluded datom.e = '\000' then
+               rows := [ Result_entity datom.e; Query.result_of_datom_v datom ] :: !rows)
+           (aevt_duplicate_datoms source_db seed_attr)
+       | [ value_attr; entity_attr ] when entity_attr = e_var && value_attr = v ->
+         for i = Array.length seed_arr - 1 downto 0 do
+           let datom = seed_arr.(i) in
+           if datom.e >= 0 && datom.e < max_entity && Bytes.unsafe_get excluded datom.e = '\000' then
+             rows := [ Query.result_of_datom_v datom; Result_entity datom.e ] :: !rows
+         done;
+         List.iter
+           (fun datom ->
+             if datom.e >= 0 && datom.e < max_entity && Bytes.unsafe_get excluded datom.e = '\000' then
+               rows := [ Query.result_of_datom_v datom; Result_entity datom.e ] :: !rows)
+           (aevt_duplicate_datoms source_db seed_attr)
+       | _ -> ());
       Some !rows
     | _ -> None
 
@@ -374,33 +392,42 @@ end) = struct
       in
       let drive_len = Array.length ids in
       (match pos_ops, attrs with
-       (* q2: one value merge *)
+       (* q2: one value merge — unrolled dense emit (Datahike sorted-merge card-one). *)
        | [ Pos { bind_var = Some v; arr; _ } ], [ a; b ]
          when (a = e_var && b = v) || (a = v && b = e_var) ->
-         let out = ref [] in
+         let rows = ref [] in
          (match dense_base arr with
           | Some (base, len) ->
-            for i = drive_len - 1 downto 0 do
-              let eid = ids.(i) in
-              let idx = eid - base in
-              if idx >= 0 && idx < len && arr.(idx).e = eid then
-                let rv = Result_value arr.(idx).v in
-                out :=
-                  (if a = e_var then [ Result_entity eid; rv ] else [ rv; Result_entity eid ]) :: !out
-            done
+            if a = e_var then
+              for i = Array.length ids - 1 downto 0 do
+                let e = ids.(i) in
+                let index = e - base in
+                if index >= 0 && index < len then
+                  rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
+              done
+            else
+              for i = Array.length ids - 1 downto 0 do
+                let e = ids.(i) in
+                let index = e - base in
+                if index >= 0 && index < len then
+                  rows := [ Result_value arr.(index).v; Result_entity e ] :: !rows
+              done
           | None ->
             let ptr = ref 0 in
-            for i = 0 to drive_len - 1 do
-              let eid = ids.(i) in
-              match seek_aevt arr ptr eid with
-              | None -> ()
-              | Some d ->
-                let rv = Result_value d.v in
-                out :=
-                  (if a = e_var then [ Result_entity eid; rv ] else [ rv; Result_entity eid ]) :: !out
-            done;
-            out := List.rev !out);
-         Some !out
+            if a = e_var then
+              for i = 0 to Array.length ids - 1 do
+                match seek_aevt arr ptr ids.(i) with
+                | None -> ()
+                | Some d -> rows := [ Result_entity d.e; Result_value d.v ] :: !rows
+              done
+            else
+              for i = 0 to Array.length ids - 1 do
+                match seek_aevt arr ptr ids.(i) with
+                | None -> ()
+                | Some d -> rows := [ Result_value d.v; Result_entity d.e ] :: !rows
+              done;
+            rows := List.rev !rows);
+         Some !rows
        (* Multi merges (value binds + optional ground verifies) — q3/q4/q-5-merge *)
        | pos_ops, _ ->
          let bind_vars =
@@ -656,21 +683,92 @@ end) = struct
   let execute_entity_group _db source (group : Query_plan.entity_group) =
     match source with
     | Db_source source_db -> (
-      (* Predicates attached to the group: defer to relational fallback which
-         already has AVET range pushdown (Datahike scan-bound path). *)
       if group.filters <> [] then
         None
       else
         let e_var = group.entity_var in
         let (scan : Query_plan.l_scan) = group.scan in
-        match scan.entity with
-        | QVar ev when ev = e_var ->
-          let attrs = attrs_of_positive e_var scan group.merges in
-          (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
-           | None -> None
-           | Some rows ->
-             Some { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
-        | _ -> None)
+        (* Specialized q2: [?e :attr const] [?e :attr2 ?v] — Datahike sorted-merge N=1. *)
+        (match scan.entity, scan.attr, scan.value, group.merges, group.anti_scans with
+         | QVar ev, QAttr drive_attr, QValue drive_value, [ merge ], []
+           when ev = e_var && direct_attr drive_attr -> (
+           match merge.Query_plan.entity, merge.attr, merge.value with
+           | QVar ev2, QAttr merge_attr, QVar v
+             when ev2 = e_var && v <> e_var && direct_attr merge_attr
+                  && cardinality_one source_db merge_attr -> (
+             match avet_ids_array source_db drive_attr drive_value, aevt_attr_array source_db merge_attr with
+             | Some ids, Some arr -> (
+               match dense_base arr with
+               | Some (base, len) ->
+                 let rows = ref [] in
+                 for i = Array.length ids - 1 downto 0 do
+                   let e = ids.(i) in
+                   let index = e - base in
+                   if index >= 0 && index < len then
+                     rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
+                 done;
+                 Some
+                   { attrs = [ e_var; v ]
+                   ; rows = !rows
+                   ; unique_rows = unique_rows_flag source_db [ e_var; v ] e_var
+                   }
+               | None -> None)
+             | _ -> None)
+           | _ -> None)
+         (* Specialized q-5-merge: const drive + 4 card-one value merges, dense AEVT. *)
+         | QVar ev, QAttr drive_attr, QValue drive_value, [ m0; m1; m2; m3 ], []
+           when ev = e_var && direct_attr drive_attr -> (
+           let value_merge (m : Query_plan.l_scan) =
+             match m.entity, m.attr, m.value with
+             | QVar ev2, QAttr attr, QVar v
+               when ev2 = e_var && v <> e_var && direct_attr attr && cardinality_one source_db attr ->
+               Some (v, attr)
+             | _ -> None
+           in
+           match value_merge m0, value_merge m1, value_merge m2, value_merge m3 with
+           | Some (v0, a0), Some (v1, a1), Some (v2, a2), Some (v3, a3) -> (
+             match
+               ( avet_ids_array source_db drive_attr drive_value
+               , aevt_attr_array source_db a0
+               , aevt_attr_array source_db a1
+               , aevt_attr_array source_db a2
+               , aevt_attr_array source_db a3 )
+             with
+             | Some ids, Some arr0, Some arr1, Some arr2, Some arr3 -> (
+               match dense_base arr0, dense_base arr1, dense_base arr2, dense_base arr3 with
+               | Some (base, len), Some (b1, l1), Some (b2, l2), Some (b3, l3)
+                 when base = b1 && base = b2 && base = b3 && len = l1 && len = l2 && len = l3 ->
+                 let rows = ref [] in
+                 for i = Array.length ids - 1 downto 0 do
+                   let e = ids.(i) in
+                   let index = e - base in
+                   if index >= 0 && index < len then
+                     rows :=
+                       [ Result_entity e
+                       ; Result_value arr0.(index).v
+                       ; Result_value arr1.(index).v
+                       ; Result_value arr2.(index).v
+                       ; Result_value arr3.(index).v
+                       ]
+                       :: !rows
+                 done;
+                 let attrs = [ e_var; v0; v1; v2; v3 ] in
+                 Some { attrs; rows = !rows; unique_rows = unique_rows_flag source_db attrs e_var }
+               | _ -> None)
+             | _ -> None)
+           | _ -> None)
+         | _ -> None)
+        |> function
+        | Some _ as result -> result
+        | None -> (
+          match scan.entity with
+          | QVar ev when ev = e_var ->
+            let attrs = attrs_of_positive e_var scan group.merges in
+            (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
+             | None -> None
+             | Some rows ->
+               Some { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
+          | _ -> None))
     | _ -> None
 
   let execute_scan db source (scan : Query_plan.l_scan) =
@@ -679,19 +777,31 @@ end) = struct
       (* Datahike :scan-only / AVET ground pattern (q1). *)
       match scan.entity, scan.attr, scan.value, scan.tx with
       | QVar e_var, QAttr attr, QValue value, None when direct_attr attr -> (
-        match entity_ids_by_attr_value source_db attr value with
-        | Some entity_ids ->
+        match avet_ids_array source_db attr value with
+        | Some ids ->
+          let rows = ref [] in
+          for i = Array.length ids - 1 downto 0 do
+            rows := [ Result_entity ids.(i) ] :: !rows
+          done;
           Some
             { attrs = [ e_var ]
-            ; rows = List.map (fun e -> [ Result_entity e ]) entity_ids
+            ; rows = !rows
             ; unique_rows = unique_rows_flag source_db [ e_var ] e_var
             }
-        | None ->
-          let rows =
-            datoms_by_attr_value source_db attr value
-            |> List.map (fun datom -> [ Result_entity datom.e ])
-          in
-          Some { attrs = [ e_var ]; rows; unique_rows = false })
+        | None -> (
+          match entity_ids_by_attr_value source_db attr value with
+          | Some entity_ids ->
+            Some
+              { attrs = [ e_var ]
+              ; rows = List.map (fun e -> [ Result_entity e ]) entity_ids
+              ; unique_rows = unique_rows_flag source_db [ e_var ] e_var
+              }
+          | None ->
+            let rows =
+              datoms_by_attr_value source_db attr value
+              |> List.map (fun datom -> [ Result_entity datom.e ])
+            in
+            Some { attrs = [ e_var ]; rows; unique_rows = false }))
       | _ ->
         let terms =
           match scan.tx with
@@ -735,8 +845,21 @@ end) = struct
         Some { attrs; rows; unique_rows = false })
     | _ -> None
 
-  let rec execute_plan db sources default_source bindings plan =
-    let rec apply relation = function
+  let rec execute_plan db sources default_source bindings (plan : Query_plan.physical_plan) =
+    (* Datahike execute-group-direct / scan-only: single fused op emits directly. *)
+    match plan.ops with
+    | [ Query_plan.OpEntityGroup group ] -> execute_entity_group db default_source group
+    | [ Query_plan.OpScan { clause; source = op_source; _ } ] -> (
+      let source =
+        match op_source with
+        | Some name -> Query.source db sources name
+        | None -> default_source
+      in
+      match Query_plan.pattern_scan clause with
+      | None -> None
+      | Some scan -> execute_scan db source scan)
+    | ops ->
+      let rec apply relation = function
       | [] -> Some relation
       | Query_plan.OpEntityGroup group :: rest -> (
         match execute_entity_group db default_source group with
@@ -792,7 +915,7 @@ end) = struct
         apply joined rest)
       | Query_plan.OpPassthrough _ :: _ -> None
     in
-    apply empty_relation plan.ops
+    apply empty_relation ops
 
   and union_relations left right =
     let attrs = left.attrs @ List.filter (fun attr -> not (List.mem attr left.attrs)) right.attrs in

@@ -157,17 +157,35 @@ end) = struct
       |> List.map snd
 
   let plan_cache : (int * query_clause list, Query_plan.physical_plan) Hashtbl.t = Hashtbl.create 32
+  (* Hot path: cached_query_string reuses the same where list object. *)
+  let last_plan_where : query_clause list ref = ref []
+  let last_plan_max_e = ref (-1)
+  let last_plan : Query_plan.physical_plan option ref = ref None
 
   let compile_plan max_datom_e where =
-    let key = max_datom_e, where in
-    match Hashtbl.find_opt plan_cache key with
-    | Some plan -> Some plan
-    | None ->
-      (match Query_plan.compile ~max_datom_e where with
-       | None -> None
-       | Some plan ->
-         Hashtbl.add plan_cache key plan;
-         Some plan)
+    if !last_plan_max_e = max_datom_e && !last_plan_where == where then
+      !last_plan
+    else
+      let key = max_datom_e, where in
+      match Hashtbl.find_opt plan_cache key with
+      | Some plan ->
+        last_plan_where := where;
+        last_plan_max_e := max_datom_e;
+        last_plan := Some plan;
+        Some plan
+      | None ->
+        (match Query_plan.compile ~max_datom_e where with
+         | None ->
+           last_plan_where := where;
+           last_plan_max_e := max_datom_e;
+           last_plan := None;
+           None
+         | Some plan ->
+           Hashtbl.add plan_cache key plan;
+           last_plan_where := where;
+           last_plan_max_e := max_datom_e;
+           last_plan := Some plan;
+           Some plan)
 
   let q_sources_raw ?(inputs = []) db sources query =
     let finish_relation_rows rules input_bindings where find =
@@ -186,15 +204,20 @@ end) = struct
       | None -> eval_relation_rows db sources rules input_bindings where
     in
     match relation_result with
-      | Some (attrs, rows, unique_rows) ->
-        (match relation_rows_for_find db sources attrs rows unique_rows find with
-         | Some rows -> rows
-         | None ->
-           let bindings = eval_clauses db sources rules input_bindings where in
-           bindings
-           |> fun bindings -> dedupe_bindings_for_find bindings find
-           |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
-           |> List.sort_uniq compare)
+      | Some (attrs, rows, unique_rows) -> (
+        (* Hot path: find vars already match relation attrs (entity-group emit). *)
+        match find_var_names find with
+        | Some find_vars when find_vars = attrs ->
+          if unique_rows then rows else sort_uniq_presorted compare rows
+        | _ ->
+          (match relation_rows_for_find db sources attrs rows unique_rows find with
+           | Some rows -> rows
+           | None ->
+             let bindings = eval_clauses db sources rules input_bindings where in
+             bindings
+             |> fun bindings -> dedupe_bindings_for_find bindings find
+             |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
+             |> List.sort_uniq compare))
       | None ->
         let bindings = eval_clauses db sources rules input_bindings where in
         bindings
