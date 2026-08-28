@@ -14,8 +14,8 @@ should follow Datahike's compiled planner + permanent relational fallback.
 | Classify | `query/analyze.cljc` `classify-clause` | Inline in `query_plan.ml` / `query_where.ml` pattern parsing | No dedicated analyze module |
 | Logical IR | `query/logical.cljc` `build-logical-plan` | `query_plan.ml` `build_logical_plan` | Same node shapes (`LEntityJoin`, `LScan`, …) |
 | Lower | `query/lower.cljc` + `query/plan.cljc` | `query_plan.ml` `lower` / `compile` | **Major**: DH uses DP merge + pipeline DSL; OCaml flattens to clause list |
-| Execute | `query/execute.cljc` fused scan+merge, probe-map joins | **Missing** `query_exec.ml`; execution lives in `query_where.ml` | **Major**: no cursor merge, no `PPipeline` |
-| Fallback | `query/relation.cljc` + `query.cljc` `execute-legacy` | `query_where.ml` relation interpreter | Permanent fallback — correct role, but also hosts fast paths |
+| Execute | `query/execute.cljc` fused scan+merge, probe-map joins | `query_exec.ml` drive-scan + AEVT seek/dense merge + anti-merge | Card-one entity groups implemented; multi-group probe joins still fallback |
+| Fallback | `query/relation.cljc` + `query.cljc` `execute-legacy` | `query_where.ml` relation interpreter | Permanent fallback — correct role |
 | Project | find projection in execute / query | `query_api.ml` `relation_rows_for_find` | OK |
 
 Datahike end-to-end:
@@ -28,13 +28,14 @@ analyze → logical.cljc → lower.cljc → execute.cljc → find project
 OCaml today:
 
 ```
-query_plan.compile → clauses_of_plan → query_where (fused kernels + interpreter)
-         ↳ try_fast_empty_relation_rows (pre-planner bypass)
-         ↳ relation_of_same_entity_patterns (dense AEVT gather)
-         ↳ eval_relation_from_empty (hash_join chain)
+query_plan.compile → OpEntityGroup/OpScan
+         ↳ query_exec (Datahike-like drive + lookup/dense merge + anti)
+         ↳ else query_where relational fallback (hash_join / anti_join)
 ```
 
-The planner IR **matches** Datahike; the **execute layer does not**.
+The planner IR matches Datahike. Entity-group **execute** now follows
+`execute-group-direct` / sorted-merge / anti-merge semantics (AEVT
+forward-seek or dense index ≈ seekGE), not Datascript `simple_*` gates.
 
 ## Module-by-module notes
 

@@ -140,26 +140,37 @@ let entity_var_of_scan scan =
   | QVar v -> Some v
   | _ -> None
 
-(** Foldable NOT: single pattern, same source, non-entity vars local to the negation. *)
+(** Foldable NOT / NOT-JOIN: single pattern, same source, non-entity vars local to the negation. *)
 let foldable_not_scan ~bound_vars ~var_owners clause_idx clause =
+  let foldable_pattern = function
+    | (Pattern (QVar e_var, QAttr _, value_term) as pattern) ->
+      let local_vars =
+        match value_term with
+        | QVar v when v <> e_var -> [ v ]
+        | _ -> []
+      in
+      let locals_ok =
+        List.for_all
+          (fun v ->
+            (not (List.mem v bound_vars))
+            &&
+            match List.assoc_opt v var_owners with
+            | None -> true
+            | Some idxs -> List.for_all (( = ) clause_idx) idxs)
+          local_vars
+      in
+      if locals_ok then pattern_scan pattern else None
+    | _ -> None
+  in
   match clause with
-  | Not [ ((Pattern (QVar e_var, QAttr _, value_term) as pattern) as _inner) ] ->
-    let local_vars =
-      match value_term with
-      | QVar v when v <> e_var -> [ v ]
-      | _ -> []
-    in
-    let locals_ok =
-      List.for_all
-        (fun v ->
-          (not (List.mem v bound_vars))
-          &&
-          match List.assoc_opt v var_owners with
-          | None -> true
-          | Some idxs -> List.for_all (( = ) clause_idx) idxs)
-        local_vars
-    in
-    if locals_ok then pattern_scan pattern else None
+  | Not [ pattern ] -> foldable_pattern pattern
+  | NotJoin ([ join_e ], [ pattern ]) -> (
+    match foldable_pattern pattern with
+    | Some anti_scan ->
+      (match entity_var_of_scan anti_scan with
+       | Some e_var when join_e = e_var -> Some anti_scan
+       | _ -> None)
+    | None -> None)
   | _ -> None
 
 let var_owners_of_clauses clauses =

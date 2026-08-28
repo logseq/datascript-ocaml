@@ -155,18 +155,31 @@ end) = struct
         |> Option.map (fun key -> key, binding))
       |> List.sort_uniq (fun (left, _) (right, _) -> compare left right)
       |> List.map snd
-  
+
+  let plan_cache : (int * query_clause list, Query_plan.physical_plan) Hashtbl.t = Hashtbl.create 32
+
+  let compile_plan max_datom_e where =
+    let key = max_datom_e, where in
+    match Hashtbl.find_opt plan_cache key with
+    | Some plan -> Some plan
+    | None ->
+      (match Query_plan.compile ~max_datom_e where with
+       | None -> None
+       | Some plan ->
+         Hashtbl.add plan_cache key plan;
+         Some plan)
+
   let q_sources_raw ?(inputs = []) db sources query =
-  let finish_relation_rows rules input_bindings where find =
-    let try_planned_execute () =
-      if input_bindings = [ [] ] && rules = [] then
-        match Query_plan.compile ~max_datom_e:db.max_datom_e where with
-        | Some plan when Query_plan.plan_is_fused_execute plan ->
-          execute_plan db sources rules input_bindings plan
-        | _ -> None
-      else
-        None
-    in
+    let finish_relation_rows rules input_bindings where find =
+      let try_planned_execute () =
+        if input_bindings = [ [] ] && rules = [] then
+          match compile_plan db.max_datom_e where with
+          | Some plan when Query_plan.plan_is_fused_execute plan ->
+            execute_plan db sources rules input_bindings plan
+          | _ -> None
+        else
+          None
+      in
     let relation_result =
       match try_planned_execute () with
       | Some result -> Some result

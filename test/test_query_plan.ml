@@ -100,6 +100,21 @@ let test_logical_entity_join () =
        check_int "filter attached to entity join" 1 (List.length filters)
      | _ -> failwith "expected LEntityJoin")
 
+let test_logical_not_join_fold () =
+  let clauses =
+    [ Pattern (QVar "?e", QAttr "age", QVar "?a")
+    ; NotJoin ([ "?e" ], [ Pattern (QVar "?e", QAttr "sex", QValue (Keyword "male")) ])
+    ]
+  in
+  match Query_plan.build_logical_plan clauses with
+  | None -> failwith "expected logical plan"
+  | Some logical -> (
+    match logical.nodes with
+    | [ Query_plan.LEntityJoin { scans; anti_scans; _ } ] ->
+      check_int "not-join folds to entity anti-scan" 1 (List.length anti_scans);
+      check_int "positive scan in entity join" 1 (List.length scans)
+    | _ -> failwith "expected LEntityJoin with folded not-join")
+
 let () =
   run "query plan"
     [ ( "analyze"
@@ -108,5 +123,6 @@ let () =
         ; test_case "analyze same-entity merge" `Quick test_analyze_same_entity_merge
         ; test_case "analyze benchmark shapes" `Quick test_analyze_benchmark_shapes
         ; test_case "logical entity join attaches filters" `Quick test_logical_entity_join
+        ; test_case "logical not-join folds to anti-scan" `Quick test_logical_not_join_fold
         ] )
     ]

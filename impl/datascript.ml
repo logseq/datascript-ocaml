@@ -1520,6 +1520,7 @@ module Query_exec_impl = Query_exec.Make (struct
   let aevt_attr_array = Db.aevt_attr_array
   let aevt_duplicate_datoms db attr =
     Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+  let find_entity_in_aevt_array = Db.find_entity_in_aevt_array
 end)
 
 let execute_plan db sources rules bindings plan =

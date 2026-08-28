@@ -1,4 +1,11 @@
-(** Datahike-aligned query execute layer: run compiled physical ops. *)
+(** Datahike-aligned query execute layer: run compiled physical ops.
+
+    Entity-group execution follows Datahike [execute-group-direct] /
+    [execute-per-cursor-merge] / [execute-sorted-merge] semantics:
+    drive from the planned scan slice, then per-entity lookup merges
+    (AEVT binary search ≈ lookupGE), with foldable NOT as anti-merges
+    that exclude on hit. Dense aligned-array gather is intentionally
+    not used — that path diverged from Datahike and regressed benches. *)
 
 open Datascript_types
 
@@ -23,6 +30,7 @@ module Make (Context : sig
   val query_value_uses_avet : value -> bool
   val aevt_attr_array : db -> attr -> datom array option
   val aevt_duplicate_datoms : db -> attr -> datom list
+  val find_entity_in_aevt_array : datom array -> entity_id -> datom option
 end) = struct
   open Context
 
@@ -136,309 +144,595 @@ end) = struct
     && source_db.duplicate_datoms = []
     && List.mem e_var attrs
 
-  let classify_patterns e_var scans =
-    scans
-    |> List.fold_left
-         (fun (value_vars, constants, required) (_, attr, value_term) ->
-           match value_term with
-           | QVar value_var when value_var <> e_var ->
-             ((value_var, attr) :: value_vars, constants, required)
-           | QValue value -> (value_vars, (attr, value) :: constants, required)
-           | QWildcard -> (value_vars, constants, attr :: required)
-           | QVar _ | QEntity _ | QAttr _ | QIdent _ | QLookupRef _ | QSource _ ->
-             (value_vars, constants, required))
-         ([], [], [])
-
-  let attrs_of_scans e_var scans =
-    scans
-    |> List.concat_map (fun (_, attr, value_term) -> [ QVar e_var; QAttr attr; value_term ])
-    |> unique_vars
-
-  let attr_name = function QAttr name -> name | _ -> ""
-
-  let scans_of_group (group : Query_plan.entity_group) =
-    List.map
-      (fun (scan : Query_plan.l_scan) ->
-        match scan.entity with
-        | QVar e_var -> e_var, attr_name scan.attr, scan.value
-        | _ -> "", attr_name scan.attr, scan.value)
-      (group.scan :: group.merges)
-
-  let anti_patterns_of_group (group : Query_plan.entity_group) =
-    List.map
-      (fun (anti : Query_plan.l_scan) -> attr_name anti.attr, anti.value)
-      group.anti_scans
-
   let avet_ids_array source_db attr value =
     if query_value_uses_avet value && query_attr_uses_avet source_db attr then
       entity_ids_array_by_attr_value source_db attr value
     else
       None
 
-  let arrays_aligned const_arr attr_arrays =
-    let const_len = Array.length const_arr in
-    if const_len = 0 then
-      false
-    else if not (Array.for_all (fun arr -> Array.length arr = const_len) attr_arrays) then
-      false
+  let value_matches term v =
+    match term with
+    | QValue expected -> query_evaluator_context.compare_value v expected = 0
+    | QWildcard -> true
+    | QVar _ -> true
+    | _ -> false
+
+  (* Datahike merge-op: positive lookup or anti-merge (NOT folded into group). *)
+  type merge_op =
+    | Pos of
+        { attr : string
+        ; value_term : query_term
+        ; bind_var : string option
+        ; arr : datom array
+        }
+    | Anti of
+        { attr : string
+        ; value_term : query_term
+        ; (* Ground anti: excluded bitset (batched lookupGE). Non-ground: AEVT arr. *)
+          excluded : bytes option
+        ; arr : datom array option
+        }
+
+  let preload_aevt source_db attr =
+    if not (direct_attr attr && cardinality_one source_db attr) then
+      None
     else
-      let mid = const_len / 2 in
-      let check i =
-        let e = const_arr.(i).e in
-        Array.for_all (fun arr -> arr.(i).e = e) attr_arrays
-      in
-      check 0 && check mid && check (const_len - 1)
+      aevt_attr_array source_db attr
 
-  let dense_range const_arr attr_arrays =
-    let const_len = Array.length const_arr in
-    let base_e = const_arr.(0).e in
-    const_arr.(const_len - 1).e = base_e + const_len - 1
-    && Array.for_all (fun arr -> arr.(0).e = base_e && arr.(const_len - 1).e = base_e + const_len - 1) attr_arrays
+  let attrs_of_positive e_var (scan : Query_plan.l_scan) merges =
+    (scan :: merges)
+    |> List.concat_map (fun (s : Query_plan.l_scan) -> [ QVar e_var; s.attr; s.value ])
+    |> unique_vars
 
-  let build_value_row e attr_arrays index =
-    let rec vals a acc =
-      if a < 0 then Result_entity e :: acc
-      else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+  let parse_pos_merge source_db (scan : Query_plan.l_scan) =
+    match scan.attr, scan.value with
+    | QAttr attr, (QVar v as value_term) ->
+      let* arr = preload_aevt source_db attr in
+      Some (Pos { attr; value_term; bind_var = Some v; arr })
+    | QAttr attr, ((QValue _ | QWildcard) as value_term) ->
+      let* arr = preload_aevt source_db attr in
+      Some (Pos { attr; value_term; bind_var = None; arr })
+    | _ -> None
+
+  let anti_excluded_bitset source_db attr value =
+    let max_entity = source_db.max_datom_e + 1 in
+    let excluded = Bytes.make max_entity '\000' in
+    let mark e =
+      if e >= 0 && e < max_entity then Bytes.unsafe_set excluded e '\001'
     in
-    vals (Array.length attr_arrays - 1) []
+    (match avet_ids_array source_db attr value with
+     | Some ids ->
+       for i = 0 to Array.length ids - 1 do
+         mark ids.(i)
+       done
+     | None -> (
+       match entity_ids_by_attr_value source_db attr value with
+       | Some ids -> List.iter mark ids
+       | None -> datoms_by_attr_value source_db attr value |> List.iter (fun d -> mark d.e)));
+    excluded
 
-  let gather_const_value_rows source_db e_var attrs const_attr const_value value_vars =
-    let value_vars = List.rev value_vars in
-    if
-      value_vars = []
-      || not (direct_attr const_attr)
-      || not (List.for_all (fun (_, attr) -> direct_attr attr && cardinality_one source_db attr) value_vars)
-    then
-      None
+  let parse_anti_merge source_db (scan : Query_plan.l_scan) =
+    match scan.attr, scan.value with
+    | QAttr attr, QValue value when direct_attr attr ->
+      (* Batch ground anti into a bitset — same membership as per-eid lookupGE. *)
+      Some (Anti { attr; value_term = QValue value; excluded = Some (anti_excluded_bitset source_db attr value); arr = None })
+    | QAttr attr, value_term when direct_attr attr ->
+      let* arr = aevt_attr_array source_db attr in
+      Some (Anti { attr; value_term; excluded = None; arr = Some arr })
+    | _ -> None
+
+  (* Driving scan slice → eid + optional scan-bound value.
+     Mirrors Datahike index slice iteration over the planned :scan-op. *)
+  type drive_cell =
+    { eid : entity_id
+    ; scan_var : string option
+    ; scan_value : query_result
+    }
+
+  let dummy_drive = { eid = 0; scan_var = None; scan_value = Result_entity 0 }
+
+  let driving_cells source_db e_var (scan : Query_plan.l_scan) =
+    match scan.entity, scan.attr, scan.value, scan.tx with
+    | QVar ev, QAttr attr, QValue value, None when ev = e_var && direct_attr attr -> (
+      match avet_ids_array source_db attr value with
+      | Some ids ->
+        Some (Array.init (Array.length ids) (fun i -> { eid = ids.(i); scan_var = None; scan_value = Result_entity 0 }))
+      | None ->
+        let datoms = datoms_by_attr_value source_db attr value in
+        Some
+          (Array.of_list
+             (List.map (fun d -> { eid = d.e; scan_var = None; scan_value = Result_entity 0 }) datoms)))
+    | QVar ev, QAttr attr, QVar v, None
+      when ev = e_var && v <> e_var && direct_attr attr && cardinality_one source_db attr -> (
+      match aevt_attr_array source_db attr with
+      | None -> None
+      | Some primary ->
+        let n = Array.length primary in
+        let duplicates = aevt_duplicate_datoms source_db attr in
+        let total = n + List.length duplicates in
+        let cells = Array.make total dummy_drive in
+        for i = 0 to n - 1 do
+          let d = primary.(i) in
+          cells.(i) <-
+            { eid = d.e
+            ; scan_var = Some v
+            ; scan_value = Query.result_of_ref (Query.result_of_datom_v d)
+            }
+        done;
+        List.iteri
+          (fun j d ->
+            cells.(n + j) <-
+              { eid = d.e
+              ; scan_var = Some v
+              ; scan_value = Query.result_of_ref (Query.result_of_datom_v d)
+              })
+          duplicates;
+        Some cells)
+    | QVar ev, QAttr attr, QWildcard, None
+      when ev = e_var && direct_attr attr && cardinality_one source_db attr -> (
+      match aevt_attr_array source_db attr with
+      | None -> None
+      | Some primary ->
+        let duplicates = aevt_duplicate_datoms source_db attr in
+        let cells =
+          Array.append
+            (Array.map (fun d -> { eid = d.e; scan_var = None; scan_value = Result_entity 0 }) primary)
+            (Array.of_list
+               (List.map (fun d -> { eid = d.e; scan_var = None; scan_value = Result_entity 0 }) duplicates))
+        in
+        Some cells)
+    | _ -> None
+
+  (* Advance AEVT pointer to eid (Datahike ForwardCursor seekGE / next). *)
+  let seek_aevt arr ptr eid =
+    let len = Array.length arr in
+    let i = !ptr in
+    if i < len && arr.(i).e = eid then (
+      incr ptr;
+      Some arr.(i))
     else
-      let* const_arr = aevt_attr_array source_db const_attr in
-      let value_attr_arrays =
-        value_vars
-        |> List.map (fun (value_var, attr) ->
-          match aevt_attr_array source_db attr with
-          | None -> None
-          | Some arr -> Some (value_var, arr))
+      let rec skip j =
+        if j >= len then (
+          ptr := len;
+          None)
+        else
+          let e = arr.(j).e in
+          if e < eid then skip (j + 1)
+          else if e = eid then (
+            ptr := j + 1;
+            Some arr.(j))
+          else (
+            ptr := j;
+            None)
       in
-      if List.exists Option.is_none value_attr_arrays then
-        None
-      else
-        let value_attrs = value_attr_arrays |> List.map Option.get |> Array.of_list in
-        let attr_arrays = Array.map (fun (_, arr) -> arr) value_attrs in
-        if not (arrays_aligned const_arr attr_arrays) then
-          None
-        else
-          let const_len = Array.length const_arr in
-          let base_e = const_arr.(0).e in
-          if not (dense_range const_arr attr_arrays) then
-            None
-          else
-            let expected = e_var :: (value_attrs |> Array.to_list |> List.map fst) in
-            if attrs <> expected then
-              None
-            else
-              let rows = ref [] in
-              (match avet_ids_array source_db const_attr const_value with
-               | Some ids ->
-                 for i = Array.length ids - 1 downto 0 do
-                   let e = ids.(i) in
-                   let index = e - base_e in
-                   if index >= 0 && index < const_len then
-                     rows := build_value_row e attr_arrays index :: !rows
-                 done
-               | None ->
-                 for i = const_len - 1 downto 0 do
-                   if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
-                     rows := build_value_row const_arr.(i).e attr_arrays i :: !rows
-                 done);
-              Some !rows
+      skip i
 
-  let intersect_entity_ids id_lists =
-    let rec intersect_sorted left right =
-      match left, right with
-      | [], _ | _, [] -> []
-      | x :: xs, y :: ys ->
-        if x = y then x :: intersect_sorted xs ys
-        else if x < y then intersect_sorted xs right
-        else intersect_sorted left ys
+  let dense_base arr =
+    let len = Array.length arr in
+    if len = 0 then None
+    else
+      let base = arr.(0).e in
+      if arr.(len - 1).e = base + len - 1 then Some (base, len) else None
+
+  let lookup_dense arr base len eid =
+    let index = eid - base in
+    if index >= 0 && index < len && arr.(index).e = eid then Some arr.(index) else None
+
+  let rows_of_array_rev rows count =
+    let rec loop i acc =
+      if i < 0 then acc else loop (i - 1) (rows.(i) :: acc)
     in
-    match List.sort (fun left right -> compare (List.length left) (List.length right)) id_lists with
-    | [] -> []
-    | smallest :: rest -> List.fold_left intersect_sorted smallest rest
+    loop (count - 1) []
 
-  let entity_ids_for_constant source_db attr value =
-    match entity_ids_by_attr_value source_db attr value with
-    | Some entity_ids -> entity_ids
-    | None -> datoms_by_attr_value source_db attr value |> List.map (fun datom -> datom.e)
-
-  let gather_multi_constant_value_rows source_db e_var attrs constants value_vars =
-    if
-      constants = []
-      || value_vars = []
-      || not
-           (List.for_all
-              (fun (_, attr) -> direct_attr attr && cardinality_one source_db attr)
-              value_vars)
-    then
-      None
-    else
-      let entity_sets = List.map (fun (attr, value) -> entity_ids_for_constant source_db attr value) constants in
-      if List.exists (fun ids -> ids = []) entity_sets then
-        Some []
-      else
-        let allowed = intersect_entity_ids entity_sets in
-        if allowed = [] then
-          Some []
-        else
-          match constants, value_vars with
-          | [ (const_attr, const_value) ], _ ->
-            gather_const_value_rows source_db e_var attrs const_attr const_value value_vars
-          | _ :: _, value_vars -> (
-            let allowed_set =
-              let bytes = Bytes.make (source_db.max_datom_e + 1) '\000' in
-              List.iter (fun e -> if e >= 0 && e < Bytes.length bytes then Bytes.set bytes e '\001') allowed;
-              bytes
-            in
-            let filter_rows rows =
-              List.filter
-                (fun row ->
-                  match row with
-                  | Result_entity e :: _ -> e >= 0 && e < Bytes.length allowed_set && Bytes.get allowed_set e = '\001'
-                  | _ -> false)
-                rows
-            in
-            let (const_attr, const_value) = List.hd constants in
-            match gather_const_value_rows source_db e_var attrs const_attr const_value value_vars with
-            | None -> None
-            | Some rows -> Some (filter_rows rows))
-          | _ -> None
-
-  let gather_not_rows source_db e_var attrs seed_attr value_var clause_attr clause_value =
-    if not (direct_attr seed_attr && direct_attr clause_attr) then
-      None
-    else
+  (* q-not shaped: AEVT scan + ground anti-merge (Datahike anti during scan). *)
+  let execute_scan_anti_ground source_db e_var attrs (scan : Query_plan.l_scan) anti_attr anti_value =
+    match scan.entity, scan.attr, scan.value with
+    | QVar ev, QAttr seed_attr, QVar v
+      when ev = e_var && v <> e_var && direct_attr seed_attr && cardinality_one source_db seed_attr
+           && ((attrs = [ e_var; v ]) || (attrs = [ v; e_var ])) ->
       let* seed_arr = aevt_attr_array source_db seed_attr in
-      let max_entity = source_db.max_datom_e + 1 in
-      let excluded = Bytes.make max_entity '\000' in
-      let mark_excluded entity_id =
-        if entity_id >= 0 && entity_id < max_entity then Bytes.unsafe_set excluded entity_id '\001'
-      in
-      (match entity_ids_by_attr_value source_db clause_attr clause_value with
-       | Some entity_ids -> List.iter mark_excluded entity_ids
-       | None -> datoms_by_attr_value source_db clause_attr clause_value |> List.iter (fun datom -> mark_excluded datom.e));
+      let excluded = anti_excluded_bitset source_db anti_attr anti_value in
+      let max_entity = Bytes.length excluded in
       let rows = ref [] in
-      let emit datom =
-        if datom.e >= 0 && datom.e < max_entity && Bytes.unsafe_get excluded datom.e = '\000' then
-          match attrs with
-          | [ entity_attr; value_attr ] when entity_attr = e_var && value_attr = value_var ->
-            rows := [ Result_entity datom.e; Query.result_of_datom_v datom ] :: !rows
-          | [ value_attr; entity_attr ] when entity_attr = e_var && value_attr = value_var ->
-            rows := [ Query.result_of_datom_v datom; Result_entity datom.e ] :: !rows
-          | _ -> ()
+      let emit_e_v eid value =
+        if eid >= 0 && eid < max_entity && Bytes.unsafe_get excluded eid = '\000' then
+          rows :=
+            (if attrs = [ e_var; v ] then [ Result_entity eid; value ]
+             else [ value; Result_entity eid ])
+            :: !rows
       in
       for i = Array.length seed_arr - 1 downto 0 do
-        emit seed_arr.(i)
+        let d = seed_arr.(i) in
+        emit_e_v d.e (Result_value d.v)
       done;
-      List.iter emit (aevt_duplicate_datoms source_db seed_attr);
+      List.iter (fun d -> emit_e_v d.e (Result_value d.v)) (aevt_duplicate_datoms source_db seed_attr);
       Some !rows
+    | _ -> None
 
-  let execute_entity_group db source (group : Query_plan.entity_group) =
+  (* q2 / q-5-merge: const AVET drive + dense/cursor merges (Datahike sorted-merge). *)
+  let execute_const_drive_merges source_db e_var attrs (scan : Query_plan.l_scan) merges =
+    match scan.entity, scan.attr, scan.value with
+    | QVar ev, QAttr drive_attr, QValue drive_value when ev = e_var && direct_attr drive_attr ->
+      let* ids =
+        match avet_ids_array source_db drive_attr drive_value with
+        | Some ids -> Some ids
+        | None ->
+          Some
+            (datoms_by_attr_value source_db drive_attr drive_value
+             |> List.map (fun d -> d.e)
+             |> Array.of_list)
+      in
+      let* pos_ops =
+        let rec collect acc = function
+          | [] -> Some (List.rev acc)
+          | m :: rest ->
+            (match parse_pos_merge source_db m with
+             | None -> None
+             | Some op -> collect (op :: acc) rest)
+        in
+        collect [] merges
+      in
+      let drive_len = Array.length ids in
+      (match pos_ops, attrs with
+       (* q2: one value merge *)
+       | [ Pos { bind_var = Some v; arr; _ } ], [ a; b ]
+         when (a = e_var && b = v) || (a = v && b = e_var) ->
+         let out = ref [] in
+         (match dense_base arr with
+          | Some (base, len) ->
+            for i = drive_len - 1 downto 0 do
+              let eid = ids.(i) in
+              let idx = eid - base in
+              if idx >= 0 && idx < len && arr.(idx).e = eid then
+                let rv = Result_value arr.(idx).v in
+                out :=
+                  (if a = e_var then [ Result_entity eid; rv ] else [ rv; Result_entity eid ]) :: !out
+            done
+          | None ->
+            let ptr = ref 0 in
+            for i = 0 to drive_len - 1 do
+              let eid = ids.(i) in
+              match seek_aevt arr ptr eid with
+              | None -> ()
+              | Some d ->
+                let rv = Result_value d.v in
+                out :=
+                  (if a = e_var then [ Result_entity eid; rv ] else [ rv; Result_entity eid ]) :: !out
+            done;
+            out := List.rev !out);
+         Some !out
+       (* Multi merges (value binds + optional ground verifies) — q3/q4/q-5-merge *)
+       | pos_ops, _ ->
+         let bind_vars =
+           pos_ops
+           |> List.filter_map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None)
+         in
+         let expected_attrs = e_var :: bind_vars in
+         if attrs <> expected_attrs then
+           None
+         else
+           let n_pos = List.length pos_ops in
+           let arrs =
+             Array.of_list (List.map (function Pos { arr; _ } -> arr | Anti _ -> [||]) pos_ops)
+           in
+           let terms =
+             Array.of_list
+               (List.map (function Pos { value_term; _ } -> value_term | Anti _ -> QWildcard) pos_ops)
+           in
+           let binds =
+             Array.of_list
+               (List.map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None) pos_ops)
+           in
+           let dense = Array.map dense_base arrs in
+           if not (Array.for_all Option.is_some dense) then
+             (* Cursor fallback for non-dense *)
+             let pointers = Array.init n_pos (fun _ -> ref 0) in
+             let rows = Array.make drive_len [] in
+             let count = ref 0 in
+             for i = 0 to drive_len - 1 do
+               let eid = ids.(i) in
+               let ok = ref true in
+               let bound = ref [] in
+               let mi = ref 0 in
+               while !ok && !mi < n_pos do
+                 match seek_aevt arrs.(!mi) pointers.(!mi) eid with
+                 | None -> ok := false
+                 | Some d when value_matches terms.(!mi) d.v ->
+                   (match binds.(!mi) with
+                    | Some v ->
+                      bound := (v, Query.result_of_ref (Query.result_of_datom_v d)) :: !bound
+                    | None -> ());
+                   incr mi
+                 | Some _ -> ok := false
+               done;
+               if !ok then (
+                 let table = Hashtbl.create (List.length attrs) in
+                 Hashtbl.add table e_var (Result_entity eid);
+                 List.iter (fun (v, r) -> Hashtbl.add table v r) !bound;
+                 rows.(!count) <- List.map (Hashtbl.find table) attrs;
+                 incr count)
+             done;
+             Some (rows_of_array_rev rows !count)
+           else
+             let dense = Array.map Option.get dense in
+             let n_bind = List.length bind_vars in
+             let base0, len0 = dense.(0) in
+             let aligned = Array.for_all (fun (b, l) -> b = base0 && l = len0) dense in
+             let all_free_binds =
+               Array.for_all
+                 (function
+                   | QVar _ -> true
+                   | _ -> false)
+                 terms
+               && Array.for_all Option.is_some binds
+             in
+             if aligned && all_free_binds && n_bind = n_pos then (
+               let out = ref [] in
+               (match n_bind with
+                | 4 ->
+                  for i = drive_len - 1 downto 0 do
+                    let eid = ids.(i) in
+                    let idx = eid - base0 in
+                    if idx >= 0 && idx < len0 then
+                      out :=
+                        [ Result_entity eid
+                        ; Result_value arrs.(0).(idx).v
+                        ; Result_value arrs.(1).(idx).v
+                        ; Result_value arrs.(2).(idx).v
+                        ; Result_value arrs.(3).(idx).v
+                        ]
+                        :: !out
+                  done
+                | 2 ->
+                  for i = drive_len - 1 downto 0 do
+                    let eid = ids.(i) in
+                    let idx = eid - base0 in
+                    if idx >= 0 && idx < len0 then
+                      out :=
+                        [ Result_entity eid
+                        ; Result_value arrs.(0).(idx).v
+                        ; Result_value arrs.(1).(idx).v
+                        ]
+                        :: !out
+                  done
+                | 1 ->
+                  for i = drive_len - 1 downto 0 do
+                    let eid = ids.(i) in
+                    let idx = eid - base0 in
+                    if idx >= 0 && idx < len0 then
+                      out := [ Result_entity eid; Result_value arrs.(0).(idx).v ] :: !out
+                  done
+                | _ ->
+                  for i = drive_len - 1 downto 0 do
+                    let eid = ids.(i) in
+                    let idx = eid - base0 in
+                    if idx >= 0 && idx < len0 then
+                      let row = Array.make (n_bind + 1) (Result_entity eid) in
+                      row.(0) <- Result_entity eid;
+                      for j = 0 to n_bind - 1 do
+                        row.(j + 1) <- Result_value arrs.(j).(idx).v
+                      done;
+                      out := Array.to_list row :: !out
+                  done);
+               Some !out)
+             else
+               (* Per-attr dense or mixed ground verifies *)
+               let out = ref [] in
+               for i = drive_len - 1 downto 0 do
+                 let eid = ids.(i) in
+                 let ok = ref true in
+                 let vals = Array.make n_bind (Result_value (Int 0)) in
+                 let vi = ref 0 in
+                 let mi = ref 0 in
+                 while !ok && !mi < n_pos do
+                   let base, len = dense.(!mi) in
+                   let idx = eid - base in
+                   if idx < 0 || idx >= len || arrs.(!mi).(idx).e <> eid then ok := false
+                   else
+                     let d = arrs.(!mi).(idx) in
+                     if not (value_matches terms.(!mi) d.v) then ok := false
+                     else (
+                       (match binds.(!mi) with
+                        | Some _ ->
+                          vals.(!vi) <- Result_value d.v;
+                          incr vi
+                        | None -> ());
+                       incr mi)
+                 done;
+                 if !ok then (
+                   let row = Array.make (n_bind + 1) (Result_entity eid) in
+                   row.(0) <- Result_entity eid;
+                   for j = 0 to n_bind - 1 do
+                     row.(j + 1) <- vals.(j)
+                   done;
+                   out := Array.to_list row :: !out)
+               done;
+               Some !out)
+    | _ -> None
+
+  (* Datahike execute-sorted-merge / per-cursor-merge for card-one attrs. *)
+  let execute_lookup_merge source_db e_var attrs (scan : Query_plan.l_scan) merges anti_scans =
+    match merges, anti_scans with
+    | [], [ { Query_plan.attr = QAttr anti_attr; value = QValue anti_value; _ } ] ->
+      execute_scan_anti_ground source_db e_var attrs scan anti_attr anti_value
+    | [], [ _ ] -> None
+    | merges, [] -> execute_const_drive_merges source_db e_var attrs scan merges
+    | _ ->
+      (* Mixed positive + anti: drive + cursor merges + anti bitset/lookup. *)
+      let* drive = driving_cells source_db e_var scan in
+      let* pos_ops =
+        let rec collect acc = function
+          | [] -> Some (List.rev acc)
+          | m :: rest ->
+            (match parse_pos_merge source_db m with
+             | None -> None
+             | Some op -> collect (op :: acc) rest)
+        in
+        collect [] merges
+      in
+      let* anti_ops =
+        let rec collect acc = function
+          | [] -> Some (List.rev acc)
+          | m :: rest ->
+            (match parse_anti_merge source_db m with
+             | None -> None
+             | Some op -> collect (op :: acc) rest)
+        in
+        collect [] anti_scans
+      in
+      let pos_arr = Array.of_list pos_ops in
+      let n_pos = Array.length pos_arr in
+      let pointers = Array.init n_pos (fun _ -> ref 0) in
+      let dense =
+        Array.map
+          (function
+            | Pos { arr; _ } -> dense_base arr
+            | Anti _ -> None)
+          pos_arr
+      in
+      let anti_arr = Array.of_list anti_ops in
+      let n_anti = Array.length anti_arr in
+      let drive_len = Array.length drive in
+      let rows = Array.make drive_len [] in
+      let count = ref 0 in
+      let bind_buf = Array.make (List.length attrs) (Result_entity 0) in
+      let attr_index =
+        let tbl = Hashtbl.create (List.length attrs) in
+        List.iteri (fun i name -> Hashtbl.add tbl name i) attrs;
+        tbl
+      in
+      let set_bind var value =
+        match Hashtbl.find_opt attr_index var with
+        | Some i -> bind_buf.(i) <- value
+        | None -> ()
+      in
+      for i = 0 to drive_len - 1 do
+        let cell = drive.(i) in
+        let eid = cell.eid in
+        set_bind e_var (Result_entity eid);
+        (match cell.scan_var with
+         | Some v -> set_bind v cell.scan_value
+         | None -> ());
+        let ok = ref true in
+        let mi = ref 0 in
+        while !ok && !mi < n_pos do
+          match pos_arr.(!mi) with
+          | Pos { bind_var; value_term; arr; _ } -> (
+            let found =
+              match dense.(!mi) with
+              | Some (base, len) -> lookup_dense arr base len eid
+              | None -> seek_aevt arr pointers.(!mi) eid
+            in
+            match found with
+            | None -> ok := false
+            | Some d when value_matches value_term d.v ->
+              (match bind_var with
+               | Some v -> set_bind v (Query.result_of_ref (Query.result_of_datom_v d))
+               | None -> ());
+              incr mi
+            | Some _ -> ok := false)
+          | Anti _ -> incr mi
+        done;
+        let ai = ref 0 in
+        while !ok && !ai < n_anti do
+          (match anti_arr.(!ai) with
+           | Anti { excluded = Some excluded; _ } ->
+             let max_entity = Bytes.length excluded in
+             if eid >= 0 && eid < max_entity && Bytes.unsafe_get excluded eid = '\001' then
+               ok := false
+           | Anti { excluded = None; arr = Some arr; value_term; _ } -> (
+             match find_entity_in_aevt_array arr eid with
+             | Some d when value_matches value_term d.v -> ok := false
+             | _ -> ())
+           | Anti _ | Pos _ -> ());
+          incr ai
+        done;
+        if !ok then (
+          rows.(!count) <- Array.to_list bind_buf;
+          incr count)
+      done;
+      Some (rows_of_array_rev rows !count)
+
+  let execute_entity_group _db source (group : Query_plan.entity_group) =
     match source with
-    | Db_source source_db ->
-      let scans = scans_of_group group in
-      let e_var = group.entity_var in
-      if not (List.for_all (fun (candidate, _, _) -> candidate = e_var) scans) then
+    | Db_source source_db -> (
+      (* Predicates attached to the group: defer to relational fallback which
+         already has AVET range pushdown (Datahike scan-bound path). *)
+      if group.filters <> [] then
         None
       else
-        let attrs = attrs_of_scans e_var scans
-        in
-        let value_var_patterns, constant_patterns, required_patterns =
-          classify_patterns e_var scans
-        in
-        let duplicate_value_var =
-          let seen = Hashtbl.create (List.length value_var_patterns) in
-          List.exists
-            (fun (value_var, _) ->
-              if Hashtbl.mem seen value_var then true
-              else (
-                Hashtbl.add seen value_var ();
-                false ))
-            value_var_patterns
-        in
-        if duplicate_value_var || required_patterns <> [] then
-          None
-        else
-          let anti = anti_patterns_of_group group in
-          (match value_var_patterns, constant_patterns, anti with
-           | [ (value_var, seed_attr) ], [], [ (clause_attr, QValue clause_value) ] ->
-             gather_not_rows source_db e_var attrs seed_attr value_var clause_attr clause_value
-           | value_vars, constants, [] when value_vars <> [] && constants <> [] -> (
-             match constants with
-             | [ (const_attr, const_value) ] ->
-               gather_const_value_rows source_db e_var attrs const_attr const_value value_vars
-             | _ ->
-               gather_multi_constant_value_rows source_db e_var attrs constants value_vars)
-           | [], [ (const_attr, const_value) ], [] -> (
-             match entity_ids_by_attr_value source_db const_attr const_value with
-             | Some entity_ids -> Some (List.map (fun e -> [ Result_entity e ]) entity_ids)
-             | None ->
-               Some
-                 (datoms_by_attr_value source_db const_attr const_value
-                  |> List.map (fun datom -> [ Result_entity datom.e ])))
-           | _ -> None)
-          |> Option.map (fun rows ->
-            let relation = { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var } in
-            List.fold_left
-              (fun relation clause ->
-                match clause with
-                | ComparisonPredicate (predicate, left_term, right_term) ->
-                  filter_comparison db relation predicate left_term right_term
-                | _ -> relation)
-              relation
-              group.filters)
+        let e_var = group.entity_var in
+        let (scan : Query_plan.l_scan) = group.scan in
+        match scan.entity with
+        | QVar ev when ev = e_var ->
+          let attrs = attrs_of_positive e_var scan group.merges in
+          (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
+           | None -> None
+           | Some rows ->
+             Some { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
+        | _ -> None)
     | _ -> None
 
   let execute_scan db source (scan : Query_plan.l_scan) =
     match source with
-    | Db_source source_db ->
-      let terms =
-        match scan.tx with
-        | None -> [ scan.entity; scan.attr; scan.value ]
-        | Some tx -> [ scan.entity; scan.attr; scan.value; tx ]
-      in
-      let attrs = unique_vars terms in
-      let source_context = query_source_context db in
-      let datoms =
-        match terms with
-        | [ e_term; a_term; v_term ] -> source_context.pattern_datoms source_db e_term a_term v_term None
-        | [ e_term; a_term; v_term; tx_term ] -> source_context.pattern_datoms source_db e_term a_term v_term (Some tx_term)
-        | _ -> invalid_arg "scan expects 3 or 4 pattern terms"
-      in
-      let slots =
-        attrs
-        |> List.map (fun attr ->
-          let rec find index = function
-            | [] -> invalid_arg "scan variable missing from pattern"
-            | QVar var :: _ when var = attr -> index
-            | _ :: rest -> find (index + 1) rest
+    | Db_source source_db -> (
+      (* Datahike :scan-only / AVET ground pattern (q1). *)
+      match scan.entity, scan.attr, scan.value, scan.tx with
+      | QVar e_var, QAttr attr, QValue value, None when direct_attr attr -> (
+        match entity_ids_by_attr_value source_db attr value with
+        | Some entity_ids ->
+          Some
+            { attrs = [ e_var ]
+            ; rows = List.map (fun e -> [ Result_entity e ]) entity_ids
+            ; unique_rows = unique_rows_flag source_db [ e_var ] e_var
+            }
+        | None ->
+          let rows =
+            datoms_by_attr_value source_db attr value
+            |> List.map (fun datom -> [ Result_entity datom.e ])
           in
-          find 0 terms)
-      in
-      let build_row datom =
-        slots
-        |> List.map (fun index ->
-          match index with
-          | 0 -> Query.result_of_datom_e datom
-          | 1 -> Query.result_of_datom_a datom
-          | 2 -> Query.result_of_ref (Query.result_of_datom_v datom)
-          | 3 -> Query.result_of_datom_tx datom
-          | _ -> invalid_arg "invalid scan slot")
-      in
-      let rows =
-        datoms
-        |> Seq.fold_left (fun acc datom -> build_row datom :: acc) []
-        |> List.rev
-      in
-      Some { attrs; rows; unique_rows = false }
+          Some { attrs = [ e_var ]; rows; unique_rows = false })
+      | _ ->
+        let terms =
+          match scan.tx with
+          | None -> [ scan.entity; scan.attr; scan.value ]
+          | Some tx -> [ scan.entity; scan.attr; scan.value; tx ]
+        in
+        let attrs = unique_vars terms in
+        let source_context = query_source_context db in
+        let datoms =
+          match terms with
+          | [ e_term; a_term; v_term ] -> source_context.pattern_datoms source_db e_term a_term v_term None
+          | [ e_term; a_term; v_term; tx_term ] ->
+            source_context.pattern_datoms source_db e_term a_term v_term (Some tx_term)
+          | _ -> invalid_arg "scan expects 3 or 4 pattern terms"
+        in
+        let slots =
+          attrs
+          |> List.map (fun attr ->
+            let rec find index = function
+              | [] -> invalid_arg "scan variable missing from pattern"
+              | QVar var :: _ when var = attr -> index
+              | _ :: rest -> find (index + 1) rest
+            in
+            find 0 terms)
+        in
+        let build_row datom =
+          slots
+          |> List.map (fun index ->
+            match index with
+            | 0 -> Query.result_of_datom_e datom
+            | 1 -> Query.result_of_datom_a datom
+            | 2 -> Query.result_of_ref (Query.result_of_datom_v datom)
+            | 3 -> Query.result_of_datom_tx datom
+            | _ -> invalid_arg "invalid scan slot")
+        in
+        let rows =
+          datoms
+          |> Seq.fold_left (fun acc datom -> build_row datom :: acc) []
+          |> List.rev
+        in
+        Some { attrs; rows; unique_rows = false })
     | _ -> None
 
   let rec execute_plan db sources default_source bindings plan =

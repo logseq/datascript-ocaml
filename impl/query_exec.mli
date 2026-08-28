@@ -26,6 +26,7 @@ module Make (Context : sig
   val query_value_uses_avet : value -> bool
   val aevt_attr_array : db -> attr -> datom array option
   val aevt_duplicate_datoms : db -> attr -> datom list
+  val find_entity_in_aevt_array : datom array -> entity_id -> datom option
 end) : sig
   val run :
     db ->
