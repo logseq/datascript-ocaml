@@ -1788,6 +1788,15 @@ module Query = struct
         | _ -> false)
       inputs
 
+  let query_debug_enabled =
+    match Sys.getenv_opt "DATASCRIPT_QUERY_DEBUG" with
+    | Some ("1" | "true" | "yes") -> true
+    | _ -> false
+
+  let debug_log msg =
+    if query_debug_enabled then
+      Printf.eprintf "[datascript %.3f] %s\n%!" (Unix.gettimeofday ()) msg
+
   let entity_ids_with_attr db attr =
     let rec collect previous acc = function
       | [] -> List.rev acc
@@ -2257,6 +2266,10 @@ module Query = struct
     | _ -> None
 
   let ref_target_pull_relation db query =
+    debug_log
+      (Printf.sprintf "ref_target_pull_relation find=%d where=%d max_e=%d" (List.length query.find)
+         (List.length query.where)
+         db.max_datom_e);
     let wildcard_selector = function
       | [ Pull_wildcard ] -> Some [ Pull_wildcard ]
       | _ -> None
@@ -2297,11 +2310,13 @@ module Query = struct
          let required_attrs = List.filter_map (required_pattern source_var) query.where in
          (match required_attrs with
           | [ required_attr ] ->
+            debug_log "ref_target_pull_relation step=source_entities";
             let source_entities = Bytes.make (db.max_datom_e + 1) '\000' in
             entity_ids_with_attr db required_attr
             |> List.iter (fun entity_id ->
               if entity_id >= 0 && entity_id < Bytes.length source_entities then
                 Bytes.set source_entities entity_id '\001');
+            debug_log "ref_target_pull_relation step=ref_scan";
             let source_has_required entity_id =
               entity_id >= 0
               && entity_id < Bytes.length source_entities
@@ -2316,14 +2331,32 @@ module Query = struct
                 | _ -> None)
               |> List.sort_uniq compare
             in
+            debug_log (Printf.sprintf "ref_target_pull_relation target_ids=%d" (List.length target_ids));
             let rows =
-              Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db target_ids
-              |> List.map (fun entity -> [ Result_pull entity ])
+              if List.length target_ids <= 512 then (
+                debug_log "ref_target_pull_relation per-entity pull";
+                target_ids
+                |> List.filter_map (fun entity_id ->
+                  Pull_api_impl.pull pull_api_context db [ Pull_wildcard ] (Entity_id entity_id)
+                  |> Option.map (fun entity -> [ Result_pull entity ])))
+              else (
+                debug_log "ref_target_pull_relation wildcard_many_by_ids scan";
+                Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db target_ids
+                |> List.map (fun entity -> [ Result_pull entity ]))
             in
+            debug_log
+              (Printf.sprintf "ref_target_pull_relation HIT targets=%d rows=%d" (List.length target_ids)
+                 (List.length rows));
             Some (Query_relation rows)
-          | _ -> None)
-       | _ -> None)
-    | _ -> None
+          | _ ->
+            debug_log "ref_target_pull_relation miss required_attrs shape";
+            None)
+       | _ ->
+         debug_log "ref_target_pull_relation miss missing/ref pattern";
+         None)
+    | _ ->
+      debug_log "ref_target_pull_relation miss find/rules/inputs guard";
+      None
 
   let scalar_input_bindings db query inputs =
     let rec collect acc declarations args =
@@ -2842,13 +2875,17 @@ module Query = struct
            | [] -> None)
          |> fun values -> Query_collection values)))
     | Return_relation, None ->
+      debug_log "q_return Return_relation";
       (match simple_attr_entity_pull_collection db query with
        | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
        | Some result -> result
        | None ->
       (match ref_target_pull_relation db query with
-       | Some result -> result
+       | Some result ->
+         debug_log "q_return -> ref_target_pull_relation";
+         result
        | None ->
+         debug_log "q_return -> fallback q()";
          let rows = q db query in
          Query_relation rows))
     | Return_relation, Some inputs ->

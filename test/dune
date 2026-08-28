@@ -210,6 +210,11 @@
  (enabled_if false)
  (libraries datascript-ocaml-native unix))
 
+(executable
+ (name debug_wildcard_pull_slowcase)
+ (modules debug_wildcard_pull_slowcase)
+ (libraries datascript-ocaml-native unix))
+
 (test
  (name test_storage)
  (modules test_storage)
