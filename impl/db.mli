@@ -46,6 +46,7 @@ val filter : core_context -> db -> (db -> datom -> bool) -> db
 val value_equal : value -> value -> bool
 val same_fact : datom -> datom -> bool
 val primary_attr_datoms : db -> index -> attr -> datom list
+val aevt_attr_array : db -> attr -> datom array option
 val find_primary_aevt_entity_attr : db -> entity_id -> attr -> datom option
 val find_entity_in_aevt_array : datom array -> entity_id -> datom option
 

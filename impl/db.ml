@@ -612,6 +612,10 @@ let primary_attr_datoms db index attr =
   | Eavt ->
     merge_sorted_datoms Eavt (Index.to_list db.eavt_index) pending_attr |> apply_db_view db
 
+let aevt_attr_array db attr =
+  ignore (primary_attr_datoms db Aevt attr);
+  Hashtbl.find_opt db.aevt_by_attr attr
+
 let duplicate_prefix_datoms db index e a =
   match index, e, a with
   | Eavt, Some entity_id, _ -> Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[]

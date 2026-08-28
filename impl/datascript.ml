@@ -1486,6 +1486,8 @@ module Query_where_impl = Query_where.Make (struct
     match Db.find_primary_aevt_entity_attr db entity_id attr with
     | None -> None
     | Some datom -> Some (Query.result_of_ref (Query.result_of_datom_v datom))
+  let aevt_attr_array = Db.aevt_attr_array
+  let find_entity_in_aevt_array = Db.find_entity_in_aevt_array
 end)
 
 let eval_clauses = Query_where_impl.eval_clauses
