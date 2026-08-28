@@ -52,13 +52,19 @@ and logical_plan =
   ; bound_vars : string list
   }
 
+type entity_group =
+  { entity_var : string
+  ; scan : l_scan
+  ; merges : l_scan list
+  ; anti_scans : l_scan list
+  ; filters : query_clause list
+  ; clauses : query_clause list
+  ; estimated_rows : int
+  ; source : string option
+  }
+
 type physical_op =
-  | OpEntityGroup of
-      { entity_var : string
-      ; clauses : query_clause list
-      ; estimated_rows : int
-      ; source : string option
-      }
+  | OpEntityGroup of entity_group
   | OpScan of
       { clause : query_clause
       ; index : index_choice
@@ -79,6 +85,8 @@ type physical_op =
 and physical_plan =
   { ops : physical_op list
   }
+
+val pattern_scan : query_clause -> l_scan option
 
 (** Ground-component index preference (Datahike plan-pattern-op). *)
 val choose_index : query_term -> query_term -> query_term -> index_choice
@@ -102,6 +110,9 @@ val analyze : ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule l
 
 (** True when every op is planner-executable (no [OpPassthrough]). *)
 val plan_is_executable : physical_plan -> bool
+
+(** True when the plan is a single fused entity-group or scan for [Query_exec]. *)
+val plan_is_fused_execute : physical_plan -> bool
 
 (** Flatten a physical plan back to where-clauses in execution order (tests / explain). *)
 val clauses_of_plan : physical_plan -> query_clause list

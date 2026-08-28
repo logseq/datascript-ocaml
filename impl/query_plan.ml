@@ -52,13 +52,19 @@ and logical_plan =
   ; bound_vars : string list
   }
 
+type entity_group =
+  { entity_var : string
+  ; scan : l_scan
+  ; merges : l_scan list
+  ; anti_scans : l_scan list
+  ; filters : query_clause list
+  ; clauses : query_clause list
+  ; estimated_rows : int
+  ; source : string option
+  }
+
 type physical_op =
-  | OpEntityGroup of
-      { entity_var : string
-      ; clauses : query_clause list
-      ; estimated_rows : int
-      ; source : string option
-      }
+  | OpEntityGroup of entity_group
   | OpScan of
       { clause : query_clause
       ; index : index_choice
@@ -436,10 +442,19 @@ let rec lower_node ~max_datom_e = function
         if cmp <> 0 then cmp else compare i1 i2)
       |> List.map (fun (_, _, s) -> s)
     in
+    let scan, merges =
+      match ordered_scans with
+      | [] -> invalid_arg "entity join requires at least one scan"
+      | driving :: rest -> driving, rest
+    in
     let pattern_clauses = List.map (fun s -> s.clause) ordered_scans in
     let anti_clauses = List.map (fun s -> Not [ s.clause ]) anti_scans in
     OpEntityGroup
       { entity_var
+      ; scan
+      ; merges
+      ; anti_scans
+      ; filters
       ; clauses = pattern_clauses @ anti_clauses @ filters
       ; estimated_rows = entity_group_cost ~max_datom_e ordered_scans
       ; source
@@ -612,6 +627,11 @@ let analyze ?(max_datom_e = 1_000_000) ?(bound_vars = []) ?(rules = []) query =
 
 let plan_is_executable plan =
   not (List.exists (function OpPassthrough _ -> true | _ -> false) plan.ops)
+
+let plan_is_fused_execute plan =
+  match plan.ops with
+  | [ OpEntityGroup _ ] | [ OpScan _ ] -> true
+  | _ -> false
 
 let rec clauses_of_plan plan =
   plan.ops

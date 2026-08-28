@@ -24,6 +24,13 @@ module Make (Context : sig
     bindings list ->
     query_clause list ->
     (string list * query_result list list * bool) option
+  val execute_plan :
+    db ->
+    (string * query_source) list ->
+    query_rule list ->
+    bindings list ->
+    Query_plan.physical_plan ->
+    (string list * query_result list list * bool) option
   val has_aggregates : find_spec list -> bool
   val aggregate_rows : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> query_result list list
   val aggregate_rows_with : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> string list -> query_result list list
@@ -150,8 +157,22 @@ end) = struct
       |> List.map snd
   
   let q_sources_raw ?(inputs = []) db sources query =
-    let finish_relation_rows rules input_bindings where find =
-      match eval_relation_rows db sources rules input_bindings where with
+  let finish_relation_rows rules input_bindings where find =
+    let try_planned_execute () =
+      if input_bindings = [ [] ] && rules = [] then
+        match Query_plan.compile ~max_datom_e:db.max_datom_e where with
+        | Some plan when Query_plan.plan_is_fused_execute plan ->
+          execute_plan db sources rules input_bindings plan
+        | _ -> None
+      else
+        None
+    in
+    let relation_result =
+      match try_planned_execute () with
+      | Some result -> Some result
+      | None -> eval_relation_rows db sources rules input_bindings where
+    in
+    match relation_result with
       | Some (attrs, rows, unique_rows) ->
         (match relation_rows_for_find db sources attrs rows unique_rows find with
          | Some rows -> rows

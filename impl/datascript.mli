@@ -457,13 +457,19 @@ module Query_plan : sig
     ; bound_vars : string list
     }
 
+  type entity_group =
+    { entity_var : string
+    ; scan : l_scan
+    ; merges : l_scan list
+    ; anti_scans : l_scan list
+    ; filters : query_clause list
+    ; clauses : query_clause list
+    ; estimated_rows : int
+    ; source : string option
+    }
+
   type physical_op =
-    | OpEntityGroup of
-        { entity_var : string
-        ; clauses : query_clause list
-        ; estimated_rows : int
-        ; source : string option
-        }
+    | OpEntityGroup of entity_group
     | OpScan of
         { clause : query_clause
         ; index : index_choice

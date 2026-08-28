@@ -1494,9 +1494,7 @@ module Query_where_impl = Query_where.Make (struct
   let normalize_value = normalize_value
   let datoms_by_attr_value = datoms_by_attr_value
   let entity_ids_by_attr_value = entity_ids_by_attr_value
-  let entity_ids_array_by_attr_value = entity_ids_array_by_attr_value
   let query_attr_uses_avet = query_attr_uses_avet
-  let query_value_uses_avet = query_value_uses_avet
   let fold_index_range = fold_index_range
   let find_entity_attr_value db entity_id attr =
     match Db.find_primary_aevt_entity_attr db entity_id attr with
@@ -1507,6 +1505,27 @@ module Query_where_impl = Query_where.Make (struct
     Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
   let find_entity_in_aevt_array = Db.find_entity_in_aevt_array
 end)
+
+module Query_exec = Query_exec
+
+module Query_exec_impl = Query_exec.Make (struct
+  let query_evaluator_context = query_evaluator_context
+  let query_source_context = query_source_context
+  let cardinality_one db attr = cardinality db attr = One
+  let datoms_by_attr_value = datoms_by_attr_value
+  let entity_ids_by_attr_value = entity_ids_by_attr_value
+  let entity_ids_array_by_attr_value = entity_ids_array_by_attr_value
+  let query_attr_uses_avet = query_attr_uses_avet
+  let query_value_uses_avet = query_value_uses_avet
+  let aevt_attr_array = Db.aevt_attr_array
+  let aevt_duplicate_datoms db attr =
+    Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+end)
+
+let execute_plan db sources rules bindings plan =
+  match Query_exec_impl.run db sources rules bindings plan with
+  | None -> None
+  | Some relation -> Some (relation.attrs, relation.rows, relation.unique_rows)
 
 let eval_clauses = Query_where_impl.eval_clauses
 let eval_relation_rows = Query_where_impl.eval_relation_rows
@@ -1673,6 +1692,7 @@ module Query_api_impl = Query_api.Make (struct
   let initial_query_context = initial_query_context
   let eval_clauses = eval_clauses
   let eval_relation_rows = eval_relation_rows
+  let execute_plan = execute_plan
   let has_aggregates = has_aggregates
   let aggregate_rows = aggregate_rows
   let aggregate_rows_with = aggregate_rows_with
