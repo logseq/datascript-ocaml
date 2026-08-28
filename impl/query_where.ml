@@ -1305,6 +1305,165 @@ end) = struct
             |> unique_vars
           in
           let lookup_vars = relation_lookup_vars source_db [ QVar e_var; QWildcard; QWildcard ] in
+          let avet_ids_array attr value =
+            if
+              (not (query_evaluator_context.is_reverse_ref attr))
+              && query_value_uses_avet value
+              && query_attr_uses_avet source_db attr
+            then
+              entity_ids_array_by_attr_value source_db attr value
+            else
+              None
+          in
+          let try_same_entity_constant_dense_rows =
+            if has_not then
+              None
+            else
+              match constant_patterns, value_var_patterns, required_patterns, excluded_patterns, relation_comparisons with
+              | [ (const_attr, const_value) ], value_vars, [], [], []
+                when value_vars <> []
+                     && List.length value_vars <= 2
+                     && not (query_evaluator_context.is_reverse_ref const_attr)
+                     && List.for_all
+                          (fun (_, attr) ->
+                            not (query_evaluator_context.is_reverse_ref attr)
+                            && cardinality_one source_db attr)
+                          value_vars ->
+                (match aevt_attr_array source_db const_attr with
+                 | None -> None
+                 | Some const_arr ->
+                   let value_attr_arrays =
+                     value_vars
+                     |> List.map (fun (value_var, attr) ->
+                       match aevt_attr_array source_db attr with
+                       | None -> None
+                       | Some arr -> Some (value_var, arr))
+                   in
+                   if List.exists Option.is_none value_attr_arrays then
+                     None
+                   else
+                     let value_attrs = value_attr_arrays |> List.map Option.get |> Array.of_list in
+                     let attr_count = Array.length value_attrs in
+                     let attr_arrays = Array.map (fun (_, arr) -> arr) value_attrs in
+                     let const_len = Array.length const_arr in
+                     if
+                       const_len = 0
+                       || not (Array.for_all (fun arr -> Array.length arr = const_len) attr_arrays)
+                     then
+                       None
+                     else
+                       let mid = const_len / 2 in
+                       let e_aligned =
+                         let check i =
+                           let e = const_arr.(i).e in
+                           Array.for_all (fun arr -> arr.(i).e = e) attr_arrays
+                         in
+                         check 0 && check mid && check (const_len - 1)
+                       in
+                       if not e_aligned then
+                         None
+                       else
+                         let base_e = const_arr.(0).e in
+                         let dense =
+                           const_arr.(const_len - 1).e = base_e + const_len - 1
+                           && Array.for_all
+                                (fun arr ->
+                                  arr.(0).e = base_e && arr.(const_len - 1).e = base_e + const_len - 1)
+                                attr_arrays
+                         in
+                         let specialized_find =
+                           let expected = e_var :: (value_attrs |> Array.to_list |> List.map fst) in
+                           attrs = expected
+                         in
+                         if not (specialized_find && dense) then
+                           None
+                         else
+                           let rows = ref [] in
+                           (match attr_count with
+                            | 4 ->
+                              let a0 = attr_arrays.(0) in
+                              let a1 = attr_arrays.(1) in
+                              let a2 = attr_arrays.(2) in
+                              let a3 = attr_arrays.(3) in
+                              (match avet_ids_array const_attr const_value with
+                               | Some ids ->
+                                 for i = Array.length ids - 1 downto 0 do
+                                   let e = ids.(i) in
+                                   let index = e - base_e in
+                                   if index >= 0 && index < const_len then
+                                     rows :=
+                                       [ Result_entity e
+                                       ; Result_value a0.(index).v
+                                       ; Result_value a1.(index).v
+                                       ; Result_value a2.(index).v
+                                       ; Result_value a3.(index).v
+                                       ]
+                                       :: !rows
+                                 done
+                               | None ->
+                                 for i = const_len - 1 downto 0 do
+                                   if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
+                                     let e = const_arr.(i).e in
+                                     rows :=
+                                       [ Result_entity e
+                                       ; Result_value a0.(i).v
+                                       ; Result_value a1.(i).v
+                                       ; Result_value a2.(i).v
+                                       ; Result_value a3.(i).v
+                                       ]
+                                       :: !rows
+                                 done)
+                            | 1 ->
+                              let a0 = attr_arrays.(0) in
+                              (match avet_ids_array const_attr const_value with
+                               | Some ids ->
+                                 for i = Array.length ids - 1 downto 0 do
+                                   let e = ids.(i) in
+                                   let index = e - base_e in
+                                   if index >= 0 && index < const_len then
+                                     rows :=
+                                       [ Result_entity e; Result_value a0.(index).v ] :: !rows
+                                 done
+                               | None ->
+                                 for i = const_len - 1 downto 0 do
+                                   if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
+                                     rows :=
+                                       [ Result_entity const_arr.(i).e; Result_value a0.(i).v ] :: !rows
+                                 done)
+                            | _ ->
+                              (match avet_ids_array const_attr const_value with
+                               | Some ids ->
+                                 for i = Array.length ids - 1 downto 0 do
+                                   let e = ids.(i) in
+                                   let index = e - base_e in
+                                   if index >= 0 && index < const_len then
+                                     let rec vals a acc =
+                                       if a < 0 then Result_entity e :: acc
+                                       else vals (a - 1) (Result_value attr_arrays.(a).(index).v :: acc)
+                                     in
+                                     rows := vals (attr_count - 1) [] :: !rows
+                                 done
+                               | None ->
+                                 for i = const_len - 1 downto 0 do
+                                   if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
+                                     let e = const_arr.(i).e in
+                                     let rec vals a acc =
+                                       if a < 0 then Result_entity e :: acc
+                                       else vals (a - 1) (Result_value attr_arrays.(a).(i).v :: acc)
+                                     in
+                                     rows := vals (attr_count - 1) [] :: !rows
+                                 done));
+                           let unique_rows =
+                             (not source_db.history)
+                             && source_db.duplicate_datoms = []
+                             && List.mem e_var attrs
+                           in
+                           Some { attrs; rows = !rows; lookup_vars; unique_rows })
+              | _ -> None
+          in
+          match try_same_entity_constant_dense_rows with
+          | Some relation -> Some relation
+          | None ->
           let try_not_single_value_aevt_scan =
             if not has_not then
               None
@@ -1778,17 +1937,17 @@ end) = struct
                       in
                       (match avet_entity_ids_array const_attr const_value with
                        | Some ids ->
-                         for i = 0 to Array.length ids - 1 do
+                         for i = Array.length ids - 1 downto 0 do
                            let e = ids.(i) in
                            let index = e - base_e in
                            if index >= 0 && index < dense_len then emit_at index
                          done
                        | None ->
-                         for i = 0 to dense_len - 1 do
+                         for i = dense_len - 1 downto 0 do
                            if query_evaluator_context.compare_value const_arr.(i).v const_value = 0 then
                              emit_at i
                          done);
-                      Some (List.rev !rows)
+                      Some !rows
                     | _ ->
                       let rows = ref [] in
                       let emit entity_id =
@@ -1833,11 +1992,13 @@ end) = struct
                       in
                       (match avet_entity_ids_array const_attr const_value with
                        | Some ids ->
-                         for i = 0 to Array.length ids - 1 do
+                         for i = Array.length ids - 1 downto 0 do
                            emit ids.(i)
-                         done
-                       | None -> List.iter emit (candidate_entities ()));
-                      Some (List.rev !rows))
+                         done;
+                         Some !rows
+                       | None ->
+                         List.iter emit (candidate_entities ());
+                         Some (List.rev !rows)))
                   | Some (base_e, dense_len), _ ->
                     let rows = ref [] in
                     let emit entity_id =
@@ -3415,9 +3576,12 @@ end) = struct
     | None -> None
     | Some clauses ->
       (match bindings, relation_query_clauses clauses with
-       | [ [] ], true ->
-         eval_relation_from_empty db sources default_source clauses
-         |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
+       | [ [] ], true -> (
+         match same_entity_fused_relation db default_source clauses with
+         | Some relation -> Some (relation.attrs, relation.rows, relation.unique_rows)
+         | None ->
+           eval_relation_from_empty db sources default_source clauses
+           |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows))
        | [ binding ], true ->
          let clauses = List.map (bound_relation_clause binding) clauses in
          eval_relation_from_empty db sources default_source clauses
