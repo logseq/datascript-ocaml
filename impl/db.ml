@@ -1278,17 +1278,9 @@ let reverse_upper_prefix_datoms context db index e a v tx =
          | Some arr when not (merged_index db || pending_overlay db || temporal_view db) ->
            array_rev_seq arr
          | _ when not (merged_index db || pending_overlay db || temporal_view db) ->
-           ignore (primary_attr_datoms db index attr);
-           (match index with
-            | Aevt -> (
-              match Hashtbl.find_opt db.aevt_by_attr attr with
-              | Some arr -> array_rev_seq arr
-              | None -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
-            | Avet -> (
-              match Hashtbl.find_opt db.avet_by_attr attr with
-              | Some arr -> array_rev_seq arr
-              | None -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
-            | Eavt | Tave -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
+           (* Stay lazy like upstream rseq — do not materialize the whole attr
+              into avet_by_attr / aevt_by_attr just to reverse-scan. *)
+           Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
          | _ ->
            primary_attr_datoms db index attr
            |> List.filter (fun datom -> cmp datom bound <= 0)
@@ -1317,10 +1309,14 @@ let reverse_upper_prefix_datoms context db index e a v tx =
             (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
             (merged_index db) (pending_overlay db)
             (match a with Some a -> a | None -> "-");
-        (* Pass both bounds so exact attr/value prefixes reverse only that prefix
-           (matches forward exact-prefix slice_seq ~from_ ~to_). *)
-        Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
-    in
+        (* Attr-only reverse keeps ~to_ so the scan stays inside that attr
+           (single-field prefix cmp). Multi-component rseek matches upstream:
+           start at the upper bound and walk backward with no lower clamp. *)
+        (match index, e, a, v, tx with
+         | (Aevt | Avet), None, Some _, None, None ->
+           Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
+         | _ ->
+           Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq)    in
     (match merged_index db || pending_overlay db with
      | false -> Some indexed
      | true ->

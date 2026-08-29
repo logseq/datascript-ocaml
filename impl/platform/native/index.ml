@@ -10,11 +10,13 @@ type concrete_index =
 external inject : concrete_index -> index_set = "%identity"
 external project : index_set -> concrete_index = "%identity"
 
-(* LMDB and SQLite seq records share the same {cmp; datoms; offset} layout. *)
-external seq_of_sqlite : 'a Datascript_sqlite_index.seq -> 'a Datascript_lmdb_index.seq = "%identity"
-
 type t = index_set
-type 'a seq = 'a Datascript_lmdb_index.seq
+
+(* LMDB keeps a list-backed seq; SQLite streams lazily (upstream BTSet style). *)
+type 'a seq =
+  | Lmdb_seq of 'a Datascript_lmdb_index.seq
+  | Sqlite_seq of 'a Datascript_sqlite_index.seq
+
 type index_db = Datascript_storage_protocol.index_db
 type lmdb = index_db
 
@@ -185,23 +187,34 @@ let slice ?from_ ?to_ ?cmp t =
 
 let slice_seq ?from_ ?to_ ?cmp t =
   match project t with
-  | Lmdb i -> Datascript_lmdb_index.slice_seq ?from_ ?to_ ?cmp i
-  | Sqlite i -> seq_of_sqlite (Datascript_sqlite_index.slice_seq ?from_ ?to_ ?cmp i)
+  | Lmdb i -> Lmdb_seq (Datascript_lmdb_index.slice_seq ?from_ ?to_ ?cmp i)
+  | Sqlite i -> Sqlite_seq (Datascript_sqlite_index.slice_seq ?from_ ?to_ ?cmp i)
 
 let rslice_seq ?from_ ?to_ ?cmp t =
   match project t with
-  | Lmdb i -> Datascript_lmdb_index.rslice_seq ?from_ ?to_ ?cmp i
-  | Sqlite i -> seq_of_sqlite (Datascript_sqlite_index.rslice_seq ?from_ ?to_ ?cmp i)
+  | Lmdb i -> Lmdb_seq (Datascript_lmdb_index.rslice_seq ?from_ ?to_ ?cmp i)
+  | Sqlite i -> Sqlite_seq (Datascript_sqlite_index.rslice_seq ?from_ ?to_ ?cmp i)
 
 let seq t =
   match project t with
-  | Lmdb i -> Datascript_lmdb_index.seq i
-  | Sqlite i -> seq_of_sqlite (Datascript_sqlite_index.seq i)
+  | Lmdb i -> Lmdb_seq (Datascript_lmdb_index.seq i)
+  | Sqlite i -> Sqlite_seq (Datascript_sqlite_index.seq i)
 
-let seq_to_list = Datascript_lmdb_index.seq_to_list
-let fold_seq = Datascript_lmdb_index.fold_seq
-let to_seq = Datascript_lmdb_index.to_seq
-let seek = Datascript_lmdb_index.seek
+let to_seq = function
+  | Lmdb_seq s -> Datascript_lmdb_index.to_seq s
+  | Sqlite_seq s -> Datascript_sqlite_index.to_seq s
+
+let seq_to_list = function
+  | Lmdb_seq s -> Datascript_lmdb_index.seq_to_list s
+  | Sqlite_seq s -> Datascript_sqlite_index.seq_to_list s
+
+let fold_seq f init = function
+  | Lmdb_seq s -> Datascript_lmdb_index.fold_seq f init s
+  | Sqlite_seq s -> Datascript_sqlite_index.fold_seq f init s
+
+let seek bound = function
+  | Lmdb_seq s -> Lmdb_seq (Datascript_lmdb_index.seek bound s)
+  | Sqlite_seq s -> Sqlite_seq (Datascript_sqlite_index.seek bound s)
 
 let flush t =
   match project t with

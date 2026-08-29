@@ -2,7 +2,11 @@ open Datascript_types
 
 type t = { db : Datascript_lmdb_db.t; which : index }
 
-type 'a seq = { cmp : datom -> datom -> int; datoms : datom list; offset : int }
+type 'a seq =
+  { cmp : datom -> datom -> int
+  ; stream : datom Seq.t
+  ; seek_bound : datom option
+  }
 
 exception Stop_search
 
@@ -273,31 +277,83 @@ let find_first_slice ?from_ ?to_ ?cmp t =
 
 let fold_attr_prefix f init t attr = fold_attr_exact_prefix f init t attr
 
-let materialize_range t ?from_ ?to_ cmp =
-  fold_slice (fun acc datom -> datom :: acc) [] ?from_ ?to_ ~cmp t |> List.rev
+let make_seq cmp stream = { cmp; stream; seek_bound = None }
 
-let make_seq cmp datoms = { cmp; datoms; offset = 0 }
+let to_seq seq =
+  match seq.seek_bound with
+  | None -> seq.stream
+  | Some bound -> Seq.drop_while (fun datom -> seq.cmp datom bound < 0) seq.stream
 
-let drop_offset n datoms =
-  let rec loop n = function
-    | xs when n <= 0 -> xs
-    | _ :: xs -> loop (n - 1) xs
-    | [] -> []
+let map_kv_to_datoms t seq =
+  Seq.map (fun (key, value) -> decode_entry t.which key value) seq
+
+let stream_attr_exact_prefix t attr =
+  let prefix = attr ^ "\000" in
+  Datascript_lmdb_db.seq_index_prefix t.which t.db prefix ()
+  |> map_kv_to_datoms t
+  |> Seq.filter (fun datom -> datom.a = attr)
+
+let stream_attr_value_exact_prefix t attr value =
+  let prefix = Datascript_index_codec.encode_index_attr_value_prefix t.which attr value in
+  Datascript_lmdb_db.seq_index_prefix t.which t.db prefix ()
+  |> map_kv_to_datoms t
+
+let stream_avet_value_range t attr ?start_value ?stop_value () =
+  let from_key =
+    match start_value with
+    | Some value -> Datascript_index_codec.encode_index_attr_value_prefix Avet attr value
+    | None -> avet_attr_prefix attr
   in
-  loop n datoms
+  Datascript_lmdb_db.seq_index_range_until Avet t.db ~from_key
+    ~stop:(fun key _value ->
+      if Datascript_index_codec.avet_key_attr key <> attr then true
+      else
+        match stop_value with
+        | None -> false
+        | Some stop ->
+            Datascript_types.Compare.compare_value (Datascript_index_codec.avet_key_value key) stop
+            > 0)
+    ()
+  |> Seq.map (fun (key, _value) -> Datascript_index_codec.decode_avet_key_at attr key)
 
-let to_seq ({ cmp = _; datoms; offset = start }) = List.to_seq (drop_offset start datoms)
+let stream_bounded t ?from_ ?to_ cmp =
+  match bound_key t from_ with
+  | None ->
+      Datascript_lmdb_db.seq_index_range_until t.which t.db ()
+      |> map_kv_to_datoms t
+      |> Seq.filter (fun datom -> in_range cmp from_ to_ datom)
+  | Some from_key ->
+      Datascript_lmdb_db.seq_index_range_until t.which t.db ~from_key
+        ~stop:(fun key value ->
+          match to_ with
+          | Some bound ->
+              let datom = decode_entry t.which key value in
+              cmp datom bound > 0
+          | None -> false)
+        ()
+      |> map_kv_to_datoms t
+      |> Seq.filter (fun datom -> in_range cmp from_ to_ datom)
 
-let seq t = make_seq (cmp_for t.which) (to_list t)
+let stream_slice ?from_ ?to_ ~cmp t =
+  match t.which, avet_value_range_bounds from_ to_ with
+  | Avet, Some (attr, start_value, stop_value) ->
+      stream_avet_value_range t attr ?start_value:start_value ?stop_value:stop_value ()
+  | _ -> (
+    match attr_exact_prefix from_ to_ t.which with
+    | Some attr -> stream_attr_exact_prefix t attr
+    | None -> (
+      match attr_value_exact_prefix from_ to_ with
+      | Some (attr, value) -> stream_attr_value_exact_prefix t attr value
+      | None -> stream_bounded t ?from_ ?to_ cmp))
+
+let seq t = make_seq (cmp_for t.which) (stream_bounded t (cmp_for t.which))
 
 let slice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  make_seq cmp (materialize_range t ?from_ ?to_ cmp)
+  make_seq cmp (stream_slice ?from_ ?to_ ~cmp t)
 
-let rslice_materialize_desc t ~cmp ?from_ ?to_ () =
-  (* Descending walk with datom-level bounds; see native rslice_seq comment. *)
-  let datoms = ref [] in
-  Datascript_lmdb_db.fold_index_range_desc_until t.which t.db
+let stream_rslice_desc t ~cmp ?from_ ?to_ () =
+  Datascript_lmdb_db.seq_index_range_desc_until t.which t.db
     ~stop:(fun key value ->
       let datom = decode_entry t.which key value in
       let under_hi =
@@ -310,33 +366,37 @@ let rslice_materialize_desc t ~cmp ?from_ ?to_ () =
       match to_ with
       | Some bound -> cmp datom bound < 0
       | None -> false)
-    (fun key value ->
-      let datom = decode_entry t.which key value in
-      if in_range cmp to_ from_ datom then datoms := datom :: !datoms);
-  List.rev !datoms
+    ()
+  |> map_kv_to_datoms t
+  |> Seq.filter (fun datom -> in_range cmp to_ from_ datom)
+
+let stream_attr_exact_prefix_desc t attr =
+  let hi_key = attr ^ "\001" in
+  Datascript_lmdb_db.seq_index_range_desc_until t.which t.db ~hi_key
+    ~stop:(fun key _value ->
+      let prefix = attr ^ "\000" in
+      let prefix_len = String.length prefix in
+      String.length key < prefix_len || String.sub key 0 prefix_len <> prefix)
+    ()
+  |> map_kv_to_datoms t
+  |> Seq.filter (fun datom -> datom.a = attr)
 
 let rslice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  let datoms =
+  let stream =
     match attr_exact_prefix from_ to_ t.which with
-    | Some attr -> List.rev (fold_attr_exact_prefix (fun acc datom -> datom :: acc) [] t attr)
-    | None -> rslice_materialize_desc t ~cmp ?from_ ?to_ ()
+    | Some attr -> stream_attr_exact_prefix_desc t attr
+    | None -> stream_rslice_desc t ~cmp ?from_ ?to_ ()
   in
-  make_seq cmp datoms
+  make_seq cmp stream
 
 let seq_to_list seq = to_seq seq |> List.of_seq
 
-let fold_seq f init { cmp = _; datoms; offset } =
-  List.fold_left f init (drop_offset offset datoms)
+let fold_seq f init seq = Seq.fold_left f init (to_seq seq)
 
 let slice ?from_ ?to_ ?cmp t = slice_seq ?from_ ?to_ ?cmp t |> seq_to_list
 
-let seek bound seq =
-  let rec count index = function
-    | [] -> index
-    | x :: xs -> if seq.cmp x bound >= 0 then index else count (index + 1) xs
-  in
-  { seq with offset = count 0 seq.datoms }
+let seek bound seq = { seq with seek_bound = Some bound }
 
 (** Fold TAVE keys with [tx > from_tx], optionally restricted to [attr]. *)
 let fold_tave_range f init db ~from_tx ?to_tx ?attr () =

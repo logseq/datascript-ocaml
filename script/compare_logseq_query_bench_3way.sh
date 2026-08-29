@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Three-way Logseq shared-query bench:
-#   1) CLJS via @logseq/nbb-logseq (PSS indexes + SQLite kvs IStorage) — no release-js
-#   2) OCaml on origin/main (non-PSS; detached worktree; no new branch)
-#   3) OCaml on the current checkout (non-PSS SQLite indexes)
+#   1) CLJS via @logseq/nbb-logseq — PSS indexes + SQLite kvs IStorage
+#   2) OCaml on origin/main — PSS + SQLite blob kvs (restore → memory indexes)
+#   3) OCaml on the current checkout — non-PSS durable SQLite Share indexes
 set -euo pipefail
 
 repo_root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
@@ -85,17 +85,17 @@ if ! grep -q 'logseq_query_bench_shared' "$worktree/bench/dune"; then
 EOF
 fi
 
-echo "== 2/3 ocaml origin/main (sqlite, non-PSS) =="
+echo "== 2/3 ocaml origin/main (PSS + sqlite kvs) =="
 (
   cd "$worktree"
   dune build bench/logseq_query_bench_shared.exe
-  BENCH_RUNTIME_LABEL="ocaml-main" \
+  BENCH_RUNTIME_LABEL="ocaml-main-pss" \
     dune exec -- bench/logseq_query_bench_shared.exe \
       "${args[@]}" --sqlite "$out_dir/logseq-bench-ocaml-main-$size.sqlite3"
 ) | tee "$out_dir/bench-logseq-shared-ocaml-main.txt"
 
-echo "== 3/3 ocaml current branch (sqlite indexes, non-PSS) =="
-BENCH_RUNTIME_LABEL="ocaml-current" \
+echo "== 3/3 ocaml current branch (non-PSS sqlite Share indexes) =="
+BENCH_RUNTIME_LABEL="ocaml-current-non-pss" \
   dune exec -- bench/logseq_query_bench_shared.exe \
     "${args[@]}" --sqlite "$out_dir/logseq-bench-ocaml-current-$size.sqlite3" \
   | tee "$out_dir/bench-logseq-shared-ocaml-current.txt"
@@ -118,8 +118,8 @@ def parse(path):
 
 paths = {
     "cljs-nbb-logseq-pss": out_dir / "bench-logseq-shared-cljs-nbb.txt",
-    "ocaml-main": out_dir / "bench-logseq-shared-ocaml-main.txt",
-    "ocaml-current": out_dir / "bench-logseq-shared-ocaml-current.txt",
+    "ocaml-main-pss": out_dir / "bench-logseq-shared-ocaml-main.txt",
+    "ocaml-current-non-pss": out_dir / "bench-logseq-shared-ocaml-current.txt",
 }
 parsed = {label: parse(path) for label, path in paths.items()}
 queries = [
@@ -134,8 +134,9 @@ md = []
 md.append("# Logseq shared query bench (3-way)")
 md.append("")
 md.append(f"- Size: {size} entities / {pages} pages")
-md.append("- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kvs` IStorage (Logseq DB path)")
-md.append("- OCaml: non-PSS SQLite index store/restore (no PSS)")
+md.append("- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kvs` IStorage")
+md.append("- OCaml main: PSS + SQLite blob kvs (working set in memory after restore)")
+md.append("- OCaml current: non-PSS durable SQLite Share indexes (live B-tree tables)")
 md.append("- Workload: Logseq `initial_data` hot paths")
 md.append("")
 md.append("| query | " + " | ".join(labels) + " |")

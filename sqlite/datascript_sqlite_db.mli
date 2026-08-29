@@ -34,4 +34,25 @@ val fold_index_range_desc_until :
   (string -> string -> unit) ->
   unit
 
+(** Lazy key/value streams (upstream-style). Consumers can stop early; the
+    statement is finalized when the sequence ends or is GC'd. *)
+val seq_index_range_until :
+  index ->
+  t ->
+  ?from_key:string ->
+  ?stop:(string -> string -> bool) ->
+  unit ->
+  (string * string) Seq.t
+
+val seq_index_prefix :
+  index -> t -> string -> unit -> (string * string) Seq.t
+
+val seq_index_range_desc_until :
+  index ->
+  t ->
+  ?hi_key:string ->
+  ?stop:(string -> string -> bool) ->
+  unit ->
+  (string * string) Seq.t
+
 val copy_index : index -> t -> t -> unit

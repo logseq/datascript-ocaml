@@ -147,3 +147,48 @@ let fold_index_range_desc_until index db ?hi_key ?stop f =
 
 let copy_index_txn index txn from_db to_db =
   fold_index index from_db (fun key value -> put_index_txn index txn to_db key value)
+
+let seq_index_range_until index db ?from_key ?stop () =
+  ensure_open db;
+  let entries = sorted_entries (map_for_index index db) in
+  let rec drop = function
+    | [] -> []
+    | (key, _) :: rest as all ->
+        (match from_key with
+         | Some bound when String.compare key bound < 0 -> drop rest
+         | _ -> all)
+  in
+  let rec take = function
+    | [] -> Seq.Nil
+    | (key, value) :: rest ->
+        (match stop with
+         | Some stop when stop key value -> Seq.Nil
+         | _ -> Seq.Cons ((key, value), fun () -> take rest))
+  in
+  fun () -> take (drop entries)
+
+let seq_index_prefix index db prefix () =
+  let prefix_len = String.length prefix in
+  seq_index_range_until index db ~from_key:prefix
+    ~stop:(fun key _value ->
+      String.length key < prefix_len || String.sub key 0 prefix_len <> prefix)
+    ()
+
+let seq_index_range_desc_until index db ?hi_key ?stop () =
+  ensure_open db;
+  let entries = List.rev (sorted_entries (map_for_index index db)) in
+  let rec drop = function
+    | [] -> []
+    | (key, _) :: rest as all ->
+        (match hi_key with
+         | Some bound when String.compare key bound > 0 -> drop rest
+         | _ -> all)
+  in
+  let rec take = function
+    | [] -> Seq.Nil
+    | (key, value) :: rest ->
+        (match stop with
+         | Some stop when stop key value -> Seq.Nil
+         | _ -> Seq.Cons ((key, value), fun () -> take rest))
+  in
+  fun () -> take (drop entries)

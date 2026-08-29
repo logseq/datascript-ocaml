@@ -299,3 +299,184 @@ let fold_index_range_desc_until index db ?hi_key ?stop f =
 let copy_index_txn index txn from_db to_db =
   fold_index index from_db (fun key value ->
     put_index_txn index txn to_db key value)
+
+(* Datalevin range-seq style: pull batches inside scoped Cursor.go, then
+   re-seek from a continuation key on the next pull. Avoids holding a cursor
+   across Seq yields and needs no Obj.magic. *)
+let stream_batch_size = 64
+
+type asc_cont =
+  | Asc_start
+  | Asc_from of { key : string; include_key : bool }
+  | Asc_done
+
+let seq_index_range_until index db ?from_key ?stop () =
+  ensure_open db;
+  let cont =
+    ref
+      (match from_key with
+       | None -> Asc_start
+       | Some key -> Asc_from { key; include_key = true })
+  in
+  let fetch () =
+    match !cont with
+    | Asc_done -> []
+    | _ ->
+        let batch = ref [] in
+        let count = ref 0 in
+        (try
+           with_read_cursor index db (fun cursor ->
+             let positioned =
+               match !cont with
+               | Asc_done -> false
+               | Asc_start -> (
+                 try
+                   ignore (Cursor.first cursor);
+                   true
+                 with Not_found ->
+                   cont := Asc_done;
+                   false)
+               | Asc_from { key; include_key } -> (
+                 try
+                   ignore (Cursor.seek_range cursor key);
+                   if include_key then true
+                   else (
+                     try
+                       ignore (Cursor.next cursor);
+                       true
+                     with Not_found ->
+                       cont := Asc_done;
+                       false)
+                 with Not_found ->
+                   cont := Asc_done;
+                   false)
+             in
+             if positioned then
+               let rec loop () =
+                 if !count >= stream_batch_size then ()
+                 else
+                   let key, value =
+                     try Cursor.current cursor with Not_found -> raise Exit
+                   in
+                   match stop with
+                   | Some stop when stop key value -> cont := Asc_done
+                   | _ ->
+                       batch := (key, value) :: !batch;
+                       incr count;
+                       cont := Asc_from { key; include_key = false };
+                       try
+                         ignore (Cursor.next cursor);
+                         loop ()
+                       with Not_found -> cont := Asc_done
+               in
+               try loop () with Exit -> cont := Asc_done)
+         with _ -> cont := Asc_done);
+        List.rev !batch
+  in
+  let rec stream () =
+    match fetch () with
+    | [] -> Seq.Nil
+    | items ->
+        let rec of_list = function
+          | [] -> stream
+          | x :: xs -> fun () -> Seq.Cons (x, of_list xs)
+        in
+        of_list items ()
+  in
+  stream
+
+let seq_index_prefix index db prefix () =
+  let prefix_len = String.length prefix in
+  seq_index_range_until index db ~from_key:prefix
+    ~stop:(fun key _value ->
+      String.length key < prefix_len || String.sub key 0 prefix_len <> prefix)
+    ()
+
+type desc_cont =
+  | Desc_start of string option
+  | Desc_after of string
+  | Desc_done
+
+let position_desc_hi cursor bound =
+  try
+    let key, _ = Cursor.seek_range cursor bound in
+    if String.compare key bound > 0 then (
+      try
+        ignore (Cursor.prev cursor);
+        true
+      with Not_found -> false)
+    else true
+  with Not_found -> (
+    try
+      ignore (Cursor.last cursor);
+      true
+    with Not_found -> false)
+
+let seq_index_range_desc_until index db ?hi_key ?stop () =
+  ensure_open db;
+  let cont = ref (Desc_start hi_key) in
+  let fetch () =
+    match !cont with
+    | Desc_done -> []
+    | _ ->
+        let batch = ref [] in
+        let count = ref 0 in
+        (try
+           with_read_cursor index db (fun cursor ->
+             let positioned =
+               match !cont with
+               | Desc_done -> false
+               | Desc_start None -> (
+                 try
+                   ignore (Cursor.last cursor);
+                   true
+                 with Not_found ->
+                   cont := Desc_done;
+                   false)
+               | Desc_start (Some bound) ->
+                   if position_desc_hi cursor bound then true
+                   else (
+                     cont := Desc_done;
+                     false)
+               | Desc_after key -> (
+                 try
+                   ignore (Cursor.seek_range cursor key);
+                   (try ignore (Cursor.prev cursor) with Not_found -> raise Exit);
+                   true
+                 with Not_found | Exit ->
+                   cont := Desc_done;
+                   false)
+             in
+             if positioned then
+               let rec loop () =
+                 if !count >= stream_batch_size then ()
+                 else
+                   let key, value =
+                     try Cursor.current cursor with Not_found -> raise Exit
+                   in
+                   match stop with
+                   | Some stop when stop key value -> cont := Desc_done
+                   | _ ->
+                       batch := (key, value) :: !batch;
+                       incr count;
+                       cont := Desc_after key;
+                       try
+                         ignore (Cursor.prev cursor);
+                         loop ()
+                       with Not_found -> cont := Desc_done
+               in
+               try loop () with Exit -> cont := Desc_done)
+         with _ -> cont := Desc_done);
+        List.rev !batch
+  in
+  let rec stream () =
+    match fetch () with
+    | [] -> Seq.Nil
+    | items ->
+        let rec of_list = function
+          | [] -> stream
+          | x :: xs -> fun () -> Seq.Cons (x, of_list xs)
+        in
+        of_list items ()
+  in
+  stream

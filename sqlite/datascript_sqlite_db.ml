@@ -4,6 +4,7 @@ type t =
   { path : string
   ; db : Sqlite3.db
   ; mutable closed : bool
+  ; stmts : (string, Sqlite3.stmt) Hashtbl.t
   }
 
 let table_name = function
@@ -25,11 +26,33 @@ let exec_sql t sql =
   ensure_open t;
   check t sql (Sqlite3.exec t.db sql)
 
+(* Reuse prepared statements: build and point lookups previously prepared+finalized
+   once per datom / scan, which dominated Share SQLite cost vs PSS+memory. *)
+let cached_stmt t sql =
+  ensure_open t;
+  match Hashtbl.find_opt t.stmts sql with
+  | Some stmt ->
+      check t sql (Sqlite3.reset stmt);
+      check t sql (Sqlite3.clear_bindings stmt);
+      stmt
+  | None ->
+      let stmt = Sqlite3.prepare t.db sql in
+      Hashtbl.add t.stmts sql stmt;
+      stmt
+
+let with_cached_stmt t sql f =
+  let stmt = cached_stmt t sql in
+  f stmt
+
 let apply_open_pragmas t =
   exec_sql t "PRAGMA journal_mode=WAL;";
   exec_sql t "PRAGMA synchronous=NORMAL;";
   exec_sql t "PRAGMA busy_timeout=5000;";
-  exec_sql t "PRAGMA foreign_keys=ON;"
+  exec_sql t "PRAGMA foreign_keys=ON;";
+  (* Larger page cache + mmap cuts repeated B-tree seeks for Share index scans. *)
+  exec_sql t "PRAGMA cache_size=-65536;";
+  exec_sql t "PRAGMA temp_store=MEMORY;";
+  exec_sql t "PRAGMA mmap_size=268435456;"
 
 let ensure_schema db =
   List.iter
@@ -50,7 +73,7 @@ let ensure_schema db =
 
 let open_path path =
   let db = Sqlite3.db_open path in
-  let t = { path; db; closed = false } in
+  let t = { path; db; closed = false; stmts = Hashtbl.create 32 } in
   apply_open_pragmas t;
   ensure_schema t;
   t
@@ -59,6 +82,16 @@ let temps_created = ref 0
 
 let close t =
   if not t.closed then (
+    Hashtbl.iter
+      (fun sql stmt ->
+        match Sqlite3.finalize stmt with
+        | rc when Sqlite3.Rc.is_success rc -> ()
+        | rc ->
+            (* Best-effort finalize on close; surface only unexpected failures. *)
+            ignore
+              (Printf.sprintf "finalize %s: %s" sql (Sqlite3.Rc.to_string rc)))
+      t.stmts;
+    Hashtbl.clear t.stmts;
     if not (Sqlite3.db_close t.db) then invalid_arg ("failed to close SQLite database: " ^ t.path);
     t.closed <- true)
 
@@ -82,12 +115,8 @@ let sync t =
   exec_sql t "PRAGMA synchronous=NORMAL;"
 
 let meta_get db key =
-  ensure_open db;
   let sql = "SELECT value FROM ds_meta WHERE key = ?;" in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT key));
       match Sqlite3.step stmt with
       | Sqlite3.Rc.ROW -> Some (Sqlite3.column_blob stmt 0)
@@ -97,12 +126,8 @@ let meta_get db key =
         None)
 
 let meta_set db key value =
-  ensure_open db;
   let sql = "REPLACE INTO ds_meta (key, value) VALUES (?, ?);" in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT key));
       check db sql (Sqlite3.bind_blob stmt 2 value);
       check db sql (Sqlite3.step stmt))
@@ -121,20 +146,14 @@ let put_index_txn index db key value =
   let sql =
     Printf.sprintf "REPLACE INTO %s (key, value) VALUES (?, ?);" (table_name index)
   in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind_blob stmt 1 key);
       check db sql (Sqlite3.bind_blob stmt 2 value);
       check db sql (Sqlite3.step stmt))
 
 let remove_index_txn index db key =
   let sql = Printf.sprintf "DELETE FROM %s WHERE key = ?;" (table_name index) in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind_blob stmt 1 key);
       check db sql (Sqlite3.step stmt))
 
@@ -144,12 +163,8 @@ let put_index index db key value =
 let remove_index index db key = with_write_txn db (fun () -> remove_index_txn index db key)
 
 let get_index index db key =
-  ensure_open db;
   let sql = Printf.sprintf "SELECT value FROM %s WHERE key = ?;" (table_name index) in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind_blob stmt 1 key);
       match Sqlite3.step stmt with
       | Sqlite3.Rc.ROW -> Some (Sqlite3.column_blob stmt 0)
@@ -159,12 +174,8 @@ let get_index index db key =
         None)
 
 let fold_index index db f =
-  ensure_open db;
   let sql = Printf.sprintf "SELECT key, value FROM %s ORDER BY key;" (table_name index) in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       let rec loop () =
         match Sqlite3.step stmt with
         | Sqlite3.Rc.ROW ->
@@ -176,15 +187,11 @@ let fold_index index db f =
       loop ())
 
 let fold_index_prefix index db prefix f =
-  ensure_open db;
   let sql =
     Printf.sprintf "SELECT key, value FROM %s WHERE key >= ? ORDER BY key;" (table_name index)
   in
-  let stmt = Sqlite3.prepare db.db sql in
   let prefix_len = String.length prefix in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind_blob stmt 1 prefix);
       let rec loop () =
         match Sqlite3.step stmt with
@@ -200,17 +207,13 @@ let fold_index_prefix index db prefix f =
       loop ())
 
 let fold_index_range_until index db ?from_key ?stop f =
-  ensure_open db;
   let sql =
     match from_key with
     | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key;" (table_name index)
     | Some _ ->
       Printf.sprintf "SELECT key, value FROM %s WHERE key >= ? ORDER BY key;" (table_name index)
   in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       (match from_key with
        | None -> ()
        | Some key -> check db sql (Sqlite3.bind_blob stmt 1 key));
@@ -230,7 +233,6 @@ let fold_index_range_until index db ?from_key ?stop f =
       loop ())
 
 let fold_index_range_desc_until index db ?hi_key ?stop f =
-  ensure_open db;
   let sql =
     match hi_key with
     | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key DESC;" (table_name index)
@@ -238,10 +240,7 @@ let fold_index_range_desc_until index db ?hi_key ?stop f =
       Printf.sprintf "SELECT key, value FROM %s WHERE key <= ? ORDER BY key DESC;"
         (table_name index)
   in
-  let stmt = Sqlite3.prepare db.db sql in
-  Fun.protect
-    ~finally:(fun () -> check db sql (Sqlite3.finalize stmt))
-    (fun () ->
+  with_cached_stmt db sql (fun stmt ->
       (match hi_key with
        | None -> ()
        | Some key -> check db sql (Sqlite3.bind_blob stmt 1 key));
@@ -259,6 +258,83 @@ let fold_index_range_desc_until index db ?hi_key ?stop f =
         | rc -> check db sql rc
       in
       loop ())
+
+type stream_state =
+  { stmt : Sqlite3.stmt
+  ; mutable closed : bool
+  }
+
+let close_stream state =
+  if not state.closed then (
+    state.closed <- true;
+    ignore (Sqlite3.finalize state.stmt))
+
+(* Dedicated prepare (not stmt-cache): the cursor must stay open while Seq yields. *)
+let seq_from_stmt db sql ?bind ?stop () =
+  ensure_open db;
+  let stmt = Sqlite3.prepare db.db sql in
+  (match bind with
+   | None -> ()
+   | Some f -> f stmt);
+  let state = { stmt; closed = false } in
+  Gc.finalise (fun s -> close_stream s) state;
+  let rec next () =
+    if state.closed then Seq.Nil
+    else
+      match Sqlite3.step state.stmt with
+      | Sqlite3.Rc.ROW ->
+          let key = Sqlite3.column_blob state.stmt 0 in
+          let value = Sqlite3.column_blob state.stmt 1 in
+          (match stop with
+           | Some stop when stop key value ->
+               close_stream state;
+               Seq.Nil
+           | _ -> Seq.Cons ((key, value), next))
+      | Sqlite3.Rc.DONE ->
+          close_stream state;
+          Seq.Nil
+      | rc ->
+          close_stream state;
+          check db sql rc;
+          Seq.Nil
+  in
+  next
+
+let seq_index_range_until index db ?from_key ?stop () =
+  let sql =
+    match from_key with
+    | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key;" (table_name index)
+    | Some _ ->
+      Printf.sprintf "SELECT key, value FROM %s WHERE key >= ? ORDER BY key;" (table_name index)
+  in
+  seq_from_stmt db sql
+    ?bind:
+      (match from_key with
+       | None -> None
+       | Some key -> Some (fun stmt -> check db sql (Sqlite3.bind_blob stmt 1 key)))
+    ?stop ()
+
+let seq_index_prefix index db prefix () =
+  let prefix_len = String.length prefix in
+  seq_index_range_until index db ~from_key:prefix
+    ~stop:(fun key _value ->
+      String.length key < prefix_len || String.sub key 0 prefix_len <> prefix)
+    ()
+
+let seq_index_range_desc_until index db ?hi_key ?stop () =
+  let sql =
+    match hi_key with
+    | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key DESC;" (table_name index)
+    | Some _ ->
+      Printf.sprintf "SELECT key, value FROM %s WHERE key <= ? ORDER BY key DESC;"
+        (table_name index)
+  in
+  seq_from_stmt db sql
+    ?bind:
+      (match hi_key with
+       | None -> None
+       | Some key -> Some (fun stmt -> check db sql (Sqlite3.bind_blob stmt 1 key)))
+    ?stop ()
 
 let copy_index index from_db to_db =
   fold_index index from_db (fun key value -> put_index index to_db key value)

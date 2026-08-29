@@ -41,3 +41,22 @@ val fold_index_range_desc_until :
 val fold_index_prefix : index -> t -> string -> (string -> string -> unit) -> unit
 val put_index : index -> t -> string -> string -> unit
 val remove_index : index -> t -> string -> unit
+
+val seq_index_range_until :
+  index ->
+  t ->
+  ?from_key:string ->
+  ?stop:(string -> string -> bool) ->
+  unit ->
+  (string * string) Seq.t
+
+val seq_index_prefix :
+  index -> t -> string -> unit -> (string * string) Seq.t
+
+val seq_index_range_desc_until :
+  index ->
+  t ->
+  ?hi_key:string ->
+  ?stop:(string -> string -> bool) ->
+  unit ->
+  (string * string) Seq.t
