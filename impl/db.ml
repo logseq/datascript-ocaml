@@ -1183,6 +1183,27 @@ let avet_datoms_by_value_seq context db attr value =
         (* Materialize + cache via the list path; later hits use entity cache. *)
         avet_datoms_by_value context db attr value |> List.to_seq)
 
+(* Cache full EAVT e-prefix slices by (db_uid, max_tx, eid) for Share/LMDB. *)
+let eavt_entity_datoms_cache : (int * tx * entity_id, datom list) Hashtbl.t =
+  Hashtbl.create 256
+
+let eavt_entity_datoms context db entity_id =
+  let load () =
+    let bound = bound_datom ~e:entity_id () in
+    let bound_fields = fields ~e:true () in
+    let cmp = exact_prefix_slice_cmp context Eavt bound bound_fields in
+    Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Eavt) |> Index.seq_to_list
+  in
+  if temporal_view db || merged_index db || pending_overlay db then load ()
+  else
+    let key = (db.db_uid, db.max_tx, entity_id) in
+    match Hashtbl.find_opt eavt_entity_datoms_cache key with
+    | Some datoms -> datoms
+    | None ->
+      let datoms = load () in
+      Hashtbl.replace eavt_entity_datoms_cache key datoms;
+      datoms
+
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
@@ -1203,6 +1224,13 @@ let exact_prefix_datoms context db index e a v tx =
           (match merged_index db || pending_overlay db, index, e, a, v, tx with
            | false, Avet, None, Some _, Some _, None ->
              Some (avet_datoms_by_value_seq context db (Option.get a) (Option.get v))
+           | false, Eavt, Some entity_id, None, None, None ->
+             Some (List.to_seq (eavt_entity_datoms context db entity_id))
+           | false, Eavt, Some entity_id, Some attr, None, None ->
+             Some
+               (eavt_entity_datoms context db entity_id
+                |> List.to_seq
+                |> Seq.filter (fun d -> d.a = attr))
            | false, Aevt, _, Some attr, _, _ -> (
              match temporal_view db, Hashtbl.find_opt db.aevt_by_attr attr with
              | false, Some arr ->
@@ -1237,10 +1265,13 @@ let exact_prefix_datoms_list context db index e a v tx =
     (match merged_index db || pending_overlay db with
      | false ->
        Some
-         (match index, a, v, exact_attr_prefix with
-          | Avet, Some attr, Some value, false -> avet_datoms_by_value context db attr value
-          | (Aevt | Avet), Some attr, None, true -> primary_attr_datoms db index attr
-          | Aevt, Some attr, _, false -> (
+         (match index, e, a, v, exact_attr_prefix with
+          | Avet, _, Some attr, Some value, false -> avet_datoms_by_value context db attr value
+          | (Aevt | Avet), _, Some attr, None, true -> primary_attr_datoms db index attr
+          | Eavt, Some entity_id, None, None, false -> eavt_entity_datoms context db entity_id
+          | Eavt, Some entity_id, Some attr, None, false ->
+            List.filter (fun d -> d.a = attr) (eavt_entity_datoms context db entity_id)
+          | Aevt, _, Some attr, _, false -> (
             match temporal_view db, Hashtbl.find_opt db.aevt_by_attr attr with
             | false, Some arr -> array_exact_prefix_slice cmp bound arr
             | true, _ | _, None ->
