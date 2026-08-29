@@ -88,6 +88,12 @@
  (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
 
 (executable
+ (name logseq_query_bench_shared)
+ (modules logseq_query_bench_shared)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe)
