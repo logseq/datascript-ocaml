@@ -1,31 +1,32 @@
 # Logseq shared query bench (3-way)
 
 - Size: 5000 entities / 500 pages
-- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kvs` IStorage (Logseq DB path)
-- OCaml: non-PSS SQLite index store/restore (no PSS)
+- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kvs` IStorage
+- OCaml main: PSS + SQLite blob kvs (working set in memory after restore)
+- OCaml current: non-PSS durable SQLite Share indexes (live B-tree tables)
 - Workload: Logseq `initial_data` hot paths
 
-| query | cljs-nbb-logseq-pss | ocaml-main | ocaml-current |
+| query | cljs-nbb-logseq-pss | ocaml-main-pss | ocaml-current-non-pss |
 | --- | ---: | ---: | ---: |
-| `build-ms` | 3695.22 | 315.80 | 10273.47 |
-| `restore-ms` | 1.74 | 0.063 | 0.039 |
+| `build-ms` | 4398.35 | 309.07 | 9560.89 |
+| `restore-ms` | 1.40 | 0.060 | 0.038 |
 | `disk-bytes` | 5267456 | 7356416 | 9834496 |
-| `recent-pages` | 0.415 | 0.415 | 0.915 |
-| `latest-journals` | 0.261 | 0.199 | 0.014 |
-| `uuid-lookup` | 0.031 | 0.015 | 0.059 |
-| `title-lookup` | 0.0086 | 0.0022 | 0.0053 |
-| `children-by-parent` | 0.0079 | 0.0021 | 0.0060 |
-| `blocks-by-page` | 0.0071 | 0.0024 | 0.0082 |
-| `tags-scan` | 0.0079 | 0.0024 | 0.010 |
-| `eavt-entity` | 0.0027 | 0.0017 | 0.0083 |
-| `entity-hydrate` | 0.021 | 0.011 | 0.050 |
-| `q-updated-at-between` | 4.07 | 0.133 | 0.031 |
-| `q-journal-pages` | 0.786 | 3.75 | 0.463 |
-| `q-page-by-name` | 0.045 | 0.0053 | 0.0069 |
+| `recent-pages` | 0.424 | 0.416 | 0.269 |
+| `latest-journals` | 0.269 | 0.210 | 0.035 |
+| `uuid-lookup` | 0.032 | 0.018 | 0.016 |
+| `title-lookup` | 0.0087 | 0.0024 | 0.0017 |
+| `children-by-parent` | 0.0079 | 0.0021 | 0.0024 |
+| `blocks-by-page` | 0.0073 | 0.0024 | 0.0046 |
+| `tags-scan` | 0.0079 | 0.0026 | 0.0067 |
+| `eavt-entity` | 0.0029 | 0.0018 | 0.0047 |
+| `entity-hydrate` | 0.022 | 0.011 | 0.013 |
+| `q-updated-at-between` | 4.01 | 0.135 | 0.184 |
+| `q-journal-pages` | 0.772 | 3.83 | 0.458 |
+| `q-page-by-name` | 0.048 | 0.0054 | 0.0029 |
 
 Times are median ms/op.
 
 Artifacts:
 - `bench-logseq-shared-cljs-nbb.txt` (cljs-nbb-logseq-pss)
-- `bench-logseq-shared-ocaml-main.txt` (ocaml-main)
-- `bench-logseq-shared-ocaml-current.txt` (ocaml-current)
+- `bench-logseq-shared-ocaml-main.txt` (ocaml-main-pss)
+- `bench-logseq-shared-ocaml-current.txt` (ocaml-current-non-pss)
