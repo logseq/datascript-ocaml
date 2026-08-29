@@ -1156,8 +1156,17 @@ let avet_datoms_by_value context db attr value =
           |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
         else
           let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
-          Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet)
-          |> Index.seq_to_list)
+          let datoms =
+            Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet)
+            |> Index.seq_to_list
+          in
+          (* Lazy-warm entity-id cache so repeated AVET point lookups stay in RAM
+             (Share SQLite / LMDB). Observable results unchanged. *)
+          Hashtbl.replace
+            db.avet_entities_by_attr_value
+            (attr, value)
+            (Array.of_list (List.map (fun d -> d.e) datoms));
+          datoms)
 
 let avet_datoms_by_value_seq context db attr value =
   let bound = bound_datom ~a:attr ~v:value () in
@@ -1165,16 +1174,14 @@ let avet_datoms_by_value_seq context db attr value =
   if temporal_view db then
     avet_datoms_by_value context db attr value |> List.to_seq
   else
-    match Hashtbl.find_opt db.avet_by_attr attr with
-    | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
-    | None ->
-      if merged_index db then
-        primary_attr_datoms db Avet attr
-        |> List.filter (fun datom -> datom.a = attr && context.compare_value datom.v value = 0)
-        |> List.to_seq
-      else
-        let cmp = exact_prefix_slice_cmp context Avet bound bound_fields in
-        Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db Avet) |> Index.to_seq
+    match Hashtbl.find_opt db.avet_entities_by_attr_value (attr, value) with
+    | Some entity_ids -> List.to_seq (datoms_of_avet_entities attr value entity_ids)
+    | None -> (
+      match Hashtbl.find_opt db.avet_by_attr attr with
+      | Some datoms -> array_attr_value_seq context Avet bound bound_fields datoms
+      | None ->
+        (* Materialize + cache via the list path; later hits use entity cache. *)
+        avet_datoms_by_value context db attr value |> List.to_seq)
 
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with

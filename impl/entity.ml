@@ -80,16 +80,6 @@ let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
   |> List.sort (fun (left, _) (right, _) -> compare left right)
 
-let forward_entity_attr context db entity_id attr =
-  (* Point lookup on EAVT e+a — do not rescan the whole entity per attr. *)
-  context.datoms_by_entity_attr db entity_id attr
-  |> Seq.map (fun d -> d.v)
-  |> List.of_seq
-  |> entity_visible_attr_values context db attr
-  |> function
-  | [] -> None
-  | values -> Some (tx_value_of_attr_values context db attr values)
-
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
   let values =
@@ -104,6 +94,13 @@ let reverse_entity_attr context db entity_id attr =
   | values -> Some (Many_values values)
 
 let lazy_entity context db entity_id =
+  (* One EAVT e-prefix scan serves all forward attr lookups (Share SQLite / LMDB). *)
+  let forward_by_attr =
+    lazy
+      (group_forward_entity_attrs context db entity_id
+       |> List.to_seq
+       |> Hashtbl.of_seq)
+  in
   let materialized = lazy (group_entity_attrs context db entity_id) in
   { id = entity_id
   ; db
@@ -113,7 +110,7 @@ let lazy_entity context db entity_id =
         if context.is_reverse_ref attr then
           reverse_entity_attr context db entity_id attr
         else
-          forward_entity_attr context db entity_id attr)
+          Hashtbl.find_opt (Lazy.force forward_by_attr) attr)
   ; materialize_attrs = (fun () -> Lazy.force materialized)
   }
 
