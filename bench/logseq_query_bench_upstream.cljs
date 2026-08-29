@@ -304,7 +304,10 @@
     "tags-scan"
     (sorted-eids (d/datoms db :avet :block/tags sample-tag))
     "eavt-entity"
-    (mapv (fn [d] [(:a d) (:v d)]) (d/datoms db :eavt sample-page))
+    (->> (d/datoms db :eavt sample-page)
+         (mapv (fn [d] [(:a d) (:v d)]))
+         (sort-by (comp str first))
+         vec)
     "entity-hydrate"
     (let [e (d/entity db sample-page)]
       (if e

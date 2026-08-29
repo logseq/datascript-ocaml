@@ -409,6 +409,7 @@ let result_edn p name =
     datoms p.db Eavt ~e:p.sample_page ()
     |> List.of_seq
     |> List.map (fun d -> edn_vector [ ":" ^ d.a; edn_of_value d.v ])
+    |> List.sort String.compare
     |> edn_vector
   | "entity-hydrate" -> (
     match entity p.db (Entity_id p.sample_page) with
