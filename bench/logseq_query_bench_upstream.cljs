@@ -5,7 +5,6 @@
   (:require
    ["node:sqlite" :refer [DatabaseSync]]
    ["fs" :as fs]
-   ["path" :as path]
    ["process" :as process]))
 
 (def d
