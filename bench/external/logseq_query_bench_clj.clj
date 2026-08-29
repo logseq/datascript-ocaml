@@ -298,7 +298,19 @@
              (bump! (count (q store '[:find ?e :in $ ?n :where [?e :block/name ?n]]
                                (str "page-" (quot pages 3))))))}]))
 
+(defn open-datalevin [dir]
+  ;; Durable LMDB on disk (not :mem). Memory page cache is fine.
+  (remove-path dir)
+  (.mkdirs (java.io.File. dir))
+  (let [conn (dl/get-conn dir schema-dl)]
+    {:engine :datalevin :conn conn
+     :backend "lmdb-durable"
+     :close! (fn []
+               (try (dl/close conn) (catch Exception _))
+               (remove-path dir))}))
+
 (defn open-datahike [sqlite-path]
+  ;; Durable SQLite via JDBC konserve (PSS indexes; in-process cache OK).
   (remove-path sqlite-path)
   (let [cfg {:store {:backend :jdbc :dbtype "sqlite" :dbname sqlite-path}
              :schema-flexibility :write
@@ -310,21 +322,11 @@
     (dh/create-database cfg)
     (let [conn (dh/connect cfg)]
       {:engine :datahike :conn conn :cfg cfg
-       :backend "jdbc-sqlite-pss"
+       :backend "jdbc-sqlite-pss-durable"
        :close! (fn []
                  (try (dh/release conn) (catch Exception _))
                  (try (dh/delete-database cfg) (catch Exception _))
                  (remove-path sqlite-path))})))
-
-(defn open-datalevin [dir]
-  (when (.exists (java.io.File. dir))
-    (dl/clear dir))
-  (let [conn (dl/get-conn dir schema-dl)]
-    {:engine :datalevin :conn conn
-     :backend "lmdb"
-     :close! (fn []
-               (try (dl/close conn) (catch Exception _))
-               (try (dl/clear dir) (catch Exception _)))}))
 
 (defn build-prepared [cfg]
   (let [runtime (:runtime cfg)
