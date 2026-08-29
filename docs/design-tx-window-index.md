@@ -216,35 +216,31 @@ whose `tx` falls inside a configurable rolling window:
 
 | Knob | Default | Meaning |
 | --- | --- | --- |
-| `tave_retention` | **30 days** | Wall-clock window via `:db/txInstant` → `tx_lo` |
+| `tave_retention_days` | **30** | Wall-clock window via `:db/txInstant` → `tx_lo` |
 
 **Keep in TAVE:** asserts/retracts with `tx > tx_lo(retention)`.  
-**Drop from TAVE:** keys with `tx <= tx_lo` (prune).  
+**Drop from TAVE:** keys with `tx <= tx_lo` (`prune_tave_before` / `prune_tave_to_retention`).  
 **Never use TAVE as source of truth for “what is true now”** — that remains
 EAVT/AEVT/AVET (full history / current facts as today).
 
-“当前数据” here means: the live basis still answers current-fact queries from
-EAVT; TAVE only accelerates **recent-window** scans. After prune, a `since` older
-than retention falls back to AEVT/AVET + tx filter (correct, slower).
-
-```text
-transact → write EAVT/AEVT/AVET (full) + TAVE (always for this tx)
-        → optionally prune TAVE where tx <= tx_lo(retention)
-
-query (API unchanged)
-  → if need recent tx-bounded attr scan AND window ⊆ retention → TAVE
-  → else → existing AVET/AEVT/EAVT paths
-```
-
-Config (engine/session, not query EDN):
+Public API (optional; callers need not use it):
 
 ```ocaml
-(* conceptual *)
-val set_tave_retention_days : int -> unit   (* default 30; 0 = disable TAVE writes *)
+Datascript.set_tave_retention_days 30  (* default; adjustable *)
+Datascript.tave_retention_days ()
+Datascript.prune_tave_to_retention db
 ```
 
-Prune triggers: after transact (amortized / every N txs), explicit
-`compact_tave`, and restore/open. Prune deletes TAVE keys only.
+Prune runs after `transact` (best-effort). Queries older than retention fall back
+to AEVT/AVET + tx filter (correct, slower).
+
+### Implemented (this branch)
+
+- `| Tave` index; key order `tx | a | v | e | added` (BLOB KV on LMDB `ds/tave` + SQLite `ds_tave`)
+- Written on every append alongside EAVT/AEVT/(AVET when indexed)
+- `fold_tave_range` / `prune_tave_before`; retention default 30 days
+- **API unchanged:** `since` + attr scan (`datoms … Aevt ~a`) auto-uses TAVE when applicable
+- LMDB `meta_set` invalidates read txn (fixes stale restore meta)
 
 ## API stability: callers must not change
 

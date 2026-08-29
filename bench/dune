@@ -76,6 +76,12 @@
  (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
 
 (executable
+ (name tave_storage_ratio)
+ (modules tave_storage_ratio)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe)
