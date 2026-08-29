@@ -287,31 +287,162 @@ let avet_attr_rseq db attr =
   (* Match CLJS `(rseq (datoms :avet attr))` — reverse scan of one attr only. *)
   rseek_datoms db Avet ~a:attr ()
 
-let recent_pages p =
-  let db = p.db in
-  let is_page d =
-    match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/page" ()) with
-    | Some _ -> false
-    | None -> (
-      match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/title" ()) with
-      | Some (t, _) -> (match t.v with String s -> String.trim s <> "" | _ -> false)
-      | None -> false)
-  in
-  let pages = keep_take 15 is_page (avet_attr_rseq db "block/updated-at") in
-  List.iter
-    (fun d -> match entity db (Entity_id d.e) with Some e -> hydrate_forward e | None -> ())
-    pages
+let is_page db d =
+  match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/page" ()) with
+  | Some _ -> false
+  | None -> (
+    match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/title" ()) with
+    | Some (t, _) -> (match t.v with String s -> String.trim s <> "" | _ -> false)
+    | None -> false)
 
-let latest_journals p =
+let recent_page_datoms p =
+  keep_take 15 (is_page p.db) (avet_attr_rseq p.db "block/updated-at")
+
+let journal_day_value = function
+  | Int day -> Some day
+  | Float f when float_of_int (int_of_float f) = f -> Some (int_of_float f)
+  | _ -> None
+
+let latest_journal_datoms p =
   let today = journal_day_of p.pages in
-  let kept =
-    keep_take 10
-      (fun d -> match d.v with Int day -> day <= today | _ -> false)
-      (avet_attr_rseq p.db "block/journal-day")
-  in
+  keep_take 10
+    (fun d -> match journal_day_value d.v with Some day -> day <= today | None -> false)
+    (avet_attr_rseq p.db "block/journal-day")
+
+(* Canonical EDN strings for cross-runtime result equality (match Clojure pr-str). *)
+let edn_of_value = function
+  | Nil -> "nil"
+  | Bool true -> "true"
+  | Bool false -> "false"
+  | Int i -> string_of_int i
+  | Float f when float_of_int (int_of_float f) = f -> string_of_int (int_of_float f)
+  | Float f ->
+    (* Match JS/Clojure number print for this workload (ints + small floats). *)
+    let s = Printf.sprintf "%.15g" f in
+    if String.contains s '.' || String.contains s 'e' || String.contains s 'E' then s
+    else s ^ ".0"
+  | String s -> "\"" ^ String.escaped s ^ "\""
+  | Keyword k -> ":" ^ k
+  | Symbol s -> s
+  | Uuid u -> "#uuid \"" ^ u ^ "\""
+  | Instant i -> string_of_int i
+  | Ref e -> string_of_int e
+  | other ->
+    (* Fallback: keep type visible without inventing EDN readers. *)
+    match other with
+    | Regex r -> "#\"" ^ String.escaped r ^ "\""
+    | _ -> "nil"
+
+let edn_vector items = "[" ^ String.concat " " items ^ "]"
+
+let edn_of_tx_value = function
+  | One_value v -> edn_of_value v
+  | Many_values vs ->
+    vs
+    |> List.map edn_of_value
+    |> List.sort String.compare
+    |> edn_vector
+  | One_entity _ | Many_entities _ -> "nil"
+
+let edn_of_result_cell = function
+  | Result_value v -> edn_of_value v
+  | Result_entity e -> string_of_int e
+  | Result_attr a -> ":" ^ a
+  | Result_db _ -> "$"
+  | Result_pull _ -> "nil"
+
+let edn_of_q_rows rows =
+  rows
+  |> List.map (fun row -> edn_vector (List.map edn_of_result_cell row))
+  |> List.sort String.compare
+  |> edn_vector
+
+let hydrate_edn_map e =
+  [ "block/uuid"; "block/title"; "block/name"; "block/updated-at"; "block/journal-day" ]
+  |> List.filter_map (fun attr ->
+    match entity_attr e attr with
+    | None -> None
+    | Some tv -> Some (edn_vector [ ":" ^ attr; edn_of_tx_value tv ]))
+  |> List.sort String.compare
+  |> edn_vector
+
+let result_edn p name =
+  match name with
+  | "recent-pages" ->
+    recent_page_datoms p |> List.map (fun d -> string_of_int d.e) |> edn_vector
+  | "latest-journals" ->
+    latest_journal_datoms p |> List.map (fun d -> string_of_int d.e) |> edn_vector
+  | "uuid-lookup" -> (
+    match entity p.db (Lookup_ref ("block/uuid", String p.sample_uuid)) with
+    | None -> "nil"
+    | Some e -> edn_vector [ string_of_int e.id; hydrate_edn_map e ])
+  | "title-lookup" ->
+    let title = Printf.sprintf "Page %d" (p.pages / 2) in
+    datoms p.db Avet ~a:"block/title" ~v:(String title) ()
+    |> List.of_seq
+    |> List.map (fun d -> d.e)
+    |> List.sort compare
+    |> List.map string_of_int
+    |> edn_vector
+  | "children-by-parent" ->
+    datoms p.db Avet ~a:"block/parent" ~v:(Ref p.sample_page) ()
+    |> List.of_seq
+    |> List.map (fun d -> d.e)
+    |> List.sort compare
+    |> List.map string_of_int
+    |> edn_vector
+  | "blocks-by-page" ->
+    datoms p.db Avet ~a:"block/page" ~v:(Ref p.sample_page) ()
+    |> List.of_seq
+    |> List.map (fun d -> d.e)
+    |> List.sort compare
+    |> List.map string_of_int
+    |> edn_vector
+  | "tags-scan" ->
+    datoms p.db Avet ~a:"block/tags" ~v:(Ref p.sample_tag) ()
+    |> List.of_seq
+    |> List.map (fun d -> d.e)
+    |> List.sort compare
+    |> List.map string_of_int
+    |> edn_vector
+  | "eavt-entity" ->
+    datoms p.db Eavt ~e:p.sample_page ()
+    |> List.of_seq
+    |> List.map (fun d -> edn_vector [ ":" ^ d.a; edn_of_value d.v ])
+    |> edn_vector
+  | "entity-hydrate" -> (
+    match entity p.db (Entity_id p.sample_page) with
+    | None -> "nil"
+    | Some e -> edn_vector [ string_of_int e.id; hydrate_edn_map e ])
+  | "q-updated-at-between" ->
+    let lo = p.base_ms + 3_600_000 in
+    let hi = p.base_ms + 86_400_000 in
+    edn_of_q_rows
+      (q_string
+         ~inputs:
+           [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
+         p.db
+         "[:find ?e ?t :in $ ?lo ?hi :where [?e :block/updated-at ?t] [(>= ?t ?lo)] [(<= ?t ?hi)]]")
+  | "q-journal-pages" ->
+    edn_of_q_rows
+      (q_string p.db "[:find ?e ?d :where [?e :block/journal-day ?d] [?e :block/title ?t]]")
+  | "q-page-by-name" ->
+    let name = Printf.sprintf "page-%d" (p.pages / 3) in
+    edn_of_q_rows
+      (q_string
+         ~inputs:[ Arg_scalar (Result_value (String name)) ]
+         p.db "[:find ?e :in $ ?n :where [?e :block/name ?n]]")
+  | other -> invalid_arg ("unknown result-edn query: " ^ other)
+
+let recent_pages p =
   List.iter
     (fun d -> match entity p.db (Entity_id d.e) with Some e -> hydrate_forward e | None -> ())
-    kept
+    (recent_page_datoms p)
+
+let latest_journals p =
+  List.iter
+    (fun d -> match entity p.db (Entity_id d.e) with Some e -> hydrate_forward e | None -> ())
+    (latest_journal_datoms p)
 
 let uuid_lookup p =
   match entity p.db (Lookup_ref ("block/uuid", String p.sample_uuid)) with
@@ -415,6 +546,10 @@ let () =
       Printf.printf "disk-bytes\t%d\n%!" (file_size prepared.sqlite_path);
       Printf.printf "build-ms\t%s\n%!" (format_ms prepared.build_ms);
       Printf.printf "restore-ms\t%s\n%!" (format_ms prepared.restore_ms);
+      List.iter
+        (fun q ->
+          Printf.printf "result-edn\t%s\t%s\n%!" q.name (result_edn prepared q.name))
+        selected;
       if config.jit_warmup > 0 then
         List.iter
           (fun q ->

@@ -249,27 +249,103 @@
   ;; Logseq: (rseq (d/datoms db :avet attr)). Prefer rseek-datoms (same order, lazy).
   (d/rseek-datoms db :avet attr))
 
+(defn is-page? [db datom]
+  (and (empty? (d/datoms db :eavt (:e datom) :block/page))
+       (let [titles (d/datoms db :eavt (:e datom) :block/title)]
+         (and (seq titles)
+              (string? (:v (first titles)))
+              (pos? (count (.trim ^js/String (:v (first titles)))))))))
+
+(defn recent-page-datoms [db]
+  (keep-take 15 #(is-page? db %) (avet-attr-rseq db :block/updated-at)))
+
+(defn latest-journal-datoms [db pages]
+  (let [today (journal-day-of pages)]
+    (keep-take 10
+               (fn [datom]
+                 (and (number? (:v datom)) (<= (:v datom) today)))
+               (avet-attr-rseq db :block/journal-day))))
+
+(defn hydrate-edn-pairs [entity]
+  (->> [:block/uuid :block/title :block/name :block/updated-at :block/journal-day]
+       (keep (fn [attr]
+               (when-some [v (get entity attr)]
+                 [attr v])))
+       (sort-by (comp str first))
+       vec))
+
+(defn sorted-eids [datoms]
+  (vec (sort (map :e datoms))))
+
+(defn edn-q-rows [rows]
+  ;; Stable EDN: sorted vector of row vectors (find returns a set in CLJS).
+  (->> rows
+       (map (fn [row] (mapv identity row)))
+       (sort-by pr-str)
+       vec))
+
+(defn result-edn [{:keys [db pages base-ms sample-uuid sample-page sample-tag]} name]
+  (case name
+    "recent-pages"
+    (mapv :e (recent-page-datoms db))
+    "latest-journals"
+    (mapv :e (latest-journal-datoms db pages))
+    "uuid-lookup"
+    (let [e (d/entity db [:block/uuid sample-uuid])]
+      (if e
+        [(:db/id e) (hydrate-edn-pairs e)]
+        nil))
+    "title-lookup"
+    (sorted-eids (d/datoms db :avet :block/title (str "Page " (quot pages 2))))
+    "children-by-parent"
+    (sorted-eids (d/datoms db :avet :block/parent sample-page))
+    "blocks-by-page"
+    (sorted-eids (d/datoms db :avet :block/page sample-page))
+    "tags-scan"
+    (sorted-eids (d/datoms db :avet :block/tags sample-tag))
+    "eavt-entity"
+    (mapv (fn [d] [(:a d) (:v d)]) (d/datoms db :eavt sample-page))
+    "entity-hydrate"
+    (let [e (d/entity db sample-page)]
+      (if e
+        [(:db/id e) (hydrate-edn-pairs e)]
+        nil))
+    "q-updated-at-between"
+    (let [lo (+ base-ms 3600000)
+          hi (+ base-ms 86400000)]
+      (edn-q-rows
+       (d/q '[:find ?e ?t
+              :in $ ?lo ?hi
+              :where
+              [?e :block/updated-at ?t]
+              [(>= ?t ?lo)]
+              [(<= ?t ?hi)]]
+            db lo hi)))
+    "q-journal-pages"
+    (edn-q-rows
+     (d/q '[:find ?e ?d
+            :where
+            [?e :block/journal-day ?d]
+            [?e :block/title ?t]]
+          db))
+    "q-page-by-name"
+    (edn-q-rows
+     (d/q '[:find ?e
+            :in $ ?n
+            :where [?e :block/name ?n]]
+          db
+          (str "page-" (quot pages 3))))
+    (throw (js/Error. (str "unknown result-edn query " name)))))
+
 (defn make-queries [{:keys [db pages base-ms sample-uuid sample-page sample-tag]}]
   [{:name "recent-pages"
     :run (fn []
-           (let [is-page (fn [datom]
-                           (and (empty? (d/datoms db :eavt (:e datom) :block/page))
-                                (let [titles (d/datoms db :eavt (:e datom) :block/title)]
-                                  (and (seq titles)
-                                       (string? (:v (first titles)))
-                                       (pos? (count (.trim ^js/String (:v (first titles)))))))))
-                 pages15 (keep-take 15 is-page (avet-attr-rseq db :block/updated-at))]
-             (doseq [datom pages15]
-               (hydrate-forward! (d/entity db (:e datom))))))}
+           (doseq [datom (recent-page-datoms db)]
+             (hydrate-forward! (d/entity db (:e datom)))))}
    {:name "latest-journals"
     :run (fn []
-           (let [today (journal-day-of pages)
-                 kept (keep-take 10
-                                 (fn [datom]
-                                   (and (number? (:v datom)) (<= (:v datom) today)))
-                                 (avet-attr-rseq db :block/journal-day))]
-             (doseq [datom kept]
-               (hydrate-forward! (d/entity db (:e datom))))))}
+           (doseq [datom (latest-journal-datoms db pages)]
+             (hydrate-forward! (d/entity db (:e datom)))))}
    {:name "uuid-lookup"
     :run (fn [] (hydrate-forward! (d/entity db [:block/uuid sample-uuid])))}
    {:name "title-lookup"
@@ -354,6 +430,8 @@
         (println (str "restore-ms\t" (format-ms (:restore-ms prepared))))
         (println (str "disk-bytes\t" (:disk-bytes prepared)))
         (println (str "query-cases\t" (count queries)))
+        (doseq [q queries]
+          (println (str "result-edn\t" (:name q) "\t" (pr-str (result-edn prepared (:name q))))))
         (when (pos? (:jit-warmup cfg))
           (doseq [q queries]
             (dotimes [_ (:jit-warmup cfg)]

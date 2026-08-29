@@ -970,15 +970,34 @@ let find_datom_in_sorted_array index arr datom =
     let at = lower 0 len in
     if at >= len || cmp arr.(at) datom <> 0 then None else Some arr.(at)
 
+(* Share AVET/TAVE keys encode Int/Float/Ref with one numeric tag, so raw decode
+   yields Float. Prefer warm attr-cache values (EAVT-shaped), else restore from
+   schema: RefType → Ref, integer-valued floats → Int (Logseq / write-side Int). *)
+let whole_int_of_float f =
+  let i = int_of_float f in
+  if float_of_int i = f then Some i else None
+
+let rehydrate_value_from_schema schema attr = function
+  | Float f as original ->
+    (match Schema.schema_attr_by_name schema attr with
+     | Some { value_type = Some RefType; _ } ->
+       (match whole_int_of_float f with Some i -> Ref i | None -> original)
+     | Some { value_type = Some InstantType; _ } ->
+       (match whole_int_of_float f with Some i -> Instant i | None -> original)
+     | _ ->
+       (match whole_int_of_float f with Some i -> Int i | None -> Float f))
+  | other -> other
+
 let rehydrate_datom_value db index datom =
   match index with
   | Avet -> (
     match Hashtbl.find_opt db.avet_by_attr datom.a with
-    | None -> datom
     | Some arr ->
       (match find_datom_in_sorted_array Avet arr datom with
-       | None -> datom
-       | Some cached -> { datom with v = cached.v }))
+       | Some cached -> { datom with v = cached.v }
+       | None -> { datom with v = rehydrate_value_from_schema db.schema datom.a datom.v })
+    | None -> { datom with v = rehydrate_value_from_schema db.schema datom.a datom.v })
+  | Tave -> { datom with v = rehydrate_value_from_schema db.schema datom.a datom.v }
   | Aevt -> (
     match Hashtbl.find_opt db.aevt_by_attr datom.a with
     | None -> datom
@@ -986,9 +1005,11 @@ let rehydrate_datom_value db index datom =
       (match find_datom_in_sorted_array Aevt arr datom with
        | None -> datom
        | Some cached -> { datom with v = cached.v }))
-  | Eavt | Tave -> datom
+  | Eavt -> datom
 
 let rehydrate_datom_seq db index seq = Seq.map (rehydrate_datom_value db index) seq
+
+let rehydrate_datom_list db index datoms = List.map (rehydrate_datom_value db index) datoms
 
 let find_primary_aevt_entity_attr db entity_id attr =
   match Hashtbl.find_opt db.aevt_by_attr attr with
@@ -1468,7 +1489,7 @@ let datoms context db index ?e ?a ?v ?tx () =
       datoms
       |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
-  apply_db_view_seq db datoms |> apply_filter_pred db
+  apply_db_view_seq db (rehydrate_datom_seq db index datoms) |> apply_filter_pred db
 
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
@@ -1515,17 +1536,29 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
     (match exact_attr_prefix, index, a with
      | true, (Aevt | Avet), Some attr when not (temporal_view db) ->
        (* Fold the attr prefix in place — do not materialize via primary_attr_datoms. *)
-       Index.fold_attr_prefix fold init (stored_index db index) attr
+       Index.fold_attr_prefix
+         (fun acc datom -> fold acc (rehydrate_datom_value db index datom))
+         init (stored_index db index) attr
      | true, (Aevt | Avet), Some attr ->
-       List.fold_left fold init (primary_attr_datoms db index attr)
+       List.fold_left fold init
+         (rehydrate_datom_list db index (primary_attr_datoms db index attr))
      | _ ->
        let seq = Index.slice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) in
-       Index.fold_seq fold init seq)
+       Index.fold_seq
+         (fun acc datom -> fold acc (rehydrate_datom_value db index datom))
+         init seq)
   | false, None when (e, a, v, tx) = (None, None, None, None) ->
     (match db.filter_pred with
-     | None -> Index.fold f init (stored_index db index)
+     | None ->
+       Index.fold
+         (fun acc datom -> f acc (rehydrate_datom_value db index datom))
+         init (stored_index db index)
      | Some pred ->
-       Index.fold (fun acc datom -> if pred datom then f acc datom else acc) init (stored_index db index))
+       Index.fold
+         (fun acc datom ->
+           let datom = rehydrate_datom_value db index datom in
+           if pred datom then f acc datom else acc)
+         init (stored_index db index))
   | _ ->
     datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
 
@@ -1559,7 +1592,7 @@ let datoms_list context db index ?e ?a ?v ?tx () =
       datoms
       |> List.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
-  apply_db_view db datoms |> apply_filter_pred_list db
+  apply_db_view db (rehydrate_datom_list db index datoms) |> apply_filter_pred_list db
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
   let e = resolved_entity_ref_option context db e in

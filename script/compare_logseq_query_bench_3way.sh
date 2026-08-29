@@ -107,21 +107,28 @@ from pathlib import Path
 out_dir = Path(sys.argv[1])
 size, pages = sys.argv[2], sys.argv[3]
 
-def parse(path):
-    rows = {}
-    for line in path.read_text().splitlines():
-        if "\t" not in line:
-            continue
-        k, v = line.split("\t", 1)
-        rows[k] = v
-    return rows
-
 paths = {
     "cljs-nbb-logseq-pss": out_dir / "bench-logseq-shared-cljs-nbb.txt",
     "ocaml-main-pss": out_dir / "bench-logseq-shared-ocaml-main.txt",
     "ocaml-current-non-pss": out_dir / "bench-logseq-shared-ocaml-current.txt",
 }
-parsed = {label: parse(path) for label, path in paths.items()}
+
+def parse_full(path):
+    rows = {}
+    edns = {}
+    for line in path.read_text().splitlines():
+        if "\t" not in line:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0] == "result-edn":
+            edns[parts[1]] = parts[2]
+        elif len(parts) >= 2:
+            rows[parts[0]] = parts[1]
+    return rows, edns
+
+parsed_full = {label: parse_full(path) for label, path in paths.items()}
+parsed = {label: rows for label, (rows, _edns) in parsed_full.items()}
+edns = {label: edn for label, (_rows, edn) in parsed_full.items()}
 queries = [
     "build-ms", "restore-ms", "disk-bytes",
     "recent-pages", "latest-journals", "uuid-lookup", "title-lookup",
@@ -129,6 +136,20 @@ queries = [
     "entity-hydrate", "q-updated-at-between", "q-journal-pages", "q-page-by-name",
 ]
 labels = list(paths.keys())
+
+# EDN result equality: CLJS PSS vs OCaml current Share (required).
+ref = "cljs-nbb-logseq-pss"
+cur = "ocaml-current-non-pss"
+mismatches = []
+for q in queries:
+    if q in ("build-ms", "restore-ms", "disk-bytes"):
+        continue
+    left = edns[ref].get(q)
+    right = edns[cur].get(q)
+    if left is None or right is None:
+        mismatches.append(f"{q}: missing edn (cljs={left is not None}, ocaml={right is not None})")
+    elif left != right:
+        mismatches.append(f"{q}:\n  cljs:  {left}\n  ocaml: {right}")
 
 md = []
 md.append("# Logseq shared query bench (3-way)")
@@ -138,7 +159,20 @@ md.append("- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kv
 md.append("- OCaml main: PSS + SQLite blob kvs (working set in memory after restore)")
 md.append("- OCaml current: non-PSS durable SQLite Share indexes (live B-tree tables)")
 md.append("- Workload: Logseq `initial_data` hot paths")
+md.append("- Result equality: `result-edn` lines compared as EDN strings (CLJS vs current)")
 md.append("")
+if mismatches:
+    md.append("## Result EDN mismatches (CLJS vs ocaml-current)")
+    md.append("")
+    for m in mismatches:
+        md.append(f"- {m}")
+    md.append("")
+else:
+    md.append("## Result EDN")
+    md.append("")
+    md.append("All Logseq query `result-edn` strings match between CLJS PSS and OCaml current.")
+    md.append("")
+
 md.append("| query | " + " | ".join(labels) + " |")
 md.append("| --- | " + " | ".join(["---:"] * len(labels)) + " |")
 for q in queries:
@@ -155,4 +189,9 @@ report = out_dir / "bench-logseq-shared-3way.md"
 report.write_text("\n".join(md) + "\n")
 print(report.read_text())
 print(f"wrote {report}", file=sys.stderr)
+if mismatches:
+    print("RESULT EDN MISMATCH:", file=sys.stderr)
+    for m in mismatches:
+        print(m, file=sys.stderr)
+    sys.exit(1)
 PY
