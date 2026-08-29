@@ -284,7 +284,8 @@ let hydrate_forward e =
     [ "block/uuid"; "block/title"; "block/name"; "block/updated-at"; "block/journal-day" ]
 
 let avet_attr_rseq db attr =
-  datoms db Avet ~a:attr () |> List.of_seq |> List.rev |> List.to_seq
+  (* Match CLJS `(rseq (datoms :avet attr))` — reverse scan of one attr only. *)
+  rseek_datoms db Avet ~a:attr ()
 
 let recent_pages p =
   let db = p.db in

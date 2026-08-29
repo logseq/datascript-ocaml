@@ -163,7 +163,19 @@ let apply_db_view_seq db seq = Tx_visibility.filter_seq db.schema (view_bounds d
 
 (** Apply temporal cancel to a descending (rseek) sequence by restoring ascending order. *)
 let apply_db_view_reverse_seq db seq =
-  seq |> List.of_seq |> List.rev |> apply_db_view db |> List.rev |> List.to_seq
+  if Option.is_some db.as_of_tx || Option.is_some db.since_tx || db.history then
+    (* Cancel pairs need ascending order; only materialize for temporal views. *)
+    seq |> List.of_seq |> List.rev |> apply_db_view db |> List.rev |> List.to_seq
+  else
+    (* Live index streams current facts; keep descending order and stay lazy. *)
+    apply_db_view_seq db seq
+
+let array_rev_seq arr =
+  let len = Array.length arr in
+  let rec loop i () =
+    if i < 0 then Seq.Nil else Seq.Cons (Array.unsafe_get arr i, loop (i - 1))
+  in
+  loop (len - 1)
 
 let indexes_on_storage db = Option.is_some db.storage_ref
 
@@ -1248,24 +1260,49 @@ let reverse_upper_prefix_datoms context db index e a v tx =
     let debug = match Sys.getenv_opt "DS_DEBUG_INDEX" with Some "1" -> true | _ -> false in
     let indexed =
       match index, e, a, v, tx with
-      | (Aevt | Avet), None, Some attr, None, None when merged_index db || pending_overlay db ->
-        let datoms = primary_attr_datoms db index attr in
+      | (Aevt | Avet), None, Some attr, None, None ->
+        let from_cache =
+          match index with
+          | Aevt -> Hashtbl.find_opt db.aevt_by_attr attr
+          | Avet -> Hashtbl.find_opt db.avet_by_attr attr
+          | Eavt | Tave -> None
+        in
         if debug then
           Printf.eprintf
-            "[DS_DEBUG_INDEX] reverse_upper_prefix branch=primary_attr_list_rev index=%s attr=%s merged=%b pending=%b n=%d\n%!"
+            "[DS_DEBUG_INDEX] reverse_upper_prefix branch=attr_rev index=%s attr=%s cache=%b merged=%b pending=%b\n%!"
             (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
-            attr (merged_index db) (pending_overlay db) (List.length datoms);
-        datoms
-        |> List.filter (fun datom -> cmp datom bound <= 0)
-        |> List.rev
-        |> List.to_seq
+            attr
+            (Option.is_some from_cache)
+            (merged_index db) (pending_overlay db);
+        (match from_cache with
+         | Some arr when not (merged_index db || pending_overlay db || temporal_view db) ->
+           array_rev_seq arr
+         | _ when not (merged_index db || pending_overlay db || temporal_view db) ->
+           ignore (primary_attr_datoms db index attr);
+           (match index with
+            | Aevt -> (
+              match Hashtbl.find_opt db.aevt_by_attr attr with
+              | Some arr -> array_rev_seq arr
+              | None -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
+            | Avet -> (
+              match Hashtbl.find_opt db.avet_by_attr attr with
+              | Some arr -> array_rev_seq arr
+              | None -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
+            | Eavt | Tave -> primary_attr_datoms db index attr |> List.rev |> List.to_seq)
+         | _ ->
+           primary_attr_datoms db index attr
+           |> List.filter (fun datom -> cmp datom bound <= 0)
+           |> List.rev
+           |> List.to_seq)
       | _ when pending_overlay db && not (merged_index db) ->
         if debug then
           Printf.eprintf
             "[DS_DEBUG_INDEX] reverse_upper_prefix branch=rslice+pending index=%s pending=%d\n%!"
             (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
             (List.length db.pending_datoms);
-        let stored = Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq in
+        let stored =
+          Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
+        in
         let pending =
           pending_for_index db index
           |> List.filter (fun datom -> cmp datom bound <= 0)
@@ -1280,7 +1317,9 @@ let reverse_upper_prefix_datoms context db index e a v tx =
             (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
             (merged_index db) (pending_overlay db)
             (match a with Some a -> a | None -> "-");
-        Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq
+        (* Pass both bounds so exact attr/value prefixes reverse only that prefix
+           (matches forward exact-prefix slice_seq ~from_ ~to_). *)
+        Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
     in
     (match merged_index db || pending_overlay db with
      | false -> Some indexed

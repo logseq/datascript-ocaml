@@ -278,12 +278,15 @@ let materialize_range t ?from_ ?to_ cmp =
 
 let make_seq cmp datoms = { cmp; datoms; offset = 0 }
 
-let to_seq ({ cmp = _; datoms; offset = start }) =
-  let rec loop index () =
-    if index >= List.length datoms then Seq.Nil
-    else Seq.Cons (List.nth datoms index, loop (index + 1))
+let drop_offset n datoms =
+  let rec loop n = function
+    | xs when n <= 0 -> xs
+    | _ :: xs -> loop (n - 1) xs
+    | [] -> []
   in
-  loop start
+  loop n datoms
+
+let to_seq ({ cmp = _; datoms; offset = start }) = List.to_seq (drop_offset start datoms)
 
 let seq t = make_seq (cmp_for t.which) (to_list t)
 
@@ -291,8 +294,7 @@ let slice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
   make_seq cmp (materialize_range t ?from_ ?to_ cmp)
 
-let rslice_seq ?from_ ?to_ ?cmp t =
-  let cmp = Option.value ~default:(cmp_for t.which) cmp in
+let rslice_materialize_desc t ~cmp ?from_ ?to_ () =
   (* Descending walk with datom-level bounds; see native rslice_seq comment. *)
   let datoms = ref [] in
   Datascript_lmdb_db.fold_index_range_desc_until t.which t.db
@@ -311,26 +313,30 @@ let rslice_seq ?from_ ?to_ ?cmp t =
     (fun key value ->
       let datom = decode_entry t.which key value in
       if in_range cmp to_ from_ datom then datoms := datom :: !datoms);
-  make_seq cmp (List.rev !datoms)
+  List.rev !datoms
+
+let rslice_seq ?from_ ?to_ ?cmp t =
+  let cmp = Option.value ~default:(cmp_for t.which) cmp in
+  let datoms =
+    match attr_exact_prefix from_ to_ t.which with
+    | Some attr -> List.rev (fold_attr_exact_prefix (fun acc datom -> datom :: acc) [] t attr)
+    | None -> rslice_materialize_desc t ~cmp ?from_ ?to_ ()
+  in
+  make_seq cmp datoms
 
 let seq_to_list seq = to_seq seq |> List.of_seq
 
 let fold_seq f init { cmp = _; datoms; offset } =
-  let rec loop index acc =
-    if index >= List.length datoms then acc
-    else loop (index + 1) (f acc (List.nth datoms index))
-  in
-  loop offset init
+  List.fold_left f init (drop_offset offset datoms)
 
 let slice ?from_ ?to_ ?cmp t = slice_seq ?from_ ?to_ ?cmp t |> seq_to_list
 
 let seek bound seq =
-  let rec count index =
-    if index >= List.length seq.datoms then index
-    else if seq.cmp (List.nth seq.datoms index) bound >= 0 then index
-    else count (index + 1)
+  let rec count index = function
+    | [] -> index
+    | x :: xs -> if seq.cmp x bound >= 0 then index else count (index + 1) xs
   in
-  { seq with offset = count 0 }
+  { seq with offset = count 0 seq.datoms }
 
 (** Fold TAVE keys with [tx > from_tx], optionally restricted to [attr]. *)
 let fold_tave_range f init db ~from_tx ?to_tx ?attr () =
