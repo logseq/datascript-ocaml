@@ -1292,8 +1292,16 @@ let reverse_upper_prefix_datoms context db index e a v tx =
             "[DS_DEBUG_INDEX] reverse_upper_prefix branch=rslice+pending index=%s pending=%d\n%!"
             (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
             (List.length db.pending_datoms);
+        let attr_only =
+          match index, e, a, v, tx with
+          | (Aevt | Avet), None, Some _, None, None -> true
+          | _ -> false
+        in
         let stored =
-          Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
+          if attr_only then
+            Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
+          else
+            Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq
         in
         let pending =
           pending_for_index db index
@@ -1312,11 +1320,16 @@ let reverse_upper_prefix_datoms context db index e a v tx =
         (* Attr-only reverse keeps ~to_ so the scan stays inside that attr
            (single-field prefix cmp). Multi-component rseek matches upstream:
            start at the upper bound and walk backward with no lower clamp. *)
-        (match index, e, a, v, tx with
-         | (Aevt | Avet), None, Some _, None, None ->
-           Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
-         | _ ->
-           Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq)    in
+        let attr_only =
+          match index, e, a, v, tx with
+          | (Aevt | Avet), None, Some _, None, None -> true
+          | _ -> false
+        in
+        if attr_only then
+          Index.rslice_seq ~from_:bound ~to_:bound ~cmp (stored_index db index) |> Index.to_seq
+        else
+          Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq
+    in
     (match merged_index db || pending_overlay db with
      | false -> Some indexed
      | true ->
@@ -1500,6 +1513,9 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
       | false, Some _ -> fold_filter_and_pred
     in
     (match exact_attr_prefix, index, a with
+     | true, (Aevt | Avet), Some attr when not (temporal_view db) ->
+       (* Fold the attr prefix in place — do not materialize via primary_attr_datoms. *)
+       Index.fold_attr_prefix fold init (stored_index db index) attr
      | true, (Aevt | Avet), Some attr ->
        List.fold_left fold init (primary_attr_datoms db index attr)
      | _ ->

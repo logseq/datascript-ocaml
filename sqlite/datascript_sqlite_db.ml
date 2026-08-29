@@ -80,18 +80,15 @@ let open_path path =
 
 let temps_created = ref 0
 
+let finalize_cached_stmts t =
+  Hashtbl.iter
+    (fun _sql stmt -> ignore (Sqlite3.finalize stmt))
+    t.stmts;
+  Hashtbl.clear t.stmts
+
 let close t =
   if not t.closed then (
-    Hashtbl.iter
-      (fun sql stmt ->
-        match Sqlite3.finalize stmt with
-        | rc when Sqlite3.Rc.is_success rc -> ()
-        | rc ->
-            (* Best-effort finalize on close; surface only unexpected failures. *)
-            ignore
-              (Printf.sprintf "finalize %s: %s" sql (Sqlite3.Rc.to_string rc)))
-      t.stmts;
-    Hashtbl.clear t.stmts;
+    finalize_cached_stmts t;
     if not (Sqlite3.db_close t.db) then invalid_arg ("failed to close SQLite database: " ^ t.path);
     t.closed <- true)
 
@@ -110,6 +107,8 @@ let create_temp () =
 
 let sync t =
   ensure_open t;
+  (* Cached prepared statements keep the WAL busy; drop them before checkpoint. *)
+  finalize_cached_stmts t;
   exec_sql t "PRAGMA synchronous=FULL;";
   exec_sql t "PRAGMA wal_checkpoint(FULL);";
   exec_sql t "PRAGMA synchronous=NORMAL;"

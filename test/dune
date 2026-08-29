@@ -172,6 +172,16 @@
  (libraries datascript-ocaml-native datascript-ocaml-native-lmdb test_support alcotest))
 
 (test
+ (name test_index_scan_backends)
+ (modules test_index_scan_backends)
+ (libraries
+  datascript-ocaml-native
+  datascript-ocaml-native-sqlite
+  datascript-ocaml-native-lmdb
+  test_support
+  alcotest))
+
+(test
  (name test_melange_transit_backend)
  (modules test_melange_transit_backend)
  (libraries melange-transit-native melange-edn-native))
@@ -290,5 +300,3 @@
    %{dep:cross_runtime_parity_test.sh}
    %{dep:cross_runtime_ocaml.exe}
    %{dep:../script/cross_runtime_upstream.js})))
-
-
