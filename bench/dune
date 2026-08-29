@@ -82,6 +82,12 @@
  (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
 
 (executable
+ (name logseq_query_bench)
+ (modules logseq_query_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
  (modes exe)
@@ -118,3 +124,4 @@
   ../script/benchmark_gate_vs_cljs_check_test.sh)
  (action
   (run bash %{dep:../script/benchmark_gate_vs_cljs_check_test.sh})))
+
