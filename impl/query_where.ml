@@ -1475,6 +1475,13 @@ end) = struct
               None
             else
               let output_attr_arrays = List.map Option.get output_attr_arrays in
+              let aevt_dense_base arr =
+                let len = Array.length arr in
+                if len = 0 then None
+                else
+                  let base = arr.(0).e in
+                  if arr.(len - 1).e = base + len - 1 then Some (base, len) else None
+              in
               let specialized =
                 match attrs with
                 | [ out_e; jv; ov ] when out_e = output_entity && jv = join_var ->
@@ -1487,6 +1494,28 @@ end) = struct
                    | _ -> None)
                 | _ -> None
               in
+              let emit_specialized_row out_arr datom =
+                match
+                  match aevt_dense_base out_arr with
+                  | Some (base, len) ->
+                    let index = datom.e - base in
+                    if index >= 0 && index < len && out_arr.(index).e = datom.e then
+                      Some out_arr.(index)
+                    else None
+                  | None -> find_entity_in_aevt_array out_arr datom.e
+                with
+                | None -> None
+                | Some out_datom ->
+                  let join_result = Query.result_of_ref (Query.result_of_datom_v datom) in
+                  let out_result = Query.result_of_ref (Query.result_of_datom_v out_datom) in
+                  Some
+                    (match attrs with
+                     | [ _; jv; _ ] when jv = join_var ->
+                       [ Result_entity datom.e; join_result; out_result ]
+                     | [ _; _; jv ] when jv = join_var ->
+                       [ Result_entity datom.e; out_result; join_result ]
+                     | _ -> [ Result_entity datom.e; join_result; out_result ])
+              in
               let rows =
                 match specialized with
                 | Some out_arr ->
@@ -1494,25 +1523,9 @@ end) = struct
                   Array.iter
                     (fun datom ->
                       if Hashtbl.mem join_values datom.v then
-                        match find_entity_in_aevt_array out_arr datom.e with
+                        match emit_specialized_row out_arr datom with
                         | None -> ()
-                        | Some out_datom ->
-                          let join_result =
-                            Query.result_of_ref (Query.result_of_datom_v datom)
-                          in
-                          let out_result =
-                            Query.result_of_ref (Query.result_of_datom_v out_datom)
-                          in
-                          let row =
-                            match attrs with
-                            | [ _; jv; _ ] when jv = join_var ->
-                              [ Result_entity datom.e; join_result; out_result ]
-                            | [ _; _; jv ] when jv = join_var ->
-                              [ Result_entity datom.e; out_result; join_result ]
-                            | _ ->
-                              [ Result_entity datom.e; join_result; out_result ]
-                          in
-                          rows := row :: !rows)
+                        | Some row -> rows := row :: !rows)
                     join_arr;
                   List.rev !rows
                 | None ->

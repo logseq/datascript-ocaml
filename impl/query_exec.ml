@@ -28,9 +28,19 @@ module Make (Context : sig
   val entity_ids_array_by_attr_value : db -> attr -> value -> entity_id array option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
+  val is_ref_attr : db -> attr -> bool
   val aevt_attr_array : db -> attr -> datom array option
   val aevt_duplicate_datoms : db -> attr -> datom list
   val find_entity_in_aevt_array : datom array -> entity_id -> datom option
+  val fold_index_range :
+    ('acc -> datom -> 'acc) ->
+    'acc ->
+    db ->
+    attr ->
+    ?start:value ->
+    ?stop:value ->
+    unit ->
+    'acc
 end) = struct
   open Context
 
@@ -846,6 +856,117 @@ end) = struct
     in
     loop relation filters
 
+  (* Datalevin-style inequality pushdown: fold comparisons on the open value var
+     into AVET start/stop bounds instead of full AEVT scan + post-filter. *)
+  let reverse_comparison_predicate = function
+    | GreaterThan -> LessThan
+    | GreaterOrEqual -> LessOrEqual
+    | LessThan -> GreaterThan
+    | LessOrEqual -> GreaterOrEqual
+
+  let range_predicate_for_var var predicate left_term right_term =
+    match left_term, right_term with
+    | QVar left_var, QValue threshold when left_var = var -> Some (predicate, threshold)
+    | QValue threshold, QVar right_var when right_var = var ->
+      Some (reverse_comparison_predicate predicate, threshold)
+    | _ -> None
+
+  let avet_index_start predicate threshold =
+    match predicate, threshold with
+    | GreaterThan, Int n -> Some (Int (n + 1))
+    | GreaterOrEqual, value | GreaterThan, value -> Some value
+    | _ -> None
+
+  let avet_index_stop predicate threshold =
+    match predicate, threshold with
+    | LessThan, Int n when n > min_int -> Some (Int (n - 1))
+    | LessOrEqual, value | LessThan, value -> Some value
+    | _ -> None
+
+  let merge_avet_start compare_value start bound =
+    match start with
+    | None -> Some bound
+    | Some current -> if compare_value bound current > 0 then Some bound else Some current
+
+  let merge_avet_stop compare_value stop bound =
+    match stop with
+    | None -> Some bound
+    | Some current -> if compare_value bound current < 0 then Some bound else Some current
+
+  let comparison_matches_value value_var value = function
+    | ComparisonPredicate (predicate, left_term, right_term) -> (
+      match range_predicate_for_var value_var predicate left_term right_term with
+      | Some (range_predicate, threshold) ->
+        Built_ins.matches_comparison_predicate
+          range_predicate
+          (query_evaluator_context.compare_value value threshold)
+      | None -> false)
+    | _ -> false
+
+  let try_avet_range_drive source_db e_var (scan : Query_plan.l_scan) filters =
+    match scan.entity, scan.attr, scan.value, scan.tx with
+    | QVar ev, QAttr attr, QVar value_var, None
+      when ev = e_var
+           && value_var <> e_var
+           && direct_attr attr
+           && query_attr_uses_avet source_db attr
+           && not (is_ref_attr source_db attr)
+           && filters <> []
+           && List.for_all
+                (function
+                  | ComparisonPredicate (predicate, left, right) ->
+                    Option.is_some (range_predicate_for_var value_var predicate left right)
+                  | _ -> false)
+                filters ->
+      let compare_value = query_evaluator_context.compare_value in
+      let start, stop =
+        List.fold_left
+          (fun (start, stop) -> function
+            | ComparisonPredicate (predicate, left_term, right_term) -> (
+              match range_predicate_for_var value_var predicate left_term right_term with
+              | Some (GreaterThan as p, threshold) | Some (GreaterOrEqual as p, threshold) ->
+                let bound = Option.value (avet_index_start p threshold) ~default:threshold in
+                (merge_avet_start compare_value start bound, stop)
+              | Some (LessThan as p, threshold) | Some (LessOrEqual as p, threshold) ->
+                let bound = Option.value (avet_index_stop p threshold) ~default:threshold in
+                (start, merge_avet_stop compare_value stop bound)
+              | _ -> (start, stop))
+            | _ -> (start, stop))
+          (None, None) filters
+      in
+      let need_post_filter =
+        List.exists
+          (function
+            | ComparisonPredicate (predicate, left, right) -> (
+              match range_predicate_for_var value_var predicate left right with
+              | Some (GreaterThan, Int _) | Some (LessThan, Int _) -> false
+              | Some _ -> true
+              | None -> true)
+            | _ -> false)
+          filters
+      in
+      let cons_row acc d =
+        if (not need_post_filter) || List.for_all (comparison_matches_value value_var d.v) filters
+        then [ Result_entity d.e; Result_value d.v ] :: acc
+        else acc
+      in
+      let rows =
+        (match start, stop with
+         | None, None -> fold_index_range cons_row [] source_db attr ()
+         | Some start, None -> fold_index_range cons_row [] source_db attr ~start ()
+         | None, Some stop -> fold_index_range cons_row [] source_db attr ~stop ()
+         | Some start, Some stop ->
+           fold_index_range cons_row [] source_db attr ~start ~stop ())
+        |> List.rev
+      in
+      let attrs = [ e_var; value_var ] in
+      Some
+        { attrs
+        ; rows
+        ; unique_rows = unique_rows_flag source_db attrs e_var
+        }
+    | _ -> None
+
   let execute_entity_group _db source (group : Query_plan.entity_group) =
     match source with
     | Db_source source_db -> (
@@ -865,6 +986,14 @@ end) = struct
       | None ->
         let e_var = group.entity_var in
         let (scan : Query_plan.l_scan) = group.scan in
+        (* Open-value scan + comparison filters only: AVET range drive (Datalevin pushdown). *)
+        (match group.merges, group.anti_scans, group.filters with
+         | [], [], filters when filters <> [] ->
+           try_avet_range_drive source_db e_var scan filters
+         | _ -> None)
+        |> function
+        | Some relation -> Some relation (* filters already applied via range / residual *)
+        | None ->
         (* Specialized q2: [?e :attr const] [?e :attr2 ?v] — Datahike sorted-merge N=1. *)
         (match scan.entity, scan.attr, scan.value, group.merges, group.anti_scans with
          | QVar ev, QAttr drive_attr, QValue drive_value, [ merge ], []

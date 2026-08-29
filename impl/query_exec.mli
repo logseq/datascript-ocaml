@@ -24,9 +24,19 @@ module Make (Context : sig
   val entity_ids_array_by_attr_value : db -> attr -> value -> entity_id array option
   val query_attr_uses_avet : db -> attr -> bool
   val query_value_uses_avet : value -> bool
+  val is_ref_attr : db -> attr -> bool
   val aevt_attr_array : db -> attr -> datom array option
   val aevt_duplicate_datoms : db -> attr -> datom list
   val find_entity_in_aevt_array : datom array -> entity_id -> datom option
+  val fold_index_range :
+    ('acc -> datom -> 'acc) ->
+    'acc ->
+    db ->
+    attr ->
+    ?start:value ->
+    ?stop:value ->
+    unit ->
+    'acc
 end) : sig
   val run :
     db ->

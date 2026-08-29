@@ -204,6 +204,18 @@ let fused_cases =
     ; expect_path = Fused_execute
     ; expect_fused_plan = true
     }
+  ; { name = "qpred1"
+    ; query = "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"
+    ; inputs = []
+    ; expect_path = Fused_execute
+    ; expect_fused_plan = true
+    }
+  ; { name = "q-pred-range"
+    ; query = "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)] [(< ?s 80000)]]"
+    ; inputs = []
+    ; expect_path = Fused_execute
+    ; expect_fused_plan = true
+    }
   ]
 
 let fallback_cases =
