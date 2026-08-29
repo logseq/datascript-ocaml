@@ -217,16 +217,20 @@ let rand_nth rng values = values.(next_int rng (Array.length values))
 let rand_sex rng = sexes.(next_int rng 997 mod Array.length sexes)
 
 let random_man rng i =
+  let name = rand_nth rng names in
+  let last_name = rand_nth rng last_names in
+  let sex = rand_sex rng in
+  let age = next_int rng 100 in
+  let salary = next_int rng 100_000 in
   Entity
     {
-      db_id = Some (Temp_id (string_of_int i)
-      )
+      db_id = Some (Entity_id i)
     ; attrs =
-        [ "name", One_value (String (rand_nth rng names))
-        ; "last-name", One_value (String (rand_nth rng last_names))
-        ; "sex", One_value (Keyword (rand_sex rng))
-        ; "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        [ "name", One_value (String name)
+        ; "last-name", One_value (String last_name)
+        ; "sex", One_value (Keyword sex)
+        ; "age", One_value (Int age)
+        ; "salary", One_value (Int salary)
         ]
     }
 
@@ -239,52 +243,100 @@ let follow_rules =
                [ QueryFormSymbol "?e1"; QueryFormKeyword "follows"; QueryFormSymbol "?e2" ]
            ] ])
 
+(* Canonical EDN strings for cross-runtime result equality (match Clojure pr-str). *)
+let edn_of_value = function
+  | Nil -> "nil"
+  | Bool true -> "true"
+  | Bool false -> "false"
+  | Int i -> string_of_int i
+  | Float f when float_of_int (int_of_float f) = f -> string_of_int (int_of_float f)
+  | Float f ->
+    let s = Printf.sprintf "%.15g" f in
+    if String.contains s '.' || String.contains s 'e' || String.contains s 'E' then s
+    else s ^ ".0"
+  | String s -> "\"" ^ String.escaped s ^ "\""
+  | Keyword k -> ":" ^ k
+  | Symbol s -> s
+  | Uuid u -> "#uuid \"" ^ u ^ "\""
+  | Instant i -> string_of_int i
+  | Ref e -> string_of_int e
+  | Regex r -> "#\"" ^ String.escaped r ^ "\""
+  | _ -> "nil"
+
+let edn_vector items = "[" ^ String.concat " " items ^ "]"
+
+let edn_of_result_cell = function
+  | Result_value v -> edn_of_value v
+  | Result_entity e -> string_of_int e
+  | Result_attr a -> ":" ^ a
+  | Result_db _ -> "$"
+  | Result_pull _ -> "nil"
+
+let edn_of_q_rows rows =
+  rows
+  |> List.map (fun row -> edn_vector (List.map edn_of_result_cell row))
+  |> List.sort String.compare
+  |> edn_vector
+
 type query_case =
   { name : string
   ; run : db -> unit
+  ; result_edn : db -> string
   }
 
-let q name query =
-  { name; run = (fun db -> consume_rows (q_string db query)) }
-
-let q_inputs name query inputs =
+let mk_q name query_string =
+  let parsed = parse_query_string query_string in
   {
     name
-  ; run =
-      (fun db -> consume_rows (q_string ~inputs db query))
+  ; run = (fun db -> consume_rows (Datascript.q db parsed))
+  ; result_edn = (fun db -> edn_of_q_rows (Datascript.q db parsed))
   }
 
-let q_rules name query =
-  { name; run = (fun db -> consume_rows (q_string ~inputs:[ Arg_rules follow_rules ] db query)) }
+let mk_q_inputs name query_string inputs =
+  let parsed = parse_query_string query_string in
+  {
+    name
+  ; run = (fun db -> consume_rows (Datascript.q ~inputs db parsed))
+  ; result_edn = (fun db -> edn_of_q_rows (Datascript.q ~inputs db parsed))
+  }
+
+let mk_q_rules name query_string =
+  let parsed = parse_query_string query_string in
+  let inputs = [ Arg_rules follow_rules ] in
+  {
+    name
+  ; run = (fun db -> consume_rows (Datascript.q ~inputs db parsed))
+  ; result_edn = (fun db -> edn_of_q_rows (Datascript.q ~inputs db parsed))
+  }
 
 let queries =
   [
-    q "q1" "[:find ?e :where [?e :name \"Ivan\"]]"
-  ; q "q2" "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]"
-  ; q "q2-switch" "[:find ?e ?a :where [?e :age ?a] [?e :name \"Ivan\"]]"
-  ; q "q3" "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]"
-  ; q
+    mk_q "q1" "[:find ?e :where [?e :name \"Ivan\"]]"
+  ; mk_q "q2" "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]"
+  ; mk_q "q2-switch" "[:find ?e ?a :where [?e :age ?a] [?e :name \"Ivan\"]]"
+  ; mk_q "q3" "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]"
+  ; mk_q
       "q4"
       "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]"
-  ; q
+  ; mk_q
       "q5"
       "[:find ?e1 ?l ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e1 :age ?a] [?e1 :last-name ?l]]"
-  ; q "qpred1" "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"
-  ; q_inputs "qpred2" "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
+  ; mk_q "qpred1" "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"
+  ; mk_q_inputs "qpred2" "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
       [ Arg_scalar (Result_value (Int 50_000)) ]
-  ; q "q-or" "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]"
-  ; q "q-not" "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]"
-  ; q
+  ; mk_q "q-or" "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]"
+  ; mk_q "q-not" "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]"
+  ; mk_q
       "q-or-join"
       "[:find ?e ?a :where [?e :age ?a] (or-join [?e] [?e :name \"Ivan\"] [?e :name \"Petr\"])]"
-  ; q "q-not-join" "[:find ?e ?a :where [?e :age ?a] (not-join [?e] [?e :sex :male])]"
-  ; q
+  ; mk_q "q-not-join" "[:find ?e ?a :where [?e :age ?a] (not-join [?e] [?e :sex :male])]"
+  ; mk_q
       "q-pred-range"
       "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)] [(< ?s 80000)]]"
-  ; q
+  ; mk_q
       "q-5-merge"
       "[:find ?e ?n ?l ?a ?s :where [?e :name ?n] [?e :last-name ?l] [?e :age ?a] [?e :salary ?s] [?e :sex :male]]"
-  ; q_rules "q-rule" "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
+  ; mk_q_rules "q-rule" "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]"
   ]
 
 let query_names =
@@ -436,6 +488,10 @@ let run_backend config selected prepared =
     prepared.label
     config.jit_warmup;
   warmup_queries config.jit_warmup selected prepared.db;
+  List.iter
+    (fun query ->
+      Printf.printf "result-edn\t%s\t%s\n%!" query.name (query.result_edn prepared.db))
+    selected;
   Printf.eprintf "[%s] Running %d query benchmarks...\n%!" prepared.label (List.length selected);
   List.iter
     (fun query ->
