@@ -247,6 +247,9 @@ let build ~size ~pages ~sqlite_path =
   remove_path path;
   let started = now_ms () in
   let session = Datascript_sqlite.open_session path in
+  (* Current branch: sqlite plugin returns Datascript_types.storage (Storage_handle).
+     origin/main returns Datascript.storage directly — compare script strips
+     storage_of_handle / refresh_db_indexes when copying into the main worktree. *)
   let storage = storage_of_handle (Datascript_sqlite.storage session) in
   let db = db_with ops (empty_db ~schema ~storage ()) in
   let db = refresh_db_indexes db in

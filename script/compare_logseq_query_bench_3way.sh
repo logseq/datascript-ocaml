@@ -63,6 +63,21 @@ fi
 
 mkdir -p "$worktree/bench"
 cp "$repo_root/bench/logseq_query_bench_shared.ml" "$worktree/bench/logseq_query_bench_shared.ml"
+# origin/main API divergences (keep shared source matching current branch):
+# - Datascript_sqlite.storage already returns Datascript.storage (no storage_of_handle)
+# - refresh_db_indexes is not exported on main
+python3 - <<'PY' "$worktree/bench/logseq_query_bench_shared.ml"
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    "let storage = storage_of_handle (Datascript_sqlite.storage session) in",
+    "let storage = Datascript_sqlite.storage session in",
+)
+text = text.replace("  let db = refresh_db_indexes db in\n", "")
+path.write_text(text)
+PY
 if ! grep -q 'logseq_query_bench_shared' "$worktree/bench/dune"; then
   cat >> "$worktree/bench/dune" <<'EOF'
 
