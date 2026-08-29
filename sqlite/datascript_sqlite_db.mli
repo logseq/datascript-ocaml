@@ -11,7 +11,9 @@ val meta_get : t -> string -> string option
 val meta_set : t -> string -> string -> unit
 
 val with_write_txn : t -> (unit -> unit) -> unit
+val with_bulk_write_txn : t -> (unit -> unit) -> unit
 val put_index_txn : index -> t -> string -> string -> unit
+val put_index_entries_txn : index -> t -> (string * string) list -> unit
 val remove_index_txn : index -> t -> string -> unit
 val put_index : index -> t -> string -> string -> unit
 val remove_index : index -> t -> string -> unit

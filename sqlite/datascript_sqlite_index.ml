@@ -29,17 +29,32 @@ let empty index db = make index db
 let write_datoms t datoms =
   if datoms = [] then t
   else (
-    Datascript_sqlite_db.with_write_txn t.db (fun () -> List.iter (put_datom_txn t) datoms);
+    let entries =
+      datoms
+      |> List.map (fun datom ->
+        ( datom_key t datom
+        , Datascript_index_codec.encode_index_value t.which datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    Datascript_sqlite_db.with_bulk_write_txn t.db (fun () ->
+      Datascript_sqlite_db.put_index_entries_txn t.which t.db entries);
     t)
 
 let of_sorted_list index datoms db = write_datoms (empty index db) datoms
 
 let of_sorted_lists index_datoms db =
-  Datascript_sqlite_db.with_write_txn db (fun () ->
+  Datascript_sqlite_db.with_bulk_write_txn db (fun () ->
     List.iter
       (fun (index, datoms) ->
         let t = make index db in
-        List.iter (put_datom_txn t) datoms)
+        let entries =
+          datoms
+          |> List.map (fun datom ->
+            ( datom_key t datom
+            , Datascript_index_codec.encode_index_value t.which datom ))
+          |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+        in
+        Datascript_sqlite_db.put_index_entries_txn index db entries)
       index_datoms)
 
 let of_eavt_datoms ~avet eavt_datoms db =
@@ -49,14 +64,40 @@ let of_eavt_datoms ~avet eavt_datoms db =
     let aevt = make Aevt db in
     let avet_index = make Avet db in
     let tave = make Tave db in
-    Datascript_sqlite_db.with_write_txn db (fun () ->
-      List.iter
-        (fun datom ->
-          put_datom_txn eavt datom;
-          put_datom_txn aevt datom;
-          put_datom_txn tave datom;
-          if avet datom.a then put_datom_txn avet_index datom)
-        eavt_datoms))
+    let eavt_entries =
+      eavt_datoms
+      |> List.map (fun datom ->
+        ( datom_key eavt datom
+        , Datascript_index_codec.encode_index_value Eavt datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let aevt_entries =
+      eavt_datoms
+      |> List.map (fun datom ->
+        ( datom_key aevt datom
+        , Datascript_index_codec.encode_index_value Aevt datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let tave_entries =
+      eavt_datoms
+      |> List.map (fun datom ->
+        ( datom_key tave datom
+        , Datascript_index_codec.encode_index_value Tave datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let avet_entries =
+      eavt_datoms
+      |> List.filter (fun datom -> avet datom.a)
+      |> List.map (fun datom ->
+        ( datom_key avet_index datom
+        , Datascript_index_codec.encode_index_value Avet datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    Datascript_sqlite_db.with_bulk_write_txn db (fun () ->
+      Datascript_sqlite_db.put_index_entries_txn Eavt db eavt_entries;
+      Datascript_sqlite_db.put_index_entries_txn Aevt db aevt_entries;
+      Datascript_sqlite_db.put_index_entries_txn Tave db tave_entries;
+      Datascript_sqlite_db.put_index_entries_txn Avet db avet_entries))
 
 let of_bulk index datoms db = of_sorted_list index datoms db
 
@@ -64,14 +105,40 @@ let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
   if datoms = [] then (eavt, aevt, avet_index)
   else (
     let tave = make Tave eavt.db in
-    Datascript_sqlite_db.with_write_txn eavt.db (fun () ->
-      List.iter
-        (fun datom ->
-          put_datom_txn eavt datom;
-          put_datom_txn aevt datom;
-          put_datom_txn tave datom;
-          if is_avet datom.a then put_datom_txn avet_index datom)
-        datoms);
+    let eavt_entries =
+      datoms
+      |> List.map (fun datom ->
+        ( datom_key eavt datom
+        , Datascript_index_codec.encode_index_value Eavt datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let aevt_entries =
+      datoms
+      |> List.map (fun datom ->
+        ( datom_key aevt datom
+        , Datascript_index_codec.encode_index_value Aevt datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let tave_entries =
+      datoms
+      |> List.map (fun datom ->
+        ( datom_key tave datom
+        , Datascript_index_codec.encode_index_value Tave datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    let avet_entries =
+      datoms
+      |> List.filter (fun datom -> is_avet datom.a)
+      |> List.map (fun datom ->
+        ( datom_key avet_index datom
+        , Datascript_index_codec.encode_index_value Avet datom ))
+      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    in
+    Datascript_sqlite_db.with_bulk_write_txn eavt.db (fun () ->
+      Datascript_sqlite_db.put_index_entries_txn Eavt eavt.db eavt_entries;
+      Datascript_sqlite_db.put_index_entries_txn Aevt eavt.db aevt_entries;
+      Datascript_sqlite_db.put_index_entries_txn Tave eavt.db tave_entries;
+      Datascript_sqlite_db.put_index_entries_txn Avet eavt.db avet_entries);
     (eavt, aevt, avet_index))
 
 let append_datoms datoms t = write_datoms t datoms

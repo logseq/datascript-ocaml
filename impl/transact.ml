@@ -1125,35 +1125,6 @@ let apply_tx context tx_ops db =
         (left.e, left.a, left.v, left.tx)
         (right.e, right.a, right.v, right.tx)
     in
-    let existing_attr_datoms acc_tx_data d =
-      let from_db =
-        context.existing_entity_attr_datoms db d.e d.a
-        |> List.filter (fun ex ->
-          not (List.exists (fun pd -> not pd.added && context.same_fact pd ex) acc_tx_data))
-      in
-      let from_acc =
-        acc_tx_data
-        |> List.filter (fun pd -> pd.added && pd.e = d.e && pd.a = d.a)
-        |> List.filter (fun pd ->
-          not (List.exists (fun pd2 -> not pd2.added && context.same_fact pd pd2) acc_tx_data))
-      in
-      from_db @ from_acc
-    in
-    let tx_data_for_fact acc_tx_data d =
-      let d = { d with v = context.resolve_context.normalize_value d.v } in
-      let existing = existing_attr_datoms acc_tx_data d in
-      let same_fact_exists = List.exists (context.same_fact d) existing in
-      match context.resolve_context.cardinality db d.a with
-      | Many -> if same_fact_exists then [] else [ d ]
-      | One ->
-        if same_fact_exists then
-          []
-        else
-          (existing
-           |> List.sort compare_eavt_datom
-           |> List.map retraction_datom)
-          @ [ d ]
-    in
     let resolve_fast_value_for_attr attr value max_eid =
       match value with
       | Ref_to (Lookup_ref (lookup_attr, lookup_value)) when context.resolve_context.is_ref_attr db attr ->
@@ -1506,13 +1477,49 @@ let apply_tx context tx_ops db =
          if duplicate_fact facts || duplicate_unique facts || conflicts_with_existing facts then
            None
          else
+           (* Build tx_data in O(n): [acc @ pieces] was O(n²) and dominated Share
+              SQLite bulk loads (20k entities ≈ 100k facts). Index same-tx (e,a)
+              facts for card-one retraction without scanning the full acc list. *)
            let tx_data =
-             List.fold_left
-               (fun acc fact ->
-                 let datom_tx_data = tx_data_for_fact acc fact in
-                 acc @ datom_tx_data)
-               []
-               facts
+             let by_ea = Hashtbl.create (List.length facts) in
+             let acc_rev =
+               List.fold_left
+                 (fun acc_rev fact ->
+                   let d =
+                     { fact with v = context.resolve_context.normalize_value fact.v }
+                   in
+                   let from_db = context.existing_entity_attr_datoms db d.e d.a in
+                   let from_acc =
+                     match Hashtbl.find_opt by_ea (d.e, d.a) with
+                     | None -> []
+                     | Some ds -> List.rev ds
+                   in
+                   let existing = from_db @ from_acc in
+                   let same_fact_exists = List.exists (context.same_fact d) existing in
+                   let pieces =
+                     match context.resolve_context.cardinality db d.a with
+                     | Many -> if same_fact_exists then [] else [ d ]
+                     | One ->
+                       if same_fact_exists then
+                         []
+                       else
+                         (existing
+                          |> List.sort compare_eavt_datom
+                          |> List.map retraction_datom)
+                         @ [ d ]
+                   in
+                   List.iter
+                     (fun pd ->
+                       let prev =
+                         Option.value (Hashtbl.find_opt by_ea (pd.e, pd.a)) ~default:[]
+                       in
+                       Hashtbl.replace by_ea (pd.e, pd.a) (pd :: prev))
+                     pieces;
+                   List.rev_append pieces acc_rev)
+                 []
+                 facts
+             in
+             List.rev acc_rev
            in
            let max_eid =
              List.fold_left

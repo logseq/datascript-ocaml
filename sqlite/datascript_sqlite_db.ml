@@ -141,6 +141,18 @@ let with_write_txn db f =
      (try exec_sql db "ROLLBACK;" with _ -> ());
      raise exn)
 
+(* Bulk loads issue hundreds of thousands of REPLACE steps; NORMAL sync per page
+   dominates. Turn sync off for the txn and restore NORMAL afterward. *)
+let with_bulk_write_txn db f =
+  ensure_open db;
+  exec_sql db "PRAGMA synchronous=OFF;";
+  (try
+     with_write_txn db f;
+     exec_sql db "PRAGMA synchronous=NORMAL;"
+   with exn ->
+     (try exec_sql db "PRAGMA synchronous=NORMAL;" with _ -> ());
+     raise exn)
+
 let put_index_txn index db key value =
   let sql =
     Printf.sprintf "REPLACE INTO %s (key, value) VALUES (?, ?);" (table_name index)
@@ -149,6 +161,46 @@ let put_index_txn index db key value =
       check db sql (Sqlite3.bind_blob stmt 1 key);
       check db sql (Sqlite3.bind_blob stmt 2 value);
       check db sql (Sqlite3.step stmt))
+
+(* Multi-row REPLACE cuts prepare/step overhead vs one statement per key. *)
+let put_index_chunk_size = 64
+
+let put_index_entries_txn index db entries =
+  match entries with
+  | [] -> ()
+  | _ ->
+    let table = table_name index in
+    let rec loop = function
+      | [] -> ()
+      | rest ->
+        let chunk, rest =
+          let rec take n acc xs =
+            if n = 0 then List.rev acc, xs
+            else
+              match xs with
+              | [] -> List.rev acc, []
+              | x :: xs -> take (n - 1) (x :: acc) xs
+          in
+          take put_index_chunk_size [] rest
+        in
+        let n = List.length chunk in
+        let placeholders =
+          List.init n (fun _ -> "(?, ?)") |> String.concat ", "
+        in
+        let sql =
+          Printf.sprintf "REPLACE INTO %s (key, value) VALUES %s;" table placeholders
+        in
+        with_cached_stmt db sql (fun stmt ->
+          List.iteri
+            (fun i (key, value) ->
+              let base = (i * 2) + 1 in
+              check db sql (Sqlite3.bind_blob stmt base key);
+              check db sql (Sqlite3.bind_blob stmt (base + 1) value))
+            chunk;
+          check db sql (Sqlite3.step stmt));
+        loop rest
+    in
+    loop entries
 
 let remove_index_txn index db key =
   let sql = Printf.sprintf "DELETE FROM %s WHERE key = ?;" (table_name index) in
