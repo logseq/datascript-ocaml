@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_entity_attr : db -> entity_id -> attr -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; all_datoms : db -> datom Seq.t
   ; compare_value : value -> value -> int
@@ -80,8 +81,9 @@ let sorted_forward_entity_attrs context db entity_id =
   |> List.sort (fun (left, _) (right, _) -> compare left right)
 
 let forward_entity_attr context db entity_id attr =
-  context.datoms_by_entity db entity_id
-  |> Seq.filter_map (fun d -> if d.a = attr then Some d.v else None)
+  (* Point lookup on EAVT e+a — do not rescan the whole entity per attr. *)
+  context.datoms_by_entity_attr db entity_id attr
+  |> Seq.map (fun d -> d.v)
   |> List.of_seq
   |> entity_visible_attr_values context db attr
   |> function

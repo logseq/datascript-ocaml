@@ -258,60 +258,77 @@ let fold_index_range_desc_until index db ?hi_key ?stop f =
       in
       loop ())
 
-type stream_state =
-  { stmt : Sqlite3.stmt
-  ; mutable closed : bool
-  }
+(* Datalevin-style lazy ranges: pull batches through cached fold statements, then
+   re-seek from a continuation key. Avoids holding a live stmt across Seq yields
+   (which blocked WAL checkpoint and made point lookups pay prepare-per-scan). *)
+let stream_batch_size = 64
 
-let close_stream state =
-  if not state.closed then (
-    state.closed <- true;
-    ignore (Sqlite3.finalize state.stmt))
-
-(* Dedicated prepare (not stmt-cache): the cursor must stay open while Seq yields. *)
-let seq_from_stmt db sql ?bind ?stop () =
-  ensure_open db;
-  let stmt = Sqlite3.prepare db.db sql in
-  (match bind with
-   | None -> ()
-   | Some f -> f stmt);
-  let state = { stmt; closed = false } in
-  Gc.finalise (fun s -> close_stream s) state;
-  let rec next () =
-    if state.closed then Seq.Nil
-    else
-      match Sqlite3.step state.stmt with
-      | Sqlite3.Rc.ROW ->
-          let key = Sqlite3.column_blob state.stmt 0 in
-          let value = Sqlite3.column_blob state.stmt 1 in
-          (match stop with
-           | Some stop when stop key value ->
-               close_stream state;
-               Seq.Nil
-           | _ -> Seq.Cons ((key, value), next))
-      | Sqlite3.Rc.DONE ->
-          close_stream state;
-          Seq.Nil
-      | rc ->
-          close_stream state;
-          check db sql rc;
-          Seq.Nil
-  in
-  next
+type asc_cont =
+  | Asc_start
+  | Asc_from of { key : string; include_key : bool }
+  | Asc_done
 
 let seq_index_range_until index db ?from_key ?stop () =
-  let sql =
-    match from_key with
-    | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key;" (table_name index)
-    | Some _ ->
-      Printf.sprintf "SELECT key, value FROM %s WHERE key >= ? ORDER BY key;" (table_name index)
-  in
-  seq_from_stmt db sql
-    ?bind:
+  ensure_open db;
+  let cont =
+    ref
       (match from_key with
-       | None -> None
-       | Some key -> Some (fun stmt -> check db sql (Sqlite3.bind_blob stmt 1 key)))
-    ?stop ()
+       | None -> Asc_start
+       | Some key -> Asc_from { key; include_key = true })
+  in
+  let fetch () =
+    match !cont with
+    | Asc_done -> []
+    | _ ->
+        let batch = ref [] in
+        let count = ref 0 in
+        let from_key, include_key =
+          match !cont with
+          | Asc_start -> None, true
+          | Asc_from { key; include_key } -> Some key, include_key
+          | Asc_done -> None, true
+        in
+        let skipping = ref (match from_key with Some _ when not include_key -> true | _ -> false) in
+        let hit_end = ref true in
+        fold_index_range_until index db ?from_key
+          ~stop:(fun key value ->
+            if !count >= stream_batch_size then (
+              hit_end := false;
+              true)
+            else if !skipping then false
+            else
+              match stop with
+              | Some stop when stop key value ->
+                  cont := Asc_done;
+                  true
+              | _ -> false)
+          (fun key value ->
+            if !skipping then (
+              match from_key with
+              | Some cont_key when key = cont_key -> ()
+              | _ ->
+                  skipping := false;
+                  batch := (key, value) :: !batch;
+                  incr count;
+                  cont := Asc_from { key; include_key = false })
+            else (
+              batch := (key, value) :: !batch;
+              incr count;
+              cont := Asc_from { key; include_key = false }));
+        if !hit_end && !count < stream_batch_size then cont := Asc_done;
+        List.rev !batch
+  in
+  let rec stream () =
+    match fetch () with
+    | [] -> Seq.Nil
+    | items ->
+        let rec of_list = function
+          | [] -> stream
+          | x :: xs -> fun () -> Seq.Cons (x, of_list xs)
+        in
+        of_list items ()
+  in
+  stream
 
 let seq_index_prefix index db prefix () =
   let prefix_len = String.length prefix in
@@ -320,20 +337,67 @@ let seq_index_prefix index db prefix () =
       String.length key < prefix_len || String.sub key 0 prefix_len <> prefix)
     ()
 
+type desc_cont =
+  | Desc_start of string option
+  | Desc_after of string
+  | Desc_done
+
 let seq_index_range_desc_until index db ?hi_key ?stop () =
-  let sql =
-    match hi_key with
-    | None -> Printf.sprintf "SELECT key, value FROM %s ORDER BY key DESC;" (table_name index)
-    | Some _ ->
-      Printf.sprintf "SELECT key, value FROM %s WHERE key <= ? ORDER BY key DESC;"
-        (table_name index)
+  ensure_open db;
+  let cont = ref (Desc_start hi_key) in
+  let fetch () =
+    match !cont with
+    | Desc_done -> []
+    | _ ->
+        let batch = ref [] in
+        let count = ref 0 in
+        let hi_key, skip_hi =
+          match !cont with
+          | Desc_start hi -> hi, false
+          | Desc_after key -> Some key, true
+          | Desc_done -> None, false
+        in
+        let skipping = ref skip_hi in
+        let hit_end = ref true in
+        fold_index_range_desc_until index db ?hi_key
+          ~stop:(fun key value ->
+            if !count >= stream_batch_size then (
+              hit_end := false;
+              true)
+            else if !skipping then false
+            else
+              match stop with
+              | Some stop when stop key value ->
+                  cont := Desc_done;
+                  true
+              | _ -> false)
+          (fun key value ->
+            if !skipping then (
+              match hi_key with
+              | Some cont_key when key = cont_key -> ()
+              | _ ->
+                  skipping := false;
+                  batch := (key, value) :: !batch;
+                  incr count;
+                  cont := Desc_after key)
+            else (
+              batch := (key, value) :: !batch;
+              incr count;
+              cont := Desc_after key));
+        if !hit_end && !count < stream_batch_size then cont := Desc_done;
+        List.rev !batch
   in
-  seq_from_stmt db sql
-    ?bind:
-      (match hi_key with
-       | None -> None
-       | Some key -> Some (fun stmt -> check db sql (Sqlite3.bind_blob stmt 1 key)))
-    ?stop ()
+  let rec stream () =
+    match fetch () with
+    | [] -> Seq.Nil
+    | items ->
+        let rec of_list = function
+          | [] -> stream
+          | x :: xs -> fun () -> Seq.Cons (x, of_list xs)
+        in
+        of_list items ()
+  in
+  stream
 
 let copy_index index from_db to_db =
   fold_index index from_db (fun key value -> put_index index to_db key value)

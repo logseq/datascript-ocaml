@@ -1569,6 +1569,11 @@ let find_datom context db index ?e ?a ?v ?tx () =
   match temporal_view db, db.filter_pred, index, e, a, v, tx with
   | false, None, Aevt, Some entity_id, Some attr, None, None when not (merged_index db || pending_overlay db) ->
     find_primary_aevt_entity_attr db entity_id attr
+  | false, None, Eavt, Some entity_id, Some attr, None, None when not (merged_index db || pending_overlay db) ->
+    let bound = bound_datom ~e:entity_id ~a:attr () in
+    let bound_fields = fields ~e:true ~a:true () in
+    let cmp = exact_prefix_slice_cmp context Eavt bound bound_fields in
+    Index.find_first_slice ~from_:bound ~to_:bound ~cmp (stored_index db Eavt)
   | _ -> datoms context db index ?e ?a ?v ?tx () |> Seq.uncons |> Option.map fst
 
 let find_datom_ref context db index ?e ?a ?v ?tx () =
