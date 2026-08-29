@@ -209,13 +209,58 @@ Also track write amp and disk (+TEAV).
 - Melange/jsoo: TEAV native-first; JS backends follow or stay filter-only until ported.
 - Upstream DataScript has no TEAV; document as dbval/Logseq extension (same class as history).
 
-## Decision defaults (proposed)
+## API stability: callers must not change
 
-1. Ship **TEAV** as the mechanism.
-2. Public helper **`since_instant`** defaults to **Mode B** for app queries; Mode A
-   available for history/activity.
-3. Keep EAVT/AEVT/AVET authoritative for current-fact identity; TEAV is a
-   **covering access path**, not a second source of truth.
+**Constraint (Logseq / app):** keep using `d/q`, `d/datoms`, `d/entity` as today.
+No required `since_instant`, Mode B handle, or query rewrite at the call site.
+
+Faster paths are chosen **inside** the engine from the query / db view:
+
+```text
+parse where
+  → recognize selective shapes (AVET value, AVET time range, bound e, …)
+  → pick index + physical op
+  → optional: if db already has since_tx / as_of, prefer TAVE only when
+    that beats AEVT/AVET for the clause set
+```
+
+### Auto-selection rules (aligned with Logseq survey)
+
+| Query / datoms shape (unchanged API) | Prefer | Why |
+| --- | --- | --- |
+| `[?e :block/uuid u]` / lookup-ref | AVET unique → EAVT | already selective |
+| `[?e :block/updated-at ?t] [(>= ?t lo)] …` | **AVET range** on updated-at | Logseq’s real “recent” |
+| `[?p :block/journal-day ?d] [(>= ?d lo)]` | **AVET range** on journal-day | journals / between |
+| `(between …)` / DSL timestamp between | same AVET ranges (via rules expansion) | query_dsl today |
+| Bound `?e` then attrs | EAVT | entity hydrate |
+| `[?e :attr]` full presence, huge attr | AEVT (status quo) | no free lunch |
+| Db view with `since` / history + unbound attr scan | **TAVE** `tx\|a\|…` when estimated cheaper than AEVT+filter | engine-only; apps need not opt in |
+| `d/datoms db :avet :block/updated-at` (+ rseq) | keep AVET | `get-recent-updated-pages` |
+
+Planner cost hint (same as above): for each clause, estimate `|AVET(attr,range)|` vs
+`|AEVT(attr)|` vs `|TAVE(tx_lo,attr)|` when a tx lower bound is in scope; pick min.
+Wrong choice only affects speed, not results.
+
+### What this means for TAVE
+
+- **Not** a new public “window API” for Logseq UI queries.
+- **Yes** a storage/access path the executor may use when:
+  1. the db value already carries `since_tx` / history semantics, **or**
+  2. future internal sync/history ops need tx-ordered scans,
+  and AVET cannot express the bound (no denormalized time attr in the clause).
+
+For shipping Logseq shapes, auto-fast means **recognize AVET time ranges and
+bound-entity plans** — that is the win without app changes. TAVE is backup for
+tx-scoped views, not a replacement for `:block/updated-at`.
+
+### Non-goals under this constraint
+
+- Requiring apps to call `since_instant` / pass Mode B.
+- Changing EDN query syntax for “recent”.
+- Silently changing `since` result semantics to Mode B (touched-entity current facts).
+
+Optional later: *internal* connection defaults (e.g. always maintain TAVE) remain
+invisible to `d/q` callers.
 
 ## Index selection (EAVT / AVET stay primary)
 
