@@ -27,7 +27,9 @@ let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
   let target = Datascript_storage_protocol.db_for_storage target_storage in
   Datascript_lmdb_index.sync_append_since_tx ~since_tx (project eavt) target;
   Datascript_lmdb_index.sync_append_since_tx ~since_tx (project aevt) target;
-  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project avet) target
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx (project avet) target;
+  Datascript_lmdb_index.sync_append_since_tx ~since_tx
+    (Datascript_lmdb_index.empty Tave (Datascript_lmdb_index.db_of (project eavt))) target
 
 let sync_removals_to_storage removed_datoms eavt aevt avet target_storage =
   ignore (eavt, aevt, avet);
@@ -76,3 +78,10 @@ let to_seq = Datascript_lmdb_index.to_seq
 let seek = Datascript_lmdb_index.seek
 let flush t = Datascript_lmdb_index.flush (project t) |> inject
 let copy t = Datascript_lmdb_index.copy (project t) |> inject
+
+let fold_tave_range f init t ~from_tx ?to_tx ?attr () =
+  Datascript_lmdb_index.fold_tave_range f init (Datascript_lmdb_index.db_of (project t)) ~from_tx ?to_tx
+    ?attr ()
+
+let prune_tave_before t ~before_tx =
+  Datascript_lmdb_index.prune_tave_before (Datascript_lmdb_index.db_of (project t)) ~before_tx

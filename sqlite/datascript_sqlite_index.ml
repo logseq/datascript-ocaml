@@ -43,11 +43,13 @@ let of_eavt_datoms ~avet eavt_datoms db =
     let eavt = make Eavt db in
     let aevt = make Aevt db in
     let avet_index = make Avet db in
+    let tave = make Tave db in
     Datascript_sqlite_db.with_write_txn db (fun () ->
       List.iter
         (fun datom ->
           put_datom_txn eavt datom;
           put_datom_txn aevt datom;
+          put_datom_txn tave datom;
           if avet datom.a then put_datom_txn avet_index datom)
         eavt_datoms))
 
@@ -56,11 +58,13 @@ let of_bulk index datoms db = of_sorted_list index datoms db
 let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
   if datoms = [] then (eavt, aevt, avet_index)
   else (
+    let tave = make Tave eavt.db in
     Datascript_sqlite_db.with_write_txn eavt.db (fun () ->
       List.iter
         (fun datom ->
           put_datom_txn eavt datom;
           put_datom_txn aevt datom;
+          put_datom_txn tave datom;
           if is_avet datom.a then put_datom_txn avet_index datom)
         datoms);
     (eavt, aevt, avet_index))
@@ -323,3 +327,43 @@ let seek bound seq =
     else count (index + 1)
   in
   { seq with offset = count 0 }
+
+(** Fold TAVE keys with [tx > from_tx], optionally restricted to [attr]. *)
+let fold_tave_range f init db ~from_tx ?to_tx ?attr () =
+  let from_key = Datascript_index_codec.encode_tave_tx_prefix (from_tx + 1) in
+  let acc = ref init in
+  Datascript_sqlite_db.fold_index_range_until Tave db ~from_key
+    ~stop:(fun key _value ->
+      match to_tx with
+      | Some hi -> Datascript_index_codec.tave_key_tx key > hi
+      | None -> false)
+    (fun key value ->
+      let datom = decode_entry Tave key value in
+      let attr_ok =
+        match attr with
+        | None -> true
+        | Some a -> datom.a = a
+      in
+      let tx_ok =
+        datom.tx > from_tx
+        && (match to_tx with None -> true | Some hi -> datom.tx <= hi)
+      in
+      if attr_ok && tx_ok then acc := f !acc datom);
+  !acc
+
+(** Delete TAVE keys with [tx <= before_tx] (rolling retention). *)
+let prune_tave_before db ~before_tx =
+  if before_tx < 0 then ()
+  else
+    let to_delete = ref [] in
+    let stop_key = Datascript_index_codec.encode_tave_tx_prefix (before_tx + 1) in
+    Datascript_sqlite_db.fold_index_range_until Tave db
+      ~stop:(fun key _ -> key >= stop_key)
+      (fun key _value ->
+        if Datascript_index_codec.tave_key_tx key <= before_tx then
+          to_delete := key :: !to_delete);
+    if !to_delete <> [] then
+      Datascript_sqlite_db.with_write_txn db (fun () ->
+        List.iter
+          (fun key -> Datascript_sqlite_db.remove_index_txn Tave db key)
+          !to_delete)

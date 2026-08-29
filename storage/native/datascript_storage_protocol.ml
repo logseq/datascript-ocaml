@@ -64,7 +64,8 @@ let memory_backend lmdb =
     in
     remove Eavt;
     remove Aevt;
-    remove Avet
+    remove Avet;
+    remove Tave
   in
   let load_indexes_from_storage target =
     match target with

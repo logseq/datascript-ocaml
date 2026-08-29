@@ -236,7 +236,20 @@ let encode_index_attr_value_prefix index attr value =
    | Eavt ->
        append_int32 buffer 0;
        append_string buffer attr;
+       append_bytes buffer (encode_value_key value)
+   | Tave ->
+       (* Prefixed by tx elsewhere; this helper is attr|value only for Avet-like seeks. *)
+       append_string buffer attr;
        append_bytes buffer (encode_value_key value));
+  Buffer.contents buffer
+
+(** TAVE key prefix [tx] or [tx | attr] for window (+ optional attr) seeks. *)
+let encode_tave_tx_prefix ?attr tx =
+  let buffer = Buffer.create 32 in
+  append_int32 buffer tx;
+  (match attr with
+   | None -> ()
+   | Some a -> append_string buffer a);
   Buffer.contents buffer
 
 let append_added buffer added =
@@ -263,6 +276,13 @@ let encode_datom_key index datom =
        append_bytes buffer (encode_value_key datom.v);
        append_int32 buffer datom.e;
        append_int32 buffer datom.tx;
+       append_added buffer datom.added
+   | Tave ->
+       (* tx | a | v | e | added — seek recent window + attr without full scan. *)
+       append_int32 buffer datom.tx;
+       append_string buffer datom.a;
+       append_bytes buffer (encode_value_key datom.v);
+       append_int32 buffer datom.e;
        append_added buffer datom.added);
   Buffer.contents buffer
 
@@ -303,6 +323,14 @@ let decode_datom_key index bytes =
         let added, offset = decode_added bytes offset in
         if offset <> String.length bytes then invalid_arg "trailing avet key bytes";
         e, a, v, tx, added
+    | Tave ->
+        let tx, offset = read_int32 bytes 0 in
+        let a, offset = read_string bytes offset in
+        let v, offset = decode_value_key bytes offset in
+        let e, offset = read_int32 bytes offset in
+        let added, offset = decode_added bytes offset in
+        if offset <> String.length bytes then invalid_arg "trailing tave key bytes";
+        e, a, v, tx, added
   in
   { e; a; v; tx; added }
 
@@ -322,14 +350,14 @@ let decode_datom_value bytes =
 let decode_index_entry index key value =
   let datom = decode_datom_key index key in
   match index with
-  | Avet -> datom
+  | Avet | Tave -> datom
   | Eavt | Aevt ->
       let payload = decode_datom_value value in
       { datom with v = payload.v }
 
 let encode_index_value index datom =
   match index with
-  | Avet -> ""
+  | Avet | Tave -> ""
   | Eavt | Aevt -> encode_datom_value datom
 
 let avet_key_attr key =
@@ -349,6 +377,10 @@ let decode_avet_key_at attr key =
   let added, offset = decode_added key offset in
   if offset <> String.length key then invalid_arg "trailing avet key bytes";
   { e; a = attr; v; tx; added }
+
+let tave_key_tx key =
+  let tx, _offset = read_int32 key 0 in
+  tx
 
 let compare_encoded_keys index left right =
   Datascript_types.Compare.compare_datom index

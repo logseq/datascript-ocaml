@@ -251,6 +251,7 @@ let restore context storage =
       ; eavt_index = restore_index Eavt root.storage_eavt
       ; aevt_index
       ; avet_index
+      ; tave_index = Index.empty Tave (Index.db_of aevt_index)
       ; aevt_by_attr = Hashtbl.create 0
       ; avet_by_attr = Hashtbl.create 0
       ; avet_entities_by_attr_value = Hashtbl.create 0

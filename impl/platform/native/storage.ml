@@ -67,6 +67,7 @@ let restore context storage =
     ; eavt_index = Index.empty Eavt index_db
     ; aevt_index = Index.empty Aevt index_db
     ; avet_index = Index.empty Avet index_db
+    ; tave_index = Index.empty Tave index_db
     ; aevt_by_attr = Hashtbl.create 0
     ; avet_by_attr = Hashtbl.create 0
     ; avet_entities_by_attr_value = Hashtbl.create 0

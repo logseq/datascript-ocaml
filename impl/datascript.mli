@@ -156,6 +156,9 @@ module Db : sig
   val is_history : db -> bool
   val resolve_tx_at_instant : value -> db -> tx
   val purge_history_before : tx -> db -> db * datom list
+  val set_tave_retention_days : int -> unit
+  val get_tave_retention_days : unit -> int
+  val prune_tave_to_retention : db -> unit
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
@@ -408,6 +411,9 @@ val history : db -> db
 val is_history : db -> bool
 val resolve_tx_at_instant : value -> db -> tx
 val purge_history_before : tx -> db -> db * datom list
+val set_tave_retention_days : int -> unit
+val tave_retention_days : unit -> int
+val prune_tave_to_retention : db -> unit
 module Tx_visibility : module type of Tx_visibility
 module Query_plan : sig
   type index_choice =

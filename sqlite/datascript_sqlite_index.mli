@@ -33,3 +33,7 @@ val seq_to_list : datom seq -> datom list
 val fold_seq : ('acc -> datom -> 'acc) -> 'acc -> datom seq -> 'acc
 val to_seq : datom seq -> datom Seq.t
 val seek : datom -> datom seq -> datom seq
+val fold_tave_range :
+  ('acc -> datom -> 'acc) -> 'acc -> Datascript_sqlite_db.t -> from_tx:tx -> ?to_tx:tx -> ?attr:string
+  -> unit -> 'acc
+val prune_tave_before : Datascript_sqlite_db.t -> before_tx:tx -> unit

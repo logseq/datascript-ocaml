@@ -19,4 +19,4 @@ let sync_indexes from_lmdb to_lmdb =
       List.iter
         (fun index ->
           Datascript_lmdb_db.copy_index_txn index txn from_lmdb to_lmdb)
-        [ Eavt; Aevt; Avet ])
+        [ Eavt; Aevt; Avet; Tave ])

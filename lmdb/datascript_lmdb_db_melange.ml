@@ -35,7 +35,7 @@ let open_db path =
   let root = open_root path in
   { Datascript_lmdb_db.path; env = root; eavt = open_subdb root "ds/eavt"
   ; aevt = open_subdb root "ds/aevt"; avet = open_subdb root "ds/avet"
-  ; meta = open_subdb root "ds/meta"; closed = false
+  ; tave = open_subdb root "ds/tave"; meta = open_subdb root "ds/meta"; closed = false
   }
 
 let create_temp () = open_db (temp_path ())
@@ -59,6 +59,7 @@ let map_for_index index db =
   | Eavt -> db.eavt
   | Aevt -> db.aevt
   | Avet -> db.avet
+  | Tave -> db.tave
 
 let meta_get db key =
   ensure_open db;

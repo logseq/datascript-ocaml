@@ -201,7 +201,8 @@ let test_db__test_indexes_use_lmdb () =
   in
   assert_uses_lmdb_index db.eavt_index;
   assert_uses_lmdb_index db.aevt_index;
-  assert_uses_lmdb_index db.avet_index
+  assert_uses_lmdb_index db.avet_index;
+  assert_uses_lmdb_index db.tave_index
 
 let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
   let db =

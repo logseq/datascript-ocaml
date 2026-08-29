@@ -12,7 +12,8 @@ let backend_of_lmdb lmdb =
     in
     remove Eavt;
     remove Aevt;
-    remove Avet
+    remove Avet;
+    remove Tave
   in
   let load_indexes_from_storage target =
     match target with

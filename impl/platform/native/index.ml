@@ -36,15 +36,25 @@ let index_db_for_storage storage = Datascript_storage_protocol.db_for_storage st
 let lmdb_for_storage = index_db_for_storage
 
 let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
+  let sync_tave_lmdb src_db target =
+    let tave = Datascript_lmdb_index.empty Tave src_db in
+    Datascript_lmdb_index.sync_append_since_tx ~since_tx tave target
+  in
+  let sync_tave_sqlite src_db target =
+    let tave = Datascript_sqlite_index.empty Tave src_db in
+    Datascript_sqlite_index.sync_append_since_tx ~since_tx tave target
+  in
   match project eavt, project aevt, project avet, Datascript_storage_protocol.db_for_storage target_storage with
   | Lmdb e, Lmdb a, Lmdb v, Datascript_storage_protocol.Lmdb target ->
       Datascript_lmdb_index.sync_append_since_tx ~since_tx e target;
       Datascript_lmdb_index.sync_append_since_tx ~since_tx a target;
-      Datascript_lmdb_index.sync_append_since_tx ~since_tx v target
+      Datascript_lmdb_index.sync_append_since_tx ~since_tx v target;
+      sync_tave_lmdb (Datascript_lmdb_index.db_of e) target
   | Sqlite e, Sqlite a, Sqlite v, Datascript_storage_protocol.Sqlite target ->
       Datascript_sqlite_index.sync_append_since_tx ~since_tx e target;
       Datascript_sqlite_index.sync_append_since_tx ~since_tx a target;
-      Datascript_sqlite_index.sync_append_since_tx ~since_tx v target
+      Datascript_sqlite_index.sync_append_since_tx ~since_tx v target;
+      sync_tave_sqlite (Datascript_sqlite_index.db_of e) target
   | Lmdb e, Lmdb a, Lmdb v, Datascript_storage_protocol.Sqlite target ->
       let put_since index_t which =
         let dest = Datascript_sqlite_index.empty which target in
@@ -55,7 +65,8 @@ let sync_indexes_to_storage ~since_tx eavt aevt avet target_storage =
       in
       put_since e Eavt;
       put_since a Aevt;
-      put_since v Avet
+      put_since v Avet;
+      put_since (Datascript_lmdb_index.empty Tave (Datascript_lmdb_index.db_of e)) Tave
   | _ ->
       invalid_arg "Index.sync_indexes_to_storage: unsupported index/storage backend combination"
 
@@ -69,7 +80,8 @@ let sync_removals_to_storage removed_datoms eavt aevt avet target_storage =
       in
       remove Eavt;
       remove Aevt;
-      remove Avet
+      remove Avet;
+      remove Tave
   | Datascript_storage_protocol.Sqlite target ->
       let remove which =
         let t = Datascript_sqlite_index.empty which target in
@@ -77,7 +89,8 @@ let sync_removals_to_storage removed_datoms eavt aevt avet target_storage =
       in
       remove Eavt;
       remove Aevt;
-      remove Avet
+      remove Avet;
+      remove Tave
 
 let load_indexes_from_storage storage target =
   Datascript_storage_protocol.load_indexes_from_storage storage target
@@ -199,3 +212,17 @@ let copy t =
   match project t with
   | Lmdb i -> Datascript_lmdb_index.copy i |> fun i -> inject (Lmdb i)
   | Sqlite i -> Datascript_sqlite_index.copy i |> fun i -> inject (Sqlite i)
+
+let fold_tave_range f init t ~from_tx ?to_tx ?attr () =
+  match project t with
+  | Lmdb i ->
+      Datascript_lmdb_index.fold_tave_range f init (Datascript_lmdb_index.db_of i) ~from_tx ?to_tx
+        ?attr ()
+  | Sqlite i ->
+      Datascript_sqlite_index.fold_tave_range f init (Datascript_sqlite_index.db_of i) ~from_tx ?to_tx
+        ?attr ()
+
+let prune_tave_before t ~before_tx =
+  match project t with
+  | Lmdb i -> Datascript_lmdb_index.prune_tave_before (Datascript_lmdb_index.db_of i) ~before_tx
+  | Sqlite i -> Datascript_sqlite_index.prune_tave_before (Datascript_sqlite_index.db_of i) ~before_tx

@@ -136,6 +136,38 @@ let test_temporal_views () =
   Test_alcotest_support.check_int_list "sqlite history ages" [ 30; 31 ] hist_ages;
   Datascript_sqlite.close session
 
+let test_tave_since_attr_scan () =
+  let path = temp_db_path "datascript-sqlite-tave" in
+  let session = Datascript_sqlite.open_session path in
+  let storage = storage_of_handle (Datascript_sqlite.storage session) in
+  let db = empty_db ~schema:[ "name", indexed; "age", age_indexed ] ~storage () in
+  let r1 =
+    transact ~tx_meta:[ "db/txInstant", Instant 1_000 ]
+      db
+      [ Add (Temp_id "a", "name", String "Alice"); Add (Temp_id "a", "age", Int 20) ]
+  in
+  let tx1 = r1.db_after.max_tx in
+  let r2 =
+    transact ~tx_meta:[ "db/txInstant", Instant 2_000 ]
+      r1.db_after
+      [ Add (Temp_id "b", "name", String "Bob"); Add (Temp_id "b", "age", Int 30) ]
+  in
+  store ~storage r2.db_after;
+  (* since tx1: only Bob's age should appear via since-bounded AEVT (TAVE path). *)
+  let ages =
+    datoms (since tx1 r2.db_after) Aevt ~a:"age" ()
+    |> List.filter (fun d -> d.added)
+    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  in
+  Test_alcotest_support.check_int_list "since+AEVT ages via TAVE" [ 30 ] ages;
+  set_tave_retention_days 30;
+  check (Alcotest.int) "default retention days" 30 (tave_retention_days ());
+  set_tave_retention_days 7;
+  check (Alcotest.int) "adjusted retention days" 7 (tave_retention_days ());
+  set_tave_retention_days 30;
+  prune_tave_to_retention r2.db_after;
+  Datascript_sqlite.close session
+
 let () =
   run "sqlite package"
     [
@@ -145,5 +177,6 @@ let () =
         ; test_case "session close blocks use" `Quick test_session_close_blocks_use
         ; test_case "reopen preserves data" `Quick test_reopen_preserves_data
         ; test_case "temporal views" `Quick test_temporal_views
+        ; test_case "tave since attr scan" `Quick test_tave_since_attr_scan
         ] )
     ]

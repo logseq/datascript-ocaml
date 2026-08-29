@@ -13,6 +13,7 @@ type t =
   ; eavt : (string, string, [ `Uni ]) Map.t
   ; aevt : (string, string, [ `Uni ]) Map.t
   ; avet : (string, string, [ `Uni ]) Map.t
+  ; tave : (string, string, [ `Uni ]) Map.t
   ; meta : (string, string, [ `Uni ]) Map.t
   ; profile : lmdb_env_profile
   ; mutable closed : bool
@@ -47,7 +48,8 @@ let open_named_map env name =
 let open_db path profile =
   let env = open_env path profile in
   { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
-  ; avet = open_named_map env "ds/avet"; meta = open_named_map env "ds/meta"; profile
+  ; avet = open_named_map env "ds/avet"; tave = open_named_map env "ds/tave"
+  ; meta = open_named_map env "ds/meta"; profile
   ; closed = false; read = None
   }
 
@@ -66,6 +68,7 @@ let close db =
     Map.close db.eavt;
     Map.close db.aevt;
     Map.close db.avet;
+    Map.close db.tave;
     Map.close db.meta;
     (match db.profile with
      | Default -> Env.sync db.env
@@ -102,6 +105,7 @@ let map_for_index index db =
   | Eavt -> db.eavt
   | Aevt -> db.aevt
   | Avet -> db.avet
+  | Tave -> db.tave
 
 let invalidate_read db =
   match db.read with
@@ -139,6 +143,7 @@ let meta_get db key =
 
 let meta_set db key value =
   ensure_open db;
+  invalidate_read db;
   ignore
     (Txn.go Rw db.env (fun txn ->
        Map.set ~txn db.meta key value;

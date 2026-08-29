@@ -56,7 +56,9 @@ let memory_backend lmdb =
     in
     remove Eavt;
     remove Aevt;
-    remove Avet
+    remove Avet;
+    remove Tave;
+    remove Tave
   in
   let load_indexes_from_storage target_lmdb =
     if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
@@ -130,7 +132,9 @@ let backend_of_lmdb lmdb =
     in
     remove Eavt;
     remove Aevt;
-    remove Avet
+    remove Avet;
+    remove Tave;
+    remove Tave
   in
   let load_indexes_from_storage target_lmdb =
     if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb

@@ -44,3 +44,6 @@ val to_seq : datom seq -> datom Seq.t
 val seek : datom -> datom seq -> datom seq
 val flush : t -> t
 val copy : t -> t
+val fold_tave_range :
+  ('acc -> datom -> 'acc) -> 'acc -> t -> from_tx:tx -> ?to_tx:tx -> ?attr:string -> unit -> 'acc
+val prune_tave_before : t -> before_tx:tx -> unit

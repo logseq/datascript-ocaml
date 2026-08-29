@@ -10,6 +10,7 @@ let table_name = function
   | Eavt -> "ds_eavt"
   | Aevt -> "ds_aevt"
   | Avet -> "ds_avet"
+  | Tave -> "ds_tave"
 
 let check t sql rc =
   if not (Sqlite3.Rc.is_success rc) then
@@ -40,7 +41,7 @@ let ensure_schema db =
            \  value BLOB NOT NULL\n\
             ) WITHOUT ROWID;"
            (table_name index)))
-    [ Eavt; Aevt; Avet ];
+    [ Eavt; Aevt; Avet; Tave ];
   exec_sql db
     "CREATE TABLE IF NOT EXISTS ds_meta (\n\
     \  key TEXT PRIMARY KEY NOT NULL,\n\

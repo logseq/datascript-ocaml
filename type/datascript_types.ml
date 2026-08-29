@@ -121,6 +121,7 @@ and db =
   ; eavt_index : index_set
   ; aevt_index : index_set
   ; avet_index : index_set
+  ; tave_index : index_set
   ; aevt_by_attr : (attr, datom array) Hashtbl.t
   ; avet_by_attr : (attr, datom array) Hashtbl.t
   ; avet_entities_by_attr_value : (attr * value, entity_id array) Hashtbl.t
@@ -502,6 +503,9 @@ type index =
   | Eavt
   | Aevt
   | Avet
+  | Tave
+      (** Tx-ordered covering index: [tx | a | v | e | added]. Rolling window only
+          (see TAVE retention); not a substitute for EAVT/AEVT/AVET. *)
 
 type tx_meta = (attr * value) list
 
@@ -819,4 +823,11 @@ module Compare = struct
            (compare_value left.v right.v)
            (compare left.e right.e)
            (compare left.tx right.tx))
+    | Tave ->
+      tiebreak_added
+        (first_nonzero4
+           (compare left.tx right.tx)
+           (compare left.a right.a)
+           (compare_value left.v right.v)
+           (compare left.e right.e))
 end

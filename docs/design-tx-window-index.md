@@ -209,6 +209,43 @@ Also track write amp and disk (+TEAV).
 - Melange/jsoo: TEAV native-first; JS backends follow or stay filter-only until ported.
 - Upstream DataScript has no TEAV; document as dbval/Logseq extension (same class as history).
 
+## Retention: current window only (default 1 month)
+
+TAVE is **not** a full historical fourth copy of the DB. It only retains datoms
+whose `tx` falls inside a configurable rolling window:
+
+| Knob | Default | Meaning |
+| --- | --- | --- |
+| `tave_retention` | **30 days** | Wall-clock window via `:db/txInstant` → `tx_lo` |
+
+**Keep in TAVE:** asserts/retracts with `tx > tx_lo(retention)`.  
+**Drop from TAVE:** keys with `tx <= tx_lo` (prune).  
+**Never use TAVE as source of truth for “what is true now”** — that remains
+EAVT/AEVT/AVET (full history / current facts as today).
+
+“当前数据” here means: the live basis still answers current-fact queries from
+EAVT; TAVE only accelerates **recent-window** scans. After prune, a `since` older
+than retention falls back to AEVT/AVET + tx filter (correct, slower).
+
+```text
+transact → write EAVT/AEVT/AVET (full) + TAVE (always for this tx)
+        → optionally prune TAVE where tx <= tx_lo(retention)
+
+query (API unchanged)
+  → if need recent tx-bounded attr scan AND window ⊆ retention → TAVE
+  → else → existing AVET/AEVT/EAVT paths
+```
+
+Config (engine/session, not query EDN):
+
+```ocaml
+(* conceptual *)
+val set_tave_retention_days : int -> unit   (* default 30; 0 = disable TAVE writes *)
+```
+
+Prune triggers: after transact (amortized / every N txs), explicit
+`compact_tave`, and restore/open. Prune deletes TAVE keys only.
+
 ## API stability: callers must not change
 
 **Constraint (Logseq / app):** keep using `d/q`, `d/datoms`, `d/entity` as today.

@@ -11,6 +11,7 @@ type t =
   ; eavt : map
   ; aevt : map
   ; avet : map
+  ; tave : map
   ; meta : map
   ; mutable closed : bool
   }
@@ -24,6 +25,7 @@ let open_db path =
   ; eavt = make_map ()
   ; aevt = make_map ()
   ; avet = make_map ()
+  ; tave = make_map ()
   ; meta = make_map ()
   ; closed = false
   }
@@ -50,6 +52,7 @@ let map_for_index index db =
   | Eavt -> db.eavt
   | Aevt -> db.aevt
   | Avet -> db.avet
+  | Tave -> db.tave
 
 let meta_get db key =
   ensure_open db;

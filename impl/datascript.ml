@@ -86,6 +86,9 @@ let as_of_instant = Db_impl.as_of_instant
 let since = Db_impl.since
 let history = Db_impl.history
 let is_history = Db_impl.is_history
+let set_tave_retention_days = Db_impl.set_tave_retention_days
+let tave_retention_days = Db_impl.get_tave_retention_days
+let prune_tave_to_retention = Db_impl.prune_tave_to_retention
 let resolve_tx_at_instant = Db_impl.resolve_tx_at_instant
 let purge_history_before = Db_impl.purge_history_before
 let as_of_tx = Db_impl.as_of_tx
@@ -878,6 +881,8 @@ let transact_report ?(tx_meta = []) db tx_ops =
       Db_impl.refresh_indexes_with_tx_data db_after [ stamped ], tx_data @ [ stamped ]
     | Some _ -> invalid_arg ":db/txInstant must be an Instant value"
   in
+  (* Amortized TAVE retention prune (rolling window; default 30 days). *)
+  (try Db_impl.prune_tave_to_retention db_after with _ -> ());
   { db_before; db_after; tx_data; tempids; tx_meta; purged_datoms }
 
 let transact ?(tx_meta = []) db tx_ops =

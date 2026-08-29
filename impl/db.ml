@@ -176,7 +176,7 @@ let pending_for_index db index =
     match index with
     | Avet ->
       List.filter (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a) db.pending_datoms
-    | Eavt | Aevt -> db.pending_datoms
+    | Eavt | Aevt | Tave -> db.pending_datoms
   in
   List.sort (Util.compare_datom index) datoms
 
@@ -248,7 +248,8 @@ let set_indexes_from_datoms db datoms =
     lmdb;
   let eavt_index = Index.empty Eavt lmdb
   and aevt_index = Index.empty Aevt lmdb
-  and avet_index = Index.empty Avet lmdb in
+  and avet_index = Index.empty Avet lmdb
+  and tave_index = Index.empty Tave lmdb in
   let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
   let duplicate_avet_datoms =
     duplicate_datoms
@@ -263,6 +264,7 @@ let set_indexes_from_datoms db datoms =
     eavt_index
   ; aevt_index
   ; avet_index
+  ; tave_index
   ; aevt_by_attr = group_sorted_datoms_by_attr aevt_sorted
   ; avet_by_attr = group_sorted_datoms_by_attr avet_sorted
   ; avet_entities_by_attr_value = index_avet_entities_by_attr_value avet_sorted
@@ -302,6 +304,7 @@ let refresh_indexes_with_added_datoms db added_datoms =
           (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
           added_datoms
           db.avet_index
+    ; tave_index = add_datoms_to_index (fun _ -> true) added_datoms db.tave_index
     ; duplicate_datoms = db.duplicate_datoms
     ; duplicate_aevt_datoms = db.duplicate_aevt_datoms
     ; duplicate_avet_datoms = db.duplicate_avet_datoms
@@ -349,6 +352,7 @@ let refresh_indexes_with_removed_datoms db removed_datoms =
     let eavt_index = remove_from db.eavt_index in
     let aevt_index = remove_from db.aevt_index in
     let avet_index = remove_from db.avet_index in
+    let tave_index = remove_from db.tave_index in
     let duplicate_datoms = without_stored_datoms removed_datoms db.duplicate_datoms in
     let duplicate_aevt_datoms = without_stored_datoms removed_datoms db.duplicate_aevt_datoms in
     let duplicate_avet_datoms = without_stored_datoms removed_datoms db.duplicate_avet_datoms in
@@ -357,6 +361,7 @@ let refresh_indexes_with_removed_datoms db removed_datoms =
       eavt_index
     ; aevt_index
     ; avet_index
+    ; tave_index
     ; duplicate_datoms
     ; duplicate_aevt_datoms
     ; duplicate_avet_datoms
@@ -368,6 +373,15 @@ let snapshot_db db = db
 
 let temporal_view db =
   Option.is_some db.as_of_tx || Option.is_some db.since_tx || db.history
+
+(** Rolling TAVE retention window in days. [0] disables pruning (index still written). *)
+let tave_retention_days = ref 30
+
+let set_tave_retention_days days = tave_retention_days := max 0 days
+
+let get_tave_retention_days () = !tave_retention_days
+
+let millis_per_day = 86_400_000
 
 let basis_tx db = db.max_tx
 
@@ -410,6 +424,7 @@ let empty_db context ?(schema = []) ?storage () =
   ; eavt_index = empty_index Eavt index_db
   ; aevt_index = empty_index Aevt index_db
   ; avet_index = empty_index Avet index_db
+  ; tave_index = empty_index Tave index_db
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
   ; avet_entities_by_attr_value = Hashtbl.create 0
@@ -447,6 +462,7 @@ let init_db context ?(schema = []) ?storage datoms =
   ; eavt_index = empty_index Eavt index_db
   ; aevt_index = empty_index Aevt index_db
   ; avet_index = empty_index Avet index_db
+  ; tave_index = empty_index Tave index_db
   ; aevt_by_attr = Hashtbl.create 0
   ; avet_by_attr = Hashtbl.create 0
   ; avet_entities_by_attr_value = Hashtbl.create 0
@@ -520,6 +536,7 @@ let stored_index db = function
   | Eavt -> db.eavt_index
   | Aevt -> db.aevt_index
   | Avet -> db.avet_index
+  | Tave -> db.tave_index
 
 let merge_sorted_datoms index left right =
   let cmp = Util.compare_datom index in
@@ -550,7 +567,7 @@ let merge_sorted_datom_seqs compare_datom left right =
 
 let duplicate_index_datoms db index =
   match index with
-  | Eavt -> db.duplicate_datoms
+  | Eavt | Tave -> db.duplicate_datoms
   | Aevt -> db.duplicate_aevt_datoms
   | Avet -> db.duplicate_avet_datoms
 
@@ -558,7 +575,7 @@ let duplicate_attr_datoms db index attr =
   match index with
   | Aevt -> Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
   | Avet -> Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[]
-  | Eavt -> duplicate_index_datoms db index
+  | Eavt | Tave -> duplicate_index_datoms db index
 
 let cache_avet_entities_for_attr db attr datoms =
   let by_value = Hashtbl.create 16 in
@@ -588,15 +605,24 @@ let primary_attr_datoms db index attr =
   let temporal = temporal_view db in
   match index with
   | Aevt ->
-    (match (if temporal then None else Hashtbl.find_opt db.aevt_by_attr attr) with
-     | Some datoms -> Array.to_list datoms
-     | None ->
-       let datoms =
-         merge_sorted_datoms Aevt (attr_prefix_datoms Aevt db.aevt_index) pending_attr
-         |> apply_db_view db
-       in
-       if not temporal then Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
-       datoms)
+    (match db.since_tx with
+     | Some from_tx when temporal && not (merged_index db) && not (pending_overlay db) ->
+       (* Prefer TAVE for since-bounded attr scans (API unchanged). *)
+       Index.fold_tave_range
+         (fun acc datom -> datom :: acc)
+         [] db.tave_index ~from_tx ~to_tx:db.max_tx ~attr ()
+       |> List.rev
+       |> apply_db_view db
+     | _ ->
+       (match (if temporal then None else Hashtbl.find_opt db.aevt_by_attr attr) with
+        | Some datoms -> Array.to_list datoms
+        | None ->
+          let datoms =
+            merge_sorted_datoms Aevt (attr_prefix_datoms Aevt db.aevt_index) pending_attr
+            |> apply_db_view db
+          in
+          if not temporal then Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
+          datoms))
   | Avet ->
     (match (if temporal then None else Hashtbl.find_opt db.avet_by_attr attr) with
      | Some datoms -> Array.to_list datoms
@@ -609,8 +635,9 @@ let primary_attr_datoms db index attr =
          Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
          cache_avet_entities_for_attr db attr datoms);
        datoms)
-  | Eavt ->
-    merge_sorted_datoms Eavt (Index.to_list db.eavt_index) pending_attr |> apply_db_view db
+  | Eavt | Tave ->
+    merge_sorted_datoms index (Index.to_list (stored_index db index)) pending_attr
+    |> apply_db_view db
 
 let aevt_attr_array db attr =
   ignore (primary_attr_datoms db Aevt attr);
@@ -693,6 +720,23 @@ let resolve_tx_at_instant instant db =
     invalid_arg "as_of_instant: no :db/txInstant at or before the given Instant"
 
 let as_of_instant instant db = as_of (resolve_tx_at_instant instant db) db
+
+let try_resolve_tx_at_instant instant db =
+  try Some (resolve_tx_at_instant instant db) with Invalid_argument _ -> None
+
+(** Lowest tx still inside the TAVE retention window, if resolvable via txInstant. *)
+let retention_tx_lo db =
+  match !tave_retention_days with
+  | 0 -> None
+  | days ->
+    let now_ms = int_of_float (Platform.now_seconds () *. 1000.) in
+    let cutoff = Instant (now_ms - (days * millis_per_day)) in
+    try_resolve_tx_at_instant cutoff db
+
+let prune_tave_to_retention db =
+  match retention_tx_lo db with
+  | None -> ()
+  | Some tx_lo -> Index.prune_tave_before db.tave_index ~before_tx:tx_lo
 
 (** Physically drop history facts with [tx < before] while keeping the current
     projection and all datoms at or after [before]. *)
@@ -795,6 +839,12 @@ let compare_bound_fields context fields left right = function
       (compare_bound_v context fields left right)
       (compare_bound_e fields left right)
       (compare_bound_tx fields left right)
+  | Tave ->
+    first_nonzero4
+      (compare_bound_tx fields left right)
+      (compare_bound_a fields left right)
+      (compare_bound_v context fields left right)
+      (compare_bound_e fields left right)
 
 let array_attr_value_slice context index bound bound_fields arr =
   let prefix left right = compare_bound_fields context bound_fields left right index in
@@ -924,7 +974,7 @@ let rehydrate_datom_value db index datom =
       (match find_datom_in_sorted_array Aevt arr datom with
        | None -> datom
        | Some cached -> { datom with v = cached.v }))
-  | Eavt -> datom
+  | Eavt | Tave -> datom
 
 let rehydrate_datom_seq db index seq = Seq.map (rehydrate_datom_value db index) seq
 
@@ -953,6 +1003,7 @@ let single_field_prefix_cmp index bound left right =
     match index with
     | Eavt -> compare left.e right.e
     | Aevt | Avet -> compare left.a right.a
+    | Tave -> compare left.tx right.tx
   in
   if right == bound then
     compare_bound left right
@@ -978,6 +1029,12 @@ let single_field_prefix_cmp index bound left right =
         (Util.compare_value left.v right.v)
         (compare left.e right.e)
         (compare left.tx right.tx)
+    | Tave ->
+      first_nonzero4
+        (compare left.tx right.tx)
+        (compare left.a right.a)
+        (Util.compare_value left.v right.v)
+        (compare left.e right.e)
 
 let exact_prefix_slice_cmp context index bound bound_fields =
   match index, bound_fields with
@@ -1025,6 +1082,7 @@ let exact_prefix_bound index e a v tx =
      | Some a, Some v, Some e, Some tx ->
        Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
      | _ -> None)
+  | Tave -> None
 
 let avet_entity_ids_by_attr_value context db attr value =
   if temporal_view db then
@@ -1474,6 +1532,13 @@ let compare_datom_to_bound context index d e a v tx =
       ; compare_optional_with context.compare_value d.v v
       ; compare_optional d.e e
       ; compare_optional d.tx tx
+      ]
+  | Tave ->
+    context.first_nonzero
+      [ compare_optional d.tx tx
+      ; compare_optional d.a a
+      ; compare_optional_with context.compare_value d.v v
+      ; compare_optional d.e e
       ]
 
 let seek_datoms context db index ?e ?a ?v ?tx () =
