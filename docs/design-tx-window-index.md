@@ -216,3 +216,118 @@ Also track write amp and disk (+TEAV).
    available for history/activity.
 3. Keep EAVT/AEVT/AVET authoritative for current-fact identity; TEAV is a
    **covering access path**, not a second source of truth.
+
+## Index selection (EAVT / AVET stay primary)
+
+TEAV does **not** retire the other indexes. Selection is per clause / seed:
+
+| Clause shape (under window) | Preferred index | Role of TEAV |
+| --- | --- | --- |
+| Bound `e` (`[e :a ?v]`, pull, entity) | **EAVT** | None (Mode A: optional tx check) |
+| Bound `a` + bound `v` (unique / lookup) | **AVET** | None, unless needing “only if written in window” |
+| Bound `a`, unbound `e`/`v`, **no window** | **AEVT** | — |
+| Bound `a`, unbound `e`, **window**, `\|TEAV\| ≪ \|A\|` | **TEAV** then filter `a` | Seed / narrow |
+| Bound `a`, unbound `e`, **window**, attr tiny | **AEVT** + tx filter | Skip TEAV |
+| Mode B after candidate `e` set built | **EAVT** per `e` | Only to build the `e` set once |
+| `txInstant` → `tx_lo` | **AVET** on `:db/txInstant` | Bootstrap only |
+
+Invariant: **current-fact identity** always comes from EAVT/AEVT/AVET + existing
+tx-visibility/`datoms_filter`. TEAV never answers “what is true now?” alone in
+Mode B; it only answers “who/what was touched in this tx range?”.
+
+```text
+                    ┌── selective e/v ──► EAVT / AVET (unchanged)
+ query + window ────┤
+                    └── unselective scan ──► TEAV[tx_lo..] ──► filter / rejoin EAVT
+```
+
+## Layering on `since` / `as_of` / `history`
+
+| Mechanism | What it does today | Relation to TEAV window |
+| --- | --- | --- |
+| `as_of` | Upper bound `tx <= T` on every datom | Still applied; TEAV range uses `to_tx = min(window_hi, as_of)` |
+| `since` | Drop `tx <= since_tx` after scan | Window’s `tx_lo` should **subsume** filter when TEAV path is used; filter remains as safety on EAVT paths |
+| `history` | Skip cancel of add/retract | Mode A natural fit; Mode B should use **non-history** EAVT for “current entity state” |
+| `filter` pred | Extra datom predicate | Unchanged; runs after index choice |
+
+Recommended stacking:
+
+```text
+db0 = conn.db
+db1 = as_of? tx_hi db0          (* optional snapshot *)
+db2 = since_instant ~mode:B t0 db1
+q query db2                     (* planner sees window on db2 *)
+```
+
+Do **not** silently reinterpret plain `since` as Mode B — that would change
+results (Mode B returns current attrs of touched entities, including attrs last
+written *before* the window). Mode A ≈ today’s `since` semantics with a faster
+physical path; Mode B is a **different product API**.
+
+## Candidate discipline (Mode B)
+
+Once `E_touched = unique e in TEAV[tx_lo, tx_hi]` (excluding pure tx entities if
+desired):
+
+1. Every pattern that produces new `?e` must intersect `E_touched`, **or** be a
+   join from an already-bound var that itself descends from that set.
+2. Rules / `or` / `or-join`: expand inside the same candidate constraint; if a
+   branch cannot honor it, either reject planning for window (fallback warning)
+   or evaluate branch then intersect — never full-DB seed.
+3. Reverse refs (`[_ :block/refs e]`): still AEVT/AVET, but result `e` filtered to
+   candidates when the query is window-scoped “touched pages” style.
+4. Cache `E_touched` on the windowed `db` value (O(window) build once per basis).
+
+Leakage = accidental full AEVT scan = design bug, not “planner best effort”.
+
+## Product-shaped API (sketch only)
+
+```text
+;; Mode B — default for “recent work”
+(d/q query (d/since-instant #inst "..." db))
+
+;; Mode A — activity / history slice (same facts as filtered since, faster path)
+(d/q query (d/since-instant db #inst "..." {:mode :tx-datoms}))
+
+;; Explicit tx bound when caller already mapped time → tx
+(d/since-tx-window db tx-lo {:mode :touched-entities})
+```
+
+Logseq layer can keep `:block/updated-at` for UX sorting; TEAV window is the
+**engine** bound. App attr indexes remain complementary, not a substitute for
+transaction-scoped narrowing.
+
+## Cost model (planner hint)
+
+Rough compare for “scan attr `A` under window”:
+
+```text
+cost_aevt  ≈ |datoms(A)|           // + cheap tx filter if since set
+cost_teav  ≈ |datoms in window|    // + filter a = A
+pick min
+```
+
+Estimates: maintain `max_tx`, optional running `datoms_in_recent_tx` sketch, or
+sample TEAV first page. Wrong choice only hurts constant factors when sizes are
+close; correctness unchanged.
+
+## Open decisions (need agreement before code)
+
+1. **Default mode** for `since_instant`: B (product) vs A (semantic continuity with `since`).
+2. **TEAV fullness**: full datom keys vs `tx → e` posting only (B-optimized, A needs extra joins).
+3. **Tx entities in Mode B**: include `e = tx` rows or strip them from `E_touched`.
+4. **Mandatory txInstant**: require stamp on every tx for wall-clock windows, or allow tx-only API.
+5. **SQLite + LMDB together in v1** vs native LMDB first.
+6. Whether plain `since` gains TEAV acceleration (Mode A path) in the same phase as Mode B API.
+
+## Worked example
+
+Graph: 500k blocks. Last day: 2k blocks touched, 8k datoms in TEAV range.
+
+| Query intent | Without TEAV | With TEAV (Mode B) |
+| --- | --- | --- |
+| “Recent blocks with tag X” | AEVT `:block/tags` over 500k + filter time | TEAV → 2k ids → EAVT/AVET only on those |
+| “Pull recent block” with known id | EAVT (already fine) | EAVT unchanged |
+| “All :block/title” in window | AEVT full titles | TEAV → filter attr / EAVT per e |
+
+EAVT/AVET are what make the second hop cheap; TEAV only shrinks who enters that hop.
