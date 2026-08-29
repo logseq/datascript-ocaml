@@ -1213,6 +1213,10 @@ let exact_prefix_datoms context db index e a v tx =
        let indexed = primary_attr_datoms db index attr in
        let duplicates = duplicate_attr_datoms db index attr in
        Some (merge_sorted_datom_seqs (Util.compare_datom index) (List.to_seq indexed) (List.to_seq duplicates))
+     | (Aevt | Avet), None, Some attr, None, None
+       when (not (merged_index db)) && (not (pending_overlay db)) && (not (temporal_view db)) ->
+       (* Warm/serve aevt_by_attr / avet_by_attr for attr-only scans (Share SQLite). *)
+       Some (List.to_seq (primary_attr_datoms db index attr))
      | _ ->
        let cmp = exact_prefix_slice_cmp context index bound bound_fields in
        (match index, a, merged_index db || pending_overlay db with
@@ -1259,7 +1263,7 @@ let exact_prefix_datoms_list context db index e a v tx =
     let cmp = exact_prefix_slice_cmp context index bound bound_fields in
     let exact_attr_prefix =
       match index, e, a, v, tx with
-      | Aevt, None, Some _, None, None -> true
+      | (Aevt | Avet), None, Some _, None, None -> true
       | _ -> false
     in
     (match merged_index db || pending_overlay db with
