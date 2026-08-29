@@ -266,6 +266,36 @@ let fold_index_range_until index db ?from_key ?stop f =
        loop ())
    with Exit -> ())
 
+(** Walk keys descending: start at greatest key [<= hi_key] (or last key), stop when [stop] holds. *)
+let fold_index_range_desc_until index db ?hi_key ?stop f =
+  ensure_open db;
+  (try
+     with_read_cursor index db (fun cursor ->
+       (match hi_key with
+        | None -> (try ignore (Cursor.last cursor) with Not_found -> raise Exit)
+        | Some bound -> (
+          try
+            let key, _ = Cursor.seek_range cursor bound in
+            if String.compare key bound > 0 then
+              try ignore (Cursor.prev cursor) with Not_found -> raise Exit
+          with Not_found -> (try ignore (Cursor.last cursor) with Not_found -> raise Exit)));
+       let rec loop () =
+         let key, value =
+           try Cursor.current cursor
+           with Not_found -> raise Exit
+         in
+         (match stop with
+          | Some stop when stop key value -> raise Exit
+          | _ -> ());
+         f key value;
+         try
+           ignore (Cursor.prev cursor);
+           loop ()
+         with Not_found -> raise Exit
+       in
+       loop ())
+   with Exit -> ())
+
 let copy_index_txn index txn from_db to_db =
   fold_index index from_db (fun key value ->
     put_index_txn index txn to_db key value)

@@ -1245,14 +1245,26 @@ let reverse_upper_prefix_datoms context db index e a v tx =
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+    let debug = match Sys.getenv_opt "DS_DEBUG_INDEX" with Some "1" -> true | _ -> false in
     let indexed =
       match index, e, a, v, tx with
       | (Aevt | Avet), None, Some attr, None, None when merged_index db || pending_overlay db ->
-        primary_attr_datoms db index attr
+        let datoms = primary_attr_datoms db index attr in
+        if debug then
+          Printf.eprintf
+            "[DS_DEBUG_INDEX] reverse_upper_prefix branch=primary_attr_list_rev index=%s attr=%s merged=%b pending=%b n=%d\n%!"
+            (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
+            attr (merged_index db) (pending_overlay db) (List.length datoms);
+        datoms
         |> List.filter (fun datom -> cmp datom bound <= 0)
         |> List.rev
         |> List.to_seq
       | _ when pending_overlay db && not (merged_index db) ->
+        if debug then
+          Printf.eprintf
+            "[DS_DEBUG_INDEX] reverse_upper_prefix branch=rslice+pending index=%s pending=%d\n%!"
+            (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
+            (List.length db.pending_datoms);
         let stored = Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq in
         let pending =
           pending_for_index db index
@@ -1261,12 +1273,21 @@ let reverse_upper_prefix_datoms context db index e a v tx =
           |> List.to_seq
         in
         merge_sorted_datom_seqs (fun left right -> Util.compare_datom index right left) stored pending
-      | _ -> Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq
+      | _ ->
+        if debug then
+          Printf.eprintf
+            "[DS_DEBUG_INDEX] reverse_upper_prefix branch=rslice index=%s merged=%b pending=%b a=%s\n%!"
+            (match index with Eavt -> "eavt" | Aevt -> "aevt" | Avet -> "avet" | Tave -> "tave")
+            (merged_index db) (pending_overlay db)
+            (match a with Some a -> a | None -> "-");
+        Index.rslice_seq ~from_:bound ~cmp (stored_index db index) |> Index.to_seq
     in
     (match merged_index db || pending_overlay db with
      | false -> Some indexed
      | true ->
        let duplicates = duplicate_prefix_datoms db index e a |> List.filter (fun datom -> cmp datom bound <= 0) |> List.rev in
+       if debug then
+         Printf.eprintf "[DS_DEBUG_INDEX] reverse_upper_prefix merge_duplicates n=%d\n%!" (List.length duplicates);
        Some
          (merge_sorted_datom_seqs
             (fun left right -> Util.compare_datom index right left)

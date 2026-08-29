@@ -293,19 +293,25 @@ let slice_seq ?from_ ?to_ ?cmp t =
 
 let rslice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  let datoms =
-    to_list t
-    |> List.filter (fun datom ->
-      match from_ with
-      | None -> true
-      | Some bound -> cmp datom bound <= 0)
-    |> List.filter (fun datom ->
+  (* Descending walk with datom-level bounds; see native rslice_seq comment. *)
+  let datoms = ref [] in
+  Datascript_lmdb_db.fold_index_range_desc_until t.which t.db
+    ~stop:(fun key value ->
+      let datom = decode_entry t.which key value in
+      let under_hi =
+        match from_ with
+        | None -> true
+        | Some bound -> cmp datom bound <= 0
+      in
+      under_hi
+      &&
       match to_ with
-      | None -> true
-      | Some bound -> cmp datom bound >= 0)
-    |> List.rev
-  in
-  make_seq cmp datoms
+      | Some bound -> cmp datom bound < 0
+      | None -> false)
+    (fun key value ->
+      let datom = decode_entry t.which key value in
+      if in_range cmp to_ from_ datom then datoms := datom :: !datoms);
+  make_seq cmp (List.rev !datoms)
 
 let seq_to_list seq = to_seq seq |> List.of_seq
 

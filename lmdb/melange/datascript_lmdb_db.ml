@@ -128,5 +128,22 @@ let fold_index_range_until index db ?from_key ?stop f =
   in
   iter (sorted_entries (map_for_index index db))
 
+let fold_index_range_desc_until index db ?hi_key ?stop f =
+  ensure_open db;
+  let entries = List.rev (sorted_entries (map_for_index index db)) in
+  let rec iter = function
+    | [] -> ()
+    | (key, value) :: rest ->
+        (match hi_key with
+         | Some bound when String.compare key bound > 0 -> iter rest
+         | _ -> (
+           match stop with
+           | Some stop when stop key value -> ()
+           | _ ->
+               f key value;
+               iter rest))
+  in
+  iter entries
+
 let copy_index_txn index txn from_db to_db =
   fold_index index from_db (fun key value -> put_index_txn index txn to_db key value)

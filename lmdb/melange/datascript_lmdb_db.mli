@@ -31,6 +31,13 @@ val fold_index_range_until :
   ?stop:(string -> string -> bool) ->
   (string -> string -> unit) ->
   unit
+val fold_index_range_desc_until :
+  index ->
+  t ->
+  ?hi_key:string ->
+  ?stop:(string -> string -> bool) ->
+  (string -> string -> unit) ->
+  unit
 val fold_index_prefix : index -> t -> string -> (string -> string -> unit) -> unit
 val put_index : index -> t -> string -> string -> unit
 val remove_index : index -> t -> string -> unit

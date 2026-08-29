@@ -77,6 +77,7 @@ let config_from_env base =
 
 let parse_args () =
   let config = ref (config_from_env default_config) in
+  let debug_profile = ref false in
   let set_size value = config := { !config with size = int_of_string value } in
   let set_pages value = config := { !config with pages = int_of_string value } in
   let set_warmup value = config := { !config with warmup_ms = float_of_string value } in
@@ -96,7 +97,7 @@ let parse_args () =
   in
   let set_data_dir value = config := { !config with data_dir = value } in
   let rec loop = function
-    | [] -> !config
+    | [] -> !config, !debug_profile
     | "--size" :: value :: rest ->
       set_size value;
       loop rest
@@ -123,6 +124,9 @@ let parse_args () =
       loop rest
     | "--data-dir" :: value :: rest ->
       set_data_dir value;
+      loop rest
+    | "--debug-profile" :: rest ->
+      debug_profile := true;
       loop rest
     | arg :: _ -> invalid_arg ("unknown benchmark argument: " ^ arg)
   in
@@ -431,6 +435,11 @@ let hydrate_forward e =
     (fun attr -> match entity_attr e attr with Some _ -> bump 1 | None -> ())
     [ "block/uuid"; "block/title"; "block/name"; "block/updated-at"; "block/journal-day" ]
 
+(* Logseq: (rseq (d/datoms db :avet attr)) — exact attr, then reverse.
+   Not rseek-datoms (which continues into earlier attrs per DataScript). *)
+let avet_attr_rseq db attr =
+  datoms db Avet ~a:attr () |> List.of_seq |> List.rev |> List.to_seq
+
 (* Mirror get-recent-updated-pages: reverse AVET updated-at, keep pages, take 15. *)
 let recent_pages prepared =
   let db = prepared.db in
@@ -442,7 +451,7 @@ let recent_pages prepared =
       | Some (t, _) -> (match t.v with String s -> String.trim s <> "" | _ -> false)
       | None -> false)
   in
-  let pages = keep_take 15 is_page (rseek_datoms db Avet ~a:"block/updated-at" ()) in
+  let pages = keep_take 15 is_page (avet_attr_rseq db "block/updated-at") in
   List.iter
     (fun d ->
       match entity db (Entity_id d.e) with
@@ -456,7 +465,7 @@ let latest_journals prepared =
   let kept =
     keep_take 10
       (fun d -> match d.v with Int day -> day <= today | _ -> false)
-      (rseek_datoms prepared.db Avet ~a:"block/journal-day" ())
+      (avet_attr_rseq prepared.db "block/journal-day")
   in
   List.iter
     (fun d ->
@@ -609,8 +618,138 @@ let ensure_dir path =
   in
   loop path
 
+let debug_ms label t0 =
+  let elapsed = now_ms () -. t0 in
+  Printf.printf "debug\t%s\t%.3f\n%!" label elapsed;
+  elapsed
+
+(* Phase-level instrumentation for recent-pages / entity — evidence only, no behavior change. *)
+let debug_profile_recent prepared =
+  let db = prepared.db in
+  Printf.printf "debug\tstorage\t%s\n%!" prepared.label;
+  Printf.printf "debug\tentities\t%d\n%!" prepared.size;
+  Printf.printf "debug\tpages\t%d\n%!" prepared.pages;
+  (* 1) Force full AVET updated-at via datoms (ascending). *)
+  let t0 = now_ms () in
+  let avet_count = Seq.fold_left (fun n _ -> n + 1) 0 (datoms db Avet ~a:"block/updated-at" ()) in
+  ignore (debug_ms "datoms-avet-updated-at-full-count" t0);
+  Printf.printf "debug\tavet-updated-at-count\t%d\n%!" avet_count;
+  (* 2) Force full rseek of same attr. *)
+  let t0 = now_ms () in
+  let rseek_count =
+    Seq.fold_left (fun n _ -> n + 1) 0 (rseek_datoms db Avet ~a:"block/updated-at" ())
+  in
+  ignore (debug_ms "rseek-avet-updated-at-full-count" t0);
+  Printf.printf "debug\trseek-updated-at-count\t%d\n%!" rseek_count;
+  (* 3) Take first 15 from rseek with no filter. *)
+  let t0 = now_ms () in
+  let first15 =
+    let rec loop i seq acc =
+      if i <= 0 then List.rev acc
+      else
+        match seq () with
+        | Seq.Nil -> List.rev acc
+        | Seq.Cons (x, xs) -> loop (i - 1) xs (x :: acc)
+    in
+    loop 15 (rseek_datoms db Avet ~a:"block/updated-at" ()) []
+  in
+  ignore (debug_ms "rseek-take-15-nofilter" t0);
+  Printf.printf "debug\trseek-first15-e\t%s\n%!"
+    (String.concat "," (List.map (fun d -> string_of_int d.e) first15));
+  Printf.printf "debug\trseek-first15-a\t%s\n%!"
+    (String.concat "," (List.map (fun d -> d.a) first15));
+  (* Logseq path: exact attr datoms then reverse *)
+  let t0 = now_ms () in
+  let exact_rev =
+    datoms db Avet ~a:"block/updated-at" ()
+    |> List.of_seq
+    |> List.rev
+  in
+  ignore (debug_ms "datoms-avet-attr-then-list-rev" t0);
+  Printf.printf "debug\texact-rev-count\t%d\n%!" (List.length exact_rev);
+  let exact15 = List.filteri (fun i _ -> i < 15) exact_rev in
+  Printf.printf "debug\texact-rev-first15-e\t%s\n%!"
+    (String.concat "," (List.map (fun d -> string_of_int d.e) exact15));
+  let t0 = now_ms () in
+  let _ =
+    keep_take 15
+      (fun d ->
+        match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/page" ()) with
+        | Some _ -> false
+        | None -> true)
+      (List.to_seq exact_rev)
+  in
+  ignore (debug_ms "logseq-style-keep-take-15-on-exact-rev" t0);
+  (* 4) keep_take 15 with is_page on Logseq-style exact-attr reverse. *)
+  let visited = ref 0 in
+  let page_hits = ref 0 in
+  let filter_ms = ref 0. in
+  let is_page d =
+    let t = now_ms () in
+    incr visited;
+    let ok =
+      match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/page" ()) with
+      | Some _ -> false
+      | None -> (
+        match Seq.uncons (datoms db Eavt ~e:d.e ~a:"block/title" ()) with
+        | Some (t, _) -> (match t.v with String s -> String.trim s <> "" | _ -> false)
+        | None -> false)
+    in
+    if ok then incr page_hits;
+    filter_ms := !filter_ms +. (now_ms () -. t);
+    ok
+  in
+  let t0 = now_ms () in
+  let pages = keep_take 15 is_page (avet_attr_rseq db "block/updated-at") in
+  let keep_ms = debug_ms "keep-take-15-is-page-logseq-style" t0 in
+  Printf.printf "debug\tkeep-visited\t%d\n%!" !visited;
+  Printf.printf "debug\tkeep-page-hits\t%d\n%!" !page_hits;
+  Printf.printf "debug\tkeep-filter-ms-sum\t%.3f\n%!" !filter_ms;
+  Printf.printf "debug\tkeep-scan-overhead-ms\t%.3f\n%!" (keep_ms -. !filter_ms);
+  Printf.printf "debug\tkeep-page-e\t%s\n%!"
+    (String.concat "," (List.map (fun d -> string_of_int d.e) pages));
+  (* 5) Hydrate costs: entity only, entity_attr x5, entity_attrs full. *)
+  let sample_e =
+    match pages with
+    | d :: _ -> d.e
+    | [] -> prepared.sample_page
+  in
+  let t0 = now_ms () in
+  let ent = entity db (Entity_id sample_e) in
+  ignore (debug_ms "entity-only" t0);
+  (match ent with
+   | None -> Printf.printf "debug\tentity-missing\t%d\n%!" sample_e
+   | Some e ->
+     let t0 = now_ms () in
+     List.iter
+       (fun attr ->
+         let t = now_ms () in
+         let v = entity_attr e attr in
+         Printf.printf "debug\tentity-attr\t%s\t%.3f\tpresent=%b\n%!" attr (now_ms () -. t)
+           (Option.is_some v))
+       [ "block/uuid"; "block/title"; "block/name"; "block/updated-at"; "block/journal-day" ];
+     ignore (debug_ms "hydrate-forward-5attrs" t0);
+     let t0 = now_ms () in
+     let n = List.length (entity_attrs e) in
+     ignore (debug_ms "entity-attrs-full" t0);
+     Printf.printf "debug\tentity-attrs-count\t%d\n%!" n);
+  (* 6) Repeat full recent_pages once timed. *)
+  let t0 = now_ms () in
+  recent_pages prepared;
+  ignore (debug_ms "recent-pages-once" t0);
+  (* 7) Contrast: datoms Eavt for one entity. *)
+  let t0 = now_ms () in
+  let n = Seq.fold_left (fun n _ -> n + 1) 0 (datoms db Eavt ~e:sample_e ()) in
+  ignore (debug_ms "datoms-eavt-one-entity" t0);
+  Printf.printf "debug\teavt-one-entity-count\t%d\n%!" n;
+  (* 8) Full EAVT count (entity_attrs reverse path scans this). *)
+  let t0 = now_ms () in
+  let n = Seq.fold_left (fun n _ -> n + 1) 0 (datoms db Eavt ()) in
+  ignore (debug_ms "datoms-eavt-full" t0);
+  Printf.printf "debug\teavt-full-count\t%d\n%!" n
+
 let main () =
-  let config = parse_args () in
+  let config, do_debug = parse_args () in
   let selected = select_queries config.query in
   ensure_dir config.data_dir;
   Printf.printf "runtime\tocaml\n%!";
@@ -623,6 +762,7 @@ let main () =
   Printf.printf "jit-warmup\t%d\n%!" config.jit_warmup;
   Printf.printf "data-dir\t%s\n%!" config.data_dir;
   Printf.printf "query-cases\t%d\n%!" (List.length selected);
+  Printf.printf "debug-profile\t%b\n%!" do_debug;
   (match config.query with
    | Some name -> Printf.printf "query\t%s\n%!" name
    | None -> ());
@@ -634,7 +774,9 @@ let main () =
       let prepared =
         prepare_backend ~data_dir:config.data_dir backend ~size:config.size ~pages:config.pages
       in
-      Fun.protect ~finally:prepared.cleanup (fun () -> run_backend config selected prepared))
+      Fun.protect ~finally:prepared.cleanup (fun () ->
+          if do_debug then debug_profile_recent prepared
+          else run_backend config selected prepared))
     config.storages;
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 

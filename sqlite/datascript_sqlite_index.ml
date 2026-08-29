@@ -293,20 +293,26 @@ let slice_seq ?from_ ?to_ ?cmp t =
 
 let rslice_seq ?from_ ?to_ ?cmp t =
   let cmp = Option.value ~default:(cmp_for t.which) cmp in
-  (* from_ is the upper (hi) bound for rslice; to_ is the lower bound. *)
+  (* from_ is the upper (hi) bound for rslice; to_ is the lower bound.
+     Use datom-level bounds (not key<=hi_key alone): prefix bounds encode e=0 and
+     would drop matching datoms under a strict key comparison. *)
   let datoms = ref [] in
-  let hi_key = bound_key t from_ in
-  Datascript_sqlite_db.fold_index_range_desc_until t.which t.db ?hi_key
+  Datascript_sqlite_db.fold_index_range_desc_until t.which t.db
     ~stop:(fun key value ->
+      let datom = decode_entry t.which key value in
+      let under_hi =
+        match from_ with
+        | None -> true
+        | Some bound -> cmp datom bound <= 0
+      in
+      under_hi
+      &&
       match to_ with
-      | None -> false
-      | Some bound ->
-          let datom = decode_entry t.which key value in
-          cmp datom bound < 0)
+      | Some bound -> cmp datom bound < 0
+      | None -> false)
     (fun key value ->
       let datom = decode_entry t.which key value in
       if in_range cmp to_ from_ datom then datoms := datom :: !datoms);
-  (* fold visits DESC; cons builds ascending then rev restores descending order. *)
   make_seq cmp (List.rev !datoms)
 
 let seq_to_list seq = to_seq seq |> List.of_seq
