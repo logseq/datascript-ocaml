@@ -1,16 +1,16 @@
-#!/usr/bin/env nbb
-;; Logseq-shaped query bench for Logseq-forked DataScript, run via nbb.
-;; Durable path: node:sqlite stores d/serializable JSON; queries run after restore.
+#!/usr/bin/env nbb-logseq
+;; Logseq-shaped query bench via @logseq/nbb-logseq#feat-db-v34.
+;; Persistence matches Logseq DB graphs (see logseq.db.common.sqlite-cli):
+;;   IStorage → SQLite kvs + transit, create-conn {:storage} + transact!.
+;; No release-js / datascript.js interop. OCaml side stays non-PSS.
 (ns logseq-query-bench-upstream
   (:require
    ["node:sqlite" :refer [DatabaseSync]]
    ["fs" :as fs]
-   ["process" :as process]))
-
-(def d
-  (js/require
-   (or (.-UPSTREAM_DATASCRIPT_JS (.-env process))
-       (throw (js/Error. "Set UPSTREAM_DATASCRIPT_JS to Logseq-forked release-js/datascript.js")))))
+   ["process" :as process]
+   [datascript.core :as d]
+   [datascript.storage :refer [IStorage]]
+   [datascript.transit :as dt]))
 
 (def default-config
   {:size 20000
@@ -59,16 +59,8 @@
 (defn bump! [n]
   (swap! blackhole #(bit-and (+ % n) 0x3fffffff)))
 
-(defn as-array [xs]
-  (if (array? xs) xs (js/Array.from xs)))
-
 (defn keep-take [n pred xs]
-  (let [out #js []]
-    (doseq [x xs
-            :while (< (.-length out) n)]
-      (when (pred x)
-        (.push out x)))
-    out))
+  (into [] (comp (filter pred) (take n)) xs))
 
 (defn dotime [duration-ms step f]
   (let [start (now-ms)
@@ -87,21 +79,21 @@
          (range (:repeats cfg)))))
 
 (def schema
-  #js {"block/uuid" #js {":db/unique" ":db.unique/identity" ":db/index" true}
-       "block/title" #js {":db/index" true}
-       "block/name" #js {":db/index" true}
-       "block/updated-at" #js {":db/index" true}
-       "block/created-at" #js {":db/index" true}
-       "block/journal-day" #js {":db/index" true}
-       "block/parent" #js {":db/valueType" ":db.type/ref" ":db/index" true}
-       "block/page" #js {":db/valueType" ":db.type/ref" ":db/index" true}
-       "block/tags" #js {":db/valueType" ":db.type/ref"
-                         ":db/cardinality" ":db.cardinality/many"
-                         ":db/index" true}
-       "block/refs" #js {":db/valueType" ":db.type/ref"
-                         ":db/cardinality" ":db.cardinality/many"
-                         ":db/index" true}
-       "block/content" #js {":db/index" true}})
+  {:block/uuid {:db/unique :db.unique/identity :db/index true}
+   :block/title {:db/index true}
+   :block/name {:db/index true}
+   :block/updated-at {:db/index true}
+   :block/created-at {:db/index true}
+   :block/journal-day {:db/index true}
+   :block/parent {:db/valueType :db.type/ref :db/index true}
+   :block/page {:db/valueType :db.type/ref :db/index true}
+   :block/tags {:db/valueType :db.type/ref
+                :db/cardinality :db.cardinality/many
+                :db/index true}
+   :block/refs {:db/valueType :db.type/ref
+                :db/cardinality :db.cardinality/many
+                :db/index true}
+   :block/content {:db/index true}})
 
 (defn uuid-of [i]
   (str "00000000-0000-4000-8000-" (.padStart (str i) 12 "0")))
@@ -114,156 +106,217 @@
         base-ms 1700000000000
         day-ms 86400000
         tag-count (min 32 pages)
-        tx #js []]
+        tx (transient [])]
     (doseq [e (range 1 (inc pages))]
       (let [updated (+ base-ms (* 10 day-ms) (* e 1000))
-            ent #js {":db/id" e
-                     "block/uuid" (uuid-of e)
-                     "block/title" (str "Page " e)
-                     "block/name" (str "page-" e)
-                     "block/updated-at" updated
-                     "block/created-at" (- updated day-ms)
-                     "block/content" (str "page body " e)}]
-        (when (zero? (mod e 5))
-          (aset ent "block/journal-day" (journal-day-of e)))
-        (when (zero? (mod e 7))
-          (aset ent "block/tags" (inc (mod e tag-count))))
-        (.push tx ent)))
+            ent (cond-> {:db/id e
+                         :block/uuid (uuid-of e)
+                         :block/title (str "Page " e)
+                         :block/name (str "page-" e)
+                         :block/updated-at updated
+                         :block/created-at (- updated day-ms)
+                         :block/content (str "page body " e)}
+                  (zero? (mod e 5))
+                  (assoc :block/journal-day (journal-day-of e))
+                  (zero? (mod e 7))
+                  (assoc :block/tags (inc (mod e tag-count))))]
+        (conj! tx ent)))
     (doseq [index (range (- size pages))]
       (let [e (+ pages index 1)
             page (inc (mod index pages))
             parent (if (or (zero? index) (zero? (mod index 3))) page (dec e))
             updated (+ base-ms (* e 30))
-            ent #js {":db/id" e
-                     "block/uuid" (uuid-of e)
-                     "block/title" (str "Block " e)
-                     "block/updated-at" updated
-                     "block/created-at" (- updated 60000)
-                     "block/parent" parent
-                     "block/page" page
-                     "block/content" (str "block body " e)}]
-        (when (zero? (mod e 11))
-          (aset ent "block/tags" (inc (mod e tag-count)))
-          (aset ent "block/refs" page))
-        (.push tx ent)))
-    #js {:tx tx :pages pages :baseMs base-ms}))
+            ent (cond-> {:db/id e
+                         :block/uuid (uuid-of e)
+                         :block/title (str "Block " e)
+                         :block/updated-at updated
+                         :block/created-at (- updated 60000)
+                         :block/parent parent
+                         :block/page page
+                         :block/content (str "block body " e)}
+                  (zero? (mod e 11))
+                  (assoc :block/tags (inc (mod e tag-count))
+                         :block/refs page))]
+        (conj! tx ent)))
+    {:tx (persistent! tx)
+     :pages pages
+     :base-ms base-ms}))
 
-(defn entity-get [entity attr]
-  (when entity
-    (if (fn? (.-get entity))
-      (.get entity attr)
-      (aget entity attr))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Storage — aligned with logseq.db.common.sqlite-cli / db-worker
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn hydrate-forward! [entity]
-  (when entity
-    (doseq [attr ["block/uuid" "block/title" "block/name" "block/updated-at" "block/journal-day"]]
-      (when (some? (entity-get entity attr))
-        (bump! 1)))))
+(defn create-kvs-table!
+  "Same DDL as logseq.db.common.sqlite/create-kvs-table!"
+  [^js sql-db]
+  (.exec sql-db
+         "create table if not exists kvs (addr INTEGER primary key, content TEXT, addresses JSON)"))
 
-(defn avet-attr-rseq [db attr]
-  (-> (.datoms d db ":avet" attr) as-array .slice .reverse))
+(defn- upsert-addr-content!
+  "Same semantics as sqlite-cli/upsert-addr-content!.
+   node:sqlite has no better-sqlite3 `.transaction`; apply rows sequentially."
+  [^js sql-db rows]
+  (assert sql-db ::upsert-addr-content!)
+  (let [insert (.prepare sql-db
+                         "INSERT INTO kvs (addr, content, addresses) values (?, ?, ?) on conflict(addr) do update set content = excluded.content, addresses = excluded.addresses")]
+    (doseq [item rows]
+      (.run insert (.-addr item) (.-content item) (.-addresses item)))))
+
+(defn- restore-data-from-addr
+  "Same semantics as sqlite-cli/restore-data-from-addr."
+  [^js sql-db addr]
+  (when-let [row (.get (.prepare sql-db "select content, addresses from kvs where addr = ?") addr)]
+    (let [content (.-content row)
+          addresses (when (.-addresses row)
+                      (js/JSON.parse (.-addresses row)))
+          data (dt/read-transit-str content)]
+      (if (and addresses (map? data))
+        (assoc data :addresses addresses)
+        data))))
+
+(defn new-sqlite-storage
+  "Creates a datascript IStorage for sqlite.
+   Mirrors logseq.db.common.sqlite-cli/new-sqlite-storage (transit content + addresses JSON)."
+  [^js sql-db]
+  (reify IStorage
+    (-store [_ addr+data-seq _delete-addrs]
+      (let [data (map
+                  (fn [[addr payload]]
+                    (let [payload' (if (map? payload) (dissoc payload :addresses) payload)
+                          addresses (when (map? payload)
+                                      (when-let [as (:addresses payload)]
+                                        (js/JSON.stringify (clj->js as))))]
+                      #js {:addr addr
+                           :content (dt/write-transit-str payload')
+                           :addresses addresses}))
+                  addr+data-seq)]
+        (upsert-addr-content! sql-db data)))
+    (-restore [_ addr]
+      (restore-data-from-addr sql-db addr))))
+
+(defn get-storage-conn
+  "Same as logseq.db.common.sqlite/get-storage-conn."
+  [storage schema]
+  (or (d/restore-conn storage)
+      (d/create-conn schema {:storage storage})))
 
 (defn sqlite-open [sqlite-path]
   (when (and sqlite-path (fs/existsSync sqlite-path))
     (fs/unlinkSync sqlite-path))
   (let [db (DatabaseSync. (or sqlite-path ":memory:"))]
-    (.exec db "CREATE TABLE IF NOT EXISTS ds_serializable (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL);")
+    (create-kvs-table! db)
     db))
-
-(defn sqlite-store-db! [sql-db ds-db]
-  (let [payload (js/JSON.stringify (.serializable d ds-db))]
-    (.run (.prepare sql-db "INSERT OR REPLACE INTO ds_serializable(id, payload) VALUES (1, ?) ")
-          payload)
-    (count payload)))
-
-(defn sqlite-restore-db [sql-db]
-  (let [row (.get (.prepare sql-db "SELECT payload FROM ds_serializable WHERE id = 1"))]
-    (when-not row
-      (throw (js/Error. "missing serializable payload in sqlite")))
-    (.from_serializable d (js/JSON.parse (.-payload row)))))
 
 (defn build-prepared [{:keys [size pages sqlite-path]}]
   (let [built (build-tx size pages)
         started (now-ms)
-        mem-db (.db_with d (.empty_db d schema) (.-tx built))
         sql-db (sqlite-open sqlite-path)
-        bytes (sqlite-store-db! sql-db mem-db)
-        db (sqlite-restore-db sql-db)
+        storage (new-sqlite-storage sql-db)
+        conn (get-storage-conn storage schema)
+        ;; Logseq path: transact! on a storage-backed conn (auto-stores PSS nodes).
+        _ (d/transact! conn (:tx built))
+        restore-started (now-ms)
+        ;; Re-open like a fresh process: restore-conn from the same kvs.
+        conn' (or (d/restore-conn storage)
+                  (throw (js/Error. "sqlite PSS restore-conn failed")))
+        restore-ms (- (now-ms) restore-started)
         build-ms (- (now-ms) started)
-        p (.-pages built)]
+        db @conn'
+        p (:pages built)
+        disk-bytes (if (and sqlite-path (fs/existsSync sqlite-path))
+                     (.-size (fs/statSync sqlite-path))
+                     0)]
     {:db db
+     :conn conn'
      :sql-db sql-db
      :pages p
-     :base-ms (.-baseMs built)
+     :base-ms (:base-ms built)
      :sample-uuid (uuid-of (max 1 (quot p 2)))
      :sample-page 1
      :sample-tag 1
      :build-ms build-ms
-     :sqlite-bytes bytes
+     :restore-ms restore-ms
+     :disk-bytes disk-bytes
      :sqlite-path (or sqlite-path ":memory:")}))
+
+(defn hydrate-forward! [entity]
+  (when entity
+    (doseq [attr [:block/uuid :block/title :block/name :block/updated-at :block/journal-day]]
+      (when (some? (get entity attr))
+        (bump! 1)))))
+
+(defn avet-attr-rseq [db attr]
+  ;; Logseq: (rseq (d/datoms db :avet attr)). Prefer rseek-datoms (same order, lazy).
+  (d/rseek-datoms db :avet attr))
 
 (defn make-queries [{:keys [db pages base-ms sample-uuid sample-page sample-tag]}]
   [{:name "recent-pages"
     :run (fn []
            (let [is-page (fn [datom]
-                           (and (zero? (.-length (as-array (.datoms d db ":eavt" (.-e datom) "block/page"))))
-                                (let [titles (as-array (.datoms d db ":eavt" (.-e datom) "block/title"))]
-                                  (and (pos? (.-length titles))
-                                       (string? (.-v (aget titles 0)))
-                                       (pos? (count (.trim (.-v (aget titles 0)))))))))
-                 pages15 (keep-take 15 is-page (avet-attr-rseq db "block/updated-at"))]
+                           (and (empty? (d/datoms db :eavt (:e datom) :block/page))
+                                (let [titles (d/datoms db :eavt (:e datom) :block/title)]
+                                  (and (seq titles)
+                                       (string? (:v (first titles)))
+                                       (pos? (count (.trim ^js/String (:v (first titles)))))))))
+                 pages15 (keep-take 15 is-page (avet-attr-rseq db :block/updated-at))]
              (doseq [datom pages15]
-               (hydrate-forward! (.entity d db (.-e datom))))))}
+               (hydrate-forward! (d/entity db (:e datom))))))}
    {:name "latest-journals"
     :run (fn []
            (let [today (journal-day-of pages)
                  kept (keep-take 10
                                  (fn [datom]
-                                   (and (number? (.-v datom)) (<= (.-v datom) today)))
-                                 (avet-attr-rseq db "block/journal-day"))]
+                                   (and (number? (:v datom)) (<= (:v datom) today)))
+                                 (avet-attr-rseq db :block/journal-day))]
              (doseq [datom kept]
-               (hydrate-forward! (.entity d db (.-e datom))))))}
+               (hydrate-forward! (d/entity db (:e datom))))))}
    {:name "uuid-lookup"
-    :run (fn [] (hydrate-forward! (.entity d db #js ["block/uuid" sample-uuid])))}
+    :run (fn [] (hydrate-forward! (d/entity db [:block/uuid sample-uuid])))}
    {:name "title-lookup"
     :run (fn []
-           (bump! (.-length (as-array (.datoms d db ":avet" "block/title"
-                                               (str "Page " (quot pages 2)))))))}
+           (bump! (count (d/datoms db :avet :block/title (str "Page " (quot pages 2))))))}
    {:name "children-by-parent"
     :run (fn []
-           (bump! (.-length (as-array (.datoms d db ":avet" "block/parent" sample-page)))))}
+           (bump! (count (d/datoms db :avet :block/parent sample-page))))}
    {:name "blocks-by-page"
     :run (fn []
-           (bump! (.-length (as-array (.datoms d db ":avet" "block/page" sample-page)))))}
+           (bump! (count (d/datoms db :avet :block/page sample-page))))}
    {:name "tags-scan"
     :run (fn []
-           (bump! (.-length (as-array (.datoms d db ":avet" "block/tags" sample-tag)))))}
+           (bump! (count (d/datoms db :avet :block/tags sample-tag))))}
    {:name "eavt-entity"
     :run (fn []
-           (bump! (.-length (as-array (.datoms d db ":eavt" sample-page)))))}
+           (bump! (count (d/datoms db :eavt sample-page))))}
    {:name "entity-hydrate"
-    :run (fn [] (hydrate-forward! (.entity d db sample-page)))}
+    :run (fn [] (hydrate-forward! (d/entity db sample-page)))}
    {:name "q-updated-at-between"
     :run (fn []
            (let [lo (+ base-ms 3600000)
                  hi (+ base-ms 86400000)
-                 rows (.q d
-                          "[:find ?e ?t :in $ ?lo ?hi :where [?e \"block/updated-at\" ?t] [(>= ?t ?lo)] [(<= ?t ?hi)]]"
-                          db lo hi)]
-             (bump! (.-length rows))))}
+                 rows (d/q '[:find ?e ?t
+                             :in $ ?lo ?hi
+                             :where
+                             [?e :block/updated-at ?t]
+                             [(>= ?t ?lo)]
+                             [(<= ?t ?hi)]]
+                           db lo hi)]
+             (bump! (count rows))))}
    {:name "q-journal-pages"
     :run (fn []
-           (bump! (.-length
-                   (.q d
-                       "[:find ?e ?d :where [?e \"block/journal-day\" ?d] [?e \"block/title\" ?t]]"
-                       db))))}
+           (bump! (count
+                   (d/q '[:find ?e ?d
+                          :where
+                          [?e :block/journal-day ?d]
+                          [?e :block/title ?t]]
+                        db))))}
    {:name "q-page-by-name"
     :run (fn []
-           (bump! (.-length
-                   (.q d
-                       "[:find ?e :in $ ?n :where [?e \"block/name\" ?n]]"
-                       db
-                       (str "page-" (quot pages 3))))))}])
+           (bump! (count
+                   (d/q '[:find ?e
+                          :in $ ?n
+                          :where [?e :block/name ?n]]
+                        db
+                        (str "page-" (quot pages 3))))))}])
 
 (def query-names
   ["recent-pages" "latest-journals" "uuid-lookup" "title-lookup"
@@ -275,12 +328,12 @@
     (when (:list-queries cfg)
       (doseq [q query-names] (println q))
       (.exit process 0))
-    (let [label (or (.-BENCH_RUNTIME_LABEL (.-env process)) "logseq-forked-cljs-nbb")
+    (let [label (or (.-BENCH_RUNTIME_LABEL (.-env process)) "cljs-nbb-logseq-pss")
           sqlite-path (or (:sqlite-path cfg)
                           (str "/tmp/logseq-query-bench-cljs-" (:size cfg) ".sqlite3"))]
       (println (str "runtime\t" label))
       (println "suite\tlogseq-queries-shared")
-      (println (str "backend\tsqlite"))
+      (println "backend\tsqlite-kvs-pss")
       (println (str "size\t" (:size cfg)))
       (println (str "pages\t" (:pages cfg)))
       (println (str "warmup-ms\t" (:warmup-ms cfg)))
@@ -289,7 +342,7 @@
       (println (str "jit-warmup\t" (:jit-warmup cfg)))
       (println (str "sqlite-path\t" sqlite-path))
       (.write (.-stderr process)
-              (str "Building via nbb+sqlite (entities=" (:size cfg)
+              (str "Building via nbb-logseq PSS+kvs+transact! (entities=" (:size cfg)
                    " pages=" (:pages cfg) ")...\n"))
       (let [prepared (build-prepared (assoc cfg :sqlite-path sqlite-path))
             queries (cond->> (make-queries prepared)
@@ -298,7 +351,8 @@
         (when (empty? queries)
           (throw (js/Error. (str "unknown query " (:query cfg)))))
         (println (str "build-ms\t" (format-ms (:build-ms prepared))))
-        (println (str "sqlite-bytes\t" (:sqlite-bytes prepared)))
+        (println (str "restore-ms\t" (format-ms (:restore-ms prepared))))
+        (println (str "disk-bytes\t" (:disk-bytes prepared)))
         (println (str "query-cases\t" (count queries)))
         (when (pos? (:jit-warmup cfg))
           (doseq [q queries]

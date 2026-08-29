@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Three-way Logseq shared-query bench (SQLite backend throughout):
-#   1) Logseq-forked DataScript via nbb + node:sqlite
-#   2) OCaml on origin/main (existing ref via detached worktree; no new branch)
-#   3) OCaml on the current checkout
+# Three-way Logseq shared-query bench:
+#   1) CLJS via @logseq/nbb-logseq (PSS indexes + SQLite kvs IStorage) — no release-js
+#   2) OCaml on origin/main (non-PSS; detached worktree; no new branch)
+#   3) OCaml on the current checkout (non-PSS SQLite indexes)
 set -euo pipefail
 
 repo_root="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
@@ -15,28 +15,25 @@ sample_ms="${BENCH_SAMPLE_MS:-200}"
 repeats="${BENCH_REPEATS:-3}"
 jit_warmup="${BENCH_JIT_WARMUP:-20}"
 out_dir="${BENCH_OUT_DIR:-/opt/cursor/artifacts}"
-upstream_js="${UPSTREAM_DATASCRIPT_JS:-$repo_root/_deps/datascript/release-js/datascript.js}"
 main_ref="${BENCH_MAIN_REF:-origin/main}"
 worktree="${BENCH_MAIN_WORKTREE:-/tmp/datascript-ocaml-main-bench}"
-nbb_bin="${NBB_BIN:-}"
+nbb_bin="${NBB_LOGSEQ_BIN:-}"
+nbb_prefix="${NBB_LOGSEQ_PREFIX:-/tmp/nbb-logseq-db}"
+# DB-graph capable nbb-logseq (datascript.core store/restore + IStorage)
+nbb_pkg="${NBB_LOGSEQ_PKG:-github:logseq/nbb-logseq#feat-db-v34}"
 
 mkdir -p "$out_dir"
 
 if [ -z "$nbb_bin" ]; then
-  if [ -x /tmp/nbb-local/node_modules/.bin/nbb ]; then
-    nbb_bin=/tmp/nbb-local/node_modules/.bin/nbb
-  elif command -v nbb >/dev/null 2>&1; then
-    nbb_bin="$(command -v nbb)"
+  if [ -x "$nbb_prefix/node_modules/.bin/nbb-logseq" ]; then
+    nbb_bin="$nbb_prefix/node_modules/.bin/nbb-logseq"
+  elif command -v nbb-logseq >/dev/null 2>&1; then
+    nbb_bin="$(command -v nbb-logseq)"
   else
-    npm install nbb --no-save --prefix /tmp/nbb-local
-    nbb_bin=/tmp/nbb-local/node_modules/.bin/nbb
+    mkdir -p "$nbb_prefix"
+    npm install "$nbb_pkg" --no-save --prefix "$nbb_prefix"
+    nbb_bin="$nbb_prefix/node_modules/.bin/nbb-logseq"
   fi
-fi
-
-if [ ! -f "$upstream_js" ]; then
-  echo "Missing upstream JS bundle: $upstream_js" >&2
-  echo "Run: script/ensure_upstream_datascript.sh" >&2
-  exit 2
 fi
 
 args=(--size "$size" --pages "$pages" --warmup-ms "$warmup_ms" --sample-ms "$sample_ms" --repeats "$repeats" --jit-warmup "$jit_warmup")
@@ -44,9 +41,8 @@ args=(--size "$size" --pages "$pages" --warmup-ms "$warmup_ms" --sample-ms "$sam
 echo "== building current-branch shared sqlite bench =="
 dune build bench/logseq_query_bench_shared.exe
 
-echo "== 1/3 logseq-forked cljs via nbb + node:sqlite =="
-BENCH_RUNTIME_LABEL="logseq-forked-cljs-nbb" \
-  UPSTREAM_DATASCRIPT_JS="$upstream_js" \
+echo "== 1/3 cljs via nbb-logseq (PSS + sqlite kvs) =="
+BENCH_RUNTIME_LABEL="cljs-nbb-logseq-pss" \
   "$nbb_bin" "$repo_root/bench/logseq_query_bench_upstream.cljs" \
     "${args[@]}" --sqlite "$out_dir/logseq-bench-cljs-$size.sqlite3" \
   | tee "$out_dir/bench-logseq-shared-cljs-nbb.txt"
@@ -89,7 +85,7 @@ if ! grep -q 'logseq_query_bench_shared' "$worktree/bench/dune"; then
 EOF
 fi
 
-echo "== 2/3 ocaml origin/main (sqlite) =="
+echo "== 2/3 ocaml origin/main (sqlite, non-PSS) =="
 (
   cd "$worktree"
   dune build bench/logseq_query_bench_shared.exe
@@ -98,7 +94,7 @@ echo "== 2/3 ocaml origin/main (sqlite) =="
       "${args[@]}" --sqlite "$out_dir/logseq-bench-ocaml-main-$size.sqlite3"
 ) | tee "$out_dir/bench-logseq-shared-ocaml-main.txt"
 
-echo "== 3/3 ocaml current branch (sqlite) =="
+echo "== 3/3 ocaml current branch (sqlite indexes, non-PSS) =="
 BENCH_RUNTIME_LABEL="ocaml-current" \
   dune exec -- bench/logseq_query_bench_shared.exe \
     "${args[@]}" --sqlite "$out_dir/logseq-bench-ocaml-current-$size.sqlite3" \
@@ -121,13 +117,13 @@ def parse(path):
     return rows
 
 paths = {
-    "logseq-forked-cljs-nbb": out_dir / "bench-logseq-shared-cljs-nbb.txt",
+    "cljs-nbb-logseq-pss": out_dir / "bench-logseq-shared-cljs-nbb.txt",
     "ocaml-main": out_dir / "bench-logseq-shared-ocaml-main.txt",
     "ocaml-current": out_dir / "bench-logseq-shared-ocaml-current.txt",
 }
 parsed = {label: parse(path) for label, path in paths.items()}
 queries = [
-    "build-ms", "restore-ms",
+    "build-ms", "restore-ms", "disk-bytes",
     "recent-pages", "latest-journals", "uuid-lookup", "title-lookup",
     "children-by-parent", "blocks-by-page", "tags-scan", "eavt-entity",
     "entity-hydrate", "q-updated-at-between", "q-journal-pages", "q-page-by-name",
@@ -135,12 +131,11 @@ queries = [
 labels = list(paths.keys())
 
 md = []
-md.append("# Logseq shared query bench (3-way, SQLite)")
+md.append("# Logseq shared query bench (3-way)")
 md.append("")
 md.append(f"- Size: {size} entities / {pages} pages")
-md.append("- Backend: **SQLite** for all runtimes")
-md.append("  - CLJS: nbb + `node:sqlite` storing `serializable` / `from_serializable`")
-md.append("  - OCaml: `datascript_sqlite` index store + restore")
+md.append("- CLJS: `@logseq/nbb-logseq#feat-db-v34` — PSS indexes + SQLite `kvs` IStorage (Logseq DB path)")
+md.append("- OCaml: non-PSS SQLite index store/restore (no PSS)")
 md.append("- Workload: Logseq `initial_data` hot paths")
 md.append("")
 md.append("| query | " + " | ".join(labels) + " |")
