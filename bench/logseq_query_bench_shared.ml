@@ -366,6 +366,17 @@ let hydrate_edn_map e =
   |> List.sort String.compare
   |> edn_vector
 
+(* Pre-parse once — matches CLJS/Datahike quoted queries (no per-op string parse). *)
+let q_updated_at_between_query =
+  parse_query_string
+    "[:find ?e ?t :in $ ?lo ?hi :where [?e :block/updated-at ?t] [(>= ?t ?lo)] [(<= ?t ?hi)]]"
+
+let q_journal_pages_query =
+  parse_query_string "[:find ?e ?d :where [?e :block/journal-day ?d] [?e :block/title ?t]]"
+
+let q_page_by_name_query =
+  parse_query_string "[:find ?e :in $ ?n :where [?e :block/name ?n]]"
+
 let result_edn p name =
   match name with
   | "recent-pages" ->
@@ -419,20 +430,16 @@ let result_edn p name =
     let lo = p.base_ms + 3_600_000 in
     let hi = p.base_ms + 86_400_000 in
     edn_of_q_rows
-      (q_string
+      (q
          ~inputs:
            [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
-         p.db
-         "[:find ?e ?t :in $ ?lo ?hi :where [?e :block/updated-at ?t] [(>= ?t ?lo)] [(<= ?t ?hi)]]")
+         p.db q_updated_at_between_query)
   | "q-journal-pages" ->
-    edn_of_q_rows
-      (q_string p.db "[:find ?e ?d :where [?e :block/journal-day ?d] [?e :block/title ?t]]")
+    edn_of_q_rows (q p.db q_journal_pages_query)
   | "q-page-by-name" ->
     let name = Printf.sprintf "page-%d" (p.pages / 3) in
     edn_of_q_rows
-      (q_string
-         ~inputs:[ Arg_scalar (Result_value (String name)) ]
-         p.db "[:find ?e :in $ ?n :where [?e :block/name ?n]]")
+      (q ~inputs:[ Arg_scalar (Result_value (String name)) ] p.db q_page_by_name_query)
   | other -> invalid_arg ("unknown result-edn query: " ^ other)
 
 let recent_pages p =
@@ -474,22 +481,18 @@ let q_updated_at_between p =
   let lo = p.base_ms + 3_600_000 in
   let hi = p.base_ms + 86_400_000 in
   consume_rows
-    (q_string
+    (q
        ~inputs:
          [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
-       p.db
-       "[:find ?e ?t :in $ ?lo ?hi :where [?e :block/updated-at ?t] [(>= ?t ?lo)] [(<= ?t ?hi)]]")
+       p.db q_updated_at_between_query)
 
 let q_journal_pages p =
-  consume_rows
-    (q_string p.db "[:find ?e ?d :where [?e :block/journal-day ?d] [?e :block/title ?t]]")
+  consume_rows (q p.db q_journal_pages_query)
 
 let q_page_by_name p =
   let name = Printf.sprintf "page-%d" (p.pages / 3) in
   consume_rows
-    (q_string
-       ~inputs:[ Arg_scalar (Result_value (String name)) ]
-       p.db "[:find ?e :in $ ?n :where [?e :block/name ?n]]")
+    (q ~inputs:[ Arg_scalar (Result_value (String name)) ] p.db q_page_by_name_query)
 
 type query_case = { name : string; run : prepared -> unit }
 

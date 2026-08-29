@@ -668,7 +668,79 @@ end) = struct
     | [], [ { Query_plan.attr = QAttr anti_attr; value = QValue anti_value; _ } ] ->
       execute_scan_anti_ground source_db e_var attrs scan anti_attr anti_value
     | [], [ _ ] -> None
-    | merges, [] -> execute_const_drive_merges source_db e_var attrs scan merges
+    | merges, [] -> (
+      match execute_const_drive_merges source_db e_var attrs scan merges with
+      | Some _ as ok -> ok
+      | None ->
+        (* Open-value drive (e.g. [?e :block/journal-day ?d] [?e :block/title ?t]):
+           AEVT seed + card-one merges — same algorithm as mixed path without anti. *)
+        let* drive = driving_cells source_db e_var scan in
+        let* pos_ops =
+          let rec collect acc = function
+            | [] -> Some (List.rev acc)
+            | m :: rest ->
+              (match parse_pos_merge source_db m with
+               | None -> None
+               | Some op -> collect (op :: acc) rest)
+          in
+          collect [] merges
+        in
+        let pos_arr = Array.of_list pos_ops in
+        let n_pos = Array.length pos_arr in
+        let pointers = Array.init n_pos (fun _ -> ref 0) in
+        let dense =
+          Array.map
+            (function
+              | Pos { arr; _ } -> dense_base arr
+              | Anti _ -> None)
+            pos_arr
+        in
+        let drive_len = Array.length drive in
+        let rows = Array.make drive_len [] in
+        let count = ref 0 in
+        let bind_buf = Array.make (List.length attrs) (Result_entity 0) in
+        let attr_index =
+          let tbl = Hashtbl.create (List.length attrs) in
+          List.iteri (fun i name -> Hashtbl.add tbl name i) attrs;
+          tbl
+        in
+        let set_bind var value =
+          match Hashtbl.find_opt attr_index var with
+          | Some i -> bind_buf.(i) <- value
+          | None -> ()
+        in
+        for i = 0 to drive_len - 1 do
+          let cell = drive.(i) in
+          let eid = cell.eid in
+          set_bind e_var (Result_entity eid);
+          (match cell.scan_var with
+           | Some v -> set_bind v cell.scan_value
+           | None -> ());
+          let ok = ref true in
+          let mi = ref 0 in
+          while !ok && !mi < n_pos do
+            match pos_arr.(!mi) with
+            | Pos { bind_var; value_term; arr; _ } -> (
+              let found =
+                match dense.(!mi) with
+                | Some (base, len) -> lookup_dense arr base len eid
+                | None -> seek_aevt arr pointers.(!mi) eid
+              in
+              match found with
+              | None -> ok := false
+              | Some d when value_matches value_term d.v ->
+                (match bind_var with
+                 | Some v -> set_bind v (Query.result_of_ref (Query.result_of_datom_v d))
+                 | None -> ());
+                incr mi
+              | Some _ -> ok := false)
+            | Anti _ -> ok := false
+          done;
+          if !ok then (
+            rows.(!count) <- Array.to_list bind_buf;
+            incr count)
+        done;
+        Some (Array.to_list (Array.sub rows 0 !count)))
     | _ ->
       (* Mixed positive + anti: drive + cursor merges + anti bitset/lookup. *)
       let* drive = driving_cells source_db e_var scan in
@@ -743,27 +815,27 @@ end) = struct
                | None -> ());
               incr mi
             | Some _ -> ok := false)
-          | Anti _ -> incr mi
+          | Anti _ -> ok := false
         done;
         let ai = ref 0 in
         while !ok && !ai < n_anti do
-          (match anti_arr.(!ai) with
-           | Anti { excluded = Some excluded; _ } ->
-             let max_entity = Bytes.length excluded in
-             if eid >= 0 && eid < max_entity && Bytes.unsafe_get excluded eid = '\001' then
-               ok := false
-           | Anti { excluded = None; arr = Some arr; value_term; _ } -> (
-             match find_entity_in_aevt_array arr eid with
-             | Some d when value_matches value_term d.v -> ok := false
-             | _ -> ())
-           | Anti _ | Pos _ -> ());
-          incr ai
+          match anti_arr.(!ai) with
+          | Anti { excluded = Some bits; _ } ->
+            if eid >= 0 && eid < Bytes.length bits && Bytes.unsafe_get bits eid = '\001' then
+              ok := false
+            else
+              incr ai
+          | Anti { arr = Some arr; value_term; _ } -> (
+            match find_entity_in_aevt_array arr eid with
+            | Some d when value_matches value_term d.v -> ok := false
+            | _ -> incr ai)
+          | _ -> incr ai
         done;
         if !ok then (
           rows.(!count) <- Array.to_list bind_buf;
           incr count)
       done;
-      Some (rows_of_array_rev rows !count)
+      Some (Array.to_list (Array.sub rows 0 !count))
 
   let apply_group_filters source_db relation filters =
     let rec loop relation = function
