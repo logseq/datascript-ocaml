@@ -320,14 +320,53 @@ close; correctness unchanged.
 5. **SQLite + LMDB together in v1** vs native LMDB first.
 6. Whether plain `since` gains TEAV acceleration (Mode A path) in the same phase as Mode B API.
 
-## Worked example
+## Logseq production query survey (2026-08-29)
 
-Graph: 500k blocks. Last day: 2k blocks touched, 8k datoms in TEAV range.
+Shallow clone of `logseq/logseq` (`3e85583`). Scope: `deps/db`, `deps/outliner`,
+`src/main` production code (not tests).
 
-| Query intent | Without TEAV | With TEAV (Mode B) |
+### Access mix (approx)
+
+| Mechanism | ~count | Index fit |
+| --- | ---: | --- |
+| `d/entity` | 600+ | EAVT (bound entity) |
+| Lookup-ref `[:block/uuid …]` | ~250 | unique → EAVT |
+| `d/datoms :avet` | ~100+ | AVET |
+| `d/datoms :eavt` | ~50–60 | EAVT |
+| `d/q` | ~50 | mixed |
+| `d/datoms :aevt` | handful | AEVT (rare) |
+
+Hot attrs (schema-indexed): `:block/uuid`, `:block/tags`, `:block/name` /
+`:block/title`, `:block/parent`, `:block/page`, `:block/refs`, `:block/alias`,
+`:block/journal-day`, `:block/created-at`, `:block/updated-at`.
+
+### How “recent” is done today (not via `tx`)
+
+| Intent | Mechanism | File |
 | --- | --- | --- |
-| “Recent blocks with tag X” | AEVT `:block/tags` over 500k + filter time | TEAV → 2k ids → EAVT/AVET only on those |
-| “Pull recent block” with known id | EAVT (already fine) | EAVT unchanged |
-| “All :block/title” in window | AEVT full titles | TEAV → filter attr / EAVT per e |
+| Recent pages | `d/datoms :avet :block/updated-at` + `rseq` + take 15 | `deps/db/.../initial_data.cljs` `get-recent-updated-pages` |
+| Latest journals | `d/datoms :avet :block/journal-day` + `rseq` | same file `get-latest-journals` |
+| Journal by day | AVET exact `:block/journal-day` | `deps/db/src/logseq/db.cljs` |
+| DSL `(between …)` | journal-day rule **or** `created-at`/`updated-at` range | `query_dsl.cljs`, `rules.cljc` `:between` |
+| Doing last 14d / Todo next 7d | `(task …)` + journal-day window | `frontend/state.cljs` default journal queries |
+| View sort | default `:block/updated-at` desc via AVET | `common/view.cljs` |
 
-EAVT/AVET are what make the second hop cheap; TEAV only shrinks who enters that hop.
+**Not found** in production Datalog: `:db/txInstant`, DataScript `since`, or
+“datoms since tx T” shapes. Sync `:since` is protocol-level, not an index scan.
+
+### Implications for TAVE
+
+| Workload | Needs TAVE? |
+| --- | --- |
+| Recent pages / journals / `(between updated-at)` | **No** — denormalized time on **AVET** already |
+| UUID / name / tags / parent / page / refs | **No** — unique / AVET / EAVT |
+| Bound hydrate (`d/entity`) | **No** — EAVT |
+| “All assertions of attr A in tx window” / audit without `updated-at` | **Yes** — only if product moves to tx-log time |
+| Sync/history deltas by transaction | **Yes** (future) |
+
+**Conclusion for Logseq as it ships today:** keep investing in **AVET** (time attrs,
+tags, journal-day) and **EAVT** entity paths. TAVE is justified for engine-level
+tx-window scans and history, not for replacing `:block/updated-at` recent-page UX.
+
+If implementing TAVE anyway, prioritize engine/sync use cases; do not expect
+Logseq’s current “recent N days” queries to switch to it without an app rewrite.
