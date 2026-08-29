@@ -4,4 +4,5 @@
         org.xerial/sqlite-jdbc {:mvn/version "3.53.2.1"}
         datalevin/datalevin {:local/root "../../_deps/datalevin"}}
  :aliases
- {:run {:main-opts ["-m" "logseq-query-bench-clj"]}}}
+ {:run {:main-opts ["-m" "logseq-query-bench-clj"]}
+  :shared {:main-opts ["-m" "shared-query-bench-clj"]}}}
