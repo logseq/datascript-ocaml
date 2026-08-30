@@ -19,8 +19,10 @@ let with_force_relation_fallback f =
   force_relation_fallback := true;
   Fun.protect ~finally:(fun () -> force_relation_fallback := previous) f
 
-(* Datalevin-style result cache: general, keyed by db epoch + physical query/inputs.
-   Avoid structural hashing of [query] — where clauses may embed function values. *)
+(* Datalevin-style result cache: keyed by db identity + temporal/filter view +
+   epoch + physical query/inputs. Avoid structural hashing of [query] — where
+   clauses may embed function values. [filter_pred] is compared by physical
+   identity (closures are not structurally comparable). *)
 let result_cache_enabled =
   match Sys.getenv_opt "DATASCRIPT_QUERY_RESULT_CACHE" with
   | Some ("0" | "false" | "no" | "off") -> ref false
@@ -32,12 +34,17 @@ let query_debug_enabled =
   | _ -> false
 
 type result_cache_entry =
-  { max_e : entity_id
-  ; max_tx : int
-  ; query : query
-  ; inputs : query_arg list
-  ; path : query_exec_path
-  ; rows : query_result list list
+  { cache_db_uid : int
+  ; cache_max_e : entity_id
+  ; cache_max_tx : int
+  ; cache_as_of_tx : tx option
+  ; cache_since_tx : tx option
+  ; cache_history : bool
+  ; cache_filter_pred : (datom -> bool) option
+  ; cache_query : query
+  ; cache_inputs : query_arg list
+  ; cache_path : query_exec_path
+  ; cache_rows : query_result list list
   }
 
 let result_cache_entries : result_cache_entry list ref = ref []
@@ -65,33 +72,52 @@ let path_label = function
   | Relation_fallback -> "relation"
   | Binding_interpreter -> "bindings"
 
+let same_filter_pred left right =
+  match left, right with
+  | None, None -> true
+  | Some a, Some b -> a == b
+  | _ -> false
+
+let same_result_cache_key entry db query inputs =
+  entry.cache_db_uid = db.db_uid
+  && entry.cache_max_e = db.max_datom_e
+  && entry.cache_max_tx = db.max_tx
+  && entry.cache_as_of_tx = db.as_of_tx
+  && entry.cache_since_tx = db.since_tx
+  && entry.cache_history = db.history
+  && same_filter_pred entry.cache_filter_pred db.filter_pred
+  && entry.cache_query == query
+  && entry.cache_inputs == inputs
+
 let lookup_result_cache db query inputs =
   if (not !result_cache_enabled) || !force_relation_fallback then None
   else
     List.find_map
       (fun entry ->
-        if
-          entry.max_e = db.max_datom_e
-          && entry.max_tx = db.max_tx
-          && entry.query == query
-          && entry.inputs == inputs
-        then Some (entry.path, entry.rows)
+        if same_result_cache_key entry db query inputs then
+          Some (entry.cache_path, entry.cache_rows)
         else None)
       !result_cache_entries
 
 let store_result_cache db query inputs path rows =
   if !result_cache_enabled && not !force_relation_fallback then (
     let entry =
-      { max_e = db.max_datom_e; max_tx = db.max_tx; query; inputs; path; rows }
+      { cache_db_uid = db.db_uid
+      ; cache_max_e = db.max_datom_e
+      ; cache_max_tx = db.max_tx
+      ; cache_as_of_tx = db.as_of_tx
+      ; cache_since_tx = db.since_tx
+      ; cache_history = db.history
+      ; cache_filter_pred = db.filter_pred
+      ; cache_query = query
+      ; cache_inputs = inputs
+      ; cache_path = path
+      ; cache_rows = rows
+      }
     in
     let rest =
       List.filter
-        (fun e ->
-          not
-            (e.query == query
-             && e.inputs == inputs
-             && e.max_e = entry.max_e
-             && e.max_tx = entry.max_tx))
+        (fun e -> not (same_result_cache_key e db query inputs))
         !result_cache_entries
     in
     let rec take n = function

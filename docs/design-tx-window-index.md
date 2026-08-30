@@ -236,6 +236,9 @@ to AEVT/AVET + tx filter (correct, slower).
 
 ### Implemented (this branch)
 
+Shipped vs design: sections below this subsection (Mode B, TEAV alternatives,
+app-level “recent N days” product plans) remain design notes unless listed here.
+
 - `| Tave` index; key order `tx | a | v | e | added` (BLOB KV on LMDB `ds/tave` + SQLite `ds_tave`)
 - Written on every append alongside EAVT/AEVT/(AVET when indexed)
 - `fold_tave_range` / `prune_tave_before`; retention default 30 days

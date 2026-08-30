@@ -611,7 +611,8 @@ val last_query_exec_path : unit -> query_exec_path
 (** Run [f] with fused [Query_exec] disabled so [q] uses the relational fallback. *)
 val with_force_relation_fallback : (unit -> 'a) -> 'a
 
-(** Datalevin-style query result cache (general; keyed by db epoch + physical query).
+(** Datalevin-style query result cache (general; keyed by db uid, temporal/filter
+    view, epoch, and physical query/inputs).
     Enabled by default; set [DATASCRIPT_QUERY_RESULT_CACHE=0] to disable.
     Set [DATASCRIPT_QUERY_DEBUG=1] for plan/exec/cache stderr traces. *)
 val clear_query_result_cache : unit -> unit

@@ -746,7 +746,7 @@ end) = struct
 
   let avet_index_start predicate threshold =
     match predicate, threshold with
-    | GreaterThan, Int n -> Some (Int (n + 1))
+    | GreaterThan, Int n when n < max_int -> Some (Int (n + 1))
     | GreaterOrEqual, value | GreaterThan, value -> Some value
     | _ -> None
 
@@ -812,7 +812,9 @@ end) = struct
           (function
             | ComparisonPredicate (predicate, left, right) -> (
               match range_predicate_for_var value_var predicate left right with
-              | Some (GreaterThan, Int _) | Some (LessThan, Int _) -> false
+              (* Tightened Int bounds (n±1) are exact only when they do not overflow. *)
+              | Some (GreaterThan, Int n) when n < max_int -> false
+              | Some (LessThan, Int n) when n > min_int -> false
               | Some _ -> true
               | None -> true)
             | _ -> false)
