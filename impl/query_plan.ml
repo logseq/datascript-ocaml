@@ -639,6 +639,9 @@ let analyze ?(max_datom_e = 1_000_000) ?(bound_vars = []) ?(rules = []) query =
 let plan_is_executable plan =
   not (List.exists (function OpPassthrough _ -> true | _ -> false) plan.ops)
 
+(* Single ground scan or entity-group: Query_exec emits directly.
+   Multi entity-group joins (e.g. cross-entity value join) stay on the
+   relational path, which has a selective AVET/AEVT specialized join. *)
 let plan_is_fused_execute plan =
   match plan.ops with
   | [ OpEntityGroup _ ] | [ OpScan _ ] -> true

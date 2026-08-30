@@ -85,7 +85,8 @@ parsed_full = {label: parse_full(path) for label, path in paths.items()}
 parsed = {label: rows for label, (rows, _edns) in parsed_full.items()}
 edns = {label: edn for label, (_rows, edn) in parsed_full.items()}
 
-# Prefer queries present on OCaml result-edn; fall back to known suite order.
+# Prefer engine timings (`*-nocache`) when present; fall back to warm `q` name.
+# Result EDN still comes from `result-edn` lines.
 default_order = [
     "q1", "q2", "q2-switch", "q3", "q4", "q5",
     "qpred1", "qpred2", "q-or", "q-not", "q-or-join", "q-not-join",
@@ -95,6 +96,12 @@ ocaml_edns = edns["ocaml-current-non-pss"]
 query_only = [q for q in default_order if q in ocaml_edns] or sorted(ocaml_edns)
 setup = ["build-ms", "restore-ms", "disk-bytes", "store-restore-ms"]
 labels = list(paths.keys())
+
+def timing_key(rows, q):
+    nocache = f"{q}-nocache"
+    if nocache in rows:
+        return nocache
+    return q
 
 ref_pairs = [
     ("ocaml-current-non-pss", "datahike-pss-sqlite"),
@@ -122,14 +129,16 @@ cur = "ocaml-current-non-pss"
 dh = "datahike-pss-sqlite"
 slower = []
 for q in query_only:
+    ck = timing_key(parsed[cur], q)
+    dk = timing_key(parsed[dh], q)
     try:
-        cv = float(parsed[cur][q])
-        dv = float(parsed[dh][q])
+        cv = float(parsed[cur][ck])
+        dv = float(parsed[dh][dk])
     except (KeyError, ValueError):
-        slower.append(f"{q}: missing timing")
+        slower.append(f"{q}: missing timing (ocaml={ck}, datahike={dk})")
         continue
     if cv >= dv:
-        slower.append(f"{q}: ocaml-current={cv} >= datahike={dv}")
+        slower.append(f"{q}: ocaml-current={cv} ({ck}) >= datahike={dv} ({dk})")
 
 md = []
 md.append("# Shared people query bench (3-way)")
@@ -167,12 +176,19 @@ else:
 md.append("| query | " + " | ".join(labels) + " |")
 md.append("| --- | " + " | ".join(["---:"] * len(labels)) + " |")
 for q in setup + query_only:
-    cells = [parsed[l].get(q, "—") for l in labels]
+    if q in setup:
+        cells = [parsed[l].get(q, "—") for l in labels]
+        label = q
+    else:
+        cells = [parsed[l].get(timing_key(parsed[l], q), "—") for l in labels]
+        # Annotate when nocache timing is used.
+        keys = {timing_key(parsed[l], q) for l in labels}
+        label = q + (" (nocache)" if any(k.endswith("-nocache") for k in keys) else "")
     if all(c == "—" for c in cells):
         continue
-    md.append(f"| `{q}` | " + " | ".join(cells) + " |")
+    md.append(f"| `{label}` | " + " | ".join(cells) + " |")
 md.append("")
-md.append("Times are median ms/op.")
+md.append("Times are median ms/op (prefer `*-nocache` engine path when present; warm cache is separate).")
 md.append("")
 md.append("Artifacts:")
 for label, path in paths.items():

@@ -91,7 +91,8 @@ end) = struct
                  right_common_indexes
                  |> List.map (fun (attr, index) -> attr, row_value row index)
                in
-               Hashtbl.replace table key row;
+               let prev = Option.value (Hashtbl.find_opt table key) ~default:[] in
+               Hashtbl.replace table key (row :: prev);
                table)
              (Hashtbl.create (List.length right.rows))
       in
@@ -105,11 +106,14 @@ end) = struct
           in
           match Hashtbl.find_opt right_by_key key with
           | None -> []
-          | Some right_row ->
-            let extra = List.map (fun index -> row_value right_row index) right_only_indexes in
-            [ left_row @ extra ])
+          | Some right_rows ->
+            List.rev_map
+              (fun right_row ->
+                let extra = List.map (fun index -> row_value right_row index) right_only_indexes in
+                left_row @ extra)
+              right_rows)
       in
-      { attrs; rows; unique_rows = left.unique_rows && right.unique_rows && rows <> [] }
+      { attrs; rows; unique_rows = false }
 
   let anti_join left right =
     let join_attrs = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
