@@ -18,6 +18,25 @@ val normalize_datom_for_schema : schema -> datom -> datom
 val refresh_indexes : db -> db
 val refresh_indexes_with_added_datoms : db -> datom list -> db
 val refresh_indexes_with_tx_data : db -> datom list -> db
+val refresh_indexes_with_removed_datoms : db -> datom list -> db
+val flush_pending_datoms : db -> db
+val snapshot_db : db -> db
+val basis_tx : db -> tx
+val as_of_t : db -> tx option
+val as_of_tx : db -> tx option
+val since_t : db -> tx option
+val since_tx : db -> tx option
+val temporal_view : db -> bool
+val as_of : tx -> db -> db
+val as_of_instant : value -> db -> db
+val since : tx -> db -> db
+val history : db -> db
+val is_history : db -> bool
+val resolve_tx_at_instant : value -> db -> tx
+val purge_history_before : tx -> db -> db * datom list
+val set_tave_retention_days : int -> unit
+val get_tave_retention_days : unit -> int
+val prune_tave_to_retention : db -> unit
 val with_datoms : db -> datom list -> db
 val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
 val empty : core_context -> db -> db
@@ -29,6 +48,10 @@ val filter : core_context -> db -> (db -> datom -> bool) -> db
 
 val value_equal : value -> value -> bool
 val same_fact : datom -> datom -> bool
+val primary_attr_datoms : db -> index -> attr -> datom list
+val aevt_attr_array : db -> attr -> datom array option
+val find_primary_aevt_entity_attr : db -> entity_id -> attr -> datom option
+val find_entity_in_aevt_array : datom array -> entity_id -> datom option
 
 type index_context =
   { is_avet_accessible : db -> attr -> bool
@@ -55,6 +78,9 @@ val fold_datoms :
   unit ->
   'acc
 val datoms_list : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom list
+val avet_entity_ids_by_attr_value : index_context -> db -> attr -> value -> entity_id array option
+val avet_datoms_by_value : index_context -> db -> attr -> value -> datom list
+val avet_datoms_by_value_seq : index_context -> db -> attr -> value -> datom Seq.t
 val datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val find_datom : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val find_datom_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
@@ -63,6 +89,16 @@ val seek_datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -
 val rseek_datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val rseek_datoms_ref : index_context -> db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val index_range : index_context -> db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+val fold_index_range :
+  ('acc -> datom -> 'acc) ->
+  'acc ->
+  index_context ->
+  db ->
+  attr ->
+  ?start:value ->
+  ?stop:value ->
+  unit ->
+  'acc
 
 val hash : db -> int
 val hash_cache_size : unit -> int

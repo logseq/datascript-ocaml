@@ -5,7 +5,6 @@ type t =
   ; mutable listeners : (string * (tx_report -> unit)) list
   ; mutable next_listener_id : int
   ; storage : storage option
-  ; mutable storage_tail : datom list list
   }
 
 type creation_context =
@@ -19,33 +18,24 @@ type schema_context =
   ; with_schema : db -> schema -> db
   }
 
-type restore_context =
-  { restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  }
+type restore_context = { restore : storage -> db option }
 
 type transact_context =
   { store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
 type reset_context =
   { store : ?storage:storage -> db -> unit
   ; datoms : db -> datom list
+  ; snapshot_db : db -> db
   }
 
 type context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
   ; store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
   ; restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db
@@ -64,13 +54,13 @@ let tx_meta_without_store_control tx_meta =
       | _ -> true)
     tx_meta
 
-let make ?storage ?(storage_tail = []) db =
+let make ?storage db =
   let db =
     match storage with
     | None -> db
     | Some _ -> { db with storage_ref = storage }
   in
-  { db; listeners = []; next_listener_id = 0; storage; storage_tail }
+  { db; listeners = []; next_listener_id = 0; storage }
 
 let create (context : creation_context) ?schema ?storage () =
   let db = context.empty_db ?schema ?storage () in
@@ -122,15 +112,13 @@ let reset_schema (context : schema_context) conn schema =
   conn.db <- db;
   (match conn.storage with
    | None -> ()
-   | Some storage ->
-     context.store ~storage db;
-     conn.storage_tail <- []);
+   | Some storage -> context.store ~storage db);
   db
 
 let restore (context : restore_context) storage =
   match context.restore storage with
   | None -> None
-  | Some db -> Some (make ~storage ~storage_tail:(context.restore_tail_groups storage) db)
+  | Some db -> Some (make ~storage db)
 
 let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
   let skip_store = tx_meta_skips_store tx_meta in
@@ -139,21 +127,12 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
   if not skip_store then
     (match conn.storage with
      | None -> ()
-     | Some storage ->
-       if report.tx_data <> [] then begin
-         let tail = conn.storage_tail @ [ report.tx_data ] in
-         if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold then begin
-           context.store ~storage report.db_after;
-           conn.storage_tail <- []
-         end else begin
-           conn.storage_tail <- tail;
-           context.store_tail storage conn.storage_tail
-         end
-       end);
+     | Some storage -> context.store ~storage report.db_after);
   notify_listeners conn report;
   report
 
 let reset (context : reset_context) ?(tx_meta = []) conn db =
+  let db_before = context.snapshot_db conn.db in
   let db =
     match conn.storage with
     | None -> db
@@ -163,12 +142,10 @@ let reset (context : reset_context) ?(tx_meta = []) conn db =
     List.map (fun datom -> { datom with added = false }) (context.datoms conn.db)
     @ context.datoms db
   in
-  let report = { db_before = conn.db; db_after = db; tx_data; tempids = []; tx_meta } in
+  let report = { db_before; db_after = db; tx_data; tempids = []; tx_meta; purged_datoms = [] } in
   conn.db <- db;
   (match conn.storage with
    | None -> ()
-   | Some storage ->
-     context.store ~storage db;
-     conn.storage_tail <- []);
+   | Some storage -> context.store ~storage db);
   notify_listeners conn report;
   db

@@ -47,7 +47,6 @@ to use a different checkout or compiled JS bundle.
 - `type/`: shared public type definitions
 - `impl/`: implementation modules
 - `test/`: unit, integration, js_of_ocaml, and cross-runtime tests
-- `examples/`: small executable examples
 - `bench/`: benchmark entry points
 - `script/`: parity and benchmark helper scripts
 

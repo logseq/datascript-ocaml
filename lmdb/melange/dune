@@ -1,0 +1,17 @@
+(include_subdirs no)
+
+(library
+ (name lmdb_db_melange)
+ (public_name datascript-ocaml-melange.lmdb-db)
+ (wrapped false)
+ (modes melange byte)
+ (modules datascript_lmdb_db)
+ (libraries datascript_index_codec))
+
+(library
+ (name lmdb_index_melange)
+ (public_name datascript-ocaml-melange.lmdb-index)
+ (wrapped false)
+ (modes melange byte)
+ (modules datascript_lmdb_index)
+ (libraries datascript_index_codec lmdb_db_melange))

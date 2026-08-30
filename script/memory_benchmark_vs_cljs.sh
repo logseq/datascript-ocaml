@@ -37,6 +37,10 @@ echo "tx_size=$tx_size"
 echo "upstream=$upstream_datascript_js"
 echo
 
+# Memory gate compares live heap to upstream CLJS. Disable the Datalevin-style
+# query result cache so cached rows are not counted as retained heap.
+export DATASCRIPT_QUERY_RESULT_CACHE=0
+
 env MEMORY_RUNTIME_LABEL="ocaml-native" MEMORY_VERIFY_FILE="$ocaml_verify" \
   "$ocaml_native" "${args[@]}" > "$ocaml_output"
 env MEMORY_RUNTIME_LABEL="js_of_ocaml" MEMORY_VERIFY_FILE="$ocaml_js_verify" \

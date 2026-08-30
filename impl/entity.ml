@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_entity_attr : db -> entity_id -> attr -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; all_datoms : db -> datom Seq.t
   ; compare_value : value -> value -> int
@@ -32,18 +33,31 @@ let entity_visible_attr_values context db attr values =
   else
     values
 
+(* Cache forward attrs by (db_uid, max_tx, eid) so Share/LMDB entity hydrate
+   and repeated EAVT e-prefix reads stay in RAM within a basis. *)
+let forward_attr_cache : (int * tx * entity_id, (attr * tx_value) list) Hashtbl.t =
+  Hashtbl.create 256
+
 let group_forward_entity_attrs context db entity_id =
-  let add_attr groups d =
-    match List.assoc_opt d.a groups with
-    | None -> (d.a, [ d.v ]) :: groups
-    | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
-  in
-  context.datoms_by_entity db entity_id
-  |> Seq.fold_left add_attr []
-  |> List.filter_map (fun (attr, values) ->
-    match entity_visible_attr_values context db attr values with
-    | [] -> None
-    | values -> Some (attr, tx_value_of_attr_values context db attr values))
+  let key = (db.db_uid, db.max_tx, entity_id) in
+  match Hashtbl.find_opt forward_attr_cache key with
+  | Some attrs -> attrs
+  | None ->
+    let add_attr groups d =
+      match List.assoc_opt d.a groups with
+      | None -> (d.a, [ d.v ]) :: groups
+      | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
+    in
+    let attrs =
+      context.datoms_by_entity db entity_id
+      |> Seq.fold_left add_attr []
+      |> List.filter_map (fun (attr, values) ->
+        match entity_visible_attr_values context db attr values with
+        | [] -> None
+        | values -> Some (attr, tx_value_of_attr_values context db attr values))
+    in
+    Hashtbl.replace forward_attr_cache key attrs;
+    attrs
 
 let group_reverse_entity_attrs context db entity_id =
   context.all_datoms db
@@ -79,15 +93,6 @@ let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
   |> List.sort (fun (left, _) (right, _) -> compare left right)
 
-let forward_entity_attr context db entity_id attr =
-  context.datoms_by_entity db entity_id
-  |> Seq.filter_map (fun d -> if d.a = attr then Some d.v else None)
-  |> List.of_seq
-  |> entity_visible_attr_values context db attr
-  |> function
-  | [] -> None
-  | values -> Some (tx_value_of_attr_values context db attr values)
-
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
   let values =
@@ -102,6 +107,13 @@ let reverse_entity_attr context db entity_id attr =
   | values -> Some (Many_values values)
 
 let lazy_entity context db entity_id =
+  (* One EAVT e-prefix scan (cached) serves all forward attr lookups. *)
+  let forward_by_attr =
+    lazy
+      (group_forward_entity_attrs context db entity_id
+       |> List.to_seq
+       |> Hashtbl.of_seq)
+  in
   let materialized = lazy (group_entity_attrs context db entity_id) in
   { id = entity_id
   ; db
@@ -111,7 +123,7 @@ let lazy_entity context db entity_id =
         if context.is_reverse_ref attr then
           reverse_entity_attr context db entity_id attr
         else
-          forward_entity_attr context db entity_id attr)
+          Hashtbl.find_opt (Lazy.force forward_by_attr) attr)
   ; materialize_attrs = (fun () -> Lazy.force materialized)
   }
 
@@ -135,10 +147,11 @@ let entity context db entity_ref =
   match context.entity_id_of_ref db entity_ref with
   | None -> None
   | Some entity_id ->
-    if entity_has_forward_attrs context db entity_id then
-      Some (lazy_entity context db entity_id)
-    else
-      None
+    (* Prefer cached/full forward scan over a separate existence seek so hydrate
+       paths pay one EAVT e-prefix read. *)
+    match group_forward_entity_attrs context db entity_id with
+    | [] -> None
+    | _ -> Some (lazy_entity context db entity_id)
 
 let entity_attr_raw (entity : entity) = function
   | "db/id" -> Some (One_value (Int entity.id))

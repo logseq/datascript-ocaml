@@ -88,22 +88,17 @@ module Conn : sig
     ; with_schema : db -> schema -> db
     }
 
-  type restore_context =
-    { restore : storage -> db option
-    ; restore_tail_groups : storage -> datom list list
-    }
+  type restore_context = { restore : storage -> db option }
 
   type transact_context =
     { store : ?storage:storage -> db -> unit
-    ; store_tail : storage -> datom list list -> unit
-    ; storage_tail_datom_count : datom list list -> int
-    ; storage_tail_compaction_threshold : int
     ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
     }
 
   type reset_context =
     { store : ?storage:storage -> db -> unit
     ; datoms : db -> datom list
+    ; snapshot_db : db -> db
     }
 
   val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t
@@ -148,6 +143,22 @@ module Db : sig
   val rseek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   val rseek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
   val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+  val basis_tx : db -> tx
+  val as_of_t : db -> tx option
+  val as_of_tx : db -> tx option
+  val since_t : db -> tx option
+  val since_tx : db -> tx option
+  val temporal_view : db -> bool
+  val as_of : tx -> db -> db
+  val as_of_instant : value -> db -> db
+  val since : tx -> db -> db
+  val history : db -> db
+  val is_history : db -> bool
+  val resolve_tx_at_instant : value -> db -> tx
+  val purge_history_before : tx -> db -> db * datom list
+  val set_tave_retention_days : int -> unit
+  val get_tave_retention_days : unit -> int
+  val prune_tave_to_retention : db -> unit
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
@@ -158,6 +169,7 @@ end
 module Entity : sig
   type context =
     { datoms_by_entity : db -> entity_id -> datom Seq.t
+    ; datoms_by_entity_attr : db -> entity_id -> attr -> datom Seq.t
     ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
     ; all_datoms : db -> datom Seq.t
     ; compare_value : value -> value -> int
@@ -223,7 +235,7 @@ module Serialize : sig
     { next_db_uid : unit -> int
     ; validate_schema : schema -> schema
     ; normalize_datom_for_schema : schema -> datom -> datom
-    ; refresh_db_indexes : db -> db
+    ; with_datoms : db -> datom list -> db
     }
 
   val serializable : db -> serializable_db
@@ -231,30 +243,16 @@ module Serialize : sig
 end
 
 module Storage : sig
-  type tail_context =
-    { apply_group : db -> datom list -> db
-    }
+  type restore_context = { next_db_uid : unit -> int }
 
-  type restore_context =
-    { next_db_uid : unit -> int
-    ; db_with_tail : db -> datom list list -> db
-    }
-
-  val root_address : storage_address
-  val tail_address : storage_address
   val memory_storage : unit -> storage
-  val file_storage : string -> storage
+val benchmark_memory_storage : unit -> storage
+  val ensure_live : storage -> unit
+  val kind_of : storage -> storage_kind
   val store : ?storage:storage -> db -> unit
-  val store_tail : storage -> datom list list -> unit
-  val tail_compaction_threshold : int
-  val tail_datom_count : datom list list -> int
   val restore_root_snapshot : storage -> serializable_db option
-  val restore_tail_groups : storage -> datom list list
-  val db_with_tail : tail_context -> db -> datom list list -> db
   val restore : restore_context -> storage -> db option
-  val storage_addresses : storage -> storage_address list
   val storage : db -> storage option
-  val addresses : db list -> storage_address list
   val settings : db -> (attr * value) list
   val collect_garbage : storage -> unit
 end
@@ -397,22 +395,134 @@ val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
 val empty : db -> db
 val is_db : db -> bool
 val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+val refresh_db_indexes : db -> db
 val filter : db -> (db -> datom -> bool) -> db
 val is_filtered : db -> bool
 val unfiltered_db : db -> db
+val basis_tx : db -> tx
+val as_of_t : db -> tx option
+val as_of_tx : db -> tx option
+val since_t : db -> tx option
+val since_tx : db -> tx option
+val temporal_view : db -> bool
+val as_of : tx -> db -> db
+val as_of_instant : value -> db -> db
+val since : tx -> db -> db
+val history : db -> db
+val is_history : db -> bool
+val resolve_tx_at_instant : value -> db -> tx
+val purge_history_before : tx -> db -> db * datom list
+val set_tave_retention_days : int -> unit
+val tave_retention_days : unit -> int
+val prune_tave_to_retention : db -> unit
+module Tx_visibility : module type of Tx_visibility
+module Query_plan : sig
+  type index_choice =
+    | Prefer_eavt
+    | Prefer_aevt
+    | Prefer_avet
+
+  type l_scan =
+    { entity : query_term
+    ; attr : query_term
+    ; value : query_term
+    ; tx : query_term option
+    ; source : string option
+    ; clause : query_clause
+    ; vars : string list
+    }
+
+  type logical_node =
+    | LScan of l_scan
+    | LEntityJoin of
+        { entity_var : string
+        ; scans : l_scan list
+        ; anti_scans : l_scan list
+        ; filters : query_clause list
+        ; source : string option
+        }
+    | LFilter of query_clause
+    | LUnion of
+        { join_vars : string list option
+        ; branches : logical_plan list
+        ; clause : query_clause
+        }
+    | LAntiJoin of
+        { join_vars : string list option
+        ; sub : logical_plan
+        ; clause : query_clause
+        }
+    | LRuleExpand of
+        { name : string
+        ; terms : query_term list
+        ; body : logical_plan
+        }
+    | LPassthrough of query_clause
+
+  and logical_plan =
+    { nodes : logical_node list
+    ; bound_vars : string list
+    }
+
+  type entity_group =
+    { entity_var : string
+    ; scan : l_scan
+    ; merges : l_scan list
+    ; anti_scans : l_scan list
+    ; filters : query_clause list
+    ; clauses : query_clause list
+    ; estimated_rows : int
+    ; source : string option
+    }
+
+  type physical_op =
+    | OpEntityGroup of entity_group
+    | OpScan of
+        { clause : query_clause
+        ; index : index_choice
+        ; estimated_rows : int
+        ; source : string option
+        }
+    | OpFilter of query_clause
+    | OpUnion of
+        { join_vars : string list option
+        ; branches : physical_plan list
+        }
+    | OpAntiJoin of
+        { join_vars : string list option
+        ; excluded : physical_plan
+        }
+    | OpPassthrough of query_clause
+
+  and physical_plan =
+    { ops : physical_op list
+    }
+
+  val choose_index : query_term -> query_term -> query_term -> index_choice
+  val estimate_pattern_cost : ?max_datom_e:int -> query_term -> query_term -> query_term -> int
+  val build_logical_plan :
+    ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule list -> query_clause list -> logical_plan option
+  val lower : ?max_datom_e:int -> logical_plan -> physical_plan option
+  val compile :
+    ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule list -> query_clause list -> physical_plan option
+  val analyze : ?max_datom_e:int -> ?bound_vars:string list -> ?rules:query_rule list -> query -> physical_plan option
+  val plan_is_executable : physical_plan -> bool
+  val plan_is_fused_execute : physical_plan -> bool
+  val clauses_of_plan : physical_plan -> query_clause list
+end
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
-val file_storage : string -> storage
+val benchmark_memory_storage : unit -> storage
+val ensure_live : storage -> unit
+val kind_of : storage -> storage_kind
+val storage_of_handle : Datascript_types.storage -> storage
+val db_shares_storage_index : storage -> db -> bool
 val store : ?storage:storage -> db -> unit
-val store_tail : storage -> datom list list -> unit
 val restore : storage -> db option
-val db_with_tail : db -> datom list list -> db
 val storage : db -> storage option
-val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list
-val storage_addresses : storage -> storage_address list
 val collect_garbage : storage -> unit
 val db_hash : db -> int
 val db_hash_cache_size : unit -> int
@@ -488,6 +598,27 @@ val parse_query_return_map_string_with_pull_context :
   ?pull_db_for_source:(string -> db) ->
   string ->
   query_return * query_return_map option * query
+
+(** Which engine finished the last [q] / [q_string] relation path.
+    Intended for tests that pin fused execute vs relational fallback. *)
+type query_exec_path =
+  | Fused_execute
+  | Relation_fallback
+  | Binding_interpreter
+
+val last_query_exec_path : unit -> query_exec_path
+
+(** Run [f] with fused [Query_exec] disabled so [q] uses the relational fallback. *)
+val with_force_relation_fallback : (unit -> 'a) -> 'a
+
+(** Datalevin-style query result cache (general; keyed by db uid, temporal/filter
+    view, epoch, and physical query/inputs).
+    Enabled by default; set [DATASCRIPT_QUERY_RESULT_CACHE=0] to disable.
+    Set [DATASCRIPT_QUERY_DEBUG=1] for plan/exec/cache stderr traces. *)
+val clear_query_result_cache : unit -> unit
+val with_query_result_cache : bool -> (unit -> 'a) -> 'a
+val query_result_cache_enabled : unit -> bool
+val last_query_cache_hit : unit -> bool
 
 module Query : sig
   type query_callables =

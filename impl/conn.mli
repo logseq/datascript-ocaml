@@ -13,33 +13,24 @@ type schema_context =
   ; with_schema : db -> schema -> db
   }
 
-type restore_context =
-  { restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  }
+type restore_context = { restore : storage -> db option }
 
 type transact_context =
   { store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
 type reset_context =
   { store : ?storage:storage -> db -> unit
   ; datoms : db -> datom list
+  ; snapshot_db : db -> db
   }
 
 type context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
   ; store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
   ; restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db

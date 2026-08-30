@@ -1,0 +1,17 @@
+(include_subdirs no)
+
+(library
+ (name lmdb_db_native)
+ (public_name datascript-ocaml-native.lmdb-db)
+ (wrapped false)
+ (modes native)
+ (modules datascript_lmdb_db)
+ (libraries datascript_index_codec lmdb))
+
+(library
+ (name lmdb_index_native)
+ (public_name datascript-ocaml-native.lmdb-index)
+ (wrapped false)
+ (modes native)
+ (modules datascript_lmdb_index)
+ (libraries datascript_index_codec lmdb_db_native))

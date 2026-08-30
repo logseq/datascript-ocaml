@@ -2,4 +2,4 @@
  (name datascript_types)
  (public_name datascript_ocaml.types)
  (modes native byte melange)
- (libraries persistent_sorted_set_ocaml))
+ (modules datascript_types))

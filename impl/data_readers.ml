@@ -182,6 +182,8 @@ let tx_op_of_edn_form context = function
           Retract (tx_entity_ref_of_edn_form context entity_ref, tx_attr_of_edn_key attr, Some (tx_scalar_value_of_edn_form context value))
         | "db/cas" | "db.fn/cas" ->
           invalid_arg "db/cas requires entity, attr, expected value, and new value"
+        | "db/purge" | "db.purge/datom" ->
+          Purge (tx_entity_ref_of_edn_form context entity_ref, tx_attr_of_edn_key attr, tx_scalar_value_of_edn_form context value)
         | _ -> invalid_arg "Unknown operation")
      | op :: entity_ref :: attr :: expected :: value_or_tx :: [] ->
        (match tx_op_name_of_edn_form op with
@@ -202,11 +204,15 @@ let tx_op_of_edn_form context = function
         | "retract" | "db/retract" -> Retract (tx_entity_ref_of_edn_form context entity_ref, tx_attr_of_edn_key attr, None)
         | "db/retractAttribute" | "db.fn/retractAttribute" ->
           RetractAttr (tx_entity_ref_of_edn_form context entity_ref, tx_attr_of_edn_key attr)
+        | "db.purge/attribute" | "db/purgeAttribute" ->
+          PurgeAttr (tx_entity_ref_of_edn_form context entity_ref, tx_attr_of_edn_key attr)
         | _ -> invalid_arg "Unknown operation")
      | [ op; entity_ref ] ->
        (match tx_op_name_of_edn_form op with
         | "db/retractEntity" | "db.fn/retractEntity" ->
           RetractEntity (tx_entity_ref_of_edn_form context entity_ref)
+        | "db.purge/entity" | "db/purgeEntity" ->
+          PurgeEntity (tx_entity_ref_of_edn_form context entity_ref)
         | _ -> invalid_arg "Unknown operation")
      | [] -> invalid_arg "empty EDN transaction vector"
      | _ :: _ -> invalid_arg "Unknown operation")

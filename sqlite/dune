@@ -1,10 +1,32 @@
 (library
- (name datascript_sqlite)
- (public_name datascript-ocaml-native.sqlite)
+ (name sqlite_db_native)
+ (public_name datascript-ocaml-native-sqlite.db)
  (wrapped false)
- (foreign_stubs
-  (language c)
-  (names datascript_sqlite_stubs))
- (c_library_flags
-  (:standard -L%{env:DATASCRIPT_SQLITE_LIB_DIR=.} -lsqlite3))
- (libraries datascript-ocaml-native persistent_sorted_set_ocaml melange-transit-native))
+ (modes native)
+ (modules datascript_sqlite_db)
+ (libraries sqlite3 datascript_types))
+
+(library
+ (name sqlite_index_native)
+ (public_name datascript-ocaml-native-sqlite.index)
+ (wrapped false)
+ (modes native)
+ (modules datascript_sqlite_index)
+ (libraries datascript_index_codec sqlite_db_native datascript_types))
+
+(library
+ (name datascript_sqlite)
+ (public_name datascript-ocaml-native-sqlite)
+ (wrapped false)
+ (modules
+  datascript_sqlite
+  datascript_sqlite_codec
+  datascript_storage_sqlite
+  datascript_storage_sqlite_plugin)
+ (libraries
+  datascript-ocaml-native
+  storage_native
+  datascript_index_codec
+  sqlite_db_native
+  sqlite_index_native
+  melange-transit-native))
