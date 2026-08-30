@@ -6,9 +6,6 @@ external set_last_index : Js.Re.t -> int -> unit = "lastIndex" [@@mel.set]
 
 let now_seconds () = date_now () /. 1000.0
 
-let file_storage _dir =
-  invalid_arg "file_storage is not supported on Melange"
-
 let compile_regex pattern = pattern
 
 let regexp ?(global = false) pattern =
