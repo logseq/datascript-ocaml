@@ -611,10 +611,18 @@ let primary_attr_datoms db index attr =
   let pending_attr =
     List.filter (fun d -> d.a = attr) db.pending_datoms |> List.sort (Util.compare_datom index)
   in
-  (* Attr caches are shared across as_of/since/history shallow copies and hold
-     current-basis slices. Temporal views must rebuild from raw indexes so
-     retracted/history facts remain available for apply_db_view. *)
+  (* Attr caches are shared across as_of/since/history/filter shallow copies and
+     hold unfiltered current-basis slices. Temporal and filtered views must not
+     read or write those caches — temporal needs history facts; filtered would
+     otherwise leak hidden datoms (and must not poison the shared cache). *)
   let temporal = temporal_view db in
+  let filtered = Option.is_some db.filter_pred in
+  let skip_attr_cache = temporal || filtered in
+  let apply_filter datoms =
+    match db.filter_pred with
+    | None -> datoms
+    | Some pred -> List.filter pred datoms
+  in
   match index with
   | Aevt ->
     (match db.since_tx with
@@ -625,35 +633,43 @@ let primary_attr_datoms db index attr =
          [] db.tave_index ~from_tx ~to_tx:db.max_tx ~attr ()
        |> List.rev
        |> apply_db_view db
+       |> apply_filter
      | _ ->
-       (match (if temporal then None else Hashtbl.find_opt db.aevt_by_attr attr) with
+       (match (if skip_attr_cache then None else Hashtbl.find_opt db.aevt_by_attr attr) with
         | Some datoms -> Array.to_list datoms
         | None ->
           let datoms =
             merge_sorted_datoms Aevt (attr_prefix_datoms Aevt db.aevt_index) pending_attr
             |> apply_db_view db
+            |> apply_filter
           in
-          if not temporal then Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
+          if not skip_attr_cache then Hashtbl.replace db.aevt_by_attr attr (Array.of_list datoms);
           datoms))
   | Avet ->
-    (match (if temporal then None else Hashtbl.find_opt db.avet_by_attr attr) with
+    (match (if skip_attr_cache then None else Hashtbl.find_opt db.avet_by_attr attr) with
      | Some datoms -> Array.to_list datoms
      | None ->
        let datoms =
          merge_sorted_datoms Avet (attr_prefix_datoms Avet db.avet_index) pending_attr
          |> apply_db_view db
+         |> apply_filter
        in
-       if not temporal then (
+       if not skip_attr_cache then (
          Hashtbl.replace db.avet_by_attr attr (Array.of_list datoms);
          cache_avet_entities_for_attr db attr datoms);
        datoms)
   | Eavt | Tave ->
     merge_sorted_datoms index (Index.to_list (stored_index db index)) pending_attr
     |> apply_db_view db
+    |> apply_filter
 
 let aevt_attr_array db attr =
-  ignore (primary_attr_datoms db Aevt attr);
-  Hashtbl.find_opt db.aevt_by_attr attr
+  (* Dense AEVT arrays are shared with the unfiltered db; filtered views must
+     not use them (query would see hidden entities). *)
+  if Option.is_some db.filter_pred then None
+  else (
+    ignore (primary_attr_datoms db Aevt attr);
+    Hashtbl.find_opt db.aevt_by_attr attr)
 
 let duplicate_prefix_datoms db index e a =
   match index, e, a with
@@ -1744,7 +1760,8 @@ let fold_index_range f init context db attr ?start ?stop () =
     | Some pred -> if pred datom then f acc datom else acc
   in
   let attr_cache =
-    if temporal_view db then None else Hashtbl.find_opt db.avet_by_attr attr
+    if temporal_view db || Option.is_some db.filter_pred then None
+    else Hashtbl.find_opt db.avet_by_attr attr
   in
   if temporal_view db then
     (* Rebuild through primary_attr so pending/history facts are visible. *)

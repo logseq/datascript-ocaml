@@ -185,7 +185,7 @@ let test_int_range_at_max_int_does_not_overflow () =
       in
       let q_gt =
         parse_query_string
-          {|[:find ?e :where [?e :age ?age] [(> ?age ?t)]]|}
+          {|[:find ?e :in $ ?t :where [?e :age ?age] [(> ?age ?t)]]|}
       in
       let dig =
         rows_digest
@@ -208,7 +208,7 @@ let test_int_range_at_min_int_does_not_overflow () =
       in
       let q_lt =
         parse_query_string
-          {|[:find ?e :where [?e :age ?age] [(< ?age ?t)]]|}
+          {|[:find ?e :in $ ?t :where [?e :age ?age] [(< ?age ?t)]]|}
       in
       let dig =
         rows_digest
