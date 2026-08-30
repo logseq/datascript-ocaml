@@ -19,6 +19,88 @@ let with_force_relation_fallback f =
   force_relation_fallback := true;
   Fun.protect ~finally:(fun () -> force_relation_fallback := previous) f
 
+(* Datalevin-style result cache: general, keyed by db epoch + physical query/inputs.
+   Avoid structural hashing of [query] — where clauses may embed function values. *)
+let result_cache_enabled =
+  match Sys.getenv_opt "DATASCRIPT_QUERY_RESULT_CACHE" with
+  | Some ("0" | "false" | "no" | "off") -> ref false
+  | _ -> ref true
+
+let query_debug_enabled =
+  match Sys.getenv_opt "DATASCRIPT_QUERY_DEBUG" with
+  | Some ("1" | "true" | "yes" | "on") -> true
+  | _ -> false
+
+type result_cache_entry =
+  { max_e : entity_id
+  ; max_tx : int
+  ; query : query
+  ; inputs : query_arg list
+  ; path : query_exec_path
+  ; rows : query_result list list
+  }
+
+let result_cache_entries : result_cache_entry list ref = ref []
+let result_cache_limit = 128
+let last_cache_hit = ref false
+
+let clear_query_result_cache () = result_cache_entries := []
+
+let with_query_result_cache enabled f =
+  let previous = !result_cache_enabled in
+  result_cache_enabled := enabled;
+  Fun.protect ~finally:(fun () -> result_cache_enabled := previous) f
+
+let query_result_cache_enabled () = !result_cache_enabled
+let last_query_cache_hit () = !last_cache_hit
+
+let now_ms () = Platform.now_seconds () *. 1000.
+
+let debug_log fmt =
+  if query_debug_enabled then Printf.eprintf ("query-debug\t" ^^ fmt ^^ "\n%!")
+  else Printf.ifprintf stderr fmt
+
+let path_label = function
+  | Fused_execute -> "fused"
+  | Relation_fallback -> "relation"
+  | Binding_interpreter -> "bindings"
+
+let lookup_result_cache db query inputs =
+  if (not !result_cache_enabled) || !force_relation_fallback then None
+  else
+    List.find_map
+      (fun entry ->
+        if
+          entry.max_e = db.max_datom_e
+          && entry.max_tx = db.max_tx
+          && entry.query == query
+          && entry.inputs == inputs
+        then Some (entry.path, entry.rows)
+        else None)
+      !result_cache_entries
+
+let store_result_cache db query inputs path rows =
+  if !result_cache_enabled && not !force_relation_fallback then (
+    let entry =
+      { max_e = db.max_datom_e; max_tx = db.max_tx; query; inputs; path; rows }
+    in
+    let rest =
+      List.filter
+        (fun e ->
+          not
+            (e.query == query
+             && e.inputs == inputs
+             && e.max_e = entry.max_e
+             && e.max_tx = entry.max_tx))
+        !result_cache_entries
+    in
+    let rec take n = function
+      | [] -> []
+      | _ when n <= 0 -> []
+      | x :: xs -> x :: take (n - 1) xs
+    in
+    result_cache_entries := take result_cache_limit (entry :: rest))
+
 module Make (Context : sig
   val empty_db : unit -> db
   val validate_rule_arities : query_rule list -> query_rule list
@@ -204,7 +286,21 @@ end) = struct
       vars)
 
   let q_sources_raw ?(inputs = []) db sources query =
+    let started = if query_debug_enabled then now_ms () else 0. in
+    last_cache_hit := false;
+    match lookup_result_cache db query inputs with
+    | Some (path, rows) ->
+      last_cache_hit := true;
+      last_path := path;
+      debug_log
+        "cache=hit\tpath=%s\trows=%d\tms=%.4f"
+        (path_label path)
+        (List.length rows)
+        (if query_debug_enabled then now_ms () -. started else 0.);
+      rows
+    | None ->
     let finish_relation_rows rules input_bindings where find =
+      let plan_started = if query_debug_enabled then now_ms () else 0. in
       let try_planned_execute () =
         (* Prefer Datahike execute for single fused entity-group / ground scan.
            Multi-op Union and open scans still use relational fallback until
@@ -229,6 +325,8 @@ end) = struct
             | _ -> execute_plan db sources [] input_bindings plan)
           | _ -> None
       in
+      let plan_ms = if query_debug_enabled then now_ms () -. plan_started else 0. in
+      let exec_started = if query_debug_enabled then now_ms () else 0. in
       let relation_result =
         match try_planned_execute () with
         | Some result ->
@@ -243,65 +341,80 @@ end) = struct
             last_path := Binding_interpreter;
             None)
       in
-      match relation_result with
-      | Some (attrs, rows, unique_rows) -> (
-        (* Hot path: find vars already match relation attrs (entity-group emit). *)
-        match find_var_names_cached find with
-        | Some find_vars when find_vars = attrs ->
-          if unique_rows then rows else sort_uniq_presorted compare rows
-        | _ ->
-          (match relation_rows_for_find db sources attrs rows unique_rows find with
-           | Some rows -> rows
-           | None ->
-             let bindings = eval_clauses db sources rules input_bindings where in
-             bindings
-             |> fun bindings -> dedupe_bindings_for_find bindings find
-             |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
-             |> List.sort_uniq compare))
-      | None ->
-        let bindings = eval_clauses db sources rules input_bindings where in
-        bindings
-        |> fun bindings -> dedupe_bindings_for_find bindings find
-        |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
-        |> List.sort_uniq compare
-    in
-    if
-      inputs = []
-      && query.inputs = []
-      && query.rules = []
-      && query.with_vars = []
-      && not (has_aggregates query.find)
-    then
-      finish_relation_rows [] [ [] ] query.where query.find
-    else
-      let callables, input_bindings, input_rules = initial_query_context db query inputs in
-      let rules, where =
-        match query.rules, input_rules with
-        | [], [] -> [], query.where
-        | _ -> query_rules_and_where query input_rules
-      in
-      if
-        (not (has_aggregates query.find))
-        && query.with_vars = []
-        && query_callables_empty callables
-      then
-        finish_relation_rows rules input_bindings where query.find
-      else (
-        last_path := Binding_interpreter;
-        let bindings = eval_clauses ~callables db sources rules input_bindings where in
-        if has_aggregates query.find then
-          if query.with_vars = [] then
-            aggregate_rows ~callables db sources bindings query.find
-          else
-            aggregate_rows_with ~callables db sources bindings query.find query.with_vars
-        else if query.with_vars <> [] then
-          non_aggregate_rows_with db sources bindings query.find query.with_vars
-        else
+      let exec_ms = if query_debug_enabled then now_ms () -. exec_started else 0. in
+      let rows =
+        match relation_result with
+        | Some (attrs, rows, unique_rows) -> (
+          (* Hot path: find vars already match relation attrs (entity-group emit). *)
+          match find_var_names_cached find with
+          | Some find_vars when find_vars = attrs ->
+            if unique_rows then rows else sort_uniq_presorted compare rows
+          | _ ->
+            (match relation_rows_for_find db sources attrs rows unique_rows find with
+             | Some rows -> rows
+             | None ->
+               let bindings = eval_clauses db sources rules input_bindings where in
+               bindings
+               |> fun bindings -> dedupe_bindings_for_find bindings find
+               |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
+               |> List.sort_uniq compare))
+        | None ->
+          let bindings = eval_clauses db sources rules input_bindings where in
           bindings
-          |> fun bindings -> dedupe_bindings_for_find bindings query.find
-          |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-          |> List.sort_uniq compare)
-  
+          |> fun bindings -> dedupe_bindings_for_find bindings find
+          |> List.filter_map (fun binding -> collect_find_specs db sources binding find)
+          |> List.sort_uniq compare
+      in
+      debug_log
+        "cache=miss\tpath=%s\tplan-ms=%.4f\texec-ms=%.4f\trows=%d\ttotal-ms=%.4f"
+        (path_label !last_path)
+        plan_ms
+        exec_ms
+        (List.length rows)
+        (if query_debug_enabled then now_ms () -. started else 0.);
+      rows
+    in
+    let rows =
+      if
+        inputs = []
+        && query.inputs = []
+        && query.rules = []
+        && query.with_vars = []
+        && not (has_aggregates query.find)
+      then
+        finish_relation_rows [] [ [] ] query.where query.find
+      else
+        let callables, input_bindings, input_rules = initial_query_context db query inputs in
+        let rules, where =
+          match query.rules, input_rules with
+          | [], [] -> [], query.where
+          | _ -> query_rules_and_where query input_rules
+        in
+        if
+          (not (has_aggregates query.find))
+          && query.with_vars = []
+          && query_callables_empty callables
+        then
+          finish_relation_rows rules input_bindings where query.find
+        else (
+          last_path := Binding_interpreter;
+          let bindings = eval_clauses ~callables db sources rules input_bindings where in
+          if has_aggregates query.find then
+            if query.with_vars = [] then
+              aggregate_rows ~callables db sources bindings query.find
+            else
+              aggregate_rows_with ~callables db sources bindings query.find query.with_vars
+          else if query.with_vars <> [] then
+            non_aggregate_rows_with db sources bindings query.find query.with_vars
+          else
+            bindings
+            |> fun bindings -> dedupe_bindings_for_find bindings query.find
+            |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
+            |> List.sort_uniq compare)
+    in
+    store_result_cache db query inputs !last_path rows;
+    rows
+ 
   let q_with_raw ?(inputs = []) db with_vars query =
     last_path := Binding_interpreter;
     let callables, input_bindings, input_rules = initial_query_context db query inputs in

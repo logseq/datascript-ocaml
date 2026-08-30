@@ -611,6 +611,14 @@ val last_query_exec_path : unit -> query_exec_path
 (** Run [f] with fused [Query_exec] disabled so [q] uses the relational fallback. *)
 val with_force_relation_fallback : (unit -> 'a) -> 'a
 
+(** Datalevin-style query result cache (general; keyed by db epoch + physical query).
+    Enabled by default; set [DATASCRIPT_QUERY_RESULT_CACHE=0] to disable.
+    Set [DATASCRIPT_QUERY_DEBUG=1] for plan/exec/cache stderr traces. *)
+val clear_query_result_cache : unit -> unit
+val with_query_result_cache : bool -> (unit -> 'a) -> 'a
+val query_result_cache_enabled : unit -> bool
+val last_query_cache_hit : unit -> bool
+
 module Query : sig
   type query_callables =
     { callable_predicates : (string * (query_result list -> bool)) list

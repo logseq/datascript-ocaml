@@ -355,71 +355,24 @@ end) = struct
     in
     loop (count - 1) []
 
-  (* Resolved Datahike-style pipelines, keyed by entity-group physical identity
-     (plan cache reuses the same group object across calls). *)
-  type resolved_kernel =
-    | Kernel_q2 of
-        { ids : entity_id array
-        ; arr : datom array
-        ; base : int
-        ; len : int
-        ; attrs : string list
-        ; unique_rows : bool
-        }
-    | Kernel_q5 of
-        { ids : entity_id array
-        ; arr0 : datom array
-        ; arr1 : datom array
-        ; arr2 : datom array
-        ; arr3 : datom array
-        ; base : int
-        ; len : int
-        ; attrs : string list
-        ; unique_rows : bool
-        }
-
-  let last_kernel_group : Query_plan.entity_group option ref = ref None
-  let last_kernel_max_e = ref (-1)
-  let last_kernel : resolved_kernel option ref = ref None
-
-  let emit_q2_rows ids arr base len =
-    let rows = ref [] in
+  (* Emit rows for const AVET drive + N aligned dense card-one value merges. *)
+  let emit_dense_const_rows ids arrs base len =
+    let n_bind = Array.length arrs in
+    let out = ref [] in
     for i = Array.length ids - 1 downto 0 do
-      let e = ids.(i) in
-      let index = e - base in
-      if index >= 0 && index < len then
-        rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
+      let eid = ids.(i) in
+      let idx = eid - base in
+      if idx >= 0 && idx < len then (
+        let row = Array.make (n_bind + 1) (Result_entity eid) in
+        row.(0) <- Result_entity eid;
+        for j = 0 to n_bind - 1 do
+          row.(j + 1) <- Result_value arrs.(j).(idx).v
+        done;
+        out := Array.to_list row :: !out)
     done;
-    !rows
+    !out
 
-  let emit_q5_rows ids arr0 arr1 arr2 arr3 base len =
-    let rows = ref [] in
-    for i = Array.length ids - 1 downto 0 do
-      let e = ids.(i) in
-      let index = e - base in
-      if index >= 0 && index < len then
-        rows :=
-          [ Result_entity e
-          ; Result_value arr0.(index).v
-          ; Result_value arr1.(index).v
-          ; Result_value arr2.(index).v
-          ; Result_value arr3.(index).v
-          ]
-          :: !rows
-    done;
-    !rows
-
-  let run_resolved_kernel = function
-    | Kernel_q2 { ids; arr; base; len; attrs; unique_rows } ->
-      Some { attrs; rows = emit_q2_rows ids arr base len; unique_rows }
-    | Kernel_q5 { ids; arr0; arr1; arr2; arr3; base; len; attrs; unique_rows } ->
-      Some
-        { attrs
-        ; rows = emit_q5_rows ids arr0 arr1 arr2 arr3 base len
-        ; unique_rows
-        }
-
-  (* q-not shaped: AEVT scan + ground anti-merge (Datahike anti during scan). *)
+  (* Open AEVT seed + ground anti-merge (Datahike anti during scan). *)
   let execute_scan_anti_ground source_db e_var attrs (scan : Query_plan.l_scan) anti_attr anti_value =
     match scan.entity, scan.attr, scan.value with
     | QVar ev, QAttr seed_attr, QVar v
@@ -462,8 +415,10 @@ end) = struct
       Some !rows
     | _ -> None
 
-  (* q2 / q-5-merge: const AVET drive + dense/cursor merges (Datahike sorted-merge). *)
+  (* Const AVET drive + card-one AEVT merges (Datahike sorted-merge / per-cursor). *)
   let execute_const_drive_merges source_db e_var attrs (scan : Query_plan.l_scan) merges =
+    if merges = [] then None
+    else
     match scan.entity, scan.attr, scan.value with
     | QVar ev, QAttr drive_attr, QValue drive_value when ev = e_var && direct_attr drive_attr ->
       let* ids =
@@ -486,190 +441,104 @@ end) = struct
         collect [] merges
       in
       let drive_len = Array.length ids in
-      (match pos_ops, attrs with
-       (* q2: one value merge — unrolled dense emit (Datahike sorted-merge card-one). *)
-       | [ Pos { bind_var = Some v; arr; _ } ], [ a; b ]
-         when (a = e_var && b = v) || (a = v && b = e_var) ->
-         let rows = ref [] in
-         (match dense_base arr with
-          | Some (base, len) ->
-            if a = e_var then
-              for i = Array.length ids - 1 downto 0 do
-                let e = ids.(i) in
-                let index = e - base in
-                if index >= 0 && index < len then
-                  rows := [ Result_entity e; Result_value arr.(index).v ] :: !rows
-              done
-            else
-              for i = Array.length ids - 1 downto 0 do
-                let e = ids.(i) in
-                let index = e - base in
-                if index >= 0 && index < len then
-                  rows := [ Result_value arr.(index).v; Result_entity e ] :: !rows
-              done
-          | None ->
-            let ptr = ref 0 in
-            if a = e_var then
-              for i = 0 to Array.length ids - 1 do
-                match seek_aevt arr ptr ids.(i) with
-                | None -> ()
-                | Some d -> rows := [ Result_entity d.e; Result_value d.v ] :: !rows
-              done
-            else
-              for i = 0 to Array.length ids - 1 do
-                match seek_aevt arr ptr ids.(i) with
-                | None -> ()
-                | Some d -> rows := [ Result_value d.v; Result_entity d.e ] :: !rows
+      let bind_vars =
+        pos_ops
+        |> List.filter_map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None)
+      in
+      let expected_attrs = e_var :: bind_vars in
+      if attrs <> expected_attrs then
+        None
+      else
+        let n_pos = List.length pos_ops in
+        let arrs =
+          Array.of_list (List.map (function Pos { arr; _ } -> arr | Anti _ -> [||]) pos_ops)
+        in
+        let terms =
+          Array.of_list
+            (List.map (function Pos { value_term; _ } -> value_term | Anti _ -> QWildcard) pos_ops)
+        in
+        let binds =
+          Array.of_list
+            (List.map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None) pos_ops)
+        in
+        let dense = Array.map dense_base arrs in
+        if not (Array.for_all Option.is_some dense) then
+          (* Cursor fallback for non-dense AEVT slices *)
+          let pointers = Array.init n_pos (fun _ -> ref 0) in
+          let rows = Array.make drive_len [] in
+          let count = ref 0 in
+          for i = 0 to drive_len - 1 do
+            let eid = ids.(i) in
+            let ok = ref true in
+            let bound = ref [] in
+            let mi = ref 0 in
+            while !ok && !mi < n_pos do
+              match seek_aevt arrs.(!mi) pointers.(!mi) eid with
+              | None -> ok := false
+              | Some d when value_matches terms.(!mi) d.v ->
+                (match binds.(!mi) with
+                 | Some v ->
+                   bound := (v, Query.result_of_ref (Query.result_of_datom_v d)) :: !bound
+                 | None -> ());
+                incr mi
+              | Some _ -> ok := false
+            done;
+            if !ok then (
+              let table = Hashtbl.create (List.length attrs) in
+              Hashtbl.add table e_var (Result_entity eid);
+              List.iter (fun (v, r) -> Hashtbl.add table v r) !bound;
+              rows.(!count) <- List.map (Hashtbl.find table) attrs;
+              incr count)
+          done;
+          Some (rows_of_array_rev rows !count)
+        else
+          let dense = Array.map Option.get dense in
+          let n_bind = List.length bind_vars in
+          let base0, len0 = dense.(0) in
+          let aligned = Array.for_all (fun (b, l) -> b = base0 && l = len0) dense in
+          let all_free_binds =
+            Array.for_all
+              (function
+                | QVar _ -> true
+                | _ -> false)
+              terms
+            && Array.for_all Option.is_some binds
+          in
+          if aligned && all_free_binds && n_bind = n_pos then
+            Some (emit_dense_const_rows ids arrs base0 len0)
+          else
+            (* Per-attr dense index, including ground-value verifies *)
+            let out = ref [] in
+            for i = drive_len - 1 downto 0 do
+              let eid = ids.(i) in
+              let ok = ref true in
+              let vals = Array.make n_bind (Result_value (Int 0)) in
+              let vi = ref 0 in
+              let mi = ref 0 in
+              while !ok && !mi < n_pos do
+                let base, len = dense.(!mi) in
+                let idx = eid - base in
+                if idx < 0 || idx >= len || arrs.(!mi).(idx).e <> eid then ok := false
+                else
+                  let d = arrs.(!mi).(idx) in
+                  if not (value_matches terms.(!mi) d.v) then ok := false
+                  else (
+                    (match binds.(!mi) with
+                     | Some _ ->
+                       vals.(!vi) <- Result_value d.v;
+                       incr vi
+                     | None -> ());
+                    incr mi)
               done;
-            rows := List.rev !rows);
-         Some !rows
-       (* Multi merges (value binds + optional ground verifies) — q3/q4/q-5-merge *)
-       | pos_ops, _ ->
-         let bind_vars =
-           pos_ops
-           |> List.filter_map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None)
-         in
-         let expected_attrs = e_var :: bind_vars in
-         if attrs <> expected_attrs then
-           None
-         else
-           let n_pos = List.length pos_ops in
-           let arrs =
-             Array.of_list (List.map (function Pos { arr; _ } -> arr | Anti _ -> [||]) pos_ops)
-           in
-           let terms =
-             Array.of_list
-               (List.map (function Pos { value_term; _ } -> value_term | Anti _ -> QWildcard) pos_ops)
-           in
-           let binds =
-             Array.of_list
-               (List.map (function Pos { bind_var; _ } -> bind_var | Anti _ -> None) pos_ops)
-           in
-           let dense = Array.map dense_base arrs in
-           if not (Array.for_all Option.is_some dense) then
-             (* Cursor fallback for non-dense *)
-             let pointers = Array.init n_pos (fun _ -> ref 0) in
-             let rows = Array.make drive_len [] in
-             let count = ref 0 in
-             for i = 0 to drive_len - 1 do
-               let eid = ids.(i) in
-               let ok = ref true in
-               let bound = ref [] in
-               let mi = ref 0 in
-               while !ok && !mi < n_pos do
-                 match seek_aevt arrs.(!mi) pointers.(!mi) eid with
-                 | None -> ok := false
-                 | Some d when value_matches terms.(!mi) d.v ->
-                   (match binds.(!mi) with
-                    | Some v ->
-                      bound := (v, Query.result_of_ref (Query.result_of_datom_v d)) :: !bound
-                    | None -> ());
-                   incr mi
-                 | Some _ -> ok := false
-               done;
-               if !ok then (
-                 let table = Hashtbl.create (List.length attrs) in
-                 Hashtbl.add table e_var (Result_entity eid);
-                 List.iter (fun (v, r) -> Hashtbl.add table v r) !bound;
-                 rows.(!count) <- List.map (Hashtbl.find table) attrs;
-                 incr count)
-             done;
-             Some (rows_of_array_rev rows !count)
-           else
-             let dense = Array.map Option.get dense in
-             let n_bind = List.length bind_vars in
-             let base0, len0 = dense.(0) in
-             let aligned = Array.for_all (fun (b, l) -> b = base0 && l = len0) dense in
-             let all_free_binds =
-               Array.for_all
-                 (function
-                   | QVar _ -> true
-                   | _ -> false)
-                 terms
-               && Array.for_all Option.is_some binds
-             in
-             if aligned && all_free_binds && n_bind = n_pos then (
-               let out = ref [] in
-               (match n_bind with
-                | 4 ->
-                  for i = drive_len - 1 downto 0 do
-                    let eid = ids.(i) in
-                    let idx = eid - base0 in
-                    if idx >= 0 && idx < len0 then
-                      out :=
-                        [ Result_entity eid
-                        ; Result_value arrs.(0).(idx).v
-                        ; Result_value arrs.(1).(idx).v
-                        ; Result_value arrs.(2).(idx).v
-                        ; Result_value arrs.(3).(idx).v
-                        ]
-                        :: !out
-                  done
-                | 2 ->
-                  for i = drive_len - 1 downto 0 do
-                    let eid = ids.(i) in
-                    let idx = eid - base0 in
-                    if idx >= 0 && idx < len0 then
-                      out :=
-                        [ Result_entity eid
-                        ; Result_value arrs.(0).(idx).v
-                        ; Result_value arrs.(1).(idx).v
-                        ]
-                        :: !out
-                  done
-                | 1 ->
-                  for i = drive_len - 1 downto 0 do
-                    let eid = ids.(i) in
-                    let idx = eid - base0 in
-                    if idx >= 0 && idx < len0 then
-                      out := [ Result_entity eid; Result_value arrs.(0).(idx).v ] :: !out
-                  done
-                | _ ->
-                  for i = drive_len - 1 downto 0 do
-                    let eid = ids.(i) in
-                    let idx = eid - base0 in
-                    if idx >= 0 && idx < len0 then
-                      let row = Array.make (n_bind + 1) (Result_entity eid) in
-                      row.(0) <- Result_entity eid;
-                      for j = 0 to n_bind - 1 do
-                        row.(j + 1) <- Result_value arrs.(j).(idx).v
-                      done;
-                      out := Array.to_list row :: !out
-                  done);
-               Some !out)
-             else
-               (* Per-attr dense or mixed ground verifies *)
-               let out = ref [] in
-               for i = drive_len - 1 downto 0 do
-                 let eid = ids.(i) in
-                 let ok = ref true in
-                 let vals = Array.make n_bind (Result_value (Int 0)) in
-                 let vi = ref 0 in
-                 let mi = ref 0 in
-                 while !ok && !mi < n_pos do
-                   let base, len = dense.(!mi) in
-                   let idx = eid - base in
-                   if idx < 0 || idx >= len || arrs.(!mi).(idx).e <> eid then ok := false
-                   else
-                     let d = arrs.(!mi).(idx) in
-                     if not (value_matches terms.(!mi) d.v) then ok := false
-                     else (
-                       (match binds.(!mi) with
-                        | Some _ ->
-                          vals.(!vi) <- Result_value d.v;
-                          incr vi
-                        | None -> ());
-                       incr mi)
-                 done;
-                 if !ok then (
-                   let row = Array.make (n_bind + 1) (Result_entity eid) in
-                   row.(0) <- Result_entity eid;
-                   for j = 0 to n_bind - 1 do
-                     row.(j + 1) <- vals.(j)
-                   done;
-                   out := Array.to_list row :: !out)
-               done;
-               Some !out)
+              if !ok then (
+                let row = Array.make (n_bind + 1) (Result_entity eid) in
+                row.(0) <- Result_entity eid;
+                for j = 0 to n_bind - 1 do
+                  row.(j + 1) <- vals.(j)
+                done;
+                out := Array.to_list row :: !out)
+            done;
+            Some !out
     | _ -> None
 
   (* Datahike execute-sorted-merge / per-cursor-merge for card-one attrs. *)
@@ -975,105 +844,30 @@ end) = struct
         | [] -> Some relation
         | filters -> apply_group_filters source_db relation filters
       in
-      (match !last_kernel_group with
-       | Some g when g == group && !last_kernel_max_e = source_db.max_datom_e && group.filters = [] -> (
-         match !last_kernel with
-         | Some kernel -> run_resolved_kernel kernel
-         | None -> None)
+      let e_var = group.entity_var in
+      let (scan : Query_plan.l_scan) = group.scan in
+      (* Inequality pushdown: open-value scan + comparison filters → AVET range. *)
+      (match group.merges, group.anti_scans, group.filters with
+       | [], [], filters when filters <> [] ->
+         try_avet_range_drive source_db e_var scan filters
        | _ -> None)
       |> function
-      | Some relation -> finish relation
-      | None ->
-        let e_var = group.entity_var in
-        let (scan : Query_plan.l_scan) = group.scan in
-        (* Open-value scan + comparison filters only: AVET range drive (Datalevin pushdown). *)
-        (match group.merges, group.anti_scans, group.filters with
-         | [], [], filters when filters <> [] ->
-           try_avet_range_drive source_db e_var scan filters
-         | _ -> None)
-        |> function
-        | Some relation -> Some relation (* filters already applied via range / residual *)
-        | None ->
-        (* Specialized q2: [?e :attr const] [?e :attr2 ?v] — Datahike sorted-merge N=1. *)
-        (match scan.entity, scan.attr, scan.value, group.merges, group.anti_scans with
-         | QVar ev, QAttr drive_attr, QValue drive_value, [ merge ], []
-           when ev = e_var && direct_attr drive_attr -> (
-           match merge.Query_plan.entity, merge.attr, merge.value with
-           | QVar ev2, QAttr merge_attr, QVar v
-             when ev2 = e_var && v <> e_var && direct_attr merge_attr
-                  && cardinality_one source_db merge_attr -> (
-             match avet_ids_array_cached source_db drive_attr drive_value, aevt_attr_array source_db merge_attr with
-             | Some ids, Some arr -> (
-               match dense_base arr with
-               | Some (base, len) ->
-                 let attrs = [ e_var; v ] in
-                 let unique_rows = unique_rows_flag source_db attrs e_var in
-                 let kernel =
-                   Kernel_q2 { ids; arr; base; len; attrs; unique_rows }
-                 in
-                 if group.filters = [] then (
-                   last_kernel_group := Some group;
-                   last_kernel_max_e := source_db.max_datom_e;
-                   last_kernel := Some kernel);
-                 run_resolved_kernel kernel
-               | None -> None)
-             | _ -> None)
-           | _ -> None)
-         (* Specialized q-5-merge: const drive + 4 card-one value merges, dense AEVT. *)
-         | QVar ev, QAttr drive_attr, QValue drive_value, [ m0; m1; m2; m3 ], []
-           when ev = e_var && direct_attr drive_attr -> (
-           let value_merge (m : Query_plan.l_scan) =
-             match m.entity, m.attr, m.value with
-             | QVar ev2, QAttr attr, QVar v
-               when ev2 = e_var && v <> e_var && direct_attr attr && cardinality_one source_db attr ->
-               Some (v, attr)
-             | _ -> None
-           in
-           match value_merge m0, value_merge m1, value_merge m2, value_merge m3 with
-           | Some (v0, a0), Some (v1, a1), Some (v2, a2), Some (v3, a3) -> (
-             match
-               ( avet_ids_array_cached source_db drive_attr drive_value
-               , aevt_attr_array source_db a0
-               , aevt_attr_array source_db a1
-               , aevt_attr_array source_db a2
-               , aevt_attr_array source_db a3 )
-             with
-             | Some ids, Some arr0, Some arr1, Some arr2, Some arr3 -> (
-               match dense_base arr0, dense_base arr1, dense_base arr2, dense_base arr3 with
-               | Some (base, len), Some (b1, l1), Some (b2, l2), Some (b3, l3)
-                 when base = b1 && base = b2 && base = b3 && len = l1 && len = l2 && len = l3 ->
-                 let attrs = [ e_var; v0; v1; v2; v3 ] in
-                 let unique_rows = unique_rows_flag source_db attrs e_var in
-                 let kernel =
-                   Kernel_q5
-                     { ids; arr0; arr1; arr2; arr3; base; len; attrs; unique_rows }
-                 in
-                 if group.filters = [] then (
-                   last_kernel_group := Some group;
-                   last_kernel_max_e := source_db.max_datom_e;
-                   last_kernel := Some kernel);
-                 run_resolved_kernel kernel
-               | _ -> None)
-             | _ -> None)
-           | _ -> None)
-         | _ -> None)
-        |> function
-        | Some relation -> finish relation
-        | None -> (
-          match scan.entity with
-          | QVar ev when ev = e_var ->
-            let attrs = attrs_of_positive e_var scan group.merges in
-            (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
-             | None -> None
-             | Some rows ->
-               finish { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
-          | _ -> None))
+      | Some relation -> Some relation (* filters already applied via range / residual *)
+      | None -> (
+        match scan.entity with
+        | QVar ev when ev = e_var ->
+          let attrs = attrs_of_positive e_var scan group.merges in
+          (match execute_lookup_merge source_db e_var attrs scan group.merges group.anti_scans with
+           | None -> None
+           | Some rows ->
+             finish { attrs; rows; unique_rows = unique_rows_flag source_db attrs e_var })
+        | _ -> None))
     | _ -> None
 
   let execute_scan db source (scan : Query_plan.l_scan) =
     match source with
     | Db_source source_db -> (
-      (* Datahike :scan-only / AVET ground pattern (q1). *)
+      (* Ground AVET scan-only (bound attr + value). *)
       match scan.entity, scan.attr, scan.value, scan.tx with
       | QVar e_var, QAttr attr, QValue value, None when direct_attr attr -> (
         match avet_ids_array_cached source_db attr value with

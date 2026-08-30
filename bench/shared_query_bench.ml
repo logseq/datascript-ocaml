@@ -483,21 +483,43 @@ let run_backend config selected prepared =
   Printf.printf "build-ms\t%s\n%!" (format_ms prepared.build_ms);
   if prepared.restore_ms > 0. then
     Printf.printf "store-restore-ms\t%s\n%!" (format_ms prepared.restore_ms);
-  Printf.eprintf
-    "[%s] JIT pre-warmup (%d/query)...\n%!"
-    prepared.label
-    config.jit_warmup;
-  warmup_queries config.jit_warmup selected prepared.db;
   List.iter
     (fun query ->
       Printf.printf "result-edn\t%s\t%s\n%!" query.name (query.result_edn prepared.db))
     selected;
-  Printf.eprintf "[%s] Running %d query benchmarks...\n%!" prepared.label (List.length selected);
-  List.iter
-    (fun query ->
-      let ms = bench config (fun () -> query.run prepared.db) in
-      Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
-    selected
+  (* Cold engine path: Datalevin-comparable without result cache. *)
+  Printf.printf "cache-mode\tnocache\n%!";
+  clear_query_result_cache ();
+  with_query_result_cache false (fun () ->
+    let warm_n = min 5 config.jit_warmup in
+    if warm_n > 0 then (
+      Printf.eprintf "[%s] nocache JIT (%d/query)...\n%!" prepared.label warm_n;
+      warmup_queries warm_n selected prepared.db);
+    Printf.eprintf "[%s] Running %d nocache query benchmarks...\n%!" prepared.label (List.length selected);
+    List.iter
+      (fun query ->
+        let t0 = now_ms () in
+        query.run prepared.db;
+        let first_ms = now_ms () -. t0 in
+        let ms = bench config (fun () -> query.run prepared.db) in
+        Printf.printf "%s-first\t%s\n%!" query.name (format_ms first_ms);
+        Printf.printf "%s-nocache\t%s\n%!" query.name (format_ms ms))
+      selected);
+  (* Warm path with result cache (Datalevin default). *)
+  Printf.printf "cache-mode\twarm\n%!";
+  clear_query_result_cache ();
+  with_query_result_cache true (fun () ->
+    Printf.eprintf
+      "[%s] JIT pre-warmup with result cache (%d/query)...\n%!"
+      prepared.label
+      config.jit_warmup;
+    warmup_queries config.jit_warmup selected prepared.db;
+    Printf.eprintf "[%s] Running %d warm query benchmarks...\n%!" prepared.label (List.length selected);
+    List.iter
+      (fun query ->
+        let ms = bench config (fun () -> query.run prepared.db) in
+        Printf.printf "%s\t%s\n%!" query.name (format_ms ms))
+      selected)
 
 let ensure_dir path =
   let rec loop dir =

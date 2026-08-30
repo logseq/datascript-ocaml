@@ -1720,6 +1720,10 @@ type query_exec_path = Query_api.query_exec_path =
 
 let last_query_exec_path = Query_api.last_query_exec_path
 let with_force_relation_fallback = Query_api.with_force_relation_fallback
+let clear_query_result_cache = Query_api.clear_query_result_cache
+let with_query_result_cache = Query_api.with_query_result_cache
+let query_result_cache_enabled = Query_api.query_result_cache_enabled
+let last_query_cache_hit = Query_api.last_query_cache_hit
 
 module Query_impl = Query
 

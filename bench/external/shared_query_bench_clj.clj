@@ -1,11 +1,16 @@
 (ns shared-query-bench-clj
   "Shared people-query suite (q1/q2/q3/…) for Datahike (PSS + SQLite JDBC)
    and Datalevin (durable LMDB). Matches OCaml bench/shared_query_bench.ml
-   data generation (seed=1 LCG) and emits result-edn + timing TSV."
+   data generation (seed=1 LCG) and emits result-edn + timing TSV.
+
+   Datalevin timings are reported twice:
+   - <query>-nocache : datalevin.query/*cache?* false (engine cost)
+   - <query>          : default result+plan cache on (steady-state / Datalevin default)"
   (:require [clojure.string :as str]
             [datahike.api :as dh]
             [datahike-jdbc.core]
-            [datalevin.core :as dl]))
+            [datalevin.core :as dl]
+            [datalevin.query :as dq]))
 
 (defn now-ms [] (double (/ (System/nanoTime) 1e6)))
 
@@ -287,6 +292,26 @@
       (println (str "query-cases\t" (count queries)))
       (doseq [q queries]
         (println (str "result-edn\t" (:name q) "\t" (pr-str (result-edn prepared (:name q))))))
+      ;; Cold / no result-cache path (fair engine comparison).
+      (println "cache-mode\tnocache")
+      (let [run-nocache
+            (fn [q]
+              (case (:runtime cfg)
+                "datalevin" (binding [dq/*cache?* false] ((:run q)))
+                ((:run q))))]
+        (when (pos? (:jit-warmup cfg))
+          (doseq [q queries]
+            (dotimes [_ (min 5 (:jit-warmup cfg))]
+              (run-nocache q))))
+        (doseq [q queries]
+          (let [t0 (now-ms)
+                _ (run-nocache q)
+                first-ms (- (now-ms) t0)
+                steady (bench cfg (fn [] (run-nocache q)))]
+            (println (str (:name q) "-first\t" (format-ms first-ms)))
+            (println (str (:name q) "-nocache\t" (format-ms steady))))))
+      ;; Warm path with Datalevin result/plan cache (default *cache?* true).
+      (println "cache-mode\twarm")
       (when (pos? (:jit-warmup cfg))
         (doseq [q queries]
           (dotimes [_ (:jit-warmup cfg)]
