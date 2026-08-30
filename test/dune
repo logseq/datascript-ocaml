@@ -50,6 +50,16 @@
  (libraries datascript-ocaml-native test_support alcotest))
 
 (test
+ (name test_query_result_cache)
+ (modules test_query_result_cache)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
+ (name test_bulk_card_one)
+ (modules test_bulk_card_one)
+ (libraries datascript-ocaml-native test_support alcotest))
+
+(test
  (name test_shared_queries)
  (modules test_shared_queries)
  (libraries datascript-ocaml-native test_support alcotest))

@@ -1479,7 +1479,8 @@ let apply_tx context tx_ops db =
          else
            (* Build tx_data in O(n): [acc @ pieces] was O(n²) and dominated Share
               SQLite bulk loads (20k entities ≈ 100k facts). Index same-tx (e,a)
-              facts for card-one retraction without scanning the full acc list. *)
+              pieces (newest-first) and mirror [existing_attr_datoms] semantics:
+              from_db excludes in-tx retracts; from_acc is live added facts only. *)
            let tx_data =
              let by_ea = Hashtbl.create (List.length facts) in
              let acc_rev =
@@ -1488,11 +1489,22 @@ let apply_tx context tx_ops db =
                    let d =
                      { fact with v = context.resolve_context.normalize_value fact.v }
                    in
-                   let from_db = context.existing_entity_attr_datoms db d.e d.a in
+                   let same_tx_pieces =
+                     Option.value (Hashtbl.find_opt by_ea (d.e, d.a)) ~default:[]
+                   in
+                   let retracted_in_tx ex =
+                     List.exists
+                       (fun pd -> not pd.added && context.same_fact pd ex)
+                       same_tx_pieces
+                   in
+                   let from_db =
+                     context.existing_entity_attr_datoms db d.e d.a
+                     |> List.filter (fun ex -> not (retracted_in_tx ex))
+                   in
                    let from_acc =
-                     match Hashtbl.find_opt by_ea (d.e, d.a) with
-                     | None -> []
-                     | Some ds -> List.rev ds
+                     same_tx_pieces
+                     |> List.filter (fun pd -> pd.added && not (retracted_in_tx pd))
+                     |> List.rev
                    in
                    let existing = from_db @ from_acc in
                    let same_fact_exists = List.exists (context.same_fact d) existing in
