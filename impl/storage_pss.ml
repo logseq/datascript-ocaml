@@ -251,8 +251,10 @@ let restore context storage =
       ; eavt_index = restore_index Eavt root.storage_eavt
       ; aevt_index
       ; avet_index
+      ; tave_index = Index.empty Tave (Index.db_of aevt_index)
       ; aevt_by_attr = Hashtbl.create 0
       ; avet_by_attr = Hashtbl.create 0
+      ; avet_entities_by_attr_value = Hashtbl.create 0
       ; duplicate_datoms
       ; duplicate_aevt_datoms
       ; duplicate_avet_datoms
@@ -262,7 +264,12 @@ let restore context storage =
       ; max_eid = root.storage_max_eid
       ; max_datom_e = root.storage_max_eid
       ; max_tx = root.storage_max_tx
+      ; store_max_tx = root.storage_max_tx
+      ; as_of_tx = None
+      ; since_tx = None
+      ; history = false
       ; filter_pred = None
+      ; pending_datoms = []
       ; storage_ref = Some storage
       ; tx_fns = []
       }

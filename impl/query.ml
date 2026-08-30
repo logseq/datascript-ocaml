@@ -481,7 +481,7 @@ let query_results_equivalent context left right =
 
 let bind_var context name value bindings =
   match List.assoc_opt name bindings with
-  | Some bound when query_results_equivalent context bound value -> Some bindings
+  | Some bound when bound == value || query_results_equivalent context bound value -> Some bindings
   | Some _ -> None
   | None -> Some ((name, value) :: bindings)
 

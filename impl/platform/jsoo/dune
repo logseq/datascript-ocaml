@@ -3,4 +3,4 @@
  (public_name datascript-ocaml-jsoo)
  (implements datascript)
  (modes byte)
- (libraries js_of_ocaml persistent_sorted_set_ocaml.native))
+ (libraries js_of_ocaml lmdb_db_melange lmdb_index_melange storage_melange))

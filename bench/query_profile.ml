@@ -296,6 +296,10 @@ let () =
   measure "q-sex-name-age" iterations (fun () -> q_len db "[:find ?e ?a :where [?e :sex :male] [?e :name \"Ivan\"] [?e :age ?a]]");
   measure "q-name-last-age-sex" iterations (fun () -> q_len db "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]");
   measure "qpred1" iterations (fun () -> q_len db "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]");
+  measure "avet-salary-range-seq" iterations (fun () ->
+      seq_len (index_range db "salary" ~start:(Int 50001) ()));
+  measure "avet-salary-range-bounded" iterations (fun () ->
+      seq_len (index_range db "salary" ~start:(Int 50001) ~stop:(Int 80_000) ()));
   measure
     "qpred2"
     iterations

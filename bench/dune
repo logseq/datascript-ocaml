@@ -1,31 +1,55 @@
 (executable
+ (name index_compare_20k)
+ (modules index_compare_20k)
+ (libraries datascript-ocaml-native unix))
+
+;; Shared scenario code depends on the virtual datascript library; each
+;; executable selects a concrete implementation (native vs jsoo).
+(library
+ (name memory_bench_common)
+ (modules memory_scenario)
+ (libraries datascript))
+
+(executable
  (name bench_ocaml)
  (modules bench_ocaml)
- (modes exe js)
+ (modes exe)
  (libraries datascript-ocaml-native unix))
+
+;; js_of_ocaml bench must use the jsoo package (native LMDB is not linkable to JS).
+(executable
+ (name bench_ocaml_js)
+ (modules bench_ocaml_js)
+ (modes js)
+ (libraries datascript-ocaml-jsoo js_of_ocaml))
 
 (executable
  (name query_profile)
  (modules query_profile)
- (modes exe js)
+ (modes exe)
  (libraries datascript-ocaml-native unix))
 
-(library
- (name memory_bench_common)
- (modules memory_scenario)
- (libraries datascript-ocaml-native))
+(executable
+ (name count_avet)
+ (modules count_avet)
+ (libraries datascript-ocaml-native unix))
+
+(executable
+ (name shared_query_bench)
+ (modules shared_query_bench)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
 
 (executable
  (name memory_ocaml)
  (modules memory_ocaml)
  (modes exe)
- (libraries memory_bench_common unix))
+ (libraries memory_bench_common datascript-ocaml-native unix))
 
 (executable
  (name memory_ocaml_js)
  (modules memory_ocaml_js)
  (modes js)
- (libraries memory_bench_common js_of_ocaml))
+ (libraries memory_bench_common datascript-ocaml-jsoo js_of_ocaml))
 
 (executable
  (name persistent_sqlite)
@@ -34,16 +58,52 @@
  (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
 
 (executable
+ (name index_scan_bench)
+ (modules index_scan_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
+ (name persistent_storage_bench)
+ (modules persistent_storage_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
+ (name storage_rss_bench)
+ (modules storage_rss_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
+ (name tave_storage_ratio)
+ (modules tave_storage_ratio)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
+ (name logseq_query_bench)
+ (modules logseq_query_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite datascript_lmdb unix sqlite3))
+
+(executable
+ (name logseq_query_bench_shared)
+ (modules logseq_query_bench_shared)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
+
+(executable
  (name outliner_insert_ocaml)
  (modules outliner_insert_ocaml)
- (modes exe js)
+ (modes exe)
  (libraries datascript-ocaml-native unix))
 
 (rule
  (alias bench)
  (deps
   bench_ocaml.exe
-  bench_ocaml.bc.js
+  bench_ocaml_js.bc.js
   memory_ocaml.exe
   memory_ocaml_js.bc.js
   bench_upstream.js
@@ -70,3 +130,4 @@
   ../script/benchmark_gate_vs_cljs_check_test.sh)
  (action
   (run bash %{dep:../script/benchmark_gate_vs_cljs_check_test.sh})))
+

@@ -29,7 +29,7 @@ module Serialize = Serialize
 module Storage = Storage
 module Util = Util
 module Upsert = Upsert
-module PSet = Persistent_sorted_set
+module Index = Index
 
 let validate_entity_id = Db_impl.validate_entity_id
 
@@ -53,14 +53,20 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
 let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
+let refresh_db_indexes_with_removed_datoms = Db_impl.refresh_indexes_with_removed_datoms
+let snapshot_db = Db_impl.snapshot_db
 
 let empty_db ?(schema = []) ?storage () =
   Db_impl.empty_db db_core_context ~schema ?storage ()
 
 let empty db = Db_impl.empty db_core_context db
 
+let warm_query_parser = ref (fun _db -> ())
+
 let init_db ?(schema = []) ?storage datoms =
-  Db_impl.init_db db_core_context ~schema ?storage datoms
+  let db = Db_impl.init_db db_core_context ~schema ?storage datoms in
+  !warm_query_parser db;
+  db
 
 let visible_datoms = Db_impl.visible_datoms
 
@@ -71,30 +77,52 @@ let unfiltered_db db = Db_impl.unfiltered db_core_context db
 let filter db pred =
   Db_impl.filter db_core_context db pred
 
+let basis_tx = Db_impl.basis_tx
+let as_of_t = Db_impl.as_of_t
+let since_t = Db_impl.since_t
+let temporal_view = Db_impl.temporal_view
+let as_of = Db_impl.as_of
+let as_of_instant = Db_impl.as_of_instant
+let since = Db_impl.since
+let history = Db_impl.history
+let is_history = Db_impl.is_history
+let set_tave_retention_days = Db_impl.set_tave_retention_days
+let tave_retention_days = Db_impl.get_tave_retention_days
+let prune_tave_to_retention = Db_impl.prune_tave_to_retention
+let resolve_tx_at_instant = Db_impl.resolve_tx_at_instant
+let purge_history_before = Db_impl.purge_history_before
+let as_of_tx = Db_impl.as_of_tx
+let since_tx = Db_impl.since_tx
+
+module Tx_visibility = Tx_visibility
+module Query_plan = Query_plan
+
 let serializable = Serialize.serializable
 
 let serialize_context : Serialize.context =
   { next_db_uid
   ; validate_schema
   ; normalize_datom_for_schema
-  ; refresh_db_indexes
+  ; with_datoms = Db_impl.with_datoms
   }
 
 let from_serializable snapshot =
   Serialize.from_serializable serialize_context snapshot
 
 let store ?storage db =
-  Storage.store ?storage db
+  Storage.store ?storage (Db_impl.flush_pending_datoms db)
 
 let memory_storage = Storage.memory_storage
-let file_storage = Storage.file_storage
-let store_tail = Storage.store_tail
-let storage_tail_compaction_threshold = Storage.tail_compaction_threshold
-let storage_tail_datom_count = Storage.tail_datom_count
-let restore_tail_groups = Storage.restore_tail_groups
-let storage_addresses = Storage.storage_addresses
+let benchmark_memory_storage = Storage.benchmark_memory_storage
+let ensure_live = Storage.ensure_live
+let kind_of = Storage.kind_of
+
+let storage_of_handle (handle : Datascript_types.storage) = (handle : storage)
+
+let db_shares_storage_index storage db =
+  Index.same_storage_db storage (Index.db_of db.eavt_index)
+
 let storage = Storage.storage
-let addresses = Storage.addresses
 let settings = Storage.settings
 let collect_garbage = Storage.collect_garbage
 
@@ -245,39 +273,24 @@ let find_avet_exact db attr value =
     else if left == bound then -compare_prefix right left
     else Util.compare_datom Avet left right
   in
-  match
-    PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
-    @ List.filter
+  match Index.find_first_slice ~from_:bound ~to_:bound ~cmp db.avet_index with
+  | Some datom when datom.a = attr && value_equal datom.v value -> Some datom
+  | _ -> (
+    match
+      List.find_opt
+        (fun datom -> datom.a = attr && value_equal datom.v value)
+        db.pending_datoms
+    with
+    | Some datom -> Some datom
+    | None ->
+    match
+      List.filter
         (fun datom -> datom.a = attr && value_equal datom.v value)
         (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
-    |> List.sort (Util.compare_datom Avet)
-  with
-  | datom :: _ -> Some datom
-  | [] -> None
-
-let find_eavt_exact db entity_id attr value =
-  let bound = datom ~e:entity_id ~a:attr ~v:value () in
-  let compare_prefix left right =
-    first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; compare_value left.v right.v
-      ]
-  in
-  let cmp left right =
-    if right == bound then compare_prefix left right
-    else if left == bound then -compare_prefix right left
-    else Util.compare_datom Eavt left right
-  in
-  match
-    PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
-    @ List.filter
-        (fun datom -> datom.e = entity_id && datom.a = attr && value_equal datom.v value)
-        (Option.value (Hashtbl.find_opt db.duplicate_eavt_by_entity entity_id) ~default:[])
-    |> List.sort (Util.compare_datom Eavt)
-  with
-  | datom :: _ -> Some datom
-  | [] -> None
+      |> List.sort (Util.compare_datom Avet)
+    with
+    | datom :: _ -> Some datom
+    | [] -> None)
 
 let rec coerce_tuple_lookup_value_db db attr value =
   match schema_attr db attr, value with
@@ -477,12 +490,23 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
     else invalid_arg "cannot modify tuple attributes directly"
   else begin
     if validate_value then validate_datom_value schema_db d;
-    (match find_avet_exact db d.a d.v with
-     | Some existing when is_unique schema_db d.a && existing.e <> d.e ->
-       invalid_arg "unique constraint"
-     | Some _ | None -> ());
+    (* Use the write schema for AVET access: mid-transaction schema updates live in
+       [schema_db] while [db] may still carry the pre-tx schema on the value. *)
+    if is_unique schema_db d.a then
+      (match
+         Db_access_impl.datoms
+           { db with schema = schema_db.schema }
+           Avet
+           ~a:d.a
+           ~v:d.v
+           ()
+         |> Seq.uncons
+       with
+       | Some (existing, _) when existing.e <> d.e -> invalid_arg "unique constraint"
+       | Some _ | None -> ());
     let same_fact_exists =
-      find_eavt_exact db d.e d.a d.v |> Option.is_some
+      entity_attr_datoms_db db d.e d.a
+      |> List.exists (fun datom -> value_equal datom.v d.v)
     in
     if same_fact_exists then
       db, []
@@ -500,7 +524,8 @@ let retract_active_datom_with_report_db tx db e a value =
   let removed =
     match value with
     | Some value ->
-      find_eavt_exact db e a value |> Option.to_list
+      entity_attr_datoms_db db e a
+      |> List.filter (fun datom -> value_equal datom.v value)
     | None -> entity_attr_datoms_db db e a
   in
   let tx_data = sorted_retractions tx removed in
@@ -592,6 +617,82 @@ and refresh_tuple_attrs_for_source_db schema_db tx db e source_attr tx_data =
          in
          db, tx_data @ tuple_tx_data)
        (db, tx_data)
+
+let history_db db = { db with history = true }
+
+let historical_datoms db ?e ?a ?v () =
+  Db_access_impl.datoms (history_db db) Eavt ?e ?a ?v () |> List.of_seq
+
+let historical_fact_datoms db e a value =
+  historical_datoms db ~e ~a ()
+  |> List.filter (fun datom -> value_equal datom.v value)
+
+let purge_not_found_message entity_ref =
+  "Can't find entity with ID "
+  ^ (match entity_ref with
+     | Entity_id e -> string_of_int e
+     | Temp_id tempid -> tempid
+     | Ident ident -> ":" ^ ident
+     | Lookup_ref (attr, String s) -> "[:" ^ attr ^ " \"" ^ s ^ "\"]"
+     | Lookup_ref (attr, value) -> "[:" ^ attr ^ " " ^ edn_string_of_value value ^ "]"
+     | CurrentTx -> "db/current-tx")
+  ^ " to be purged"
+
+let resolve_entity_for_purge db entity_ref =
+  match Db_access_impl.entid_ref db entity_ref with
+  | Some entity_id -> entity_id
+  | None -> invalid_arg (purge_not_found_message entity_ref)
+
+let unique_historical_datoms datoms =
+  datoms |> List.sort_uniq (Util.compare_datom Eavt)
+
+let purge_datoms_with_report_db _tx db removed_datoms =
+  let removed_datoms = unique_historical_datoms removed_datoms in
+  refresh_db_indexes_with_removed_datoms db removed_datoms, removed_datoms
+
+let purge_datom_with_report_db tx db e a value =
+  let removed = historical_fact_datoms db e a value in
+  if removed = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  purge_datoms_with_report_db tx db removed
+
+let purge_attr_with_report_db tx db e a =
+  let removed = historical_datoms db ~e ~a () in
+  if removed = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  let component_ids =
+    removed
+    |> List.filter (fun datom -> is_component db datom.a)
+    |> List.filter_map (fun datom -> ref_value_id datom.v)
+  in
+  let component_datoms =
+    component_ids
+    |> List.concat_map (fun component_e -> historical_datoms db ~e:component_e ())
+  in
+  purge_datoms_with_report_db tx db (removed @ component_datoms)
+
+let purge_entity_with_report_db schema_db tx db e =
+  let initial_entity_datoms = historical_datoms db ~e () in
+  if initial_entity_datoms = [] then invalid_arg (purge_not_found_message (Entity_id e));
+  let ids = component_entity_closure_db schema_db db [] e in
+  let all_entity_datoms =
+    ids
+    |> List.concat_map (fun entity_id -> historical_datoms db ~e:entity_id ())
+  in
+  let ref_datoms =
+    ids
+    |> List.concat_map (fun entity_id ->
+      incoming_ref_datoms db [ entity_id ]
+      |> List.filter (fun datom -> datom.e <> entity_id))
+  in
+  let component_entity_ids =
+    all_entity_datoms
+    |> List.filter (fun datom -> is_component schema_db datom.a)
+    |> List.filter_map (fun datom -> ref_value_id datom.v)
+  in
+  let component_datoms =
+    component_entity_ids
+    |> List.concat_map (fun component_e -> historical_datoms db ~e:component_e ())
+  in
+  purge_datoms_with_report_db tx db (all_entity_datoms @ ref_datoms @ component_datoms)
 
 let add_user_datom_with_report_db schema_db tx db d =
   let db, tx_data = add_active_datom_with_report_db schema_db tx db d in
@@ -699,6 +800,10 @@ let transact_apply_context : Transact_impl.apply_context =
   ; retract_user_attr_with_report = retract_user_attr_with_report_db
   ; retract_active_datom_with_report = retract_active_datom_with_report_db
   ; retract_entity_with_report = retract_entity_with_report_db
+  ; purge_datom_with_report = purge_datom_with_report_db
+  ; purge_attr_with_report = purge_attr_with_report_db
+  ; purge_entity_with_report = purge_entity_with_report_db
+  ; resolve_entity_for_purge = resolve_entity_for_purge
   ; compare_and_set_matches = compare_and_set_matches_db
   ; compare_and_set_failure_message = compare_and_set_failure_message_db
   ; datom
@@ -726,6 +831,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; refresh_tuple_attrs_for_source = refresh_tuple_attrs_for_source_db
   ; refresh_db_indexes_with_added_datoms
   ; refresh_db_indexes_with_tx_data
+  ; refresh_db_indexes_with_removed_datoms
   ; refresh_db_identity
   }
 
@@ -733,64 +839,16 @@ let apply_tx tx_ops db =
   Transact_impl.apply_tx transact_apply_context tx_ops db
 
 let db_with tx_ops db =
-  let db_after, _, _ = apply_tx tx_ops db in
+  let db_after, _, _, _ = apply_tx tx_ops db in
   db_after
 
-let apply_tail_group db group =
-  List.iter
-    (fun datom ->
-      if datom.added && is_unique db datom.a then
-        match Db_access_impl.find_datom db Avet ~a:datom.a ~v:datom.v () with
-        | Some existing when existing.e <> datom.e ->
-          invalid_arg "tail group conflicts with an existing unique value"
-        | Some _ | None -> ())
-    group;
-  let group =
-    List.fold_left
-      (fun tx_data datom ->
-        if datom.added && cardinality db datom.a = One then
-          let existing =
-            Db_access_impl.datoms db Eavt ~e:datom.e ~a:datom.a ()
-            |> Seq.filter (fun existing -> not (value_equal existing.v datom.v))
-            |> Seq.map (fun existing ->
-              { existing with tx = datom.tx; added = false })
-            |> List.of_seq
-          in
-          List.rev_append existing (datom :: tx_data)
-        else
-          datom :: tx_data)
-      []
-      group
-    |> List.rev
-  in
-  let max_eid =
-    List.fold_left
-      (fun max_eid datom ->
-        let max_eid =
-          if datom.e <= max_allocatable_entity_id then max max_eid datom.e
-          else max_eid
-        in
-        max_eid_in_value max_eid datom.v)
-      db.max_eid
-      group
-  in
-  let db = refresh_db_indexes_with_tx_data db group in
-  { db with max_eid }
-
-let storage_tail_context : Storage.tail_context =
-  { apply_group = apply_tail_group }
-
-let db_with_tail db tail =
-  Storage.db_with_tail storage_tail_context db tail
-
-let storage_restore_context : Storage.restore_context =
-  { next_db_uid; db_with_tail }
+let storage_restore_context : Storage.restore_context = { next_db_uid }
 
 let restore storage =
   Storage.restore storage_restore_context storage
 
 let restore_conn storage =
-  let context : Conn.restore_context = { restore; restore_tail_groups } in
+  let context : Conn.restore_context = { restore } in
   Conn.restore context storage
 
 let tx_meta_skips_store tx_meta =
@@ -800,36 +858,43 @@ let tx_meta_skips_store tx_meta =
       | _ -> false)
     tx_meta
 
-let persist_transact_tail ~tx_meta db tx_data =
-  if tx_data <> [] && not (tx_meta_skips_store tx_meta) then
+let persist_transact ~tx_meta db ?(purged_datoms = []) () =
+  if not (tx_meta_skips_store tx_meta) then
     match db.storage_ref with
     | None -> ()
     | Some storage ->
-      let tail = restore_tail_groups storage @ [ tx_data ] in
-      if storage_tail_datom_count tail > storage_tail_compaction_threshold then
-        store ~storage db
-      else
-        store_tail storage tail
+      if purged_datoms <> [] then
+        Index.sync_removals_to_storage purged_datoms db.eavt_index db.aevt_index db.avet_index storage;
+      store ~storage db
 
 let transact_report ?(tx_meta = []) db tx_ops =
-  let db_after, tempids, tx_data = apply_tx tx_ops db in
-  { db_before = db; db_after; tx_data; tempids; tx_meta }
+  if Db_impl.temporal_view db then
+    invalid_arg "Cannot transact against an as-of/since/history database value";
+  let db_before = snapshot_db db in
+  let db_after, tempids, tx_data, purged_datoms = apply_tx tx_ops db in
+  let db_after, tx_data =
+    match List.assoc_opt "db/txInstant" tx_meta with
+    | None -> db_after, tx_data
+    | Some (Instant _ as instant) ->
+      let tx = db_after.max_tx in
+      let stamped = datom ~tx ~e:tx ~a:"db/txInstant" ~v:instant () in
+      Db_impl.refresh_indexes_with_tx_data db_after [ stamped ], tx_data @ [ stamped ]
+    | Some _ -> invalid_arg ":db/txInstant must be an Instant value"
+  in
+  (* Amortized TAVE retention prune (rolling window; default 30 days). *)
+  (try Db_impl.prune_tave_to_retention db_after with _ -> ());
+  { db_before; db_after; tx_data; tempids; tx_meta; purged_datoms }
 
 let transact ?(tx_meta = []) db tx_ops =
   let report = transact_report ~tx_meta db tx_ops in
-  persist_transact_tail ~tx_meta report.db_after report.tx_data;
+  persist_transact ~tx_meta report.db_after ~purged_datoms:report.purged_datoms ();
   report
 
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops
 
 let transact_conn ?(tx_meta = []) conn tx_data =
   let context : Conn.transact_context =
-    { store
-    ; store_tail
-    ; storage_tail_datom_count
-    ; storage_tail_compaction_threshold
-    ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
-    }
+    { store; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data) }
   in
   Conn.transact context ~tx_meta conn tx_data
 
@@ -864,6 +929,7 @@ let seek_datoms_ref = Db_access_impl.seek_datoms_ref
 let rseek_datoms = Db_access_impl.rseek_datoms
 let rseek_datoms_ref = Db_access_impl.rseek_datoms_ref
 let index_range = Db_access_impl.index_range
+let fold_index_range = Db_access_impl.fold_index_range
 
 let diff = Db_impl.diff
 
@@ -877,7 +943,10 @@ let squuid_time_millis = Db_impl.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
   let context : Conn.reset_context =
-    { store; datoms = (fun db -> datoms_list db Eavt ()) }
+    { store
+    ; datoms = (fun db -> datoms_list db Eavt ())
+    ; snapshot_db
+    }
   in
   Conn.reset context ~tx_meta conn db
 
@@ -895,6 +964,7 @@ let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
 let entity_context =
   { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_entity_attr = (fun db entity_id attr -> datoms db Eavt ~e:entity_id ~a:attr ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
@@ -1139,10 +1209,42 @@ let datoms_by_attr_value db attr value =
       | None -> false
     in
     if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms_list db Avet ~a:attr ~v:value ()
+      Db_access_impl.avet_datoms_by_value db attr value
     else
       datoms_list db Aevt ~a:attr ()
       |> List.filter datom_value_matches
+
+let entity_ids_by_attr_value db attr value =
+  match resolve_query_value_for_attr db attr value with
+  | None -> Some []
+  | Some value ->
+    let value =
+      if is_tuple_attr db attr then
+        coerce_tuple_lookup_value_db db attr value
+      else
+        normalize_value value
+    in
+    if query_value_uses_avet value && query_attr_uses_avet db attr then
+      match Db_access_impl.avet_entity_ids_by_attr_value db attr value with
+      | None -> None
+      | Some entity_ids -> Some (Array.to_list entity_ids)
+    else
+      None
+
+let entity_ids_array_by_attr_value db attr value =
+  match resolve_query_value_for_attr db attr value with
+  | None -> Some [||]
+  | Some value ->
+    let value =
+      if is_tuple_attr db attr then
+        coerce_tuple_lookup_value_db db attr value
+      else
+        normalize_value value
+    in
+    if query_value_uses_avet value && query_attr_uses_avet db attr then
+      Db_access_impl.avet_entity_ids_by_attr_value db attr value
+    else
+      None
 
 let pattern_value_needs_attr_resolution db attr value =
   is_tuple_attr db attr
@@ -1154,33 +1256,7 @@ let pattern_value_needs_attr_resolution db attr value =
      | Keyword ident -> Option.is_some (entid db ident_attr (Keyword ident))
      | _ -> false)
 
-let primary_attr_datoms db index attr =
-  let attr_prefix_datoms index index_set =
-    let bound = datom ~e:0 ~a:attr ~v:Nil () in
-    let compare_prefix left right = compare left.a right.a in
-    let cmp left right =
-      if right == bound then compare_prefix left right
-      else if left == bound then -compare_prefix right left
-      else Util.compare_datom index left right
-    in
-    PSet.slice ~from_:bound ~to_:bound ~cmp index_set
-  in
-  match index with
-  | Aevt ->
-    (match Hashtbl.find_opt db.aevt_by_attr attr with
-     | Some datoms -> datoms
-     | None ->
-       let datoms = attr_prefix_datoms Aevt db.aevt_index in
-       Hashtbl.replace db.aevt_by_attr attr datoms;
-       datoms)
-  | Avet ->
-    (match Hashtbl.find_opt db.avet_by_attr attr with
-     | Some datoms -> datoms
-     | None ->
-       let datoms = attr_prefix_datoms Avet db.avet_index in
-       Hashtbl.replace db.avet_by_attr attr datoms;
-       datoms)
-  | Eavt -> PSet.to_list db.eavt_index
+let primary_attr_datoms = Db_impl.primary_attr_datoms
 
 let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
   let datoms = primary_attr_datoms db index a in
@@ -1203,9 +1279,15 @@ let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
       | None -> true)
 
 let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
-  match db.duplicate_datoms with
-  | [] -> datoms db index ?e ~a ?v ?tx ()
-  | _ -> primary_attr_datoms_seq db index ?e ~a ?v ?tx ()
+  let attr = a in
+  match temporal_view db, db.duplicate_datoms, index, e, v, tx with
+  | true, _, _, _, _, _ ->
+    (* Temporal views must go through datoms so history/as_of filtering applies. *)
+    datoms db index ?e ~a:attr ?v ?tx ()
+  | false, [], Avet, None, Some value, None ->
+    List.to_seq (Db_access_impl.avet_datoms_by_value db attr value)
+  | false, [], _, _, _, _ -> datoms db index ?e ~a:attr ?v ?tx ()
+  | false, _, _, _, _, _ -> primary_attr_datoms_seq db index ?e ~a:attr ?v ?tx ()
 
 let pattern_datoms db e_term a_term v_term tx_term =
   let e = query_entity_id_term db e_term in
@@ -1296,7 +1378,12 @@ let match_data_pattern_tx db bindings e_term a_term v_term tx_term datom =
 let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term datom =
   let ( let* ) = Option.bind in
   let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
-  match_query_term db op_term (result_of_datom_op datom) bindings
+  (* History patterns use boolean added flags; also accept
+     :db/add / :db/retract keywords for DataScript-style queries. *)
+  match op_term with
+  | QValue (Bool expected) when datom.added = expected -> Some bindings
+  | QValue (Bool _) -> None
+  | _ -> match_query_term db op_term (result_of_datom_op datom) bindings
 
 let query_source_context db : Query.source_context =
   { match_context = query_match_context db
@@ -1411,7 +1498,43 @@ module Query_where_impl = Query_where.Make (struct
   let is_ref_attr = is_ref_attr
   let cardinality_one db attr = cardinality db attr = One
   let normalize_value = normalize_value
+  let datoms_by_attr_value = datoms_by_attr_value
+  let entity_ids_by_attr_value = entity_ids_by_attr_value
+  let query_attr_uses_avet = query_attr_uses_avet
+  let fold_index_range = fold_index_range
+  let find_entity_attr_value db entity_id attr =
+    match Db.find_primary_aevt_entity_attr db entity_id attr with
+    | None -> None
+    | Some datom -> Some (Query.result_of_ref (Query.result_of_datom_v datom))
+  let aevt_attr_array = Db.aevt_attr_array
+  let aevt_duplicate_datoms db attr =
+    Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+  let find_entity_in_aevt_array = Db.find_entity_in_aevt_array
 end)
+
+module Query_exec = Query_exec
+
+module Query_exec_impl = Query_exec.Make (struct
+  let query_evaluator_context = query_evaluator_context
+  let query_source_context = query_source_context
+  let cardinality_one db attr = cardinality db attr = One
+  let datoms_by_attr_value = datoms_by_attr_value
+  let entity_ids_by_attr_value = entity_ids_by_attr_value
+  let entity_ids_array_by_attr_value = entity_ids_array_by_attr_value
+  let query_attr_uses_avet = query_attr_uses_avet
+  let query_value_uses_avet = query_value_uses_avet
+  let is_ref_attr = is_ref_attr
+  let aevt_attr_array = Db.aevt_attr_array
+  let aevt_duplicate_datoms db attr =
+    Option.value (Hashtbl.find_opt db.duplicate_aevt_by_attr attr) ~default:[]
+  let find_entity_in_aevt_array = Db.find_entity_in_aevt_array
+  let fold_index_range = fold_index_range
+end)
+
+let execute_plan db sources rules bindings plan =
+  match Query_exec_impl.run db sources rules bindings plan with
+  | None -> None
+  | Some relation -> Some (relation.attrs, relation.rows, relation.unique_rows)
 
 let eval_clauses = Query_where_impl.eval_clauses
 let eval_relation_rows = Query_where_impl.eval_relation_rows
@@ -1448,7 +1571,22 @@ let parse_with = Parser_impl.parse_with
 let parse_query_return form = Parser_impl.parse_query_return parser_query_context form
 let parse_query_return_map form = Parser_impl.parse_query_return_map parser_query_context form
 let parse_query form = Parser_impl.parse_query parser_query_context form
-let parse_query_string input = Parser_impl.parse_query_string parser_query_context input
+
+let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
+
+let parse_query_string_uncached input =
+  Parser_impl.parse_query_string parser_query_context input
+
+let cached_query_string input =
+  match Hashtbl.find_opt query_string_cache input with
+  | Some query -> query
+  | None ->
+    let query = parse_query_string_uncached input in
+    Hashtbl.replace query_string_cache input query;
+    query
+
+let parse_query_string input = cached_query_string input
+
 let parse_query_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   Parser_impl.parse_query_string_with_pull_context parser_query_context ?default_pull_db ?pull_db_for_source input
 let parse_query_return_string input = Parser_impl.parse_query_return_string parser_query_context input
@@ -1563,6 +1701,7 @@ module Query_api_impl = Query_api.Make (struct
   let initial_query_context = initial_query_context
   let eval_clauses = eval_clauses
   let eval_relation_rows = eval_relation_rows
+  let execute_plan = execute_plan
   let has_aggregates = has_aggregates
   let aggregate_rows = aggregate_rows
   let aggregate_rows_with = aggregate_rows_with
@@ -1573,6 +1712,18 @@ module Query_api_impl = Query_api.Make (struct
   let parse_query_return_map_string_with_pull_context = parse_query_return_map_string_with_pull_context
   let compare_value = compare_value
 end)
+
+type query_exec_path = Query_api.query_exec_path =
+  | Fused_execute
+  | Relation_fallback
+  | Binding_interpreter
+
+let last_query_exec_path = Query_api.last_query_exec_path
+let with_force_relation_fallback = Query_api.with_force_relation_fallback
+let clear_query_result_cache = Query_api.clear_query_result_cache
+let with_query_result_cache = Query_api.with_query_result_cache
+let query_result_cache_enabled = Query_api.query_result_cache_enabled
+let last_query_cache_hit = Query_api.last_query_cache_hit
 
 module Query_impl = Query
 
@@ -1657,164 +1808,8 @@ module Query = struct
 
   let empty_query_callables = Query_impl.empty_query_callables
 
-  type simple_row_slot =
-    | Simple_entity_slot
-    | Simple_value_slot of query_result option array
+  let q ?inputs db query = Query_impl.q query_context ?inputs db query
 
-  let simple_same_entity_constant_rows ?inputs db query =
-    let ( let* ) = Option.bind in
-    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
-    | true, _, _, _ -> None
-    | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
-    | false, None, [], [] ->
-      let* find_vars =
-        query.find
-        |> List.fold_left
-             (fun vars -> function
-               | Find_var var -> Option.map (fun vars -> var :: vars) vars
-               | _ -> None)
-             (Some [])
-        |> Option.map List.rev
-      in
-      let pattern_summary =
-        List.fold_left
-          (fun acc -> function
-            | Pattern (QVar entity_var, QAttr attr, value_term)
-              when (not (is_reverse_ref attr)) && cardinality db attr = One ->
-              (match acc with
-               | None -> None
-               | Some (e_var, value_var_attrs, constant_patterns) ->
-                 let e_var =
-                   match e_var with
-                   | None -> Some entity_var
-                   | Some existing when existing = entity_var -> e_var
-                   | Some _ -> None
-                 in
-                 (match e_var, value_term with
-                  | None, _ -> None
-                  | Some _, QVar value_var when value_var <> entity_var ->
-                    Some (e_var, (value_var, attr) :: value_var_attrs, constant_patterns)
-                  | Some _, QValue value ->
-                    Some (e_var, value_var_attrs, (attr, value) :: constant_patterns)
-                  | _ -> None))
-            | _ -> None)
-          (Some (None, [], []))
-          query.where
-      in
-      let* e_var, value_var_attrs, constant_patterns =
-        Option.bind pattern_summary (function
-          | Some e_var, value_var_attrs, constant_patterns ->
-            Some (e_var, List.rev value_var_attrs, List.rev constant_patterns)
-          | None, _, _ -> None)
-      in
-      if constant_patterns = [] then
-        None
-      else
-        let duplicate_value_var =
-          let seen = Hashtbl.create (List.length value_var_attrs) in
-          List.exists
-            (fun (value_var, _) ->
-              if Hashtbl.mem seen value_var then true
-              else (
-                Hashtbl.add seen value_var ();
-                false ))
-            value_var_attrs
-        in
-        if duplicate_value_var then
-          None
-        else
-          let constant_datoms =
-            constant_patterns
-            |> List.map (fun (attr, value) -> attr, datoms_by_attr_value db attr value)
-          in
-          if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
-            Some []
-          else
-            let value_tables =
-              value_var_attrs
-              |> List.map (fun (value_var, attr) ->
-                let values = Array.make (db.max_datom_e + 1) None in
-                primary_attr_datoms db Aevt attr
-                |> List.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
-                value_var, values)
-            in
-            let slot_for_find_var var =
-              if var = e_var then
-                Some Simple_entity_slot
-              else
-                Option.map
-                  (fun values -> Simple_value_slot values)
-                  (List.assoc_opt var value_tables)
-            in
-            let* row_slots =
-              find_vars
-              |> List.fold_left
-                   (fun slots var ->
-                     match slots with
-                     | None -> None
-                     | Some slots -> Option.map (fun slot -> slot :: slots) (slot_for_find_var var))
-                   (Some [])
-              |> Option.map List.rev
-            in
-            let constant_sets =
-              constant_datoms
-              |> List.map (fun (_, datoms) ->
-                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
-                List.iter
-                  (fun datom ->
-                    if datom.e >= 0 && datom.e < Bytes.length entities then
-                      Bytes.set entities datom.e '\001')
-                  datoms;
-                entities)
-            in
-            let _, scan_datoms =
-              constant_datoms
-              |> List.sort (fun (_, left) (_, right) -> compare (List.length left) (List.length right))
-              |> List.hd
-            in
-            let entity_allowed entity_id =
-              constant_sets
-              |> List.for_all (fun entities ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001')
-            in
-            let value_of_slot entity_id = function
-              | Simple_entity_slot -> Some (Result_entity entity_id)
-              | Simple_value_slot values ->
-                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
-            in
-            let row_for_entity entity_id =
-              row_slots
-              |> List.fold_left
-                   (fun row slot ->
-                     match row with
-                     | None -> None
-                     | Some row -> Option.map (fun value -> value :: row) (value_of_slot entity_id slot))
-                   (Some [])
-              |> Option.map List.rev
-            in
-            scan_datoms
-            |> List.filter_map (fun datom ->
-              if entity_allowed datom.e then row_for_entity datom.e else None)
-            |> List.sort_uniq compare
-            |> fun rows -> Some rows
-
-  let q ?inputs db query =
-    match simple_same_entity_constant_rows ?inputs db query with
-    | Some rows -> rows
-    | None -> Query_impl.q query_context ?inputs db query
-
-  let query_string_cache : (string, query) Hashtbl.t = Hashtbl.create 32
-  let cached_query_string input =
-    match Hashtbl.find_opt query_string_cache input with
-    | Some query -> query
-    | None ->
-      let query = parse_query_string input in
-      Hashtbl.replace query_string_cache input query;
-      query
 
   let q_string ?inputs db input =
     if string_includes input "pull" then
@@ -1833,6 +1828,15 @@ module Query = struct
         | Input_source_decl _ -> true
         | _ -> false)
       inputs
+
+  let query_debug_enabled =
+    match Sys.getenv_opt "DATASCRIPT_QUERY_DEBUG" with
+    | Some ("1" | "true" | "yes") -> true
+    | _ -> false
+
+  let debug_log msg =
+    if query_debug_enabled then
+      Printf.eprintf "[datascript %.3f] %s\n%!" (Platform.now_seconds ()) msg
 
   let entity_ids_with_attr db attr =
     let rec collect previous acc = function
@@ -2303,6 +2307,10 @@ module Query = struct
     | _ -> None
 
   let ref_target_pull_relation db query =
+    debug_log
+      (Printf.sprintf "ref_target_pull_relation find=%d where=%d max_e=%d" (List.length query.find)
+         (List.length query.where)
+         db.max_datom_e);
     let wildcard_selector = function
       | [ Pull_wildcard ] -> Some [ Pull_wildcard ]
       | _ -> None
@@ -2343,11 +2351,13 @@ module Query = struct
          let required_attrs = List.filter_map (required_pattern source_var) query.where in
          (match required_attrs with
           | [ required_attr ] ->
+            debug_log "ref_target_pull_relation step=source_entities";
             let source_entities = Bytes.make (db.max_datom_e + 1) '\000' in
             entity_ids_with_attr db required_attr
             |> List.iter (fun entity_id ->
               if entity_id >= 0 && entity_id < Bytes.length source_entities then
                 Bytes.set source_entities entity_id '\001');
+            debug_log "ref_target_pull_relation step=ref_scan";
             let source_has_required entity_id =
               entity_id >= 0
               && entity_id < Bytes.length source_entities
@@ -2362,14 +2372,32 @@ module Query = struct
                 | _ -> None)
               |> List.sort_uniq compare
             in
+            debug_log (Printf.sprintf "ref_target_pull_relation target_ids=%d" (List.length target_ids));
             let rows =
-              Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db target_ids
-              |> List.map (fun entity -> [ Result_pull entity ])
+              if List.length target_ids <= 512 then (
+                debug_log "ref_target_pull_relation per-entity pull";
+                target_ids
+                |> List.filter_map (fun entity_id ->
+                  Pull_api_impl.pull pull_api_context db [ Pull_wildcard ] (Entity_id entity_id)
+                  |> Option.map (fun entity -> [ Result_pull entity ])))
+              else (
+                debug_log "ref_target_pull_relation wildcard_many_by_ids scan";
+                Pull_api_impl.pull_wildcard_many_by_ids pull_api_context db target_ids
+                |> List.map (fun entity -> [ Result_pull entity ]))
             in
+            debug_log
+              (Printf.sprintf "ref_target_pull_relation HIT targets=%d rows=%d" (List.length target_ids)
+                 (List.length rows));
             Some (Query_relation rows)
-          | _ -> None)
-       | _ -> None)
-    | _ -> None
+          | _ ->
+            debug_log "ref_target_pull_relation miss required_attrs shape";
+            None)
+       | _ ->
+         debug_log "ref_target_pull_relation miss missing/ref pattern";
+         None)
+    | _ ->
+      debug_log "ref_target_pull_relation miss find/rules/inputs guard";
+      None
 
   let scalar_input_bindings db query inputs =
     let rec collect acc declarations args =
@@ -2888,13 +2916,17 @@ module Query = struct
            | [] -> None)
          |> fun values -> Query_collection values)))
     | Return_relation, None ->
+      debug_log "q_return Return_relation";
       (match simple_attr_entity_pull_collection db query with
        | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
        | Some result -> result
        | None ->
       (match ref_target_pull_relation db query with
-       | Some result -> result
+       | Some result ->
+         debug_log "q_return -> ref_target_pull_relation";
+         result
        | None ->
+         debug_log "q_return -> fallback q()";
          let rows = q db query in
          Query_relation rows))
     | Return_relation, Some inputs ->
@@ -3112,6 +3144,18 @@ end
 
 let q = Query.q
 let q_string = Query.q_string
+
+let () =
+  warm_query_parser :=
+    (let warmed = ref false in
+     fun db ->
+       if not !warmed then (
+         warmed := true;
+         ignore (read_edn "1");
+         ignore (parse_query_string_uncached "[:find ?e :where [?e :name \"warmup\"]]");
+         ignore (parse_query_string_uncached "[:find ?e :where [?e :age 1]]");
+         ignore (q_string db "[:find ?e :where [?e :name \"warmup\"]]")))
+
 let q_with = Query.q_with
 let q_with_string = Query.q_with_string
 let q_sources = Query.q_sources

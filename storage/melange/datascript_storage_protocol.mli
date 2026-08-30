@@ -1,0 +1,35 @@
+open Datascript_types
+
+type storage_index_db =
+  | Share_index_db of Datascript_lmdb_db.t
+  | Separate_index_db
+
+type storage_backend = {
+  kind : storage_kind
+  ; restore_meta : unit -> schema * entity_id * tx * datom list
+  ; store_meta : db -> unit
+  ; sync_indexes_to_storage : since_tx:tx -> unit
+  ; sync_removals_to_storage : datom list -> unit
+  ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
+  ; index_db : storage_index_db
+}
+
+val kind_of : storage -> storage_kind
+val ensure_live : storage -> unit
+val memory_storage : unit -> storage
+val benchmark_memory_storage : unit -> storage
+val register_backend : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
+val restore_meta : storage -> schema * entity_id * tx * datom list
+val store_db : storage -> db -> unit
+val sync_indexes_to_storage : since_tx:tx -> storage -> unit
+val sync_removals_to_storage : datom list -> storage -> unit
+val load_indexes_from_storage : storage -> Datascript_lmdb_db.t -> unit
+val db_for_storage : storage -> Datascript_lmdb_db.t
+val same_storage_db : storage -> Datascript_lmdb_db.t -> bool
+val create_index_db : storage option -> Datascript_lmdb_db.t * storage option
+
+type plugin = storage_backend
+type index_db_mode = storage_index_db
+val register_plugin : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
+
+val wrap_lmdb : ?check_live:(unit -> unit) -> Datascript_lmdb_db.t -> storage

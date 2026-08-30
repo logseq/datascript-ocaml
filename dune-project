@@ -7,7 +7,14 @@
  (name datascript_ocaml))
 
 (package
- (name datascript-ocaml-native))
+ (name datascript-ocaml-native)
+ (depends alcotest))
+
+(package
+ (name datascript-ocaml-native-lmdb))
+
+(package
+ (name datascript-ocaml-native-sqlite))
 
 (package
  (name datascript-ocaml-jsoo))

@@ -1,12 +1,7 @@
 type regex
 
-open Datascript_types
-
 (** Return the current wall-clock time as seconds since the Unix epoch. *)
 val now_seconds : unit -> float
-
-(** Create a file-backed storage instance rooted at the given path. *)
-val file_storage : string -> storage
 
 (** Compile a platform-specific regular expression from a pattern string. *)
 val compile_regex : string -> regex

@@ -71,7 +71,7 @@ let indexed =
 
 let unique_identity = { indexed with unique = Some Identity }
 
-let assert_uses_persistent_sorted_set (_index : datom Persistent_sorted_set.t) = ()
+let assert_uses_lmdb_index (_index : index_set) = ()
 
 let test_db__test_defrecord_updatable () =
   let value = { x = Keyword "ignored"; tag = "kept" } in
@@ -190,7 +190,7 @@ let test_db__test_index_api () =
        ()
      |> List.rev)
 
-let test_db__test_indexes_use_persistent_sorted_set () =
+let test_db__test_indexes_use_lmdb () =
   let db =
     empty_db ~schema:[ "name", indexed; "friend", { indexed with value_type = Some RefType } ] ()
     |> db_with
@@ -199,9 +199,10 @@ let test_db__test_indexes_use_persistent_sorted_set () =
          ; Add (Entity_id 2, "name", String "Oleg")
          ]
   in
-  assert_uses_persistent_sorted_set db.eavt_index;
-  assert_uses_persistent_sorted_set db.aevt_index;
-  assert_uses_persistent_sorted_set db.avet_index
+  assert_uses_lmdb_index db.eavt_index;
+  assert_uses_lmdb_index db.aevt_index;
+  assert_uses_lmdb_index db.avet_index;
+  assert_uses_lmdb_index db.tave_index
 
 let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
   let db =
@@ -225,12 +226,62 @@ let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
     [ 1, "x", Int 1; 2, "x", Float 1.0 ]
     (Db.index_range db "x" ~start:(Float 1.0) ~stop:(Float 1.0) () |> List.of_seq)
 
+let test_db__test_db_view_api () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "name", String "Alice")
+      ; Add (Entity_id 1, "age", Int 30)
+      ]
+      (empty_db ~schema:[ "name", indexed; "age", indexed ] ())
+  in
+  let tx1 = basis_tx db in
+  let db =
+    db_with
+      [ Add (Entity_id 1, "age", Int 31)
+      ; Add (Entity_id 2, "name", String "Bob")
+      ]
+      db
+  in
+  let tx2 = basis_tx db in
+  assert_equal_int "basis_tx tracks latest transaction" tx2 (basis_tx db);
+  assert_equal_int "temporal_view is false on current db" 0 (if temporal_view db then 1 else 0);
+  let past = as_of tx1 db in
+  (match as_of_t past with
+  | Some tx when tx = tx1 -> ()
+  | _ -> failwith "as_of should record as_of_t like dbval");
+  assert_equal_int "as_of lowers basis_tx" tx1 (basis_tx past);
+  assert_equal_int "as_of creates temporal view" 1 (if temporal_view past then 1 else 0);
+  let delta = since tx1 db in
+  (match since_t delta with
+  | Some tx when tx = tx1 -> ()
+  | _ -> failwith "since should record since_t like dbval");
+  assert_equal_int "since creates temporal view" 1 (if temporal_view delta then 1 else 0);
+  let hist = history db in
+  assert_equal_int "history creates temporal view" 1 (if temporal_view hist then 1 else 0);
+  (try
+     ignore (as_of (basis_tx db + 1) db);
+     failwith "as_of beyond store basis should fail"
+   with Invalid_argument _ -> ());
+  (try
+     let _ = transact (as_of tx1 db) [ Add (Entity_id 3, "name", String "Carol") ] in
+     failwith "transact on temporal view should fail"
+   with Invalid_argument _ -> ());
+  (try
+     let _ = transact (since tx1 db) [ Add (Entity_id 3, "name", String "Carol") ] in
+     failwith "transact on since view should fail"
+   with Invalid_argument _ -> ());
+  (try
+     let _ = transact (history db) [ Add (Entity_id 3, "name", String "Carol") ] in
+     failwith "transact on history view should fail"
+   with Invalid_argument _ -> ())
+
 let () =
   test_db__test_defrecord_updatable ();
   test_db__test_db_hash_cache ();
+  test_db__test_db_view_api ();
   test_db__test_uuid ();
   test_db__test_squuid_uses_wall_clock_time ();
   test_db__test_diff ();
   test_db__test_index_api ();
-  test_db__test_indexes_use_persistent_sorted_set ();
+  test_db__test_indexes_use_lmdb ();
   test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds ()
