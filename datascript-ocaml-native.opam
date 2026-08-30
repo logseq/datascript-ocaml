@@ -10,15 +10,15 @@ depends: [
   "datascript_ocaml" {= version}
   "persistent_sorted_set_ocaml" {= "dev"}
   "sqlite3"
-  "melange-transit-native" {= "0.1.1"}
+  "melange-transit-native" {= "0.1.2"}
   "yojson"
 ]
 pin-depends: [
   ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
   ["melange-edn-core.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
   ["melange-edn-native.0.5.0" "git+https://github.com/RCmerci/melange-edn.git#main"]
-  ["melange-transit-core.0.1.1" "git+https://github.com/RCmerci/melange-transit.git#main"]
-  ["melange-transit-native.0.1.1" "git+https://github.com/RCmerci/melange-transit.git#main"]
+  ["melange-transit-core.0.1.2" "git+https://github.com/RCmerci/melange-transit.git#main"]
+  ["melange-transit-native.0.1.2" "git+https://github.com/RCmerci/melange-transit.git#main"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
