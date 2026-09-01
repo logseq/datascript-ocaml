@@ -12,5 +12,5 @@ depends: [
   "melange"
 ]
 build: [
-  ["dune" "build" "-p" name "-j" jobs]
+  ["dune" "build" "-p" "datascript_ocaml,datascript-ocaml-melange,datascript-ocaml-melange-sqlite" "-j" jobs]
 ]

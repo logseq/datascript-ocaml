@@ -18,5 +18,8 @@ pin-depends: [
   ["melange-transit-melange.0.1.1" "git+https://github.com/RCmerci/melange-transit.git#main"]
 ]
 build: [
-  ["dune" "build" "-p" name "-j" jobs]
+  # Virtual `datascript` lives in datascript_ocaml. Building the Melange
+  # implementer alone (-p name) looks for byte cmis that only exist when the
+  # virtual library is in the same dune -p set.
+  ["dune" "build" "-p" "datascript_ocaml,datascript-ocaml-melange" "-j" jobs]
 ]

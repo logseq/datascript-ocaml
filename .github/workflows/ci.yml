@@ -39,3 +39,11 @@ jobs:
 
       - name: Run tests
         run: opam exec -- dune runtest
+
+      - name: Check opam -p package builds
+        run: |
+          opam exec -- dune build -p datascript_ocaml
+          opam exec -- dune build -p datascript_ocaml,datascript-ocaml-native
+          opam exec -- dune build -p datascript_ocaml,datascript-ocaml-native,datascript-ocaml-native-sqlite
+          opam exec -- dune build -p datascript_ocaml,datascript-ocaml-melange
+          opam exec -- dune build -p datascript_ocaml,datascript-ocaml-melange,datascript-ocaml-melange-sqlite
