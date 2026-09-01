@@ -12,6 +12,10 @@ let open_session path =
   let sqlite = Datascript_sqlite_db.open_path path in
   { sqlite; closed = false }
 
+let open_memory () =
+  let sqlite = Datascript_sqlite_db.create_temp () in
+  { sqlite; closed = false }
+
 let close session =
   if not session.closed then (
     session.closed <- true;

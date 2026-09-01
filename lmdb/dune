@@ -1,8 +1,8 @@
 (library
  (name datascript_index_codec)
- (public_name datascript-ocaml-native.index-codec)
+ (public_name datascript_ocaml.index-codec)
  (wrapped false)
- (modes native melange byte)
+ (modes native melange)
  (modules datascript_index_codec)
  (libraries datascript_types))
 

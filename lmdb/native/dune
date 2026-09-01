@@ -6,7 +6,7 @@
  (wrapped false)
  (modes native)
  (modules datascript_lmdb_db)
- (libraries datascript_index_codec lmdb))
+ (libraries datascript_ocaml.index-codec lmdb))
 
 (library
  (name lmdb_index_native)
@@ -14,4 +14,4 @@
  (wrapped false)
  (modes native)
  (modules datascript_lmdb_index)
- (libraries datascript_index_codec lmdb_db_native))
+ (libraries datascript_ocaml.index-codec lmdb_db_native))

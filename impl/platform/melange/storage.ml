@@ -102,6 +102,15 @@ let collect_garbage storage =
   ensure_live storage;
   match kind_of storage with
   | k when k = storage_kind_lmdb || k = storage_kind_memory ->
-    (try Datascript_lmdb_db.sync (Datascript_storage_protocol.db_for_storage storage) with
-     | Invalid_argument _ -> ())
+    (try
+       match Datascript_storage_protocol.db_for_storage storage with
+       | Datascript_storage_protocol.Lmdb lmdb -> Datascript_lmdb_db.sync lmdb
+       | Datascript_storage_protocol.Sqlite _ -> ()
+     with Invalid_argument _ -> ())
+  | k when k = storage_kind_sqlite ->
+    (try
+       match Datascript_storage_protocol.db_for_storage storage with
+       | Datascript_storage_protocol.Sqlite sqlite -> Datascript_sqlite_db.sync sqlite
+       | Datascript_storage_protocol.Lmdb _ -> ()
+     with Invalid_argument _ -> ())
   | _ -> ()

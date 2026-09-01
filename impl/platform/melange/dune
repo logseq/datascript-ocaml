@@ -3,6 +3,12 @@
  (public_name datascript-ocaml-melange)
  (implements datascript)
  (modes melange)
- (libraries melange.js lmdb_db_melange lmdb_index_melange storage_melange)
+ (libraries
+  melange.js
+  lmdb_db_melange
+  lmdb_index_melange
+  sqlite_db_melange
+  sqlite_index_melange
+  storage_melange)
  (preprocess
   (pps melange.ppx)))

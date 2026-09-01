@@ -218,15 +218,13 @@
  (deps
   sqlite_cross_runtime_native.exe
   sqlite_cross_runtime_parity.js
-  upstream_datascript_bundle.stamp
-  ../js/datascript_js.bc.js)
+  upstream_datascript_bundle.stamp)
  (action
   (run
    node
    --experimental-sqlite
    %{dep:sqlite_cross_runtime_parity.js}
-   %{dep:sqlite_cross_runtime_native.exe}
-   %{dep:../js/datascript_js.bc.js})))
+   %{dep:sqlite_cross_runtime_native.exe})))
 
 (test
  (name test_logseq_query_planners)
@@ -260,12 +258,6 @@
  (modules cross_runtime_ocaml)
  (libraries datascript-ocaml-native))
 
-(executable
- (name js_smoke)
- (modes js)
- (modules js_smoke)
- (libraries datascript-ocaml-jsoo))
-
 (melange.emit
  (target melange-smoke)
  (alias melange-smoke)
@@ -273,11 +265,12 @@
  (modules melange_smoke)
  (libraries datascript-ocaml-melange))
 
-(rule
- (alias runtest)
- (deps js_smoke.bc.js)
- (action
-  (run node %{dep:js_smoke.bc.js})))
+(melange.emit
+ (target melange-sqlite-smoke)
+ (alias melange-sqlite-smoke)
+ (module_systems es6)
+ (modules melange_sqlite_smoke)
+ (libraries datascript-ocaml-melange datascript-ocaml-melange-sqlite))
 
 (rule
  (alias runtest)
@@ -289,9 +282,11 @@
 
 (rule
  (alias runtest)
- (deps ../js/datascript_js.bc.js js_facade_runner.js)
+ (deps
+  (alias melange-sqlite-smoke)
+  melange-sqlite-smoke/test/melange_sqlite_smoke.js)
  (action
-  (run node %{dep:js_facade_runner.js} %{dep:../js/datascript_js.bc.js})))
+  (run node %{dep:melange-sqlite-smoke/test/melange_sqlite_smoke.js})))
 
 (rule
  (alias runtest)

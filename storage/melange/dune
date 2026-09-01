@@ -4,9 +4,14 @@
  (name storage_melange)
  (public_name datascript-ocaml-melange.storage)
  (wrapped false)
- (modes melange byte)
+ (modes melange)
  (modules
   datascript_storage_meta
   datascript_storage_lmdb
   datascript_storage_protocol)
- (libraries datascript_index_codec lmdb_db_melange lmdb_index_melange datascript_types))
+ (libraries
+  datascript_ocaml.index-codec
+  lmdb_db_melange
+  lmdb_index_melange
+  sqlite_db_melange
+  datascript_types))

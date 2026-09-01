@@ -1,0 +1,38 @@
+(include_subdirs no)
+
+(copy_files# "../shared/datascript_sqlite_db.mli")
+(copy_files# "../shared/datascript_sqlite_index.ml")
+(copy_files# "../shared/datascript_sqlite_index.mli")
+(copy_files# "../shared/datascript_storage_sqlite.ml")
+(copy_files# "../shared/datascript_storage_sqlite_plugin.ml")
+(copy_files# "../shared/datascript_storage_sqlite_plugin.mli")
+(copy_files# "../shared/datascript_sqlite.ml")
+
+(library
+ (name sqlite_db_native)
+ (public_name datascript-ocaml-native.sqlite-db)
+ (wrapped false)
+ (modes native)
+ (modules datascript_sqlite_db)
+ (libraries sqlite3 datascript_types))
+
+(library
+ (name sqlite_index_native)
+ (public_name datascript-ocaml-native.sqlite-index)
+ (wrapped false)
+ (modes native)
+ (modules datascript_sqlite_index)
+ (libraries datascript_ocaml.index-codec sqlite_db_native datascript_types))
+
+(library
+ (name datascript_sqlite)
+ (public_name datascript-ocaml-native-sqlite)
+ (wrapped false)
+ (modules
+  datascript_sqlite
+  datascript_storage_sqlite
+  datascript_storage_sqlite_plugin)
+ (libraries
+  datascript-ocaml-native
+  datascript-ocaml-native.storage
+  datascript-ocaml-native.sqlite-db))

@@ -2,7 +2,7 @@
  (name datascript_native)
  (public_name datascript-ocaml-native)
  (implements datascript)
- (modes native byte)
+ (modes native)
  (libraries
   str
   unix

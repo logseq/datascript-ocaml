@@ -1,6 +1,6 @@
 # DataScript OCaml
 
-An OCaml 5 rewrite of DataScript, focused on matching the behavior of the ClojureScript implementation while providing a native OCaml API and js_of_ocaml build support.
+An OCaml 5 rewrite of DataScript, focused on matching the behavior of the ClojureScript implementation while providing a native OCaml API and a Melange JavaScript backend.
 
 This project is still under active development. Compatibility with upstream DataScript is verified through OCaml tests and cross-runtime parity checks against the ClojureScript implementation.
 
@@ -11,7 +11,7 @@ boundaries that are intentionally OCaml-specific.
 
 - Preserve DataScript semantics for transactions, datoms, indexes, entities, pull, and query.
 - Keep public APIs close enough to upstream behavior that Logseq can share the same data model assumptions.
-- Support native OCaml and js_of_ocaml runtimes.
+- Support native OCaml and Melange runtimes.
 - Prefer clear OCaml implementations over shortcuts that change observable behavior.
 
 ## Development
@@ -20,7 +20,7 @@ Requirements:
 
 - OCaml 5.2.1 or newer
 - Dune 3.17 or newer
-- Node.js for js_of_ocaml smoke tests and cross-runtime checks
+- Node.js for Melange smoke tests and cross-runtime checks
 
 Common commands:
 
@@ -46,7 +46,7 @@ to use a different checkout or compiled JS bundle.
 
 - `type/`: shared public type definitions
 - `impl/`: implementation modules
-- `test/`: unit, integration, js_of_ocaml, and cross-runtime tests
+- `test/`: unit, integration, Melange, and cross-runtime tests
 - `bench/`: benchmark entry points
 - `script/`: parity and benchmark helper scripts
 

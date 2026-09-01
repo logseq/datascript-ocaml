@@ -2,6 +2,6 @@
  (name datascript)
  (public_name datascript_ocaml)
  (virtual_modules platform index storage)
- (modes native byte melange)
+ (modes native melange)
  (modules (:standard \ storage_pss storage_lmdb_impl))
  (libraries datascript_types))

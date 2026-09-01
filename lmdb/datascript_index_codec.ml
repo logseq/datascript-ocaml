@@ -1,7 +1,5 @@
 open Datascript_types
 
-let value_payload_cache = Hashtbl.create 256
-
 let int32_be value =
   let value = Int32.of_int value in
   String.init 4 (fun index ->
@@ -223,6 +221,214 @@ let rec decode_value_key bytes offset =
   | 15 -> Ref_to (Entity_id 0), offset + 4
   | _ -> invalid_arg "invalid value key tag"
 
+(* Sort keys collapse Int/Float/Ref into one numeric order. Payloads keep the
+   original value constructor so EAVT/AEVT (and meta datoms) round-trip. *)
+let append_len_string buffer text =
+  append_int32 buffer (String.length text);
+  Buffer.add_string buffer text
+
+let read_len_string bytes offset =
+  let len, offset = read_int32 bytes offset in
+  if len < 0 || offset + len > String.length bytes then invalid_arg "truncated payload string";
+  String.sub bytes offset len, offset + len
+
+let rec encode_value_payload buffer value =
+  match value with
+  | Nil -> append_byte buffer 0
+  | Keyword text ->
+      let namespace, name = Datascript_types.Compare.split_keyword text in
+      append_byte buffer 1;
+      append_len_string buffer namespace;
+      append_len_string buffer name
+  | Symbol text ->
+      let namespace, name = Datascript_types.Compare.split_keyword text in
+      append_byte buffer 2;
+      append_len_string buffer namespace;
+      append_len_string buffer name
+  | Map entries ->
+      append_byte buffer 3;
+      append_int32 buffer (List.length entries);
+      List.iter
+        (fun (key, value) ->
+          encode_value_payload buffer key;
+          encode_value_payload buffer value)
+        entries
+  | Set values ->
+      append_byte buffer 4;
+      append_int32 buffer (List.length values);
+      List.iter (encode_value_payload buffer) values
+  | List values ->
+      append_byte buffer 5;
+      append_int32 buffer (List.length values);
+      List.iter (encode_value_payload buffer) values
+  | Vector values ->
+      append_byte buffer 6;
+      append_int32 buffer (List.length values);
+      List.iter (encode_value_payload buffer) values
+  | Tuple values ->
+      append_byte buffer 7;
+      append_int32 buffer (List.length values);
+      List.iter
+        (function
+          | None -> append_byte buffer 0
+          | Some value ->
+              append_byte buffer 1;
+              encode_value_payload buffer value)
+        values
+  | Bool false ->
+      append_byte buffer 8;
+      append_byte buffer 0
+  | Bool true ->
+      append_byte buffer 8;
+      append_byte buffer 1
+  | Int value ->
+      append_byte buffer 9;
+      append_int64 buffer (Int64.of_int value)
+  | Float value ->
+      append_byte buffer 10;
+      append_int64 buffer (Int64.bits_of_float value)
+  | Ref value ->
+      append_byte buffer 11;
+      append_int32 buffer value
+  | String text ->
+      append_byte buffer 12;
+      append_len_string buffer text
+  | Regex text ->
+      append_byte buffer 13;
+      append_len_string buffer text
+  | Instant value ->
+      append_byte buffer 14;
+      append_int64 buffer (Int64.of_int value)
+  | Uuid text ->
+      append_byte buffer 15;
+      append_len_string buffer text
+  | TxRef -> append_byte buffer 16
+  | Ref_to entity_ref ->
+      append_byte buffer 17;
+      (match entity_ref with
+       | Entity_id entity_id ->
+           append_byte buffer 0;
+           append_int32 buffer entity_id
+       | Temp_id text ->
+           append_byte buffer 1;
+           append_len_string buffer text
+       | CurrentTx -> append_byte buffer 2
+       | Ident text ->
+           append_byte buffer 3;
+           append_len_string buffer text
+       | Lookup_ref (attr, value) ->
+           append_byte buffer 4;
+           append_len_string buffer attr;
+           encode_value_payload buffer value)
+
+let rec decode_value_payload bytes offset =
+  let tag, offset = read_byte bytes offset in
+  match tag with
+  | 0 -> Nil, offset
+  | 1 | 2 as tag ->
+      let namespace, offset = read_len_string bytes offset in
+      let name, offset = read_len_string bytes offset in
+      let text = if namespace = "" then name else namespace ^ "/" ^ name in
+      (if tag = 1 then Keyword text else Symbol text), offset
+  | 3 ->
+      let count, offset = read_int32 bytes offset in
+      if count < 0 then invalid_arg "invalid map length";
+      let rec loop remaining offset acc =
+        if remaining = 0 then Map (List.rev acc), offset
+        else
+          let key, offset = decode_value_payload bytes offset in
+          let value, offset = decode_value_payload bytes offset in
+          loop (remaining - 1) offset ((key, value) :: acc)
+      in
+      loop count offset []
+  | 4 | 5 | 6 as tag ->
+      let count, offset = read_int32 bytes offset in
+      if count < 0 then invalid_arg "invalid collection length";
+      let rec loop remaining offset acc =
+        if remaining = 0 then
+          let values = List.rev acc in
+          (match tag with
+           | 4 -> Set values
+           | 5 -> List values
+           | _ -> Vector values),
+          offset
+        else
+          let value, offset = decode_value_payload bytes offset in
+          loop (remaining - 1) offset (value :: acc)
+      in
+      loop count offset []
+  | 7 ->
+      let count, offset = read_int32 bytes offset in
+      if count < 0 then invalid_arg "invalid tuple length";
+      let rec loop remaining offset acc =
+        if remaining = 0 then Tuple (List.rev acc), offset
+        else
+          let marker, offset = read_byte bytes offset in
+          let value, offset =
+            match marker with
+            | 0 -> None, offset
+            | 1 ->
+                let value, offset = decode_value_payload bytes offset in
+                Some value, offset
+            | _ -> invalid_arg "invalid tuple slot marker"
+          in
+          loop (remaining - 1) offset (value :: acc)
+      in
+      loop count offset []
+  | 8 ->
+      let value, offset = read_byte bytes offset in
+      (match value with 0 -> Bool false | 1 -> Bool true | _ -> invalid_arg "invalid bool payload"), offset
+  | 9 ->
+      let raw, offset =
+        if offset + 8 > String.length bytes then invalid_arg "truncated int payload"
+        else int64_of_be (String.sub bytes offset 8), offset + 8
+      in
+      Int (Int64.to_int raw), offset
+  | 10 ->
+      let raw, offset =
+        if offset + 8 > String.length bytes then invalid_arg "truncated float payload"
+        else int64_of_be (String.sub bytes offset 8), offset + 8
+      in
+      Float (Int64.float_of_bits raw), offset
+  | 11 ->
+      let entity_id, offset = read_int32 bytes offset in
+      Ref entity_id, offset
+  | 12 ->
+      let text, offset = read_len_string bytes offset in
+      String text, offset
+  | 13 ->
+      let text, offset = read_len_string bytes offset in
+      Regex text, offset
+  | 14 ->
+      let raw, offset =
+        if offset + 8 > String.length bytes then invalid_arg "truncated instant payload"
+        else int64_of_be (String.sub bytes offset 8), offset + 8
+      in
+      Instant (Int64.to_int raw), offset
+  | 15 ->
+      let text, offset = read_len_string bytes offset in
+      Uuid text, offset
+  | 16 -> TxRef, offset
+  | 17 ->
+      let kind, offset = read_byte bytes offset in
+      (match kind with
+       | 0 ->
+           let entity_id, offset = read_int32 bytes offset in
+           Ref_to (Entity_id entity_id), offset
+       | 1 ->
+           let text, offset = read_len_string bytes offset in
+           Ref_to (Temp_id text), offset
+       | 2 -> Ref_to CurrentTx, offset
+       | 3 ->
+           let text, offset = read_len_string bytes offset in
+           Ref_to (Ident text), offset
+       | 4 ->
+           let attr, offset = read_len_string bytes offset in
+           let value, offset = decode_value_payload bytes offset in
+           Ref_to (Lookup_ref (attr, value)), offset
+       | _ -> invalid_arg "invalid ref-to payload")
+  | _ -> invalid_arg "invalid value payload tag"
+
 let encode_index_attr_value_prefix index attr value =
   let buffer = Buffer.create 64 in
   (match index with
@@ -335,17 +541,14 @@ let decode_datom_key index bytes =
   { e; a; v; tx; added }
 
 let encode_datom_value datom =
-  let cache_key = (datom.added, datom.v) in
-  match Hashtbl.find_opt value_payload_cache cache_key with
-  | Some encoded -> encoded
-  | None ->
-    let encoded = Marshal.to_string cache_key [] in
-    Hashtbl.add value_payload_cache cache_key encoded;
-    encoded
+  let buffer = Buffer.create 16 in
+  encode_value_payload buffer datom.v;
+  Buffer.contents buffer
 
 let decode_datom_value bytes =
-  let added, v = Marshal.from_string bytes 0 in
-  { e = 0; a = ""; v; tx = 0; added }
+  let v, offset = decode_value_payload bytes 0 in
+  if offset <> String.length bytes then invalid_arg "trailing datom value bytes";
+  { e = 0; a = ""; v; tx = 0; added = true }
 
 let decode_index_entry index key value =
   let datom = decode_datom_key index key in
@@ -387,7 +590,199 @@ let compare_encoded_keys index left right =
     (decode_datom_key index left)
     (decode_datom_key index right)
 
-let encode_schema schema = Marshal.to_string schema []
-let decode_schema bytes = Marshal.from_string bytes 0
-let encode_datoms datoms = Marshal.to_string datoms []
-let decode_datoms bytes = Marshal.from_string bytes 0
+let cardinality_to_byte = function One -> 0 | Many -> 1
+
+let cardinality_of_byte = function
+  | 0 -> One
+  | 1 -> Many
+  | _ -> invalid_arg "invalid cardinality"
+
+let unique_to_byte = function None -> 0 | Some Value -> 1 | Some Identity -> 2
+
+let unique_of_byte = function
+  | 0 -> None
+  | 1 -> Some Value
+  | 2 -> Some Identity
+  | _ -> invalid_arg "invalid unique"
+
+let value_type_to_byte = function
+  | None -> 0
+  | Some RefType -> 1
+  | Some TupleType -> 2
+  | Some StringType -> 3
+  | Some KeywordType -> 4
+  | Some NumberType -> 5
+  | Some UuidType -> 6
+  | Some InstantType -> 7
+
+let value_type_of_byte = function
+  | 0 -> None
+  | 1 -> Some RefType
+  | 2 -> Some TupleType
+  | 3 -> Some StringType
+  | 4 -> Some KeywordType
+  | 5 -> Some NumberType
+  | 6 -> Some UuidType
+  | 7 -> Some InstantType
+  | _ -> invalid_arg "invalid value type"
+
+let append_string_option buffer = function
+  | None -> append_byte buffer 0
+  | Some text ->
+      append_byte buffer 1;
+      append_string buffer text
+
+let read_string_option bytes offset =
+  let marker, offset = read_byte bytes offset in
+  match marker with
+  | 0 -> None, offset
+  | 1 ->
+      let text, offset = read_string bytes offset in
+      Some text, offset
+  | _ -> invalid_arg "invalid string option"
+
+let append_string_list_option buffer = function
+  | None -> append_byte buffer 0
+  | Some items ->
+      append_byte buffer 1;
+      append_int32 buffer (List.length items);
+      List.iter (append_string buffer) items
+
+let read_string_list_option bytes offset =
+  let marker, offset = read_byte bytes offset in
+  match marker with
+  | 0 -> None, offset
+  | 1 ->
+      let count, offset = read_int32 bytes offset in
+      if count < 0 then invalid_arg "invalid string list length";
+      let rec loop remaining offset acc =
+        if remaining = 0 then Some (List.rev acc), offset
+        else
+          let item, offset = read_string bytes offset in
+          loop (remaining - 1) offset (item :: acc)
+      in
+      loop count offset []
+  | _ -> invalid_arg "invalid string list option"
+
+let append_value_type_list_option buffer = function
+  | None -> append_byte buffer 0
+  | Some items ->
+      append_byte buffer 1;
+      append_int32 buffer (List.length items);
+      List.iter (fun value_type -> append_byte buffer (value_type_to_byte (Some value_type))) items
+
+let read_value_type_list_option bytes offset =
+  let marker, offset = read_byte bytes offset in
+  match marker with
+  | 0 -> None, offset
+  | 1 ->
+      let count, offset = read_int32 bytes offset in
+      if count < 0 then invalid_arg "invalid value type list length";
+      let rec loop remaining offset acc =
+        if remaining = 0 then Some (List.rev acc), offset
+        else
+          let tag, offset = read_byte bytes offset in
+          (match value_type_of_byte tag with
+           | Some value_type -> loop (remaining - 1) offset (value_type :: acc)
+           | None -> invalid_arg "invalid tuple value type")
+      in
+      loop count offset []
+  | _ -> invalid_arg "invalid value type list option"
+
+let encode_schema_attr attr =
+  let buffer = Buffer.create 32 in
+  append_byte buffer (cardinality_to_byte attr.cardinality);
+  append_byte buffer (unique_to_byte attr.unique);
+  append_byte buffer (if attr.indexed then 1 else 0);
+  append_byte buffer (if attr.is_component then 1 else 0);
+  append_byte buffer (if attr.no_history then 1 else 0);
+  append_string_option buffer attr.doc;
+  append_byte buffer (value_type_to_byte attr.value_type);
+  append_string_list_option buffer attr.tuple_attrs;
+  append_value_type_list_option buffer attr.tuple_types;
+  Buffer.contents buffer
+
+let decode_schema_attr bytes offset =
+  let cardinality, offset = read_byte bytes offset in
+  let unique, offset = read_byte bytes offset in
+  let indexed, offset = read_byte bytes offset in
+  let is_component, offset = read_byte bytes offset in
+  let no_history, offset = read_byte bytes offset in
+  let doc, offset = read_string_option bytes offset in
+  let value_type, offset = read_byte bytes offset in
+  let tuple_attrs, offset = read_string_list_option bytes offset in
+  let tuple_types, offset = read_value_type_list_option bytes offset in
+  ( {
+      cardinality = cardinality_of_byte cardinality
+    ; unique = unique_of_byte unique
+    ; indexed = indexed <> 0
+    ; is_component = is_component <> 0
+    ; no_history = no_history <> 0
+    ; doc
+    ; value_type = value_type_of_byte value_type
+    ; tuple_attrs
+    ; tuple_types
+    }
+  , offset )
+
+let encode_schema schema =
+  let buffer = Buffer.create 64 in
+  append_byte buffer 1;
+  append_int32 buffer (List.length schema);
+  List.iter
+    (fun (attr, spec) ->
+      append_string buffer attr;
+      append_bytes buffer (encode_schema_attr spec))
+    schema;
+  Buffer.contents buffer
+
+let decode_schema bytes =
+  let version, offset = read_byte bytes 0 in
+  if version <> 1 then invalid_arg "unsupported schema codec version";
+  let count, offset = read_int32 bytes offset in
+  if count < 0 then invalid_arg "invalid schema length";
+  let rec loop remaining offset acc =
+    if remaining = 0 then
+      if offset <> String.length bytes then invalid_arg "trailing schema bytes"
+      else List.rev acc
+    else
+      let attr, offset = read_string bytes offset in
+      let spec, offset = decode_schema_attr bytes offset in
+      loop (remaining - 1) offset ((attr, spec) :: acc)
+  in
+  loop count offset []
+
+let encode_datoms datoms =
+  let buffer = Buffer.create 64 in
+  append_byte buffer 1;
+  append_int32 buffer (List.length datoms);
+  List.iter
+    (fun datom ->
+      append_int32 buffer datom.e;
+      append_string buffer datom.a;
+      encode_value_payload buffer datom.v;
+      append_int32 buffer datom.tx;
+      append_added buffer datom.added)
+    datoms;
+  Buffer.contents buffer
+
+let decode_datoms bytes =
+  if String.length bytes = 0 then []
+  else
+    let version, offset = read_byte bytes 0 in
+    if version <> 1 then invalid_arg "unsupported datoms codec version";
+    let count, offset = read_int32 bytes offset in
+    if count < 0 then invalid_arg "invalid datoms length";
+    let rec loop remaining offset acc =
+      if remaining = 0 then
+        if offset <> String.length bytes then invalid_arg "trailing datoms bytes"
+        else List.rev acc
+      else
+        let e, offset = read_int32 bytes offset in
+        let a, offset = read_string bytes offset in
+        let v, offset = decode_value_payload bytes offset in
+        let tx, offset = read_int32 bytes offset in
+        let added, offset = decode_added bytes offset in
+        loop (remaining - 1) offset ({ e; a; v; tx; added } :: acc)
+    in
+    loop count offset []

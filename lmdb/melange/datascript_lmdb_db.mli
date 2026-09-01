@@ -7,6 +7,7 @@ end
 type t
 
 val create_temp : unit -> t
+val create_benchmark_temp : unit -> t
 val open_path : string -> t
 val close : t -> unit
 val sync : t -> unit

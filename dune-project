@@ -17,7 +17,7 @@
  (name datascript-ocaml-native-sqlite))
 
 (package
- (name datascript-ocaml-jsoo))
+ (name datascript-ocaml-melange))
 
 (package
- (name datascript-ocaml-melange))
+ (name datascript-ocaml-melange-sqlite))

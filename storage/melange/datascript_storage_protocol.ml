@@ -1,7 +1,11 @@
 open Datascript_types
 
+type index_db =
+  | Lmdb of Datascript_lmdb_db.t
+  | Sqlite of Datascript_sqlite_db.t
+
 type storage_index_db =
-  | Share_index_db of Datascript_lmdb_db.t
+  | Share_index_db of index_db
   | Separate_index_db
 
 type storage_backend = {
@@ -10,7 +14,7 @@ type storage_backend = {
   ; store_meta : db -> unit
   ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
-  ; load_indexes_from_storage : Datascript_lmdb_db.t -> unit
+  ; load_indexes_from_storage : index_db -> unit
   ; index_db : storage_index_db
 }
 
@@ -57,11 +61,13 @@ let memory_backend lmdb =
     remove Eavt;
     remove Aevt;
     remove Avet;
-    remove Tave;
     remove Tave
   in
-  let load_indexes_from_storage target_lmdb =
-    if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+  let load_indexes_from_storage target =
+    match target with
+    | Lmdb target_lmdb when lmdb != target_lmdb ->
+        Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+    | Lmdb _ | Sqlite _ -> ()
   in
   {
     kind = storage_kind_memory
@@ -70,14 +76,14 @@ let memory_backend lmdb =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Share_index_db lmdb
+  ; index_db = Share_index_db (Lmdb lmdb)
   }
 
 let memory_storage () =
   register_backend (memory_backend (Datascript_lmdb_db.create_temp ())) ()
 
 let benchmark_memory_storage () =
-  register_backend (memory_backend (Datascript_lmdb_db.create_temp ())) ()
+  register_backend (memory_backend (Datascript_lmdb_db.create_benchmark_temp ())) ()
 
 let restore_meta storage =
   ensure_live storage;
@@ -95,31 +101,33 @@ let sync_removals_to_storage removed_datoms storage =
   ensure_live storage;
   (backend_of storage).sync_removals_to_storage removed_datoms
 
-let load_indexes_from_storage storage target_lmdb =
+let load_indexes_from_storage storage target =
   ensure_live storage;
-  (backend_of storage).load_indexes_from_storage target_lmdb
+  (backend_of storage).load_indexes_from_storage target
 
 let db_for_storage storage =
   ensure_live storage;
   match (backend_of storage).index_db with
   | Share_index_db db -> db
   | Separate_index_db ->
-      invalid_arg "storage backend uses a separate index db, expected shared LMDB index db"
+      invalid_arg "storage backend uses a separate index db, expected shared index db"
 
-let same_storage_db storage index_lmdb =
+let same_storage_db storage index_db =
   ensure_live storage;
-  match (backend_of storage).index_db with
-  | Share_index_db db -> db == index_lmdb
-  | Separate_index_db -> false
+  match (backend_of storage).index_db, index_db with
+  | Share_index_db (Lmdb a), Lmdb b -> a == b
+  | Share_index_db (Sqlite a), Sqlite b -> a == b
+  | Share_index_db _, _ -> false
+  | Separate_index_db, _ -> false
 
 let create_index_db storage =
   match storage with
-  | None -> (Datascript_lmdb_db.create_temp (), None)
+  | None -> (Lmdb (Datascript_lmdb_db.create_temp ()), None)
   | Some storage ->
       ensure_live storage;
       (match (backend_of storage).index_db with
        | Share_index_db db -> (db, Some storage)
-       | Separate_index_db -> (Datascript_lmdb_db.create_temp (), Some storage))
+       | Separate_index_db -> (Lmdb (Datascript_lmdb_db.create_temp ()), Some storage))
 
 let backend_of_lmdb lmdb =
   let restore_meta () = Datascript_storage_lmdb.restore_meta lmdb in
@@ -133,11 +141,13 @@ let backend_of_lmdb lmdb =
     remove Eavt;
     remove Aevt;
     remove Avet;
-    remove Tave;
     remove Tave
   in
-  let load_indexes_from_storage target_lmdb =
-    if lmdb != target_lmdb then Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+  let load_indexes_from_storage target =
+    match target with
+    | Lmdb target_lmdb when lmdb != target_lmdb ->
+        Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
+    | Lmdb _ | Sqlite _ -> ()
   in
   {
     kind = storage_kind_lmdb
@@ -146,7 +156,7 @@ let backend_of_lmdb lmdb =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Share_index_db lmdb
+  ; index_db = Share_index_db (Lmdb lmdb)
   }
 
 let wrap_lmdb ?check_live db =

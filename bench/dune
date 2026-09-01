@@ -4,7 +4,7 @@
  (libraries datascript-ocaml-native unix))
 
 ;; Shared scenario code depends on the virtual datascript library; each
-;; executable selects a concrete implementation (native vs jsoo).
+;; executable selects a concrete implementation.
 (library
  (name memory_bench_common)
  (modules memory_scenario)
@@ -15,13 +15,6 @@
  (modules bench_ocaml)
  (modes exe)
  (libraries datascript-ocaml-native unix))
-
-;; js_of_ocaml bench must use the jsoo package (native LMDB is not linkable to JS).
-(executable
- (name bench_ocaml_js)
- (modules bench_ocaml_js)
- (modes js)
- (libraries datascript-ocaml-jsoo js_of_ocaml))
 
 (executable
  (name query_profile)
@@ -44,12 +37,6 @@
  (modules memory_ocaml)
  (modes exe)
  (libraries memory_bench_common datascript-ocaml-native unix))
-
-(executable
- (name memory_ocaml_js)
- (modules memory_ocaml_js)
- (modes js)
- (libraries memory_bench_common datascript-ocaml-jsoo js_of_ocaml))
 
 (executable
  (name persistent_sqlite)
@@ -100,34 +87,10 @@
  (libraries datascript-ocaml-native unix))
 
 (rule
- (alias bench)
- (deps
-  bench_ocaml.exe
-  bench_ocaml_js.bc.js
-  memory_ocaml.exe
-  memory_ocaml_js.bc.js
-  bench_upstream.js
-  memory_upstream.js
-  ../script/benchmark_vs_cljs.sh)
- (action
-  (setenv
-   BENCH_SKIP_BUILD
-   1
-   (run bash %{dep:../script/benchmark_vs_cljs.sh}))))
-
-(rule
  (alias runtest)
  (deps
   bench_ocaml.exe
   bench_output_test.sh)
  (action
   (run bash %{dep:bench_output_test.sh} %{dep:bench_ocaml.exe})))
-
-(rule
- (alias runtest)
- (deps
-  ../script/benchmark_gate_vs_cljs_check.js
-  ../script/benchmark_gate_vs_cljs_check_test.sh)
- (action
-  (run bash %{dep:../script/benchmark_gate_vs_cljs_check_test.sh})))
 

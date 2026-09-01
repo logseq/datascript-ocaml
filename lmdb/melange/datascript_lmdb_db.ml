@@ -45,6 +45,8 @@ let create_temp () =
   incr temps_created;
   db
 
+let create_benchmark_temp = create_temp
+
 let sync _db = ()
 
 let map_for_index index db =

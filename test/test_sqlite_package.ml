@@ -168,6 +168,25 @@ let test_tave_since_attr_scan () =
   prune_tave_to_retention r2.db_after;
   Datascript_sqlite.close session
 
+let test_memory_session () =
+  let session = Datascript_sqlite.open_memory () in
+  let storage = storage_of_handle (Datascript_sqlite.storage session) in
+  let db = empty_db ~schema:[ "todo/id", indexed ] ~storage () in
+  let report =
+    transact db [ Add (Temp_id "todo-1", "todo/id", String "memory") ]
+  in
+  store ~storage report.db_after;
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "expected memory sqlite restore"
+  in
+  check_bool "memory sqlite shares index" true (db_shares_storage_index storage restored);
+  (match entity restored (Lookup_ref ("todo/id", String "memory")) with
+   | Some _ -> ()
+   | None -> failwith "expected memory sqlite entity");
+  Datascript_sqlite.close session
+
 let () =
   run "sqlite package"
     [
@@ -178,5 +197,6 @@ let () =
         ; test_case "reopen preserves data" `Quick test_reopen_preserves_data
         ; test_case "temporal views" `Quick test_temporal_views
         ; test_case "tave since attr scan" `Quick test_tave_since_attr_scan
+        ; test_case "memory session" `Quick test_memory_session
         ] )
     ]

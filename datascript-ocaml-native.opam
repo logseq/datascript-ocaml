@@ -9,6 +9,7 @@ depends: [
   "dune" {>= "3.17"}
   "datascript_ocaml" {= version}
   "lmdb"
+  "sqlite3"
   "alcotest"
   "melange-transit-native" {= "0.1.1"}
   "yojson"

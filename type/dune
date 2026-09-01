@@ -1,5 +1,5 @@
 (library
  (name datascript_types)
  (public_name datascript_ocaml.types)
- (modes native byte melange)
+ (modes native melange)
  (modules datascript_types))
