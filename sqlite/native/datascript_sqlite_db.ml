@@ -5,6 +5,7 @@ type t =
   ; db : Sqlite3.db
   ; mutable closed : bool
   ; stmts : (string, Sqlite3.stmt) Hashtbl.t
+  ; mutable sync_count : int
   }
 
 let table_name = function
@@ -73,7 +74,7 @@ let ensure_schema db =
 
 let open_path path =
   let db = Sqlite3.db_open path in
-  let t = { path; db; closed = false; stmts = Hashtbl.create 32 } in
+  let t = { path; db; closed = false; stmts = Hashtbl.create 32; sync_count = 0 } in
   apply_open_pragmas t;
   ensure_schema t;
   t
@@ -107,11 +108,14 @@ let create_temp () =
 
 let sync t =
   ensure_open t;
+  t.sync_count <- t.sync_count + 1;
   (* Cached prepared statements keep the WAL busy; drop them before checkpoint. *)
   finalize_cached_stmts t;
   exec_sql t "PRAGMA synchronous=FULL;";
   exec_sql t "PRAGMA wal_checkpoint(FULL);";
   exec_sql t "PRAGMA synchronous=NORMAL;"
+
+let sync_count t = t.sync_count
 
 let meta_get db key =
   let sql = "SELECT value FROM ds_meta WHERE key = ?;" in

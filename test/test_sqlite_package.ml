@@ -84,7 +84,6 @@ let test_reopen_preserves_data () =
     transact db [ Add (Temp_id "todo-1", "todo/id", String "persisted") ]
   in
   store ~storage report.db_after;
-  collect_garbage storage;
   Datascript_sqlite.close session;
   let session = Datascript_sqlite.open_session path in
   let storage = storage_of_handle (Datascript_sqlite.storage session) in
@@ -98,6 +97,22 @@ let test_reopen_preserves_data () =
   (match entity restored (Lookup_ref ("todo/id", String "persisted")) with
    | Some _ -> ()
    | None -> failwith "expected persisted entity after reopen");
+  Datascript_sqlite.close session
+
+let test_store_defers_checkpoint () =
+  let path = temp_db_path "datascript-sqlite-checkpoint" in
+  let session = Datascript_sqlite.open_session path in
+  let storage = storage_of_handle (Datascript_sqlite.storage session) in
+  let db = empty_db ~schema:[ "todo/id", indexed ] ~storage () in
+  let report =
+    transact db [ Add (Temp_id "todo-1", "todo/id", String "persisted") ]
+  in
+  store ~storage report.db_after;
+  check int "ordinary store does not force a checkpoint" 0
+    (Datascript_sqlite.sync_count session);
+  collect_garbage storage;
+  check int "explicit storage sync checkpoints once" 1
+    (Datascript_sqlite.sync_count session);
   Datascript_sqlite.close session
 
 let test_temporal_views () =
@@ -195,6 +210,7 @@ let () =
           test_case "storage roundtrip" `Quick test_storage_roundtrip
         ; test_case "session close blocks use" `Quick test_session_close_blocks_use
         ; test_case "reopen preserves data" `Quick test_reopen_preserves_data
+        ; test_case "store defers checkpoint" `Quick test_store_defers_checkpoint
         ; test_case "temporal views" `Quick test_temporal_views
         ; test_case "tave since attr scan" `Quick test_tave_since_attr_scan
         ; test_case "memory session" `Quick test_memory_session

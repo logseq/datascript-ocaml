@@ -24,3 +24,7 @@ let close session =
 let storage session =
   ensure_open session;
   Datascript_storage_sqlite_plugin.wrap_sqlite ~check_live:(fun () -> ensure_open session) session.sqlite
+
+let sync_count session =
+  ensure_open session;
+  Datascript_sqlite_db.sync_count session.sqlite

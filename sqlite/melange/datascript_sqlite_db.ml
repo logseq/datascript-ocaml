@@ -39,6 +39,7 @@ type t =
   { path : string
   ; mutable closed : bool
   ; impl : impl
+  ; mutable sync_count : int
   }
 
 let table_name = function
@@ -96,7 +97,7 @@ let open_path path =
   | Some opener ->
       let conn = opener path in
       ensure_schema conn;
-      { path; closed = false; impl = Remote conn }
+      { path; closed = false; impl = Remote conn; sync_count = 0 }
 
 let temps_created = ref 0
 
@@ -110,9 +111,13 @@ let close t =
 let create_temp () =
   let path = "memory:" ^ string_of_int !temps_created in
   incr temps_created;
-  { path; closed = false; impl = Memory (empty_tables ()) }
+  { path; closed = false; impl = Memory (empty_tables ()); sync_count = 0 }
 
-let sync t = ensure_open t
+let sync t =
+  ensure_open t;
+  t.sync_count <- t.sync_count + 1
+
+let sync_count t = t.sync_count
 
 let meta_get t key =
   ensure_open t;
