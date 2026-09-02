@@ -121,14 +121,26 @@ let restore (context : restore_context) storage =
   | Some db -> Some (make ~storage db)
 
 let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
+  let total_started = Platform.now_seconds () in
   let skip_store = tx_meta_skips_store tx_meta in
+  let core_started = Platform.now_seconds () in
   let report = context.transact ~tx_meta:(tx_meta_without_store_control tx_meta) conn.db tx_data in
+  let core_ms = (Platform.now_seconds () -. core_started) *. 1000.0 in
   conn.db <- report.db_after;
-  if not skip_store then
-    (match conn.storage with
-     | None -> ()
-     | Some storage -> context.store ~storage report.db_after);
+  let store_started = Platform.now_seconds () in
+  if not skip_store then (
+    match conn.storage with
+    | None -> ()
+    | Some storage -> context.store ~storage report.db_after);
+  let store_ms = (Platform.now_seconds () -. store_started) *. 1000.0 in
+  let notify_started = Platform.now_seconds () in
   notify_listeners conn report;
+  let notify_ms = (Platform.now_seconds () -. notify_started) *. 1000.0 in
+  let total_ms = (Platform.now_seconds () -. total_started) *. 1000.0 in
+  if total_ms >= 4.0 then
+    Printf.eprintf
+      "datascript.transact totalMs=%.3f coreMs=%.3f storeMs=%.3f notifyMs=%.3f ops=%d datoms=%d\n%!"
+      total_ms core_ms store_ms notify_ms (List.length tx_data) (List.length report.tx_data);
   report
 
 let reset (context : reset_context) ?(tx_meta = []) conn db =

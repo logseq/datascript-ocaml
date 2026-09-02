@@ -196,10 +196,15 @@ let flush_pending_datoms db =
   match db.pending_datoms with
   | [] -> db
   | pending ->
+    let started = Platform.now_seconds () in
     let avet attr = Schema.schema_attr_is_avet_accessible db.schema attr in
     let eavt_index, aevt_index, avet_index =
       Index.append_tx_data ~avet pending db.eavt_index db.aevt_index db.avet_index
     in
+    let elapsed_ms = (Platform.now_seconds () -. started) *. 1000.0 in
+    if elapsed_ms >= 4.0 then
+      Printf.eprintf "datascript.storage phase=append-index elapsedMs=%.3f datoms=%d\n%!"
+        elapsed_ms (List.length pending);
     { db with pending_datoms = []; eavt_index; aevt_index; avet_index }
 
 let index_db_of_db db =

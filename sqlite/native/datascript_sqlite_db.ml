@@ -23,9 +23,17 @@ let check t sql rc =
 let ensure_open t =
   if t.closed then invalid_arg ("SQLite database is closed: " ^ t.path)
 
+let now_seconds = Sys.time
+
+let log_phase phase elapsed_ms detail =
+  Printf.eprintf "datascript.sqlite phase=%s cpuMs=%.3f %s\n%!" phase elapsed_ms detail
+
 let exec_sql t sql =
   ensure_open t;
-  check t sql (Sqlite3.exec t.db sql)
+  let started = now_seconds () in
+  check t sql (Sqlite3.exec t.db sql);
+  let elapsed_ms = (now_seconds () -. started) *. 1000.0 in
+  if elapsed_ms >= 4.0 then log_phase "sql" elapsed_ms (Printf.sprintf "statement=%S" sql)
 
 (* Reuse prepared statements: build and point lookups previously prepared+finalized
    once per datom / scan, which dominated Share SQLite cost vs PSS+memory. *)
@@ -129,18 +137,30 @@ let meta_get db key =
         None)
 
 let meta_set db key value =
+  let started = now_seconds () in
   let sql = "REPLACE INTO ds_meta (key, value) VALUES (?, ?);" in
   with_cached_stmt db sql (fun stmt ->
       check db sql (Sqlite3.bind stmt 1 (Sqlite3.Data.TEXT key));
       check db sql (Sqlite3.bind_blob stmt 2 value);
-      check db sql (Sqlite3.step stmt))
+      check db sql (Sqlite3.step stmt));
+  log_phase "meta-set" ((now_seconds () -. started) *. 1000.0)
+    (Printf.sprintf "key=%s bytes=%d" key (String.length value))
 
 let with_write_txn db f =
   ensure_open db;
+  let total_started = now_seconds () in
+  let begin_started = now_seconds () in
   exec_sql db "BEGIN IMMEDIATE TRANSACTION;";
+  let begin_ms = (now_seconds () -. begin_started) *. 1000.0 in
   (try
+     let body_started = now_seconds () in
      f ();
-     exec_sql db "COMMIT;"
+     let body_ms = (now_seconds () -. body_started) *. 1000.0 in
+     let commit_started = now_seconds () in
+     exec_sql db "COMMIT;";
+     let commit_ms = (now_seconds () -. commit_started) *. 1000.0 in
+     log_phase "write-txn" ((now_seconds () -. total_started) *. 1000.0)
+       (Printf.sprintf "beginMs=%.3f bodyMs=%.3f commitMs=%.3f" begin_ms body_ms commit_ms)
    with exn ->
      (try exec_sql db "ROLLBACK;" with _ -> ());
      raise exn)
@@ -149,10 +169,20 @@ let with_write_txn db f =
    dominates. Turn sync off for the txn and restore NORMAL afterward. *)
 let with_bulk_write_txn db f =
   ensure_open db;
+  let total_started = now_seconds () in
+  let disable_started = now_seconds () in
   exec_sql db "PRAGMA synchronous=OFF;";
+  let disable_ms = (now_seconds () -. disable_started) *. 1000.0 in
   (try
+     let txn_started = now_seconds () in
      with_write_txn db f;
-     exec_sql db "PRAGMA synchronous=NORMAL;"
+     let txn_ms = (now_seconds () -. txn_started) *. 1000.0 in
+     let restore_started = now_seconds () in
+     exec_sql db "PRAGMA synchronous=NORMAL;";
+     let restore_ms = (now_seconds () -. restore_started) *. 1000.0 in
+     log_phase "bulk-write" ((now_seconds () -. total_started) *. 1000.0)
+       (Printf.sprintf "disableSyncMs=%.3f txnMs=%.3f restoreSyncMs=%.3f"
+          disable_ms txn_ms restore_ms)
    with exn ->
      (try exec_sql db "PRAGMA synchronous=NORMAL;" with _ -> ());
      raise exn)
@@ -170,8 +200,11 @@ let put_index_txn index db key value =
 let put_index_chunk_size = 64
 
 let put_index_entries_txn index db entries =
+  let started = now_seconds () in
   match entries with
-  | [] -> ()
+  | [] ->
+    log_phase "index-entries" ((now_seconds () -. started) *. 1000.0)
+      (Printf.sprintf "index=%s rows=0" (table_name index))
   | _ ->
     let table = table_name index in
     let rec loop = function
@@ -204,7 +237,9 @@ let put_index_entries_txn index db entries =
           check db sql (Sqlite3.step stmt));
         loop rest
     in
-    loop entries
+    loop entries;
+    log_phase "index-entries" ((now_seconds () -. started) *. 1000.0)
+      (Printf.sprintf "index=%s rows=%d" (table_name index) (List.length entries))
 
 let remove_index_txn index db key =
   let sql = Printf.sprintf "DELETE FROM %s WHERE key = ?;" (table_name index) in
