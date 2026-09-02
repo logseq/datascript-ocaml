@@ -1498,8 +1498,11 @@ let apply_tx context tx_ops db =
                        same_tx_pieces
                    in
                    let from_db =
-                     context.existing_entity_attr_datoms db d.e d.a
-                     |> List.filter (fun ex -> not (retracted_in_tx ex))
+                     if d.e > input_db.max_eid then
+                       []
+                     else
+                       context.existing_entity_attr_datoms db d.e d.a
+                       |> List.filter (fun ex -> not (retracted_in_tx ex))
                    in
                    let from_acc =
                      same_tx_pieces
