@@ -1104,7 +1104,11 @@ let vars_of_clause = Query.vars_of_clause
 let vars_of_branch = Query.vars_of_branch
 
 let parse_find_form context ?(defer_pull_patterns = false) ?default_pull_db ?pull_db_for_source form =
-  let default_pull_db = Option.value default_pull_db ~default:(context.empty_db ()) in
+  let default_pull_db () =
+    match default_pull_db with
+    | Some db -> db
+    | None -> context.empty_db ()
+  in
   let pull_db_for_source = Option.value pull_db_for_source ~default:(fun _ -> context.empty_db ()) in
   match form with
   | QueryFormSymbol symbol -> Find_var (find_query_symbol_name symbol)
@@ -1117,7 +1121,7 @@ let parse_find_form context ?(defer_pull_patterns = false) ?default_pull_db ?pul
        let var = query_symbol_name var in
        if defer_pull_patterns
        then Find_pull_form (var, pattern)
-       else Find_pull (var, context.parse_pull_pattern default_pull_db pattern)
+       else Find_pull (var, context.parse_pull_pattern (default_pull_db ()) pattern)
      | Some [ QueryFormSymbol "pull"; QueryFormSymbol source; QueryFormSymbol var; QueryFormSymbol pattern_var ]
        when is_query_source_symbol source && is_query_input_symbol pattern_var && pattern_var <> "*" ->
        Find_pull_source_var (query_source_name source, query_symbol_name var, query_input_name pattern_var)

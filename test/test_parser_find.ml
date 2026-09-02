@@ -10,6 +10,13 @@ let int value = QueryFormInt value
 let vec forms = QueryFormVector forms
 let list forms = QueryFormList forms
 
+let count_lmdb_temp_files () =
+  Sys.readdir (Filename.get_temp_dir_name ())
+  |> Array.fold_left
+       (fun count name ->
+         if String.starts_with ~prefix:"datascript_lmdb" name then count + 1 else count)
+       0
+
 let test_parser_find__test_parse_find () =
   assert_equal "find relation" (Return_relation, [ Find_var "a"; Find_var "b" ]) (Parser.parse_find (vec [ sym "?a"; sym "?b" ]));
   assert_equal
@@ -66,8 +73,15 @@ let test_parser_find__test_parse_find_elements () =
     (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int 1); QSource "x" ]) ])
     (Parser.parse_find (vec [ list [ sym "count"; sym "?b"; int 1; sym "$x" ]; sym "." ]))
 
+let test_parser_find__plain_find_does_not_allocate_a_pull_database () =
+  let before = count_lmdb_temp_files () in
+  ignore (Parser.parse_find (vec [ sym "?a"; sym "?b" ]));
+  let after = count_lmdb_temp_files () in
+  assert_equal "plain find must not allocate a temporary pull database" before after
+
 let () =
   test_parser_find__test_parse_find ();
   test_parser_find__test_parse_aggregate ();
   test_parser_find__test_parse_custom_aggregates ();
-  test_parser_find__test_parse_find_elements ()
+  test_parser_find__test_parse_find_elements ();
+  test_parser_find__plain_find_does_not_allocate_a_pull_database ()
