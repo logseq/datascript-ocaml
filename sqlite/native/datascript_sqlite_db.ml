@@ -6,6 +6,7 @@ type t =
   ; mutable closed : bool
   ; stmts : (string, Sqlite3.stmt) Hashtbl.t
   ; mutable sync_count : int
+  ; mutable full_index_scan_count : int
   }
 
 let table_name = function
@@ -82,7 +83,15 @@ let ensure_schema db =
 
 let open_path path =
   let db = Sqlite3.db_open path in
-  let t = { path; db; closed = false; stmts = Hashtbl.create 32; sync_count = 0 } in
+  let t =
+    { path
+    ; db
+    ; closed = false
+    ; stmts = Hashtbl.create 32
+    ; sync_count = 0
+    ; full_index_scan_count = 0
+    }
+  in
   apply_open_pragmas t;
   ensure_schema t;
   t
@@ -124,6 +133,7 @@ let sync t =
   exec_sql t "PRAGMA synchronous=NORMAL;"
 
 let sync_count t = t.sync_count
+let full_index_scan_count t = t.full_index_scan_count
 
 let meta_get db key =
   let sql = "SELECT value FROM ds_meta WHERE key = ?;" in
@@ -264,6 +274,7 @@ let get_index index db key =
         None)
 
 let fold_index index db f =
+  db.full_index_scan_count <- db.full_index_scan_count + 1;
   let sql = Printf.sprintf "SELECT key, value FROM %s ORDER BY key;" (table_name index) in
   with_cached_stmt db sql (fun stmt ->
       let rec loop () =

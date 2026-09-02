@@ -115,6 +115,27 @@ let test_store_defers_checkpoint () =
     (Datascript_sqlite.sync_count session);
   Datascript_sqlite.close session
 
+let test_retention_without_tx_instants_avoids_full_index_scan () =
+  let path = temp_db_path "datascript-sqlite-retention-scan" in
+  let session = Datascript_sqlite.open_session path in
+  let storage = storage_of_handle (Datascript_sqlite.storage session) in
+  let db = empty_db ~schema:[ "todo/id", indexed ] ~storage () in
+  let seeded =
+    transact db [ Add (Temp_id "todo-1", "todo/id", String "todo-1") ]
+  in
+  store ~storage seeded.db_after;
+  let restored =
+    match restore storage with
+    | Some db -> db
+    | None -> failwith "expected retention test restore"
+  in
+  let scans_before = Datascript_sqlite.full_index_scan_count session in
+  ignore (transact restored [ Add (Temp_id "todo-2", "todo/id", String "todo-2") ]);
+  let scans_after = Datascript_sqlite.full_index_scan_count session in
+  check int "ordinary transaction does not scan the complete EAVT index" 0
+    (scans_after - scans_before);
+  Datascript_sqlite.close session
+
 let test_temporal_views () =
   let path = temp_db_path "datascript-sqlite-temporal" in
   let session = Datascript_sqlite.open_session path in
@@ -211,6 +232,8 @@ let () =
         ; test_case "session close blocks use" `Quick test_session_close_blocks_use
         ; test_case "reopen preserves data" `Quick test_reopen_preserves_data
         ; test_case "store defers checkpoint" `Quick test_store_defers_checkpoint
+        ; test_case "retention skips full scan without txInstant" `Quick
+            test_retention_without_tx_instants_avoids_full_index_scan
         ; test_case "temporal views" `Quick test_temporal_views
         ; test_case "tave since attr scan" `Quick test_tave_since_attr_scan
         ; test_case "memory session" `Quick test_memory_session

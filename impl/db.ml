@@ -724,13 +724,8 @@ let instant_millis = function
   | Instant ms -> Some ms
   | _ -> None
 
-(** Resolve the latest transaction whose [:db/txInstant] is <= [instant]. *)
-let resolve_tx_at_instant instant db =
-  let target =
-    match instant with
-    | Instant ms -> ms
-    | _ -> invalid_arg "as_of_instant requires Instant value"
-  in
+(** Resolve the latest transaction whose [:db/txInstant] is <= [target]. *)
+let resolve_tx_at_millis_in_datoms target datoms =
   let best = ref None in
   let consider datom =
     match instant_millis datom.v with
@@ -741,21 +736,30 @@ let resolve_tx_at_instant instant db =
        | Some _ -> ())
     | _ -> ()
   in
-  (match primary_attr_datoms db Aevt "db/txInstant" with
-   | [] ->
-     List.iter
-       (fun d -> if d.a = "db/txInstant" then consider d)
-       (raw_index_datoms_list db Eavt)
-   | datoms -> List.iter consider datoms);
+  List.iter consider datoms;
   match !best with
-  | Some (tx, _) -> tx
-  | None ->
-    invalid_arg "as_of_instant: no :db/txInstant at or before the given Instant"
+  | Some (tx, _) -> Some tx
+  | None -> None
+
+(** Resolve the latest transaction whose [:db/txInstant] is <= [instant]. *)
+let resolve_tx_at_instant instant db =
+  let target =
+    match instant with
+    | Instant ms -> ms
+    | _ -> invalid_arg "as_of_instant requires Instant value"
+  in
+  let datoms =
+    match primary_attr_datoms db Aevt "db/txInstant" with
+    | [] ->
+      raw_index_datoms_list db Eavt
+      |> List.filter (fun d -> d.a = "db/txInstant")
+    | datoms -> datoms
+  in
+  match resolve_tx_at_millis_in_datoms target datoms with
+  | Some tx -> tx
+  | None -> invalid_arg "as_of_instant: no :db/txInstant at or before the given Instant"
 
 let as_of_instant instant db = as_of (resolve_tx_at_instant instant db) db
-
-let try_resolve_tx_at_instant instant db =
-  try Some (resolve_tx_at_instant instant db) with Invalid_argument _ -> None
 
 (** Lowest tx still inside the TAVE retention window, if resolvable via txInstant. *)
 let retention_tx_lo db =
@@ -763,8 +767,12 @@ let retention_tx_lo db =
   | 0 -> None
   | days ->
     let now_ms = int_of_float (Platform.now_seconds () *. 1000.) in
-    let cutoff = Instant (now_ms - (days * millis_per_day)) in
-    try_resolve_tx_at_instant cutoff db
+    let cutoff_ms = now_ms - (days * millis_per_day) in
+    (* Automatic retention must stay cheap for databases that do not stamp
+       transactions. The public instant lookup keeps its compatibility fallback,
+       but pruning only uses the indexed AEVT prefix and skips when it is empty. *)
+    primary_attr_datoms db Aevt "db/txInstant"
+    |> resolve_tx_at_millis_in_datoms cutoff_ms
 
 let prune_tave_to_retention db =
   match retention_tx_lo db with

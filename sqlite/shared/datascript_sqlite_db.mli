@@ -7,6 +7,7 @@ val open_path : string -> t
 val close : t -> unit
 val sync : t -> unit
 val sync_count : t -> int
+val full_index_scan_count : t -> int
 
 val meta_get : t -> string -> string option
 val meta_set : t -> string -> string -> unit

@@ -28,3 +28,7 @@ let storage session =
 let sync_count session =
   ensure_open session;
   Datascript_sqlite_db.sync_count session.sqlite
+
+let full_index_scan_count session =
+  ensure_open session;
+  Datascript_sqlite_db.full_index_scan_count session.sqlite
