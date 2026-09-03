@@ -154,6 +154,12 @@ module Db : sig
   val since : tx -> db -> db
   val history : db -> db
   val is_history : db -> bool
+  val history_datoms_since : tx -> db -> datom list
+  [@@ocaml.doc
+    "[history_datoms_since checkpoint db] is the history log after [checkpoint], \
+     exclusive ([tx > checkpoint]), including retractions, in TAVE order. Same as \
+     scanning [history (since checkpoint db)] on [Tave]. This is the sync/delta \
+     API; do not reimplement by querying [history] with application tx metadata."]
   val resolve_tx_at_instant : value -> db -> tx
   val purge_history_before : tx -> db -> db * datom list
   val set_tave_retention_days : int -> unit
@@ -410,6 +416,12 @@ val as_of_instant : value -> db -> db
 val since : tx -> db -> db
 val history : db -> db
 val is_history : db -> bool
+val history_datoms_since : tx -> db -> datom list
+[@@ocaml.doc
+  "[history_datoms_since checkpoint db] is the history log after [checkpoint], \
+   exclusive ([tx > checkpoint]), including retractions, in TAVE order. Same as \
+   scanning [history (since checkpoint db)] on [Tave]. This is the sync/delta \
+   API; do not reimplement by querying [history] with application tx metadata."]
 val resolve_tx_at_instant : value -> db -> tx
 val purge_history_before : tx -> db -> db * datom list
 val set_tave_retention_days : int -> unit
@@ -1024,7 +1036,6 @@ val fold_datoms :
   ?tx:tx ->
   unit ->
   'acc
-val history_datoms_since : tx -> db -> datom list
 val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val find_datom : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
 val find_datom_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option

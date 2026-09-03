@@ -341,6 +341,39 @@ let test_history_datoms_since_returns_only_new_assertions_and_retractions () =
           (fun datom -> datom.a = "name" && not datom.added)
           delta))
 
+let test_history_datoms_since_is_exclusive_and_empty_at_head () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "name", String "Alice") ]
+      (empty_db ~schema:[ "name", unique_identity ] ())
+  in
+  let checkpoint = basis_tx db in
+  check_int "no delta at the current basis" 0 (List.length (history_datoms_since checkpoint db));
+  let db = db_with [ Add (Entity_id 1, "name", String "Alicia") ] db in
+  let delta = history_datoms_since checkpoint db in
+  check_int "checkpoint tx itself is excluded" 0
+    (List.length (List.filter (fun datom -> datom.tx <= checkpoint) delta));
+  let txs = List.map (fun datom -> datom.tx) delta in
+  check_bool "TAVE order is non-decreasing"
+    true
+    (List.sort compare txs = txs)
+
+let test_history_datoms_since_keeps_cardinality_many () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "tag", String "a") ]
+      (empty_db ~schema:[ "tag", many ] ())
+  in
+  let checkpoint = basis_tx db in
+  let db = db_with [ Add (Entity_id 1, "tag", String "b") ] db in
+  let added =
+    history_datoms_since checkpoint db
+    |> List.filter (fun datom -> datom.added)
+    |> List.map (fun datom -> match datom.v with String s -> s | _ -> "")
+    |> List.sort compare
+  in
+  check_string_list "new many-value is in the delta" [ "b" ] added
+
 let () =
   run "tx history"
     [
@@ -368,5 +401,9 @@ let () =
         ; test_case "public api aliases" `Quick test_public_api_aliases
         ; test_case "history datoms since checkpoint" `Quick
             test_history_datoms_since_returns_only_new_assertions_and_retractions
+        ; test_case "history datoms since is exclusive" `Quick
+            test_history_datoms_since_is_exclusive_and_empty_at_head
+        ; test_case "history datoms since keeps cardinality many" `Quick
+            test_history_datoms_since_keeps_cardinality_many
         ] )
     ]

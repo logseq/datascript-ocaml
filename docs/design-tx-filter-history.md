@@ -52,6 +52,10 @@ Public API (matches dbval.core):
 - `since_t db` → `since_tx`
 - `history db` → `{ history = true }`
 - `temporal_view db` → read-only guard (as-of / since / history)
+- `history_datoms_since checkpoint db` → TAVE history log with `tx > checkpoint`
+  (retractions included). Composition of the view APIs:
+  `datoms (history (since checkpoint db)) Tave`. This is the sync/delta helper;
+  callers should not re-query `history` with application tx metadata.
 
 Transact rejects temporal views with dbval-compatible error message.
 

@@ -937,6 +937,7 @@ let datoms_list db index ?e ?a ?v ?tx () =
   Db_access_impl.datoms_list db index ?e ?a ?v ?tx ()
 
 let history_datoms_since checkpoint db =
+  (* PR 3 temporal views: exclusive since + history (retractions kept), TAVE order. *)
   datoms_list (history (since checkpoint db)) Tave ()
 
 let find_datom = Db_access_impl.find_datom
@@ -3192,6 +3193,7 @@ let db_seek_datoms_ref = seek_datoms_ref
 let db_rseek_datoms = rseek_datoms
 let db_rseek_datoms_ref = rseek_datoms_ref
 let db_index_range = index_range
+let db_history_datoms_since = history_datoms_since
 
 module Db = struct
   include Db_impl
@@ -3206,4 +3208,5 @@ module Db = struct
   let rseek_datoms = db_rseek_datoms
   let rseek_datoms_ref = db_rseek_datoms_ref
   let index_range = db_index_range
+  let history_datoms_since = db_history_datoms_since
 end
