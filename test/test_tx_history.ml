@@ -322,6 +322,25 @@ let test_public_api_aliases () =
   check_bool "is_history mirrors history flag" true (is_history (history db));
   check_bool "is_history false on as_of" false (is_history past)
 
+let test_history_datoms_since_returns_only_new_assertions_and_retractions () =
+  let db =
+    db_with
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]
+      (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
+  in
+  let checkpoint = basis_tx db in
+  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Retract (Entity_id 1, "name", Some (String "Alice")) ] db in
+  let delta = history_datoms_since checkpoint db in
+  check_int "replacement and deletion include three history datoms" 3 (List.length delta);
+  check_int "all returned datoms are newer than the checkpoint" 3
+    (List.length (List.filter (fun datom -> datom.tx > checkpoint) delta));
+  check_int "the deletion is retained" 1
+    (List.length
+       (List.filter
+          (fun datom -> datom.a = "name" && not datom.added)
+          delta))
+
 let () =
   run "tx history"
     [
@@ -347,5 +366,7 @@ let () =
         ; test_case "as_of_instant and purge_history_before" `Quick
             test_as_of_instant_and_purge_history_before
         ; test_case "public api aliases" `Quick test_public_api_aliases
+        ; test_case "history datoms since checkpoint" `Quick
+            test_history_datoms_since_returns_only_new_assertions_and_retractions
         ] )
     ]

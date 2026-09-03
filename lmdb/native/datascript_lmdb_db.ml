@@ -5,7 +5,7 @@ type read_session =
   { txn : Mdb.txn
   }
 
-type lmdb_env_profile = Default | Benchmark
+type lmdb_env_profile = Default | Temporary | Benchmark
 
 type t =
   { path : string
@@ -23,6 +23,10 @@ type t =
 (* Address-space ceiling for no_subdir file envs. Unused pages are not
    resident; keep headroom for million-entity index files (~1GiB+). *)
 let default_map_size = 8 * 1024 * 1024 * 1024
+(* Temporary connections are short-lived and usually tiny. Reserving the
+   persistent-store ceiling for every test connection can exhaust filesystem
+   or container allocation limits even when the databases contain no data. *)
+let temp_map_size = 16 * 1024 * 1024
 let lock_path path = path ^ "-lock"
 
 let remove_path path =
@@ -32,12 +36,16 @@ let remove_path path =
 
 let env_flags = function
   | Default -> Env.Flags.no_subdir
+  | Temporary ->
+      (* A temporary environment is owned by one process and must not consume
+         a system-wide LMDB lock table. *)
+      Env.Flags.(no_subdir + no_lock)
   | Benchmark ->
       (* Match in-memory benchmark backends: skip fsync on commit/close. *)
-      Env.Flags.(no_subdir + no_sync + no_meta_sync + write_map)
+      Env.Flags.(no_subdir + no_lock + no_sync + no_meta_sync + write_map)
 
-let open_env db_path profile =
-  Env.(create Rw ~flags:(env_flags profile) ~map_size:default_map_size ~max_maps:8 db_path)
+let open_env ?(map_size = default_map_size) db_path profile =
+  Env.(create Rw ~flags:(env_flags profile) ~map_size ~max_maps:8 db_path)
 
 let open_named_map env name =
   try Map.open_existing Nodup ~key:Conv.string ~value:Conv.string ~name env
@@ -45,8 +53,8 @@ let open_named_map env name =
 
 (* Open (or create) without deleting an existing env. Callers that want a fresh
    file must call [remove_path] first — same contract as SQLite [open_path]. *)
-let open_db path profile =
-  let env = open_env path profile in
+let open_db ?map_size path profile =
+  let env = open_env ?map_size path profile in
   { path; env; eavt = open_named_map env "ds/eavt"; aevt = open_named_map env "ds/aevt"
   ; avet = open_named_map env "ds/avet"; tave = open_named_map env "ds/tave"
   ; meta = open_named_map env "ds/meta"; profile
@@ -71,19 +79,19 @@ let close db =
     Map.close db.tave;
     Map.close db.meta;
     (match db.profile with
-     | Default -> Env.sync db.env
-     | Benchmark -> ());
+  | Default -> Env.sync db.env
+  | Temporary | Benchmark -> ());
     Env.close db.env;
     db.closed <- true)
 
 let temps_created = ref 0
 
-let create_temp ?(profile = Default) () =
+let create_temp ?(profile = Temporary) () =
   let path =
     Filename.temp_file ~temp_dir:(Filename.get_temp_dir_name ()) "datascript_lmdb" ".mdb"
   in
   remove_path path;
-  let db = open_db path profile in
+  let db = open_db ~map_size:temp_map_size path profile in
   Gc.finalise
     (fun lmdb ->
       if not lmdb.closed then close lmdb)
@@ -98,7 +106,7 @@ let sync db =
   ensure_open db;
   match db.profile with
   | Default -> Env.sync db.env
-  | Benchmark -> ()
+  | Temporary | Benchmark -> ()
 
 let map_for_index index db =
   match index with

@@ -1,6 +1,6 @@
 open Datascript_types
 
-type lmdb_env_profile = Default | Benchmark
+type lmdb_env_profile = Default | Temporary | Benchmark
 
 type t
 

@@ -870,8 +870,14 @@ let persist_transact ~tx_meta db ?(purged_datoms = []) () =
 let transact_report ?(tx_meta = []) db tx_ops =
   if Db_impl.temporal_view db then
     invalid_arg "Cannot transact against an as-of/since/history database value";
+  let total_started = Platform.now_seconds () in
+  let snapshot_started = Platform.now_seconds () in
   let db_before = snapshot_db db in
+  let snapshot_ms = (Platform.now_seconds () -. snapshot_started) *. 1000.0 in
+  let apply_started = Platform.now_seconds () in
   let db_after, tempids, tx_data, purged_datoms = apply_tx tx_ops db in
+  let apply_ms = (Platform.now_seconds () -. apply_started) *. 1000.0 in
+  let stamp_started = Platform.now_seconds () in
   let db_after, tx_data =
     match List.assoc_opt "db/txInstant" tx_meta with
     | None -> db_after, tx_data
@@ -881,8 +887,16 @@ let transact_report ?(tx_meta = []) db tx_ops =
       Db_impl.refresh_indexes_with_tx_data db_after [ stamped ], tx_data @ [ stamped ]
     | Some _ -> invalid_arg ":db/txInstant must be an Instant value"
   in
+  let stamp_ms = (Platform.now_seconds () -. stamp_started) *. 1000.0 in
   (* Amortized TAVE retention prune (rolling window; default 30 days). *)
+  let prune_started = Platform.now_seconds () in
   (try Db_impl.prune_tave_to_retention db_after with _ -> ());
+  let prune_ms = (Platform.now_seconds () -. prune_started) *. 1000.0 in
+  let total_ms = (Platform.now_seconds () -. total_started) *. 1000.0 in
+  if total_ms >= 4.0 then
+    Printf.eprintf
+      "datascript.transact-core totalMs=%.3f snapshotMs=%.3f applyMs=%.3f stampMs=%.3f pruneMs=%.3f\n%!"
+      total_ms snapshot_ms apply_ms stamp_ms prune_ms;
   { db_before; db_after; tx_data; tempids; tx_meta; purged_datoms }
 
 let transact ?(tx_meta = []) db tx_ops =
@@ -921,6 +935,9 @@ let fold_datoms = Db_access_impl.fold_datoms
 let datoms_ref = Db_access_impl.datoms_ref
 let datoms_list db index ?e ?a ?v ?tx () =
   Db_access_impl.datoms_list db index ?e ?a ?v ?tx ()
+
+let history_datoms_since checkpoint db =
+  datoms_list (history (since checkpoint db)) Tave ()
 
 let find_datom = Db_access_impl.find_datom
 let find_datom_ref = Db_access_impl.find_datom_ref
