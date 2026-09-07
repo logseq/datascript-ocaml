@@ -21,3 +21,5 @@
 
 (package
  (name datascript-ocaml-melange-sqlite))
+
+(package (name datascript-ocaml-lg))

@@ -1,0 +1,10 @@
+(library
+ (name datascript_lg)
+ (public_name datascript-ocaml-lg)
+ (modes native melange)
+ (libraries datascript lg.edn-backend))
+
+(install
+ (package datascript-ocaml-lg)
+ (section lib)
+ (files (datascript/api.cljc as sources/datascript/api.cljc)))

@@ -11,3 +11,4 @@ tmp/
 /_deps/
 /vendor/
 _bench_data/
+/.lg-cache/
