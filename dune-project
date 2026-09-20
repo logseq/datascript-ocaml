@@ -14,3 +14,7 @@
 
 (package
  (name datascript-ocaml-melange))
+
+(package
+ (name datascript-ocaml-lg)
+ (synopsis "Typed LG application APIs for DataScript"))
