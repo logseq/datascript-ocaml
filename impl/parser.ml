@@ -73,7 +73,7 @@ let read_edn input =
     | _ -> false
   in
   let is_delimiter = function
-    | '[' | ']' | '(' | ')' | '{' | '}' | '"' | '\'' -> true
+    | '[' | ']' | '(' | ')' | '{' | '}' | '"' -> true
     | c -> is_whitespace c
   in
   let rec skip index =

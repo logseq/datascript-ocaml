@@ -726,12 +726,39 @@ let apply_tx context tx_ops db =
     if entity.db_id = None && has_only_forward_nested_attrs entity then
       apply_nested_first_entity_map (datoms, max_eid, tempids, entity_tempids, tx_data) entity
     else
-      let e, attrs, datoms, max_eid, tempids, tx_data =
+      (* Upsert probes resolve non-strictly against the pre-entity datoms:
+         unresolvable refs keep their raw form and simply never match. Strict
+         resolution happens per attr at add time, matching upstream's
+         sequential [:db/add] resolution order. *)
+      let probe_attrs =
+        let probe_attrs, _, _ =
+          List.fold_left
+            (fun (probe_attrs, max_eid, tempids) (attr, tx_value) ->
+              match
+                (try
+                   Some
+                     (resolve_tx_value_for_attr
+                        context.resolve_context
+                        db
+                        attr
+                        datoms
+                        tx
+                        max_eid
+                        tempids
+                        tx_value)
+                 with Invalid_argument _ -> None)
+              with
+              | Some (tx_value, max_eid, tempids) ->
+                (attr, tx_value) :: probe_attrs, max_eid, tempids
+              | None -> (attr, tx_value) :: probe_attrs, max_eid, tempids)
+            ([], max_eid, tempids)
+            entity.attrs
+        in
+        List.rev probe_attrs
+      in
+      let e, datoms, max_eid, tempids, tx_data =
         match entity.db_id with
         | Some (Temp_id tempid) ->
-          let probe_attrs, _, _ =
-            resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
-          in
           (match context.entity_unique_identity db datoms probe_attrs with
            | Some target_e ->
              let datoms, tempids, tx_data =
@@ -741,29 +768,21 @@ let apply_tx context tx_ops db =
                | Some _ -> datoms, tempids, tx_data
                | None -> datoms, remember_tempid tempids tempid target_e, tx_data
              in
-             let attrs, max_eid, tempids =
-               resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
-             in
-             target_e, attrs, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, tempids, tx_data
+             target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, tempids, tx_data
            | None ->
              let e, max_eid, tempids =
                resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid)
              in
-             let attrs, max_eid, tempids =
-               resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs
-             in
-             e, attrs, datoms, max_eid, tempids, tx_data)
+             e, datoms, max_eid, tempids, tx_data)
         | Some entity_ref ->
           let e, max_eid, tempids = resolve_entity_ref context.resolve_context db datoms tx max_eid tempids entity_ref in
-          let attrs, max_eid, tempids = resolve_entity_attrs context.resolve_context db datoms tx max_eid tempids entity.attrs in
-          context.validate_explicit_upsert_target db datoms e attrs;
-          e, attrs, datoms, max_eid, tempids, tx_data
+          context.validate_explicit_upsert_target db datoms e probe_attrs;
+          e, datoms, max_eid, tempids, tx_data
         | None ->
           let e = context.resolve_context.allocate_entity_id max_eid in
-          let attrs, max_eid, tempids = resolve_entity_attrs context.resolve_context db datoms tx e tempids entity.attrs in
-          (match context.entity_unique_identity db datoms attrs with
-           | Some e -> e, attrs, datoms, context.resolve_context.max_eid_with_entity_id max_eid e, tempids, tx_data
-           | None -> e, attrs, datoms, max_eid, tempids, tx_data)
+          (match context.entity_unique_identity db datoms probe_attrs with
+           | Some e -> e, datoms, context.resolve_context.max_eid_with_entity_id max_eid e, tempids, tx_data
+           | None -> e, datoms, context.resolve_context.max_eid_with_entity_id max_eid e, tempids, tx_data)
       in
       let entity_tempids =
         match entity.db_id with
@@ -771,7 +790,7 @@ let apply_tx context tx_ops db =
         | None -> entity_tempids
       in
       let tuple_identity_lookup_writes =
-        attrs
+        probe_attrs
         |> List.filter_map (function
           | attr, One_value value when context.is_tuple_attr db attr && context.is_unique_identity db attr ->
             (match context.resolve_context.entid datoms attr value with
@@ -851,6 +870,9 @@ let apply_tx context tx_ops db =
           end
       in
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes) (attr, tx_value) =
+        let tx_value, max_eid, tempids =
+          resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
+        in
         match tx_value with
         | One_value (List values | Vector values) when attr_expands_collection context.resolve_context db attr ->
           List.fold_left
@@ -878,7 +900,7 @@ let apply_tx context tx_ops db =
             nested_entities
       in
       let datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes =
-        List.fold_left apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, [], []) attrs
+        List.fold_left apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, [], []) entity.attrs
       in
       let tuple_sources = List.sort_uniq compare tuple_sources in
       let datoms, tx_data =
