@@ -53,6 +53,10 @@ let remember_current_tx_alias tempids tx alias =
 exception Unresolved_lookup_ref of attr * value
 
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
+  | Entity_id e when e < 0 ->
+    (* upstream datascript: a negative integer :db/id is a tempid *)
+    resolve_entity_ref context db datoms tx max_eid tempids
+      (Temp_id (string_of_int e))
   | Entity_id e ->
     let e = context.validate_entity_id e in
     e, context.max_eid_with_entity_id max_eid e, tempids
@@ -170,6 +174,9 @@ let ref_attr_for_value_resolution context db attr =
 let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
   match ref_attr_for_value_resolution context db attr, entity_ref_of_ref_attr_value value with
   | Some _, Some entity_ref ->
+    (match value with
+     | Ref e -> ignore (context.validate_entity_id e)
+     | _ -> ());
     let entity_id, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
     Ref entity_id, max_eid, tempids
   | Some _, None -> invalid_arg "Expected number or lookup ref for entity id"
@@ -361,68 +368,58 @@ let apply_tx context tx_ops db =
          db.schema
          schema_datoms
   in
+  (* pre-scan entity positions only (db_id, add/retract entity, raw datom e)
+     so tempid allocation cannot collide with explicit entity ids; refs in
+     value positions are deliberately excluded — upstream datascript resolves
+     tempids sequentially and lets forward value refs point at eids minted
+     later in the same tx *)
   let rec max_explicit_entity_ref max_eid = function
+    | Entity_id e when e < 0 -> max_eid
     | Entity_id e -> context.resolve_context.max_eid_with_entity_id max_eid e
-    | Lookup_ref (_, value) -> max_explicit_value max_eid value
+    | Lookup_ref (_, value) -> max_explicit_lookup_value max_eid value
     | _ -> max_eid
-  and max_explicit_value max_eid = function
+  and max_explicit_lookup_value max_eid = function
     | Ref entity_id -> context.resolve_context.max_eid_with_entity_id max_eid entity_id
     | Ref_to entity_ref -> max_explicit_entity_ref max_eid entity_ref
-    | List values | Vector values ->
-      List.fold_left max_explicit_value max_eid values
-    | Map entries ->
-      List.fold_left
-        (fun max_eid (key, value) ->
-          max_explicit_value (max_explicit_value max_eid key) value)
-        max_eid
-        entries
-    | Set values ->
-      List.fold_left max_explicit_value max_eid values
+    | List values | Vector values | Set values ->
+      List.fold_left max_explicit_lookup_value max_eid values
     | Tuple values ->
       List.fold_left
         (fun max_eid -> function
           | None -> max_eid
-          | Some value -> max_explicit_value max_eid value)
+          | Some value -> max_explicit_lookup_value max_eid value)
         max_eid
         values
+    | Map entries ->
+      List.fold_left
+        (fun max_eid (key, value) ->
+          max_explicit_lookup_value (max_explicit_lookup_value max_eid key) value)
+        max_eid
+        entries
     | _ -> max_eid
   and max_explicit_tx_value max_eid = function
-    | One_value value -> max_explicit_value max_eid value
-    | Many_values values -> List.fold_left max_explicit_value max_eid values
     | One_entity entity -> max_explicit_tx_entity max_eid entity
     | Many_entities entities -> List.fold_left max_explicit_tx_entity max_eid entities
+    | _ -> max_eid
   and max_explicit_tx_entity max_eid entity =
+    (* a db_id only reserves an entity id when the entity map materializes
+       datoms; an attribute-less nested entity is just a ref wrapper *)
     let max_eid =
-      match entity.db_id with
-      | Some entity_ref -> max_explicit_entity_ref max_eid entity_ref
-      | None -> max_eid
+      match entity.db_id, entity.attrs with
+      | Some entity_ref, _ :: _ -> max_explicit_entity_ref max_eid entity_ref
+      | _ -> max_eid
     in
     entity.attrs
     |> List.fold_left (fun max_eid (_, tx_value) -> max_explicit_tx_value max_eid tx_value) max_eid
   and max_explicit_tx_op max_eid = function
-    | Add (entity_ref, _, value) ->
-      let max_eid = max_explicit_entity_ref max_eid entity_ref in
-      max_explicit_value max_eid value
-    | Retract (entity_ref, _, value) ->
-      let max_eid = max_explicit_entity_ref max_eid entity_ref in
-      (match value with
-       | Some value -> max_explicit_value max_eid value
-       | None -> max_eid)
+    | Add (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
+    | Retract (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
     | RetractEntity entity_ref | RetractAttr (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
-    | CompareAndSet (entity_ref, _, expected, new_value) ->
-      let max_eid = max_explicit_entity_ref max_eid entity_ref in
-      let max_eid =
-        match expected with
-        | Some expected -> max_explicit_value max_eid expected
-        | None -> max_eid
-      in
-      max_explicit_value max_eid new_value
+    | CompareAndSet (entity_ref, _, _, _) -> max_explicit_entity_ref max_eid entity_ref
     | Entity entity -> max_explicit_tx_entity max_eid entity
-    | Raw_datom d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v
+    | Raw_datom d -> context.resolve_context.max_eid_with_entity_id max_eid d.e
     | InstallTxFn (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
-    | CallIdent (entity_ref, args) ->
-      let max_eid = max_explicit_entity_ref max_eid entity_ref in
-      List.fold_left max_explicit_value max_eid args
+    | CallIdent (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
     | Call _ -> max_eid
   in
   let initial_max_eid = List.fold_left max_explicit_tx_op db.max_eid tx_ops in
@@ -430,6 +427,7 @@ let apply_tx context tx_ops db =
   let deferred_ops = ref [] in
   let mark_entity_tempid entity_tempids = function
     | Temp_id tempid -> tempid :: entity_tempids
+    | Entity_id e when e < 0 -> string_of_int e :: entity_tempids
     | _ -> entity_tempids
   in
   let validate_tempid_usage tempids entity_tempids =
@@ -764,8 +762,15 @@ let apply_tx context tx_ops db =
         in
         List.rev probe_attrs
       in
-      let e, datoms, max_eid, tempids, tx_data =
+      let db_id_ref =
         match entity.db_id with
+        | Some (Entity_id e) when e < 0 ->
+          (* upstream datascript: a negative integer :db/id is a tempid *)
+          Some (Temp_id (string_of_int e))
+        | db_id -> db_id
+      in
+      let e, datoms, max_eid, tempids, tx_data =
+        match db_id_ref with
         | Some (Temp_id tempid) ->
           (match context.entity_unique_identity db datoms probe_attrs with
            | Some target_e ->
@@ -793,7 +798,7 @@ let apply_tx context tx_ops db =
            | None -> e, datoms, context.resolve_context.max_eid_with_entity_id max_eid e, tempids, tx_data)
       in
       let entity_tempids =
-        match entity.db_id with
+        match db_id_ref with
         | Some entity_ref -> mark_entity_tempid entity_tempids entity_ref
         | None -> entity_tempids
       in
