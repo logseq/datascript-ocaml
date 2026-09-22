@@ -352,6 +352,7 @@ let transact_resolve_context : Transact_impl.context =
   ; is_reverse_ref
   ; reverse_ref
   ; cardinality
+  ; is_unique_identity
   ; max_eid_with_entity_id = Db_impl.max_eid_with_entity_id
   ; max_eid_in_value
   }
