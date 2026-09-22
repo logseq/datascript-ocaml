@@ -70,8 +70,41 @@ let test_native_backend_converts_edn_values () =
       ] -> ()
   | _ -> failwith "native melange-transit backend should convert EDN maps to Transit maps"
 
+let test_native_backend_read_cache_wraps_at_max_entries () =
+  (* transit-js caches both writes and reads; both caches wrap at
+     44*44 = 1936 entries, so ^XX cache codes reuse slots. Encoding
+     1936+64 distinct cacheable keywords then repeating the last one
+     emits ^1C — index 1999 wrapped to slot 63, which the read cache
+     must resolve to the overwritten entry, not the original.
+     melange-transit 0.1.0 indexed the read cache by Hashtbl.length
+     without wrapping and decoded it as the stale number-63. *)
+  let max_cache_entries = 44 * 44 in
+  let count = max_cache_entries + 64 in
+  let last = count - 1 in
+  let kw i = Json.Keyword (Printf.sprintf "long.namespace.attr/number-%d" i) in
+  let payload = Json.Array (List.init count kw @ [ kw last ]) in
+  match Json.of_string (Json.to_string payload) with
+  | Json.Array values ->
+    let decode i =
+      match List.nth values i with
+      | Json.Keyword s -> s
+      | _ -> failf "entry %d should decode to a keyword" i
+    in
+    List.iteri
+      (fun i _ ->
+        let expected = Printf.sprintf "long.namespace.attr/number-%d" i in
+        let actual = decode i in
+        if not (String.equal expected actual) then
+          failf "entry %d: expected %S, got %S" i expected actual)
+      (List.init count Fun.id);
+    expect_equal "wrapped cache reference"
+      (Printf.sprintf "long.namespace.attr/number-%d" last)
+      (decode count)
+  | _ -> failwith "expected a transit array"
+
 let () =
   test_native_backend_decodes_logseq_storage_shape ();
   test_native_backend_writes_transit_json ();
   test_native_backend_roundtrips_verbose_storage_keys ();
-  test_native_backend_converts_edn_values ()
+  test_native_backend_converts_edn_values ();
+  test_native_backend_read_cache_wraps_at_max_entries ()

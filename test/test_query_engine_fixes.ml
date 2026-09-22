@@ -543,6 +543,53 @@ let test_entity_map_lookup_ref_never_resolves_raises () =
      then
        failf "unexpected error message: %s" msg)
 
+let test_retract_cleans_duplicate_avet_tables () =
+  (* Bug 5: datoms that compare equal under eavt (same fact stored twice, as
+     produced by a full index rebuild over restore) are kept out of the PSet
+     indexes in the duplicate_* tables — and find_avet_exact consults
+     duplicate_avet_by_attr. Retraction removed the fact from the three PSets
+     but left the duplicate copy behind, so [:block/uuid u] still resolved
+     after the entity was retracted. Upstream retracts the fact entirely and
+     the lookup ref raises "Nothing found for entity id". *)
+  let u1 = "11111111-1111-1111-1111-111111111111" in
+  let uuid_datom =
+    { e = 1; a = "block/uuid"; v = Uuid u1; tx = 1; added = true }
+  in
+  let db =
+    init_db ~schema:(block_schema ())
+      [ uuid_datom
+      ; { e = 1; a = "block/title"; v = String "Page"; tx = 1; added = true }
+      ; uuid_datom ]
+  in
+  (if List.length db.duplicate_datoms = 0 then
+     failf "precondition: init_db should route the repeated fact to duplicate_datoms");
+  let db = db |> db_with [ RetractEntity (Entity_id 1) ] in
+  (match datoms db Eavt ~a:"block/uuid" () |> List.of_seq with
+   | [] -> ()
+   | datoms -> failf "retracted uuid datom still visible in eavt: %d" (List.length datoms));
+  (match datoms db Avet ~a:"block/uuid" () |> List.of_seq with
+   | [] -> ()
+   | datoms -> failf "retracted uuid datom still visible in avet: %d" (List.length datoms));
+  (try
+     ignore
+       (db
+        |> db_with
+             [ Entity
+                 { db_id = None
+                 ; attrs =
+                     [ "block/title", One_value (String "Child")
+                     ; "block/parent", One_value (lookup_ref "block/uuid" (Uuid u1))
+                     ]
+                 }
+             ]);
+     failf "lookup ref to a retracted entity should raise"
+   with
+   | Invalid_argument msg ->
+     if not
+          (String.starts_with ~prefix:"Nothing found for entity id" msg)
+     then
+       failf "unexpected error message: %s" msg)
+
 (* Bug D: upstream maybe-wrap-multival — inside a multival attr a 2-element
    collection is a lookup ref only when its head names a unique-identity attr;
    otherwise it expands into individual values *)
@@ -892,4 +939,5 @@ let () =
     ; "rule_attr_var_property", test_rule_attr_var_property
     ; "rule_tags_query_with_eid_input", test_rule_tags_query_with_eid_input
     ; "edn_symbol_special_chars", test_edn_symbol_special_chars
+    ; "retract_cleans_duplicate_avet_tables", test_retract_cleans_duplicate_avet_tables
     ]
