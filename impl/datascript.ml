@@ -660,8 +660,20 @@ let schema_datoms_for_tx db tx_data =
   let same_fact left right =
     left.e = right.e && left.a = right.a && value_equal left.v right.v
   in
-  let append_unique datoms datom =
-    if List.exists (same_fact datom) datoms then datoms else datoms @ [ datom ]
+  (* first-occurrence dedup on the (e,a,v) fact, ignoring tx — same
+     semantics as append_unique but bucketed by (e,a) and accumulated
+     reversed so a whole seed tx costs O(n) instead of O(n^2). *)
+  let seen = Hashtbl.create 512 in
+  let append_unique_rev datoms_rev datom =
+    let key = datom.e, datom.a in
+    match Hashtbl.find_opt seen key with
+    | Some bucket when List.exists (same_fact datom) bucket -> datoms_rev
+    | Some bucket ->
+      Hashtbl.replace seen key (datom :: bucket);
+      datom :: datoms_rev
+    | None ->
+      Hashtbl.replace seen key [ datom ];
+      datom :: datoms_rev
   in
   let touched_schema_entities =
     tx_data
@@ -679,7 +691,8 @@ let schema_datoms_for_tx db tx_data =
     |> List.filter (fun datom -> datom.added && schema_datom datom)
     |> List.rev
   in
-  List.fold_left append_unique [] (asserted_schema_datoms @ active_datoms)
+  List.fold_left append_unique_rev [] (asserted_schema_datoms @ active_datoms)
+  |> List.rev
 
 let schema_fields = Schema.schema_fields
 
