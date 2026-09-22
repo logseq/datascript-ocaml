@@ -846,7 +846,13 @@ let apply_tx context tx_ops db =
         begin
         if d.a = "db/ident" then note_schema_ident_retraction datoms d.e (Some d.v);
         note_schema_field_retraction datoms d.e d.a;
-        let datoms, datom_tx_data = context.retract_active_datom_with_report d.tx datoms d.e d.a (Some d.v) in
+        (* upstream: a (d/datom e a v tx false) item desugars to
+           [:db/retract e a v]; nil v takes the retract-all branch
+           (retract_attr, incl. components), non-nil exact-matches *)
+        let datoms, datom_tx_data =
+          context.retract_user_attr_with_report db d.tx datoms d.e d.a
+            (match d.v with Nil -> None | v -> Some v)
+        in
         datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
         end
     | Call f ->
