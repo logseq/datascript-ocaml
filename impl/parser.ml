@@ -64,7 +64,11 @@ let parse_instant_millis value =
   in
   let days = days_from_civil year month day in
   let local_minutes = ((days * 24 + hour) * 60) + minute in
-  (((local_minutes - timezone_offset_minutes) * 60 + second) * 1000) + millis
+  (* epoch milliseconds exceed int32; compute in int64 *)
+  let ( - ) = Int64.sub and ( + ) = Int64.add and ( * ) = Int64.mul in
+  let to_i = Int64.of_int in
+  (((to_i local_minutes - to_i timezone_offset_minutes) * 60L + to_i second) * 1000L)
+  + to_i millis
 
 let read_edn input =
   let length = String.length input in
@@ -335,7 +339,7 @@ let rec query_form_of_value = function
   | Map entries ->
     QueryFormMap (List.map (fun (key, value) -> query_form_of_value key, query_form_of_value value) entries)
   | Uuid value -> QueryFormTagged ("uuid", QueryFormString value)
-  | Instant value -> QueryFormInt value
+  | Instant value -> QueryFormInt (Int64.to_int value)
   | Regex value -> QueryFormTagged ("regex", QueryFormString value)
   | Ref entity_id -> QueryFormInt entity_id
   | TxRef

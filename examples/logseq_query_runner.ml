@@ -42,7 +42,7 @@ let rec edn_value = function
   | Bool false -> "false"
   | Keyword value -> edn_keyword value
   | Uuid value -> "#uuid " ^ json_string value
-  | Instant value -> string_of_int value
+  | Instant value -> Int64.to_string value
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref value -> string_of_int value
   | List values -> "(" ^ String.concat " " (List.map edn_value values) ^ ")"

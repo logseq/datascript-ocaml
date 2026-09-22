@@ -138,7 +138,7 @@ let test_serialize__serialize () =
              ; attrs =
                  [ "name", One_value (String "Ivan")
                  ; "aka", Many_values [ String "IV"; String "Terrible" ]
-                 ; "created-at", One_value (Instant 1_710_000_123_456)
+                 ; "created-at", One_value (Instant 1_710_000_123_456L)
                  ; "uuid", One_value (Uuid "65ec87fb-0000-0000-0000-000000000001")
                  ]
              }

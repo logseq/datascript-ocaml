@@ -26,7 +26,7 @@ let rec debug_value = function
   | Bool value -> string_of_bool value
   | Keyword value -> ":" ^ value
   | Uuid value -> "#uuid " ^ value
-  | Instant value -> "#inst " ^ string_of_int value
+  | Instant value -> "#inst " ^ Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"

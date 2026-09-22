@@ -191,7 +191,7 @@ let rec edn_string_of_value = function
   | Keyword value -> ":" ^ value
   | Symbol value -> value
   | Uuid value -> "#uuid \"" ^ value ^ "\""
-  | Instant millis -> string_of_int millis
+  | Instant millis -> Int64.to_string millis
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | TxRef -> ":db/current-tx"
@@ -1092,6 +1092,9 @@ let query_entity_id_term db = function
 
 let query_value_term = function
   | QValue value -> Some value
+  (* a variable bound to an entity id substitutes to QEntity; in value position
+     that entity is the ref value of the datom *)
+  | QEntity entity_id -> Some (Ref entity_id)
   | _ -> None
 
 let query_tx_term = function

@@ -121,7 +121,13 @@
 (test
  (name test_sqlite_storage)
  (modules test_sqlite_storage)
- (libraries datascript-ocaml-native logseq_sqlite_storage unix sqlite3 melange-transit-native))
+ (libraries
+  datascript-ocaml-native
+  datascript-ocaml-native.sqlite
+  logseq_sqlite_storage
+  unix
+  sqlite3
+  melange-transit-native))
 
 (test
  (name test_sqlite_package)

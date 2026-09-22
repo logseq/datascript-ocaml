@@ -78,7 +78,7 @@ let rec value_json = function
   | Bool value -> json_bool value
   | Keyword value -> json_string (":" ^ value)
   | Uuid value -> json_string value
-  | Instant value -> json_int value
+  | Instant value -> json_int (Int64.to_int value)
   | Regex value -> json_string value
   | Ref value -> json_int value
   | List values | Vector values | Set values -> json_list (List.map value_json values)

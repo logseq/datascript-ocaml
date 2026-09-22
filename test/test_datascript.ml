@@ -46,7 +46,7 @@ let rec debug_value = function
   | Bool value -> string_of_bool value
   | Keyword value -> ":" ^ value
   | Uuid value -> "#uuid " ^ value
-  | Instant value -> "#inst " ^ string_of_int value
+  | Instant value -> "#inst " ^ Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
@@ -2672,7 +2672,7 @@ let test_upstream_components_and_explode_parity_batch () =
 
 let test_init_db_preserves_uuid_and_instant_values () =
   let uuid = Uuid "65ec87fb-0000-0000-0000-000000000001" in
-  let instant = Instant 1_710_000_123_456 in
+  let instant = Instant 1_710_000_123_456L in
   let db =
     init_db
       ~schema:[ "uuid", indexed; "created-at", indexed ]
@@ -3338,14 +3338,14 @@ let test_edn_reader_parses_common_literals () =
   in
   assert_equal_triples
     "db_with_string parses EDN set, regex, uuid, and instant literals"
-    [ 1, "created-at", Instant 1_710_000_123_456
+    [ 1, "created-at", Instant 1_710_000_123_456L
     ; 1, "pattern", Regex "[a-z]+[0-9]+"
     ; 1, "tags", Keyword "admin"
     ; 1, "tags", Keyword "user"
     ; 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001"
-    ; 2, "created-at", Instant 1_710_000_123_456
-    ; 3, "created-at", Instant 1_710_000_123_456
-    ; 4, "created-at", Instant 1_710_000_123_456
+    ; 2, "created-at", Instant 1_710_000_123_456L
+    ; 3, "created-at", Instant 1_710_000_123_456L
+    ; 4, "created-at", Instant 1_710_000_123_456L
     ]
     (datoms db Eavt ());
   assert_equal_query
@@ -17259,12 +17259,12 @@ let test_uuid_and_instant_value_type_schema_validates_values () =
     empty_db ~schema:[ "uuid", uuid_attr; "created-at", instant_attr ] ()
     |> db_with
          [ Add (Entity_id 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001")
-         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456)
+         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456L)
          ]
   in
   assert_equal_triples
     "uuid and instant valueType attrs accept matching values"
-    [ 1, "created-at", Instant 1_710_000_123_456
+    [ 1, "created-at", Instant 1_710_000_123_456L
     ; 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001"
     ]
     (datoms db Eavt ());
@@ -17298,7 +17298,7 @@ let test_schema_transactions_install_uuid_and_instant_value_types () =
                  ]
              }
          ; Add (Entity_id 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001")
-         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456)
+         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456L)
          ]
   in
   if List.assoc_opt "uuid" (schema db) <> Some { indexed with value_type = Some UuidType } then

@@ -81,7 +81,7 @@ let rec string_of_value = function
   | Bool value -> string_of_bool value
   | Keyword value -> ":" ^ value
   | Uuid value -> "#uuid " ^ value
-  | Instant value -> "#inst " ^ string_of_int value
+  | Instant value -> "#inst " ^ Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ String.concat " " (List.map string_of_value values) ^ "]"

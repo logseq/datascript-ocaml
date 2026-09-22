@@ -123,6 +123,77 @@ let test_logseq_parent_rule () =
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?p :in $ % :where (parent ?p 4)]")
 
+(* Bug A: a bound head arg — literal or :in-bound — must flow into recursive
+   rule calls. With two disjoint trees, a dropped binding leaks the other
+   tree's children. *)
+let test_recursive_rule_bound_head_arg () =
+  let schema =
+    let base_attr =
+      { cardinality = One; unique = None; indexed = false; is_component = false
+      ; no_history = false; doc = None; value_type = None; tuple_attrs = None
+      ; tuple_types = None }
+    in
+    [ "block/parent", { base_attr with value_type = Some RefType } ]
+  in
+  let db =
+    empty_db ~schema ()
+    |> db_with
+         (* tree 1: 1 <- 2 <- 3 ; tree 2: 5 <- 6 <- 7 *)
+         [ Entity { db_id = Some (Entity_id 1); attrs = [] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "block/parent", One_value (Ref 1) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "block/parent", One_value (Ref 2) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "block/parent", One_value (Ref 5) ] }
+         ; Entity { db_id = Some (Entity_id 7); attrs = [ "block/parent", One_value (Ref 6) ] }
+         ]
+  in
+  let rules =
+    rules_of_string
+      "[[(parent ?p ?c) [?c :block/parent ?p]]
+        [(parent ?p ?c) [?t :block/parent ?p] (parent ?t ?c)]]"
+  in
+  assert_rows
+    "(parent 1 ?c) with two trees returns only tree-1 descendants"
+    [ [ Result_entity 2 ]; [ Result_entity 3 ] ]
+    (q_string ~inputs:[ Arg_rules rules ] db
+       "[:find ?c :in $ % :where (parent 1 ?c)]");
+  assert_rows
+    "(parent ?p ?c) with :in-bound ?p returns only its descendants"
+    [ [ Result_entity 2 ]; [ Result_entity 3 ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_entity 1); Arg_rules rules ] db
+       "[:find ?c :in $ ?p % :where (parent ?p ?c)]")
+
+(* Bug B: Arg_scalar (Result_entity e) binds the entity as the :in input,
+   same as Arg_scalar (Result_value (Ref e)) — a second tree exposes leaks *)
+let test_in_scalar_result_entity () =
+  let schema =
+    let base_attr =
+      { cardinality = One; unique = None; indexed = false; is_component = false
+      ; no_history = false; doc = None; value_type = None; tuple_attrs = None
+      ; tuple_types = None }
+    in
+    [ "block/parent", { base_attr with value_type = Some RefType } ]
+  in
+  let db =
+    empty_db ~schema ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "block/parent", One_value (Ref 1) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "block/parent", One_value (Ref 5) ] }
+         ]
+  in
+  assert_rows
+    ":in ?x bound to Arg_scalar (Result_entity 1) filters ref datoms"
+    [ [ Result_entity 2 ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_entity 1) ] db
+       "[:find ?c :in $ ?x :where [?c :block/parent ?x]]");
+  assert_rows
+    ":in ?x bound to Arg_scalar (Result_value (Ref 1)) filters ref datoms"
+    [ [ Result_entity 2 ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_value (Ref 1)) ] db
+       "[:find ?c :in $ ?x :where [?c :block/parent ?x]]")
+
 (* Upstream "Mutually recursive rules" (test-rules): two rules recursing into
    each other *)
 let test_mutually_recursive_rules () =
@@ -494,6 +565,8 @@ let () =
     ; "rule_branches_positional_binding", test_rule_branches_positional_binding
     ; "recursive_rule_swapped_args", test_recursive_rule_swapped_args
     ; "logseq_parent_rule", test_logseq_parent_rule
+    ; "recursive_rule_bound_head_arg", test_recursive_rule_bound_head_arg
+    ; "in_scalar_result_entity", test_in_scalar_result_entity
     ; "mutually_recursive_rules", test_mutually_recursive_rules
     ; "rule_joined_with_clauses", test_rule_joined_with_clauses
     ; "predicate_over_in_scalar", test_predicate_over_in_scalar

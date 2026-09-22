@@ -203,7 +203,7 @@ let rec string_of_value = function
   | Bool value -> string_of_bool value
   | Keyword value -> ":" ^ value
   | Uuid value -> "#uuid " ^ Printf.sprintf "%S" value
-  | Instant value -> string_of_int value
+  | Instant value -> Int64.to_string value
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | List values -> "[" ^ String.concat " " (List.map string_of_value values) ^ "]"
@@ -642,6 +642,52 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
         let names = datoms restored Avet ~a:"name" () in
         if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
+
+(* Instant and Uuid must serialize through Transit's cljs-compatible date/uuid
+   reps (~t verbose / ~m normal, ~u) rather than ~#m/~#u tagged maps, and
+   epoch-millisecond timestamps must not truncate to int32. *)
+let test_sqlite_codec_instant_uuid_transit_reps () =
+  let expect label expected actual = if expected <> actual then failf "%s" label in
+  let millis = 1_758_000_000_000L in
+  let uuid = "550e8400-e29b-41d4-a716-446655440000" in
+  let instant_rep = Datascript_sqlite_codec.value_to_transit (Instant millis) in
+  expect
+    "Instant encodes as a Transit date rep"
+    (Transit.Date millis)
+    instant_rep;
+  let uuid_rep = Datascript_sqlite_codec.value_to_transit (Uuid uuid) in
+  expect "Uuid encodes as a Transit uuid rep" (Transit.Uuid uuid) uuid_rep;
+  expect
+    "Instant round-trips without int32 truncation"
+    (Instant millis)
+    (Datascript_sqlite_codec.value_of_transit instant_rep);
+  expect
+    "Uuid round-trips"
+    (Uuid uuid)
+    (Datascript_sqlite_codec.value_of_transit uuid_rep);
+  (* blobs written by older builds with ~#m/~#u tagged maps still decode *)
+  expect
+    "legacy ~#m tagged Instant still decodes"
+    (Instant millis)
+    (Datascript_sqlite_codec.value_of_transit (Transit.Tagged ("m", Transit.Int64 millis)));
+  expect
+    "legacy ~#u tagged Uuid still decodes"
+    (Uuid uuid)
+    (Datascript_sqlite_codec.value_of_transit (Transit.Tagged ("u", Transit.String uuid)));
+  let contains text needle =
+    let rec search index =
+      index + String.length needle <= String.length text
+      && (String.sub text index (String.length needle) = needle || search (index + 1))
+    in
+    search 0
+  in
+  (* scalar roots are wrapped in a {"~#'": ...} verbose quoting *)
+  let verbose = Transit.to_string ~mode:Transit.Verbose instant_rep in
+  if not (contains verbose "\"~t") then
+    failf "verbose Instant should encode as ~t<iso>, got %s" verbose;
+  let verbose_uuid = Transit.to_string ~mode:Transit.Verbose uuid_rep in
+  if not (contains verbose_uuid "\"~u") then
+    failf "verbose Uuid should encode as ~u<uuid>, got %s" verbose_uuid
 
 let test_sqlite_storage_raw_layout_after_transact () =
   if not (sqlite3_available ()) then
@@ -2880,6 +2926,7 @@ let () =
   test_sqlite_storage_validates_db_attribute_transactions ();
   test_sqlite_storage_random_property_txs ();
   test_sqlite_storage_round_trips_ocaml_payloads ();
+  test_sqlite_codec_instant_uuid_transit_reps ();
   test_sqlite_storage_raw_layout_after_transact ();
   test_sqlite_storage_does_not_require_sqlite3_binary ();
   test_sqlite_storage_store_and_delete_are_separate ();
