@@ -162,7 +162,7 @@ let canonical_value attr = function
   | Float value -> "float:" ^ string_of_float value
   | Nil -> "nil"
   | Uuid value -> "uuid:" ^ value
-  | Instant value -> "instant:" ^ string_of_int value
+  | Instant value -> "instant:" ^ Int64.to_string value
   | Regex value -> "regex:" ^ value
   | TxRef -> "tx-ref"
   | Ref_to _ -> "ref-to"

@@ -217,7 +217,7 @@ let rec json_of_value = function
   | Bool value -> `Bool value
   | Keyword value -> `String (":" ^ value)
   | Uuid value -> `String value
-  | Instant value -> `Int value
+  | Instant value -> `Intlit (Int64.to_string value)
   | Regex value -> `String value
   | Ref entity_id -> `Int entity_id
   | List values | Vector values | Set values -> `List (List.map json_of_value values)

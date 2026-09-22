@@ -131,7 +131,7 @@ let string_of_value = function
   | Bool value -> "bool:" ^ string_of_bool value
   | Keyword value -> "keyword:" ^ value
   | Uuid value -> "uuid:" ^ value
-  | Instant value -> "instant:" ^ string_of_int value
+  | Instant value -> "instant:" ^ Int64.to_string value
   | Regex value -> "regex:" ^ value
   | Ref entity_id -> "ref:" ^ string_of_int entity_id
   | List _ | Vector _ | Set _ | Map _ | Tuple _ -> "compound"

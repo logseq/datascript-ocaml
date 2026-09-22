@@ -18,7 +18,7 @@ and value =
   | Bool of bool
   | Keyword of string
   | Uuid of string
-  | Instant of int
+  | Instant of int64
   | Regex of string
   | Ref of entity_id
   | List of value list

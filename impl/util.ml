@@ -264,7 +264,7 @@ let rec clojure_hasheq = function
     |> murmur3_hash_ordered
   | Ref value -> murmur3_hash_long (Int64.of_int value)
   | Uuid value -> java_uuid_hash value
-  | Instant value -> murmur3_hash_long (Int64.of_int value)
+  | Instant value -> murmur3_hash_long value
   | Regex value -> Hashtbl.hash value
   | TxRef -> Hashtbl.hash TxRef
   | Ref_to value -> Hashtbl.hash (Ref_to value)

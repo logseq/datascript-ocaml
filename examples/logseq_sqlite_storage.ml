@@ -246,8 +246,8 @@ let rec value_to_transit = function
   | Symbol value -> Transit.Symbol value
   | Bool value -> Transit.Bool value
   | Keyword value -> Transit.Keyword value
-  | Uuid value -> Transit.Tagged ("u", Transit.String value)
-  | Instant value -> Transit.Tagged ("m", Transit.Int value)
+  | Uuid value -> Transit.Uuid value
+  | Instant value -> Transit.Date value
   | Regex value -> Transit.Tagged ("regex", Transit.String value)
   | Ref entity_id -> Transit.Int entity_id
   | List values -> Transit.List (List.map value_to_transit values)
@@ -393,12 +393,12 @@ let rec value_of_transit = function
     if value >= Int64.of_int min_int && value <= Int64.of_int max_int then
       Int (Int64.to_int value)
     else
-      Instant (Int64.to_int value)
+      Instant value
   | Transit.Float value -> Float value
   | Transit.Binary value -> String value
   | Transit.Big_decimal value -> Float (float_of_string value)
   | Transit.Big_int value -> Transit.Int64 (Int64.of_string value) |> value_of_transit
-  | Transit.Date value -> Instant (Int64.to_int value)
+  | Transit.Date value -> Instant value
   | Transit.Uuid value -> Uuid value
   | Transit.Uri value -> String value
   | Transit.Keyword value -> Keyword value
@@ -409,8 +409,8 @@ let rec value_of_transit = function
   | Transit.Set values -> Set (List.map value_of_transit values)
   | Transit.List values -> List (List.map value_of_transit values)
   | Transit.Tagged ("u", Transit.String value) -> Uuid value
-  | Transit.Tagged ("m", Transit.Int value) -> Instant value
-  | Transit.Tagged ("m", Transit.Int64 value) -> Instant (Int64.to_int value)
+  | Transit.Tagged ("m", Transit.Int value) -> Instant (Int64.of_int value)
+  | Transit.Tagged ("m", Transit.Int64 value) -> Instant value
   | Transit.Tagged ("regex", Transit.String value) -> Regex value
   | Transit.Tagged (tag, value) ->
     Vector [ String tag; value_of_transit value ]
