@@ -293,6 +293,7 @@ let schema_from_transaction_datoms
       ?(removed_attrs = [])
       ?(removed_fields = [])
       ?(ignored_schema_entities = [])
+      ?removed_field_attrs
       current
       datoms
   =
@@ -307,10 +308,19 @@ let schema_from_transaction_datoms
       |> List.filter_map (fun d -> if List.mem d.a schema_fields then Some d.e else None)
       |> List.sort_uniq compare
     in
+    (* removed_field_attrs defaults to the fields retracted in this call;
+       incremental refreshes pass only the fields retracted since the last
+       refresh so cumulative retractions cannot strip attrs re-added by
+       earlier batches *)
+    let removed_field_attrs =
+      match removed_field_attrs with
+      | Some attrs -> attrs
+      | None -> List.map fst removed_fields
+    in
     let described_attrs =
       List.sort_uniq compare
         (removed_attrs
-         @ List.map fst removed_fields
+         @ removed_field_attrs
          @ schema_idents_from_datoms
              (List.filter (fun d -> List.mem d.e entities_with_schema_fields) datoms))
     in

@@ -39,7 +39,7 @@ val resolve_entity_attrs : context -> db -> db -> tx -> entity_id -> (string * e
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
-  ; schema_from_transaction_datoms : ?validate:bool -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_from_transaction_datoms : ?validate:bool -> ?removed_field_attrs:attr list -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
   ; schema_datoms : db -> datom list -> datom list
   ; schema_fields : attr list
   ; current_attr_value : db -> entity_id -> attr -> value option
