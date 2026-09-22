@@ -347,8 +347,10 @@ let test_upsert__test_retries_order () =
          ; Add (Temp_id "-1", "name", String "Bob")
          ]
   in
+  (* upstream retries the whole tx with "-1" pre-seeded to 2 (the entity that
+     already owns :name "Bob"), so every tempid collapses onto 2 *)
   assert_equal_triples
-    "retry order preserves the first unique identity owner"
+    "retry order merges tempids into the unique identity owner"
     [ 2, "age", Int 42; 2, "likes", String "Pizza"; 2, "name", String "Bob" ]
     (datoms second Eavt ())
 

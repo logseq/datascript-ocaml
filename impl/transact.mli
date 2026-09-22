@@ -35,10 +35,6 @@ val resolve_optional_existing_entity_ref : context -> db -> db -> tx -> entity_i
 val resolve_tx_value_for_attr : context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> tx_value -> tx_value * entity_id * (string * entity_id) list
 val resolve_optional_value_for_attr : context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> value option -> value option * entity_id * (string * entity_id) list
 val resolve_entity_attrs : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> (attr * tx_value) list -> (attr * tx_value) list * entity_id * (string * entity_id) list
-val remap_value_ref : context -> entity_id -> entity_id -> value -> value
-val remap_datom_entity : context -> entity_id -> entity_id -> datom -> datom
-val remap_resolved_tx_value : context -> entity_id -> entity_id -> tx_value -> tx_value
-val remap_tempid_entity : entity_id -> entity_id -> (string * entity_id) list -> (string * entity_id) list
 
 type apply_context =
   { resolve_context : context

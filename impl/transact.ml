@@ -53,6 +53,11 @@ let remember_current_tx_alias tempids tx alias =
    sequential behavior for genuinely missing targets). *)
 exception Unresolved_lookup_ref of attr * value
 
+(* upstream retry-with-tempid: when a tempid that already allocated an eid in
+   this tx upserts to a different entity, the whole transaction re-runs with the
+   tempids bound so far, the conflicting one pre-seeded to the upsert target. *)
+exception Upsert_retry of string * entity_id * (string * entity_id) list
+
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
   | Entity_id e when e < 0 ->
     (* upstream datascript: a negative integer :db/id is a tempid *)
@@ -71,7 +76,7 @@ let rec resolve_entity_ref context db datoms tx max_eid tempids = function
       tx, max_eid, remember_current_tx_alias tempids tx tempid
     else
       (match List.assoc_opt tempid tempids with
-       | Some e -> e, max_eid, tempids
+       | Some e -> e, context.max_eid_with_entity_id max_eid e, tempids
        | None ->
          let e = context.allocate_entity_id max_eid in
          e, context.max_eid_with_entity_id max_eid e, remember_tempid tempids tempid e)
@@ -84,10 +89,17 @@ let rec resolve_entity_ref context db datoms tx max_eid tempids = function
 and resolve_value context db datoms tx max_eid tempids = function
   | TxRef -> Ref tx, max_eid, remember_current_tx tempids tx
   | Ref e ->
+    (* upstream advances max-eid only on datom.e; ref values never bump it *)
     let e = context.validate_entity_id e in
-    Ref e, context.max_eid_with_entity_id max_eid e, tempids
+    Ref e, max_eid, tempids
   | Ref_to entity_ref ->
-    let e, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
+    let e, max_eid, tempids =
+      match entity_ref with
+      | Entity_id e ->
+        let e = context.validate_entity_id e in
+        e, max_eid, tempids
+      | entity_ref -> resolve_entity_ref context db datoms tx max_eid tempids entity_ref
+    in
     Ref e, max_eid, tempids
   | List values ->
     let values, max_eid, tempids =
@@ -178,7 +190,12 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
     (match value with
      | Ref e -> ignore (context.validate_entity_id e)
      | _ -> ());
-    let entity_id, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
+    (* upstream advances max-eid only on datom.e; ref values never bump it *)
+    let entity_id, max_eid, tempids =
+      match entity_ref with
+      | Entity_id e -> context.validate_entity_id e, max_eid, tempids
+      | entity_ref -> resolve_entity_ref context db datoms tx max_eid tempids entity_ref
+    in
     Ref entity_id, max_eid, tempids
   | Some _, None -> invalid_arg "Expected number or lookup ref for entity id"
   | _ ->
@@ -203,6 +220,10 @@ let resolve_existing_entity_ref context db datoms tx max_eid tempids = function
 
 let resolve_optional_existing_entity_ref context db datoms tx max_eid tempids = function
   | Temp_id _ -> invalid_arg "Tempids are allowed in :db/add only"
+  | Entity_id e ->
+    (* retract positions emit no added datom, so upstream never advances *)
+    let e = context.validate_entity_id e in
+    Some e, max_eid, tempids
   | Lookup_ref (attr, value) ->
     let value, max_eid, tempids = resolve_value context db datoms tx max_eid tempids value in
     (match context.lookup_ref_entity_id ~strict_missing:false datoms attr value with
@@ -266,48 +287,6 @@ let resolve_entity_attrs context db datoms tx max_eid tempids attrs =
   in
   List.rev attrs, max_eid, tempids
 
-let rec remap_value_ref context old_e new_e = function
-  | Ref entity_id when entity_id = old_e -> Ref new_e
-  | List values ->
-    List (List.map (remap_value_ref context old_e new_e) values)
-  | Vector values ->
-    Vector (List.map (remap_value_ref context old_e new_e) values)
-  | Map entries ->
-    Map
-      (List.map
-         (fun (key, value) ->
-           remap_value_ref context old_e new_e key, remap_value_ref context old_e new_e value)
-         entries)
-  | Set values ->
-    context.normalize_value (Set (List.map (remap_value_ref context old_e new_e) values))
-  | Tuple values ->
-    Tuple
-      (List.map
-         (function
-           | None -> None
-           | Some value -> Some (remap_value_ref context old_e new_e value))
-         values)
-  | value -> value
-
-let remap_datom_entity context old_e new_e d =
-  { d with
-    e = if d.e = old_e then new_e else d.e
-  ; v = remap_value_ref context old_e new_e d.v
-  }
-
-let remap_resolved_tx_value context old_e new_e = function
-  | One_value value -> One_value (remap_value_ref context old_e new_e value)
-  | Many_values values -> Many_values (List.map (remap_value_ref context old_e new_e) values)
-  | nested -> nested
-
-let remap_tempid_entity old_e new_e tempids =
-  List.map
-    (fun (tempid, entity_id) ->
-      if entity_id = old_e then
-        tempid, new_e
-      else
-        tempid, entity_id)
-    tempids
 
 
 type apply_context =
@@ -376,61 +355,10 @@ let apply_tx context tx_ops db =
          db.schema
          schema_datoms
   in
-  (* pre-scan entity positions only (db_id, add/retract entity, raw datom e)
-     so tempid allocation cannot collide with explicit entity ids; refs in
-     value positions are deliberately excluded — upstream datascript resolves
-     tempids sequentially and lets forward value refs point at eids minted
-     later in the same tx *)
-  let rec max_explicit_entity_ref max_eid = function
-    | Entity_id e when e < 0 -> max_eid
-    | Entity_id e -> context.resolve_context.max_eid_with_entity_id max_eid e
-    | Lookup_ref (_, value) -> max_explicit_lookup_value max_eid value
-    | _ -> max_eid
-  and max_explicit_lookup_value max_eid = function
-    | Ref entity_id -> context.resolve_context.max_eid_with_entity_id max_eid entity_id
-    | Ref_to entity_ref -> max_explicit_entity_ref max_eid entity_ref
-    | List values | Vector values | Set values ->
-      List.fold_left max_explicit_lookup_value max_eid values
-    | Tuple values ->
-      List.fold_left
-        (fun max_eid -> function
-          | None -> max_eid
-          | Some value -> max_explicit_lookup_value max_eid value)
-        max_eid
-        values
-    | Map entries ->
-      List.fold_left
-        (fun max_eid (key, value) ->
-          max_explicit_lookup_value (max_explicit_lookup_value max_eid key) value)
-        max_eid
-        entries
-    | _ -> max_eid
-  and max_explicit_tx_value max_eid = function
-    | One_entity entity -> max_explicit_tx_entity max_eid entity
-    | Many_entities entities -> List.fold_left max_explicit_tx_entity max_eid entities
-    | _ -> max_eid
-  and max_explicit_tx_entity max_eid entity =
-    (* a db_id only reserves an entity id when the entity map materializes
-       datoms; an attribute-less nested entity is just a ref wrapper *)
-    let max_eid =
-      match entity.db_id, entity.attrs with
-      | Some entity_ref, _ :: _ -> max_explicit_entity_ref max_eid entity_ref
-      | _ -> max_eid
-    in
-    entity.attrs
-    |> List.fold_left (fun max_eid (_, tx_value) -> max_explicit_tx_value max_eid tx_value) max_eid
-  and max_explicit_tx_op max_eid = function
-    | Add (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
-    | Retract (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
-    | RetractEntity entity_ref | RetractAttr (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
-    | CompareAndSet (entity_ref, _, _, _) -> max_explicit_entity_ref max_eid entity_ref
-    | Entity entity -> max_explicit_tx_entity max_eid entity
-    | Raw_datom d -> context.resolve_context.max_eid_with_entity_id max_eid d.e
-    | InstallTxFn (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
-    | CallIdent (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
-    | Call _ -> max_eid
-  in
-  let initial_max_eid = List.fold_left max_explicit_tx_op db.max_eid tx_ops in
+  (* upstream allocates eids sequentially from db.max_eid and advances only on
+     added datom.e / allocations; no pre-scan of explicit ids in tx ops *)
+  let initial_max_eid = db.max_eid in
+
   let max_tx_seen = ref tx in
   let deferred_ops = ref [] in
   let mark_entity_tempid entity_tempids = function
@@ -502,62 +430,22 @@ let apply_tx context tx_ops db =
        refresh_schema datoms (List.rev tx_data));
     datoms, max_eid, tempids, entity_tempids, tx_data
   in
-  let merge_tempid_entity tempid old_e target_e datoms tempids tx_data =
-    let db = current_db () in
-    if old_e <= db.max_eid then
+  let upsert_conflict tempid old_e target_e tempids =
+    (* upstream raises "Conflicting upsert" only once a tempid is bound to an
+       existing entity; a freshly-allocated eid resolves via retry-with-tempid
+       instead, so the allocated eid can never collide with a later explicit
+       entity id. *)
+    if old_e <= (current_db ()).max_eid then
       invalid_arg
         ("Conflicting upsert: "
          ^ tempid
          ^ " resolves both to "
          ^ string_of_int old_e
          ^ " and "
-         ^ string_of_int target_e);
-    let old_datoms = context.existing_entity_datoms datoms old_e in
-    let referring_datoms =
-      context.datoms_referencing_entity datoms old_e
-      |> List.filter (fun datom -> datom.e <> old_e)
-    in
-    let dedupe_facts datoms =
-      datoms
-      |> List.fold_left
-           (fun deduped d ->
-             if List.exists (context.same_fact d) deduped then deduped else d :: deduped)
-           []
-    in
-    let remapped_ref_datoms =
-      referring_datoms
-      |> List.map (remap_datom_entity context.resolve_context old_e target_e)
-      |> dedupe_facts
-    in
-    let remove_existing datom = { datom with added = false } in
-    let datoms =
-      context.refresh_db_indexes_with_tx_data
-        datoms
-        (List.map remove_existing (old_datoms @ referring_datoms))
-    in
-    let datoms =
-      context.refresh_db_indexes_with_tx_data datoms remapped_ref_datoms
-    in
-    let datoms, moved_tx_data_rev =
-      old_datoms
-      |> List.fold_left
-           (fun (datoms, moved_tx_data_rev) d ->
-             if context.is_tuple_attr db d.a then
-               datoms, moved_tx_data_rev
-             else
-               let d = remap_datom_entity context.resolve_context old_e target_e d in
-               let datoms, datom_tx_data = context.add_user_datom_with_report db tx datoms d in
-               datoms, append_tx_data moved_tx_data_rev datom_tx_data)
-           (datoms, [])
-    in
-    let tx_data =
-      tx_data
-      |> List.filter_map (fun d ->
-        if d.e = old_e then None else Some (remap_datom_entity context.resolve_context old_e target_e d))
-    in
-    let tx_data = moved_tx_data_rev @ tx_data in
-    let tempids = remap_tempid_entity old_e target_e tempids in
-    datoms, tempids, tx_data
+         ^ string_of_int target_e)
+    else
+      raise
+        (Upsert_retry (tempid, target_e, (tempid, target_e) :: List.remove_assoc tempid tempids))
   in
   let tuple_identity_target_for_add datoms e attr value =
     let db = current_db () in
@@ -585,8 +473,7 @@ let apply_tx context tx_ops db =
     if context.is_unique_identity db attr then
       match context.resolve_context.entid datoms attr value, List.assoc_opt tempid tempids with
       | Some target_e, Some old_e when old_e <> target_e ->
-        let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
-        target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+        upsert_conflict tempid old_e target_e tempids
       | Some target_e, _ ->
         target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
       | None, _ ->
@@ -595,9 +482,7 @@ let apply_tx context tx_ops db =
     else
       let e, max_eid, tempids = resolve_entity_ref context.resolve_context db datoms tx max_eid tempids (Temp_id tempid) in
       match tuple_identity_target_for_add datoms e attr value with
-      | Some target_e ->
-        let datoms, tempids, tx_data = merge_tempid_entity tempid e target_e datoms tempids tx_data in
-        target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
+      | Some target_e -> upsert_conflict tempid e target_e tempids
       | None -> e, datoms, max_eid, tempids, tx_data
   in
   let is_forward_nested_attr = function
@@ -707,13 +592,14 @@ let apply_tx context tx_ops db =
         let datoms, datom_tx_data =
           context.add_active_datom_with_report ~allow_tuple:true ~validate_value:false db d.tx datoms d
         in
-        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
+        (* upstream with-datom advances max-eid on added datom.e only *)
+        datoms, context.resolve_context.max_eid_with_entity_id max_eid d.e, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
       else
         begin
         if d.a = "db/ident" then note_schema_ident_retraction datoms d.e (Some d.v);
         note_schema_field_retraction datoms d.e d.a;
         let datoms, datom_tx_data = context.retract_active_datom_with_report d.tx datoms d.e d.a (Some d.v) in
-        datoms, context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
+        datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
         end
     | Call f ->
       let db_for_call = { (db_with_current_metadata datoms) with max_eid } in
@@ -790,7 +676,7 @@ let apply_tx context tx_ops db =
              let datoms, tempids, tx_data =
                match List.assoc_opt tempid tempids with
                | Some old_e when old_e <> target_e ->
-                 merge_tempid_entity tempid old_e target_e datoms tempids tx_data
+                 upsert_conflict tempid old_e target_e tempids
                | Some _ -> datoms, tempids, tx_data
                | None -> datoms, remember_tempid tempids tempid target_e, tx_data
              in
@@ -1405,13 +1291,7 @@ let apply_tx context tx_ops db =
                  let entity_id, max_eid =
                    match target, existing_tempid with
                    | Some target_e, Some old_e when old_e <> target_e ->
-                     invalid_arg
-                       ("Conflicting upsert: "
-                        ^ tempid
-                        ^ " resolves both to "
-                        ^ string_of_int old_e
-                        ^ " and "
-                        ^ string_of_int target_e)
+                     upsert_conflict tempid old_e target_e tempids
                    | Some entity_id, _ ->
                      entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
                    | None, Some entity_id -> entity_id, max_eid
@@ -1452,13 +1332,7 @@ let apply_tx context tx_ops db =
                let entity_id, max_eid =
                  match target, existing_tempid with
                  | Some target_e, Some old_e when old_e <> target_e ->
-                   invalid_arg
-                     ("Conflicting upsert: "
-                      ^ tempid
-                      ^ " resolves both to "
-                      ^ string_of_int old_e
-                      ^ " and "
-                      ^ string_of_int target_e)
+                   upsert_conflict tempid old_e target_e tempids
                  | Some entity_id, _ ->
                    entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
                  | None, Some entity_id -> entity_id, max_eid
@@ -1526,9 +1400,11 @@ let apply_tx context tx_ops db =
            None
          else
            let tx_data = List.concat_map tx_data_for_fact facts in
+           (* upstream advances max-eid on added datom.e only, never on v *)
            let max_eid =
              List.fold_left
-               (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
+               (fun max_eid d ->
+                 if d.added then context.resolve_context.max_eid_with_entity_id max_eid d.e else max_eid)
                max_eid
                facts
            in
@@ -1583,14 +1459,43 @@ let apply_tx context tx_ops db =
       else
         drain_deferred_ops state
   in
+  let rec compute_report upserted_tempids seeded_tempids =
+    deferred_ops := [];
+    max_tx_seen := tx;
+    current_schema := db.schema;
+    current_tx_fns := db.tx_fns;
+    removed_schema_attrs := [];
+    removed_schema_fields := [];
+    ignored_schema_entities := [];
+    try
+      (* On a retry pass the seeded tempids keep upserted entities stable, so
+         the bulk fast paths are skipped in favor of the general apply_ops. *)
+      match
+        (if upserted_tempids = [] then
+           try try_apply_bulk_explicit_entities () with Unresolved_lookup_ref _ -> None
+         else
+           None)
+      with
+      | Some (datoms, max_eid, tempids, entity_tempids, tx_data) ->
+        datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
+      | None ->
+        let state = apply_ops (db, initial_max_eid, seeded_tempids, [], []) tx_ops in
+        let datoms, max_eid, tempids, entity_tempids, tx_data = drain_deferred_ops state in
+        datoms, max_eid, tempids, entity_tempids, tx_data, None
+    with Upsert_retry (tempid, target_e, seeded_tempids) ->
+      (match List.assoc_opt tempid upserted_tempids with
+       | Some previous_e when previous_e <> target_e ->
+         invalid_arg
+           ("Conflicting upsert: "
+            ^ tempid
+            ^ " resolves both to "
+            ^ string_of_int target_e
+            ^ " and "
+            ^ string_of_int previous_e)
+       | _ -> compute_report ((tempid, target_e) :: upserted_tempids) seeded_tempids)
+  in
   let datoms, max_eid, tempids, entity_tempids, tx_data, fast_tx_data =
-    match (try try_apply_bulk_explicit_entities () with Unresolved_lookup_ref _ -> None) with
-    | Some (datoms, max_eid, tempids, entity_tempids, tx_data) ->
-      datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
-    | None ->
-      let state = apply_ops (db, initial_max_eid, [], [], []) tx_ops in
-      let datoms, max_eid, tempids, entity_tempids, tx_data = drain_deferred_ops state in
-      datoms, max_eid, tempids, entity_tempids, tx_data, None
+    compute_report [] []
   in
   let tx_data =
     match fast_tx_data with

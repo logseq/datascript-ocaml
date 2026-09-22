@@ -348,9 +348,11 @@ let test_raw_datom_counts_ref_values_in_max_eid () =
          ; Add (Temp_id "next", "name", String "Next")
          ]
   in
+  (* upstream advances max-eid on added datom.e only; a ref in the value
+     position never bumps it, so "next" allocates right after e1 *)
   assert_equal_int
-    "Raw_datom should allocate after entity ids referenced by datom values"
-    6
+    "Raw_datom should keep upstream sequential allocation"
+    2
     (Option.get (resolve_tempid report.tempids "next"));
   let db =
     empty_db ~schema:[ "friend", ref_attr ] ()
@@ -3049,16 +3051,16 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
   in
   assert_equal_triples
     "db_with_string resolves scalar EDN values for ref attrs"
-    [ 3, "friend", Ref 1
+    [ 1, "friend", Ref 2
+    ; 1, "name", String "Ivan"
+    ; 2, "name", String "Petr"
+    ; 3, "friend", Ref 1
     ; 4, "created-at", Ref (tx0 + 1)
-    ; 5, "friend", Ref 6
-    ; 5, "name", String "Ivan"
-    ; 6, "name", String "Petr"
     ]
     (datoms ref_report.db_after Eavt ());
   assert_equal_tempids
     "db_with_string reports tempids from scalar EDN ref values"
-    [ "db/current-tx", tx0 + 1; "-1", 5; "-2", 6 ]
+    [ "db/current-tx", tx0 + 1; "-1", 1; "-2", 2 ]
     ref_report.tempids;
   let tx_alias_report =
     transact_string
@@ -3171,13 +3173,14 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
            #:person{:db/id 1
                     :profile [:person/email \"existing@example.com\"]}]"
   in
+  (* upstream allocates the nested entity eid sequentially (e2), then the
+     explicit {:db/id 2} claims the same entity and its cardinality-one email
+     replaces the nested write *)
   assert_equal_triples
     "db_with_string parses EDN namespaced maps in transactions"
     [ 1, "person/name", String "Ivan"
     ; 1, "person/profile", Ref 2
-    ; 1, "person/profile", Ref 3
     ; 2, "person/email", String "existing@example.com"
-    ; 3, "person/email", String "new@example.com"
     ]
     (datoms namespaced_map_db Eavt ());
   let special_float_db =
