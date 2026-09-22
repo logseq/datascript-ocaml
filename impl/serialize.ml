@@ -69,6 +69,17 @@ let duplicate_datoms_by_attr duplicate_datoms =
 let from_serializable context snapshot =
   let schema = context.validate_schema snapshot.serializable_schema in
   let datoms = List.map (context.normalize_datom_for_schema schema) snapshot.serializable_datoms in
+  (* upstream restores a db through the same datom fold as init-db, so the
+     allocation floor is derived from the datoms themselves; the snapshot
+     fields only raise it further (retracted entities keep max-eid
+     monotonic). *)
+  let max_eid =
+    List.fold_left
+      (fun max_eid d -> Db.max_eid_in_value (Db.max_eid_with_entity_id max_eid d.e) d.v)
+      snapshot.serializable_max_eid datoms
+  in
+  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 datoms in
+  let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) snapshot.serializable_max_tx datoms in
   let duplicate_datoms = duplicate_datoms datoms in
   let duplicate_aevt_datoms = duplicate_aevt_datoms duplicate_datoms in
   let duplicate_avet_datoms = duplicate_avet_datoms schema duplicate_datoms in
@@ -85,9 +96,9 @@ let from_serializable context snapshot =
   ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
   ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
   ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
-  ; max_eid = snapshot.serializable_max_eid
-  ; max_datom_e = 0
-  ; max_tx = snapshot.serializable_max_tx
+  ; max_eid
+  ; max_datom_e
+  ; max_tx
   ; filter_pred = None
   ; storage_ref = None
   ; tx_fns = []
