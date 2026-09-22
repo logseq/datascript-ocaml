@@ -13,6 +13,7 @@ val schema_from_transaction_datoms :
   ?removed_attrs:attr list ->
   ?removed_fields:(attr * attr) list ->
   ?ignored_schema_entities:entity_id list ->
+  ?removed_field_attrs:attr list ->
   schema ->
   datom list ->
   schema

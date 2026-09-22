@@ -938,6 +938,47 @@ let test_mid_tx_schema_refresh_is_incremental () =
    | Some { indexed = true; _ } -> ()
    | _ -> failf "schema for user.property/p79 missing or wrong after seed tx")
 
+(* Regression: with incremental mid-tx refresh, an attr removal registered by
+   an earlier refresh must not re-strip an attr re-installed by a later batch.
+   prop/owner is installed on entity 500, retracted (marking it removed),
+   re-installed on entity 501, then entity 502's refresh must not drop it —
+   a stale removal would collapse its cardinality-many spec to one for later
+   datoms (the export/import roundtrip regression). *)
+let test_mid_tx_refresh_reapplies_removals_once () =
+  let schema_entity e ident card =
+    Entity
+      { db_id = Some (Entity_id e)
+      ; attrs =
+          [ "db/ident", One_value (Keyword ident)
+          ; "db/valueType", One_value (Keyword "db.type/string")
+          ; "db/cardinality", One_value (Keyword card)
+          ]
+      }
+  in
+  let db =
+    empty_db ()
+    |> db_with
+         [ schema_entity 500 "prop/owner" "db.cardinality/many"
+         ; Retract (Entity_id 500, "db/ident", Some (Keyword "prop/owner"))
+         ; schema_entity 501 "prop/owner" "db.cardinality/many"
+         ; schema_entity 502 "prop/other" "db.cardinality/one"
+         ; Add (Entity_id 1, "prop/owner", String "a")
+         ; Add (Entity_id 1, "prop/owner", String "b")
+         ]
+  in
+  (match Schema.schema_attr_by_name db.schema "prop/owner" with
+   | Some _ -> ()
+   | None -> failf "prop/owner schema entry lost mid-tx by stale removal");
+  let vals =
+    datoms db Eavt ~e:1 ~a:"prop/owner" ()
+    |> List.of_seq
+    |> List.map (fun d -> d.v)
+    |> List.sort compare
+  in
+  (match vals with
+   | [ String "a"; String "b" ] -> ()
+   | _ -> failf "prop/owner should keep cardinality-many mid-tx, got %d datoms" (List.length vals))
+
 let () =
   List.iter
     (fun (name, f) ->
@@ -973,4 +1014,5 @@ let () =
     ; "edn_symbol_special_chars", test_edn_symbol_special_chars
     ; "retract_cleans_duplicate_avet_tables", test_retract_cleans_duplicate_avet_tables
     ; "mid_tx_schema_refresh_is_incremental", test_mid_tx_schema_refresh_is_incremental
+    ; "mid_tx_refresh_reapplies_removals_once", test_mid_tx_refresh_reapplies_removals_once
     ]

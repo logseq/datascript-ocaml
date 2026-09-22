@@ -340,7 +340,7 @@ let remap_tempid_entity old_e new_e tempids =
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
-  ; schema_from_transaction_datoms : ?validate:bool -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_from_transaction_datoms : ?validate:bool -> ?removed_field_attrs:attr list -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
   ; schema_datoms : db -> datom list -> datom list
   ; schema_fields : attr list
   ; current_attr_value : db -> entity_id -> attr -> value option
@@ -381,6 +381,11 @@ let apply_tx context tx_ops db =
      of tx_data every time (O(n^2) on seed transactions). *)
   let pending_schema_rev = ref [] in
   let inc_tx_schema = Hashtbl.create 64 in
+  (* removals already dropped from !current_schema by a previous incremental
+     refresh — the removal sets below stay cumulative (the end-of-tx
+     rebuild needs them all), so track what each refresh already applied *)
+  let applied_removed_attrs = ref [] in
+  let applied_removed_fields = ref [] in
   let append_tx_data tx_data_rev datom_tx_data =
     List.iter
       (fun d ->
@@ -460,6 +465,22 @@ let apply_tx context tx_ops db =
            dedup_schema_facts (tx_datoms @ actives)
          in
          let datoms = List.concat_map entity_datoms touched in
+         (* apply each removal only once: the whole-tx pass re-derived
+            every schema entity each refresh so re-stripping was harmless;
+            here a stale removal would drop an attr whose entry an earlier
+            batch already restored *)
+         let new_removed_attrs =
+           List.filter
+             (fun a -> not (List.mem a !applied_removed_attrs))
+             !removed_schema_attrs
+         in
+         let new_removed_field_attrs =
+           !removed_schema_fields
+           |> List.filter (fun p -> not (List.mem p !applied_removed_fields))
+           |> List.map fst
+         in
+         applied_removed_attrs := !removed_schema_attrs;
+         applied_removed_fields := !removed_schema_fields;
          (* mid-tx refreshes can see a partially-installed schema spec (e.g.
             db.type/tuple before its db/tupleTypes land); upstream does not
             revalidate the whole schema during a transaction *)
@@ -467,8 +488,9 @@ let apply_tx context tx_ops db =
          := context.schema_from_transaction_datoms
               ~validate:false
               ~strict:false
-              ~removed_attrs:!removed_schema_attrs
+              ~removed_attrs:new_removed_attrs
               ~removed_fields:!removed_schema_fields
+              ~removed_field_attrs:new_removed_field_attrs
               ~ignored_schema_entities:!ignored_schema_entities
               !current_schema
               datoms)
