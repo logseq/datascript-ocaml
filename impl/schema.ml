@@ -311,13 +311,38 @@ let schema_from_transaction_datoms
     in
     List.filter (fun (attr, _) -> not (List.mem attr described_attrs)) current
   in
-  datoms
-  |> List.fold_left
-       (fun schema d ->
-         match schema_attr_from_datoms ~strict ~ignored_schema_entities ~removed_fields current datoms d.e with
-         | Some entry -> replace_schema_attr schema entry
-         | None -> schema)
-       schema
+  (* schema_attr_from_datoms only reads datoms of the entity it is
+     asked about, so group once and compute each entity's entry once —
+     the fold over every datom was O(n^2). Entities are visited in
+     last-occurrence order so replace_schema_attr lands each entry at
+     the same position the per-datom fold produced. *)
+  let by_entity = Hashtbl.create 64 in
+  List.iteri
+    (fun i d ->
+      match Hashtbl.find_opt by_entity d.e with
+      | Some (ds, _) -> Hashtbl.replace by_entity d.e (d :: ds, i)
+      | None -> Hashtbl.replace by_entity d.e ([ d ], i))
+    datoms;
+  let entities =
+    Hashtbl.fold (fun e (_, last) acc -> (e, last) :: acc) by_entity []
+    |> List.sort (fun (_, a) (_, b) -> compare a b)
+  in
+  List.fold_left
+    (fun schema (e, _) ->
+      let entity_datoms = List.rev (fst (Hashtbl.find by_entity e)) in
+      match
+        schema_attr_from_datoms
+          ~strict
+          ~ignored_schema_entities
+          ~removed_fields
+          current
+          entity_datoms
+          e
+      with
+      | Some entry -> replace_schema_attr schema entry
+      | None -> schema)
+    schema
+    entities
   |> fun schema -> if validate then validate_schema schema else schema
 
 
