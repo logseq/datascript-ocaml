@@ -42,7 +42,7 @@ val remap_tempid_entity : entity_id -> entity_id -> (string * entity_id) list ->
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
-  ; schema_from_transaction_datoms : strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_from_transaction_datoms : ?validate:bool -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
   ; schema_datoms : db -> datom list -> datom list
   ; schema_fields : attr list
   ; current_attr_value : db -> entity_id -> attr -> value option

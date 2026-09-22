@@ -285,6 +285,7 @@ let replace_schema_attr schema (attr, spec) =
 
 let schema_from_transaction_datoms
       ?(strict = true)
+      ?(validate = true)
       ?(removed_attrs = [])
       ?(removed_fields = [])
       ?(ignored_schema_entities = [])
@@ -302,7 +303,7 @@ let schema_from_transaction_datoms
          | Some entry -> replace_schema_attr schema entry
          | None -> schema)
        schema
-  |> validate_schema
+  |> fun schema -> if validate then validate_schema schema else schema
 
 
 let split_namespaced_attr attr =

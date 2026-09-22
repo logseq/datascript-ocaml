@@ -9,6 +9,7 @@ val schema_has_no_history : schema -> attr -> bool
 val schema_fields : attr list
 val schema_from_transaction_datoms :
   ?strict:bool ->
+  ?validate:bool ->
   ?removed_attrs:attr list ->
   ?removed_fields:(attr * attr) list ->
   ?ignored_schema_entities:entity_id list ->
