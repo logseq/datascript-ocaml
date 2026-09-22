@@ -293,7 +293,22 @@ let schema_from_transaction_datoms
       datoms
   =
   let schema =
-    let described_attrs = schema_idents_from_datoms datoms @ removed_attrs |> List.sort_uniq compare in
+    (* Re-derive only attrs whose entities carry schema-field datoms in
+       this tx (or had fields retracted); upstream update-schema merges
+       per-datom, so an entity that only asserts its :db/ident keeps any
+       existing schema entry. *)
+    let entities_with_schema_fields =
+      datoms
+      |> List.filter_map (fun d -> if List.mem d.a schema_fields then Some d.e else None)
+      |> List.sort_uniq compare
+    in
+    let described_attrs =
+      List.sort_uniq compare
+        (removed_attrs
+         @ List.map fst removed_fields
+         @ schema_idents_from_datoms
+             (List.filter (fun d -> List.mem d.e entities_with_schema_fields) datoms))
+    in
     List.filter (fun (attr, _) -> not (List.mem attr described_attrs)) current
   in
   datoms
