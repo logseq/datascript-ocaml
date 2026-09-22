@@ -1106,11 +1106,33 @@ let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
 let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
   Query.match_reverse_pattern_clause (query_match_context db) bindings e_term reverse_attr v_term datom
 
+(* A bound term in entity position that cannot resolve to an entity id makes
+   the pattern unsatisfiable — upstream `-search` finds no datoms. A term
+   carrying no binding (variable, wildcard) imposes no constraint. *)
+type entity_term_resolution =
+  | Resolved_eid of int
+  | Unresolved_eid
+  | No_eid_constraint
+
 let query_entity_id_term db = function
-  | QEntity entity_id -> Some entity_id
-  | QValue (Int entity_id) -> Some entity_id
-  | QValue value -> Query.query_result_entity_id (query_result_context db) (Result_value value)
-  | _ -> None
+  | QEntity entity_id -> Resolved_eid entity_id
+  | QIdent ident ->
+    (match entid db ident_attr (Keyword ident) with
+     | Some entity_id -> Resolved_eid entity_id
+     | None -> Unresolved_eid)
+  | QValue (Int entity_id) -> Resolved_eid entity_id
+  | QValue value ->
+    (match Query.query_result_entity_id (query_result_context db) (Result_value value) with
+     | Some entity_id -> Resolved_eid entity_id
+     | None ->
+       (* match_query_term resolves keyword idents in entity position *)
+       (match resolve_query_value db value with
+        | Some (Keyword ident) ->
+          (match entid db ident_attr (Keyword ident) with
+           | Some entity_id -> Resolved_eid entity_id
+           | None -> Unresolved_eid)
+        | _ -> Unresolved_eid))
+  | _ -> No_eid_constraint
 
 let query_value_term = function
   | QValue value -> Some value
@@ -1247,7 +1269,14 @@ let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
   | _ -> primary_attr_datoms_seq db index ?e ~a ?v ?tx ()
 
 let pattern_datoms db e_term a_term v_term tx_term =
-  let e = query_entity_id_term db e_term in
+  match query_entity_id_term db e_term with
+  | Unresolved_eid -> Seq.empty
+  | resolution ->
+    let e =
+      match resolution with
+      | Resolved_eid entity_id -> Some entity_id
+      | Unresolved_eid | No_eid_constraint -> None
+    in
   let v = query_value_term v_term in
   let tx = query_tx_term tx_term in
   let matches_optional_e_tx datom =
@@ -1276,7 +1305,14 @@ let pattern_datoms db e_term a_term v_term tx_term =
   | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
-  let e = query_entity_id_term db e_term in
+  match query_entity_id_term db e_term with
+  | Unresolved_eid -> init
+  | resolution ->
+    let e =
+      match resolution with
+      | Resolved_eid entity_id -> Some entity_id
+      | Unresolved_eid | No_eid_constraint -> None
+    in
   let v = query_value_term v_term in
   let tx = query_tx_term tx_term in
   let matches_optional_e_tx datom =

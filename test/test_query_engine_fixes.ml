@@ -194,6 +194,38 @@ let test_in_scalar_result_entity () =
     (q_string ~inputs:[ Arg_scalar (Result_value (Ref 1)) ] db
        "[:find ?c :in $ ?x :where [?c :block/parent ?x]]")
 
+(* A var bound to a non-entity value in entity position is unsatisfiable:
+   upstream `-search` finds no datoms for it. Before the fix, the unresolved
+   bound narrowed like an unbound term, so the clause (and any rule body
+   using it, e.g. datascript's ref->val) matched every entity's datoms. *)
+let test_bound_non_entity_in_entity_position () =
+  let db =
+    init_db
+      [ datom ~e:1 ~a:"title" ~v:(String "Page1") ()
+      ; datom ~e:2 ~a:"title" ~v:(String "Page A") ()
+      ; datom ~e:3 ~a:"title" ~v:(String "Page B") ()
+      ]
+  in
+  assert_rows
+    ":in ?pv bound to a string in entity position matches nothing"
+    []
+    (q_string ~inputs:[ Arg_scalar (Result_value (String "Page1")) ] db
+       "[:find ?v :in $ ?pv :where [?pv :title ?v]]");
+  assert_rows
+    "literal non-entity value in entity position matches nothing"
+    []
+    (q_string db "[:find ?v :where [\"Page1\" :title ?v]]");
+  let rules =
+    rules_of_string
+      "[[(titled ?pv ?v) [?pv :title ?v]]
+        [(prop ?b ?v) [?b :title ?pv] (titled ?pv ?v)]]"
+  in
+  assert_rows
+    "rule body with non-entity-bound arg in entity position matches nothing"
+    []
+    (q_string ~inputs:[ Arg_rules rules ] db
+       "[:find ?v :in $ % :where (prop ?b ?v) [?b :title \"Page1\"]]")
+
 (* Upstream "Mutually recursive rules" (test-rules): two rules recursing into
    each other *)
 let test_mutually_recursive_rules () =
@@ -1015,4 +1047,5 @@ let () =
     ; "retract_cleans_duplicate_avet_tables", test_retract_cleans_duplicate_avet_tables
     ; "mid_tx_schema_refresh_is_incremental", test_mid_tx_schema_refresh_is_incremental
     ; "mid_tx_refresh_reapplies_removals_once", test_mid_tx_refresh_reapplies_removals_once
+    ; "bound_non_entity_in_entity_position", test_bound_non_entity_in_entity_position
     ]
