@@ -283,6 +283,10 @@ let replace_schema_attr schema (attr, spec) =
   let schema = List.remove_assoc attr schema in
   schema @ [ attr, spec ]
 
+(* counts datoms folded by schema_from_transaction_datoms; tests use it to
+   prove mid-tx refreshes stay linear in the number of schema datoms *)
+let folded_datoms = ref 0
+
 let schema_from_transaction_datoms
       ?(strict = true)
       ?(validate = true)
@@ -292,6 +296,7 @@ let schema_from_transaction_datoms
       current
       datoms
   =
+  folded_datoms := !folded_datoms + List.length datoms;
   let schema =
     (* Re-derive only attrs whose entities carry schema-field datoms in
        this tx (or had fields retracted); upstream update-schema merges

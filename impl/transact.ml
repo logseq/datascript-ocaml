@@ -375,7 +375,24 @@ type apply_context =
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
+  (* Mid-tx schema refresh is incremental: schema datoms appended to tx_data
+     are recorded here and each refresh folds only the entities touched by
+     the datoms seen since the previous refresh, instead of rescanning all
+     of tx_data every time (O(n^2) on seed transactions). *)
+  let pending_schema_rev = ref [] in
+  let inc_tx_schema = Hashtbl.create 64 in
   let append_tx_data tx_data_rev datom_tx_data =
+    List.iter
+      (fun d ->
+        if d.a = "db/ident" || List.mem d.a context.schema_fields then begin
+          pending_schema_rev := d :: !pending_schema_rev;
+          if d.added then
+            Hashtbl.replace
+              inc_tx_schema
+              d.e
+              (d :: Option.value (Hashtbl.find_opt inc_tx_schema d.e) ~default:[])
+        end)
+      datom_tx_data;
     List.rev_append datom_tx_data tx_data_rev
   in
   let tx = db.max_tx + 1 in
@@ -388,20 +405,73 @@ let apply_tx context tx_ops db =
   let db_with_current_metadata tx_db =
     { tx_db with schema = !current_schema; tx_fns = !current_tx_fns }
   in
-  let refresh_schema tx_db tx_data =
-    let schema_datoms = context.schema_datoms (db_with_current_metadata tx_db) tx_data in
-    (* mid-tx refreshes can see a partially-installed schema spec (e.g.
-       db.type/tuple before its db/tupleTypes land); upstream does not
-       revalidate the whole schema during a transaction *)
-    current_schema
-    := context.schema_from_transaction_datoms
-         ~validate:false
-         ~strict:false
-         ~removed_attrs:!removed_schema_attrs
-         ~removed_fields:!removed_schema_fields
-         ~ignored_schema_entities:!ignored_schema_entities
-         db.schema
-         schema_datoms
+  let dedup_schema_facts datoms =
+    (* first-occurrence (e,a,v) dedup, bucketed by (e,a) — same semantics
+       as the whole-tx schema_datoms pass *)
+    let seen = Hashtbl.create 8 in
+    List.fold_left
+      (fun acc d ->
+        let key = d.e, d.a in
+        match Hashtbl.find_opt seen key with
+        | Some bucket when List.exists (context.same_fact d) bucket -> acc
+        | Some bucket ->
+          Hashtbl.replace seen key (d :: bucket);
+          d :: acc
+        | None ->
+          Hashtbl.replace seen key [ d ];
+          d :: acc)
+      []
+      datoms
+    |> List.rev
+  in
+  let refresh_schema tx_db =
+    match !pending_schema_rev with
+    | [] -> ()
+    | pending_rev ->
+      pending_schema_rev := [];
+      let touched =
+        (* every entity with a fresh schema-relevant datom — including
+           db/ident-only and retracted entities — mirrors the whole-tx
+           schema_datoms pass's touched_schema_entities, ordered by last
+           fresh datom so replacement order matches *)
+        let last_pos = Hashtbl.create 8 in
+        List.iteri (fun i d -> Hashtbl.replace last_pos d.e i) pending_rev;
+        pending_rev
+        |> List.map (fun d -> d.e)
+        |> List.sort_uniq compare
+        |> List.sort (fun e1 e2 ->
+          compare (Hashtbl.find last_pos e1) (Hashtbl.find last_pos e2))
+      in
+      (match touched with
+       | [] -> ()
+       | _ ->
+         let schema_db = db_with_current_metadata tx_db in
+         let entity_datoms e =
+           (* inc_tx_schema accumulates newest-first — the same order the
+              whole-tx schema_datoms pass produces for asserted datoms *)
+           let tx_datoms =
+             Option.value (Hashtbl.find_opt inc_tx_schema e) ~default:[]
+           in
+           let actives =
+             context.existing_entity_datoms schema_db e
+             |> List.filter (fun d ->
+               d.a = "db/ident" || List.mem d.a context.schema_fields)
+           in
+           dedup_schema_facts (tx_datoms @ actives)
+         in
+         let datoms = List.concat_map entity_datoms touched in
+         (* mid-tx refreshes can see a partially-installed schema spec (e.g.
+            db.type/tuple before its db/tupleTypes land); upstream does not
+            revalidate the whole schema during a transaction *)
+         current_schema
+         := context.schema_from_transaction_datoms
+              ~validate:false
+              ~strict:false
+              ~removed_attrs:!removed_schema_attrs
+              ~removed_fields:!removed_schema_fields
+              ~ignored_schema_entities:!ignored_schema_entities
+              !current_schema
+              datoms)
   in
   (* pre-scan entity positions only (db_id, add/retract entity, raw datom e)
      so tempid allocation cannot collide with explicit entity ids; refs in
@@ -526,7 +596,7 @@ let apply_tx context tx_ops db =
     (* upstream updates the schema after each schema-field datom, so later
        datoms of the same entity see it *)
     (if attr = "db/ident" || List.mem attr context.schema_fields then
-       refresh_schema datoms (List.rev tx_data));
+       refresh_schema datoms);
     datoms, max_eid, tempids, entity_tempids, tx_data
   in
   let merge_tempid_entity tempid old_e target_e datoms tempids tx_data =
@@ -583,6 +653,21 @@ let apply_tx context tx_ops db =
         if d.e = old_e then None else Some (remap_datom_entity context.resolve_context old_e target_e d))
     in
     let tx_data = moved_tx_data_rev @ tx_data in
+    (* the tx_data entries of old_e were just remapped onto target_e; keep
+       the incremental schema bookkeeping aligned with them *)
+    (match Hashtbl.find_opt inc_tx_schema old_e with
+     | Some ds ->
+       Hashtbl.remove inc_tx_schema old_e;
+       let remapped = List.map (fun d -> { d with e = target_e }) ds in
+       let existing =
+         Option.value (Hashtbl.find_opt inc_tx_schema target_e) ~default:[]
+       in
+       Hashtbl.replace inc_tx_schema target_e (remapped @ existing)
+     | None -> ());
+    pending_schema_rev
+    := List.map
+         (fun d -> if d.e = old_e then { d with e = target_e } else d)
+         !pending_schema_rev;
     let tempids = remap_tempid_entity old_e target_e tempids in
     datoms, tempids, tx_data
   in
@@ -1577,8 +1662,8 @@ let apply_tx context tx_ops db =
       (fun state tx_op ->
         try
           let state = apply_op state tx_op in
-          let datoms, _, _, _, tx_data = state in
-          if tx_op_affects_schema tx_op then refresh_schema datoms (List.rev tx_data);
+          let datoms, _, _, _, _ = state in
+          if tx_op_affects_schema tx_op then refresh_schema datoms;
           state
         with Unresolved_lookup_ref (attr, value) ->
           (* The lookup ref target may be defined by a later op in this tx:
@@ -1600,8 +1685,8 @@ let apply_tx context tx_ops db =
           (fun state (tx_op, _, _) ->
             try
               let state = apply_op state tx_op in
-              let datoms, _, _, _, tx_data = state in
-              if tx_op_affects_schema tx_op then refresh_schema datoms (List.rev tx_data);
+              let datoms, _, _, _, _ = state in
+              if tx_op_affects_schema tx_op then refresh_schema datoms;
               progressed := true;
               state
             with Unresolved_lookup_ref (attr', value') ->

@@ -906,6 +906,38 @@ let test_edn_symbol_special_chars () =
        ; QueryFormSymbol "?var" ] -> ()
    | _ -> failf "read_edn should parse symbols containing *+!_'?<>=- and leading 'quote")
 
+(* Perf: the mid-tx schema refresh must fold only the datoms appended since
+   the previous refresh — rescanning all of tx_data on every schema-field
+   datom was O(n^2) and dominated seed transactions. Schema.folded_datoms
+   counts datoms folded by schema_from_transaction_datoms; with the
+   incremental refresh it grows linearly with the number of schema datoms. *)
+let test_mid_tx_schema_refresh_is_incremental () =
+  let entity i =
+    Entity
+      { db_id = Some (Entity_id (100 + i))
+      ; attrs =
+          [ "db/ident", One_value (Keyword (Printf.sprintf "user.property/p%d" i))
+          ; "db/valueType", One_value (Keyword "db.type/string")
+          ; "db/cardinality", One_value (Keyword "db.cardinality/one")
+          ; "db/index", One_value (Bool true)
+          ]
+      }
+  in
+  let ops = List.init 80 entity in
+  let before = !Schema.folded_datoms in
+  let db = db_with ops (empty_db ()) in
+  let folded = !Schema.folded_datoms - before in
+  (* each refresh refolds only the touched entity's accumulated schema
+     datoms (~4-6 each): a linear total is ~n * fields, the old rescan
+     folded the whole tx_data prefix each time (~n^2/2 datoms) *)
+  if folded > 6000 then
+    Printf.ksprintf failwith
+      "schema refresh folded %d datoms; expected O(n) (a full-tx_data rescan would fold ~n^2/2)"
+      folded;
+  (match Schema.schema_attr_by_name db.schema "user.property/p79" with
+   | Some { indexed = true; _ } -> ()
+   | _ -> failf "schema for user.property/p79 missing or wrong after seed tx")
+
 let () =
   List.iter
     (fun (name, f) ->
@@ -940,4 +972,5 @@ let () =
     ; "rule_tags_query_with_eid_input", test_rule_tags_query_with_eid_input
     ; "edn_symbol_special_chars", test_edn_symbol_special_chars
     ; "retract_cleans_duplicate_avet_tables", test_retract_cleans_duplicate_avet_tables
+    ; "mid_tx_schema_refresh_is_incremental", test_mid_tx_schema_refresh_is_incremental
     ]
