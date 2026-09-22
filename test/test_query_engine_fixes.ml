@@ -637,6 +637,215 @@ let test_entity_map_lookup_ref_vector_form () =
   if parent_datoms <> [ 2, Ref 1 ] then
     failf "vector lookup ref should resolve to e=1"
 
+(* Batch 4 regression (fixed by 0645055): a tx asserting a bare :db/ident for an
+   attr that already has a schema entry must keep that entry mid-transaction —
+   upstream update-schema merges per-datom. At e72915c the mid-tx schema
+   refresh stripped block/tags' cardinality-many/ref entry, so every later
+   block/tags value in the same tx was stored as a raw keyword instead of a
+   ref, and logseq's db_query_dsl rule queries over the attr (has-property /
+   property / tags) returned no rows. Tests below mirror those three queries
+   over a fixture whose tx includes such a bare :db/ident assert. *)
+let logseq_rule_schema () =
+  let base_attr =
+    { cardinality = One; unique = None; indexed = false; is_component = false
+    ; no_history = false; doc = None; value_type = None; tuple_attrs = None
+    ; tuple_types = None }
+  in
+  [ "block/tags", { base_attr with cardinality = Many; value_type = Some RefType }
+  ; "block/title", base_attr
+  ; "user.property/foo", base_attr
+  ; "user.property/number-many", { base_attr with cardinality = Many }
+  ; "user.property/page-many", { base_attr with cardinality = Many; value_type = Some RefType }
+  ; "logseq.property/public?", base_attr
+  ; "logseq.property.class/extends", { base_attr with cardinality = Many; value_type = Some RefType }
+  ]
+
+(* Entity 10 asserts only :db/ident for block/tags — the bare-ident form whose
+   schema-stripping corrupts every subsequent block/tags value of the same tx
+   at e72915c. Attr entities tagged logseq.class/Property mirror logseq's
+   built-in/user properties; block/title's ident entity is intentionally
+   untagged so it is excluded from property rule results. *)
+let logseq_rule_db () =
+  let property_tag = Many_values [ Keyword "logseq.class/Property" ] in
+  empty_db ~schema:(logseq_rule_schema ()) ()
+  |> db_with
+       [ Entity
+           { db_id = Some (Entity_id 11)
+           ; attrs = [ "db/ident", One_value (Keyword "logseq.class/Property") ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 16)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "logseq.class/Page")
+               ; "block/title", One_value (String "Page")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 17)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "user.class/Person")
+               ; "block/title", One_value (String "Person")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 18)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "user.class/Employee")
+               ; "logseq.property.class/extends"
+               , Many_values [ Keyword "user.class/Person" ]
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 10)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "block/tags")
+               ; "block/tags", property_tag
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 13)
+           ; attrs = [ "db/ident", One_value (Keyword "block/title") ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 12)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "user.property/foo")
+               ; "block/tags", property_tag
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 14)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "user.property/number-many")
+               ; "block/tags", property_tag
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 15)
+           ; attrs =
+               [ "db/ident", One_value (Keyword "user.property/page-many")
+               ; "block/tags", property_tag
+               ; "db/valueType", One_value (Keyword "db.type/ref")
+               ; "db/cardinality", One_value (Keyword "db.cardinality/many")
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 2)
+           ; attrs = [ "block/title", One_value (String "Page A") ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 1)
+           ; attrs =
+               [ "block/title", One_value (String "Page1")
+               ; "block/tags", Many_values [ Keyword "user.class/Person" ]
+               ; "user.property/foo", One_value (String "bar")
+               ; "user.property/number-many", Many_values [ Int 5; Int 10 ]
+               ; "user.property/page-many", Many_values [ Keyword "logseq.class/Page" ]
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 3)
+           ; attrs =
+               [ "block/title", One_value (String "Page2")
+               ; "block/tags", Many_values [ Keyword "user.class/Person" ]
+               ]
+           }
+       ; Entity
+           { db_id = Some (Entity_id 4)
+           ; attrs =
+               [ "block/title", One_value (String "Page3")
+               ; "block/tags", Many_values [ Keyword "user.class/Employee" ]
+               ]
+           }
+       ]
+
+let logseq_dsl_rules =
+  "[[(has-property ?b ?prop)
+     [?b ?prop _]
+     [?prop-e :db/ident ?prop]
+     [?prop-e :block/tags :logseq.class/Property]
+     (or [(missing? $ ?prop-e :logseq.property/public?)]
+         [?prop-e :logseq.property/public? true])]
+    [(property ?b ?prop ?val)
+     [?prop-e :db/ident ?prop]
+     [?prop-e :block/tags :logseq.class/Property]
+     (or [(missing? $ ?prop-e :logseq.property/public?)]
+         [?prop-e :logseq.property/public? true])
+     [?b ?prop ?pv]
+     (or (and [(missing? $ ?prop-e :db/valueType)]
+              [?b ?prop ?val])
+         (and [?prop-e :db/valueType :db.type/ref]
+              (or [?pv :block/title ?val]
+                  [?pv :logseq.property/value ?val])))]
+    [(tags ?b ?tags)
+     [(identity ?tags) [?spec ...]]
+     (tag-spec->tag ?tag ?spec)
+     [?b :block/tags ?tc]
+     (or [(= ?tag ?tc)] (class-extends ?tag ?tc))
+     [(missing? $ ?b :block/link)]]
+    [(tag-spec->tag ?tag ?spec) [(number? ?spec)] [(identity ?spec) ?tag]]
+    [(tag-spec->tag ?tag ?spec) [?tag :block/title ?spec]]
+    [(tag-spec->tag ?tag ?spec) [?tag :db/ident ?spec]]
+    [(class-extends ?p ?c)
+     [?c :logseq.property.class/extends ?p]]
+    [(class-extends ?p ?c)
+     [?t :logseq.property.class/extends ?p]
+     (class-extends ?t ?c)]]"
+
+let attr_results label expected rows =
+  let got =
+    List.sort_uniq compare
+      (List.filter_map
+         (function
+           | [ Result_attr a ] -> Some a
+           | [ Result_value (Keyword a) ] -> Some a
+           | _ -> None)
+         rows)
+  in
+  if got <> List.sort compare expected then
+    failf "%s: got %d attrs" label (List.length got)
+
+let test_schema_keeps_entry_after_bare_ident_assert () =
+  (* direct check for the e72915c corruption: every block/tags datom must be a
+     Ref, not a raw keyword *)
+  let db = logseq_rule_db () in
+  List.iter
+    (fun d ->
+      match d.v with
+      | Ref _ -> ()
+      | _ -> failf "block/tags datom for e=%d stored as raw value, not a ref" d.e)
+    (List.of_seq (datoms db Aevt ~a:"block/tags" ()))
+
+let test_rule_attr_var_has_property () =
+  let db = logseq_rule_db () in
+  attr_results "has-property with unbound attr var"
+    [ "block/tags"; "user.property/foo"; "user.property/number-many"
+    ; "user.property/page-many" ]
+    (q_string ~inputs:[ Arg_rules (rules_of_string logseq_dsl_rules) ] db
+       "[:find ?p :in $ % :where (has-property ?b ?p) [?b :block/title \"Page1\"]]")
+
+let test_rule_attr_var_property () =
+  let db = logseq_rule_db () in
+  attr_results "property with unbound attr var"
+    [ "block/tags"; "user.property/foo"; "user.property/number-many"
+    ; "user.property/page-many" ]
+    (q_string ~inputs:[ Arg_rules (rules_of_string logseq_dsl_rules) ] db
+       "[:find ?p :in $ % :where (property ?b ?p _) [?b :block/title \"Page1\"]]")
+
+let test_rule_tags_query_with_eid_input () =
+  let db = logseq_rule_db () in
+  (* cljs binds #{person-eid} to scalar ?tag-ids; (number? ?spec) +
+     (identity ?spec) ?tag picks the eid up inside tag-spec->tag *)
+  assert_rows
+    "tags rule over an eid input matches subclass tags too"
+    [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+    (q_string db
+       ~inputs:
+         [ Arg_rules (rules_of_string logseq_dsl_rules)
+         ; Arg_scalar (Result_value (Set [ Int 17 ]))
+         ]
+       "[:find ?b :in $ % ?tag-ids :where (tags ?b ?tag-ids)]")
+
 (* Bug 6: EDN reader accepts ' and friends inside symbol/keyword bodies *)
 let test_edn_symbol_special_chars () =
   (match Parser.read_edn "{:user.property/foo*+!_'?<>=- nil}" with
@@ -678,5 +887,9 @@ let () =
     ; "many_ref_vector_of_same_ident_idempotent", test_many_ref_vector_of_same_ident_idempotent
     ; "many_ref_vector_with_unique_head_is_lookup_ref", test_many_ref_vector_with_unique_head_is_lookup_ref
     ; "entity_map_lookup_ref_vector_form", test_entity_map_lookup_ref_vector_form
+    ; "schema_keeps_entry_after_bare_ident_assert", test_schema_keeps_entry_after_bare_ident_assert
+    ; "rule_attr_var_has_property", test_rule_attr_var_has_property
+    ; "rule_attr_var_property", test_rule_attr_var_property
+    ; "rule_tags_query_with_eid_input", test_rule_tags_query_with_eid_input
     ; "edn_symbol_special_chars", test_edn_symbol_special_chars
     ]
