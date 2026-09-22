@@ -1678,7 +1678,7 @@ end) = struct
     | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
     | term -> term
 
-  let bound_relation_clause binding = function
+  let rec bound_relation_clause binding = function
     | Pattern (e_term, a_term, v_term) ->
       Pattern
         ( bound_pattern_term binding e_term
@@ -1723,6 +1723,31 @@ end) = struct
     | ComparisonPredicate (predicate, left_term, right_term) ->
       ComparisonPredicate
         (predicate, bound_pattern_term binding left_term, bound_pattern_term binding right_term)
+    | ComparisonPredicateN (predicate, terms) ->
+      ComparisonPredicateN (predicate, List.map (bound_pattern_term binding) terms)
+    | EqualityPredicate (predicate, terms) ->
+      EqualityPredicate (predicate, List.map (bound_pattern_term binding) terms)
+    | ArithmeticValue (op, terms, output_var) ->
+      ArithmeticValue (op, List.map (bound_pattern_term binding) terms, output_var)
+    | NameValue (term, output_var) ->
+      NameValue (bound_pattern_term binding term, output_var)
+    | NamespaceValue (term, output_var) ->
+      NamespaceValue (bound_pattern_term binding term, output_var)
+    | KeywordFromName (term, output_var) ->
+      KeywordFromName (bound_pattern_term binding term, output_var)
+    | KeywordFromNamespaceName (namespace_term, name_term, output_var) ->
+      KeywordFromNamespaceName
+        (bound_pattern_term binding namespace_term, bound_pattern_term binding name_term, output_var)
+    | SourceClause (source_name, clause) ->
+      SourceClause (source_name, bound_relation_clause binding clause)
+    | Not clauses ->
+      Not (List.map (bound_relation_clause binding) clauses)
+    | SourceNot (source_name, clauses) ->
+      SourceNot (source_name, List.map (bound_relation_clause binding) clauses)
+    | NotJoin (vars, clauses) ->
+      NotJoin (vars, List.map (bound_relation_clause binding) clauses)
+    | SourceNotJoin (source_name, vars, clauses) ->
+      SourceNotJoin (source_name, vars, List.map (bound_relation_clause binding) clauses)
     | clause -> clause
 
   let relation_prefix_clause = function

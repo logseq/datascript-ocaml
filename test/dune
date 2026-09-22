@@ -244,3 +244,8 @@
    %{dep:cross_runtime_parity_test.sh}
    %{dep:cross_runtime_ocaml.exe}
    %{dep:../script/cross_runtime_upstream.js})))
+
+(test
+ (name test_query_engine_fixes)
+ (modules test_query_engine_fixes)
+ (libraries datascript-ocaml-native))
