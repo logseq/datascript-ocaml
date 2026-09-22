@@ -153,6 +153,35 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
   notify_listeners conn report;
   report
 
+(* cljs compare-and-set! + dc/store-after-transact! + dc/run-callbacks:
+   install a report computed off-conn (e.g. by a post-process pipeline
+   built with transact/with-tx) as the conn's authoritative db, persist
+   its tx-data through the storage tail, and notify listeners with that
+   exact report rather than a re-transaction. *)
+let apply_report (context : transact_context) conn (report : tx_report) =
+  let db_after =
+    match conn.storage with
+    | None -> report.db_after
+    | Some _ -> { report.db_after with storage_ref = conn.storage }
+  in
+  conn.db <- db_after;
+  (match conn.storage with
+   | None -> ()
+   | Some storage ->
+     if report.tx_data <> [] then begin
+       let tail = conn.storage_tail @ [ report.tx_data ] in
+       if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold then begin
+         context.store ~storage db_after;
+         conn.storage_tail <- []
+       end else begin
+         conn.storage_tail <- tail;
+         context.store_tail storage conn.storage_tail
+       end
+     end);
+  let report = { report with db_after } in
+  notify_listeners conn report;
+  report
+
 let reset (context : reset_context) ?(tx_meta = []) conn db =
   let db =
     match conn.storage with

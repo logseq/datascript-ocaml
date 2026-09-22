@@ -452,6 +452,7 @@ val transact_conn : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_conn_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
 val transact_bang : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_bang_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
+val apply_report : conn -> tx_report -> tx_report
 val transact_async : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_async_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
 val tempid : ?part:string -> ?value:int -> unit -> entity_ref

@@ -833,6 +833,17 @@ let transact_conn ?(tx_meta = []) conn tx_data =
   in
   Conn.transact context ~tx_meta conn tx_data
 
+let apply_report (conn : conn) (report : tx_report) : tx_report =
+  let context : Conn.transact_context =
+    { store
+    ; store_tail
+    ; storage_tail_datom_count
+    ; storage_tail_compaction_threshold
+    ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
+    }
+  in
+  Conn.apply_report context conn report
+
 let transact_bang ?tx_meta conn tx_data = transact_conn ?tx_meta conn tx_data
 
 let transact_async ?tx_meta conn tx_data = transact_conn ?tx_meta conn tx_data
