@@ -12,6 +12,7 @@ type context =
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
+  ; is_unique_identity : db -> attr -> bool
   ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   }
@@ -186,10 +187,13 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
 let attr_expands_collection context db attr =
   context.cardinality db attr = Many || context.is_reverse_ref attr
 
-let ref_lookup_collection_value = function
-  | (List _ | Vector _) as value ->
-    (match entity_ref_of_ref_attr_value value with
-     | Some _ -> true
+(* upstream maybe-wrap-multival: in a multival context a 2-element collection is
+   a lookup ref only when its head names a :db.unique/identity attr; any other
+   collection expands into individual values *)
+let ref_lookup_collection_value context db = function
+  | List [ attr; _ ] | Vector [ attr; _ ] ->
+    (match attr_name_of_value attr with
+     | Some attr -> context.is_unique_identity db attr
      | None -> false)
   | _ -> false
 
@@ -209,7 +213,7 @@ let resolve_optional_existing_entity_ref context db datoms tx max_eid tempids = 
     Some e, max_eid, tempids
 
 let resolve_tx_value_for_attr context db attr datoms tx max_eid tempids = function
-  | One_value ((List values | Vector values) as value) when attr_expands_collection context db attr && not (ref_lookup_collection_value value) ->
+  | One_value ((List values | Vector values) as value) when attr_expands_collection context db attr && not (ref_lookup_collection_value context db value) ->
     let values, max_eid, tempids =
       List.fold_left
         (fun (values, max_eid, tempids) value ->

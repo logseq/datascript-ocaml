@@ -543,6 +543,100 @@ let test_entity_map_lookup_ref_never_resolves_raises () =
      then
        failf "unexpected error message: %s" msg)
 
+(* Bug D: upstream maybe-wrap-multival — inside a multival attr a 2-element
+   collection is a lookup ref only when its head names a unique-identity attr;
+   otherwise it expands into individual values *)
+let refs_datoms db =
+  datoms db Aevt ~a:"block/refs" ()
+  |> List.of_seq
+  |> List.map (fun d -> d.e, d.v)
+
+let test_many_ref_vector_of_idents_expands () =
+  (* logseq repro: {:block/tags [:logseq.class/Page :logseq.class/Task]} — the
+     head keyword is not an attr at all, so the vector is a collection *)
+  let db =
+    empty_db ~schema:(block_schema ()) ()
+    |> db_with
+         [ Add (Entity_id 10, "db/ident", Keyword "logseq.class/Page")
+         ; Add (Entity_id 11, "db/ident", Keyword "logseq.class/Task")
+         ]
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "block/refs"
+                 , One_value
+                     (Vector [ Keyword "logseq.class/Page"; Keyword "logseq.class/Task" ])
+                 ]
+             }
+         ]
+  in
+  let refs = refs_datoms db in
+  if refs <> [ 1, Ref 10; 1, Ref 11 ] then
+    failf "vector of ident keywords should expand into one datom per ident, got %d"
+      (List.length refs)
+
+let test_many_ref_vector_of_same_ident_idempotent () =
+  let db =
+    empty_db ~schema:(block_schema ()) ()
+    |> db_with [ Add (Entity_id 10, "db/ident", Keyword "logseq.class/Page") ]
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs =
+                 [ "block/refs"
+                 , One_value
+                     (Vector [ Keyword "logseq.class/Page"; Keyword "logseq.class/Page" ])
+                 ]
+             }
+         ]
+  in
+  let refs = refs_datoms db in
+  if refs <> [ 1, Ref 10 ] then
+    failf "duplicate ident refs should yield a single datom, got %d" (List.length refs)
+
+let test_many_ref_vector_with_unique_head_is_lookup_ref () =
+  (* Same 2-vector whose head names a unique-identity attr stays a lookup ref *)
+  let u1 = "11111111-1111-1111-1111-111111111111" in
+  let db =
+    empty_db ~schema:(block_schema ()) ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "block/uuid", One_value (Uuid u1) ] }
+         ; Entity
+             { db_id = Some (Entity_id 9)
+             ; attrs =
+                 [ "block/refs"
+                 , One_value (Vector [ Keyword "block/uuid"; Uuid u1 ])
+                 ]
+             }
+         ]
+  in
+  let refs = refs_datoms db in
+  if refs <> [ 9, Ref 1 ] then
+    failf "2-vector headed by a unique attr should resolve as a lookup ref to e=1"
+
+let test_entity_map_lookup_ref_vector_form () =
+  (* {:block/parent [:block/uuid u]} — single-attr lookup ref in vector form *)
+  let u1 = "11111111-1111-1111-1111-111111111111" in
+  let db =
+    empty_db ~schema:(block_schema ()) ()
+    |> db_with
+         [ Entity { db_id = None; attrs = [ "block/uuid", One_value (Uuid u1) ] }
+         ; Entity
+             { db_id = None
+             ; attrs =
+                 [ "block/parent", One_value (Vector [ Keyword "block/uuid"; Uuid u1 ]) ]
+             }
+         ]
+  in
+  let parent_datoms =
+    datoms db Aevt ~a:"block/parent" ()
+    |> List.of_seq
+    |> List.map (fun d -> d.e, d.v)
+  in
+  if parent_datoms <> [ 2, Ref 1 ] then
+    failf "vector lookup ref should resolve to e=1"
+
 (* Bug 6: EDN reader accepts ' and friends inside symbol/keyword bodies *)
 let test_edn_symbol_special_chars () =
   (match Parser.read_edn "{:user.property/foo*+!_'?<>=- nil}" with
@@ -580,5 +674,9 @@ let () =
     ; "entity_map_lookup_ref_later_tx_entity_many_values", test_entity_map_lookup_ref_later_tx_entity_many_values
     ; "add_op_lookup_ref_later_tx_entity", test_add_op_lookup_ref_later_tx_entity
     ; "entity_map_lookup_ref_never_resolves_raises", test_entity_map_lookup_ref_never_resolves_raises
+    ; "many_ref_vector_of_idents_expands", test_many_ref_vector_of_idents_expands
+    ; "many_ref_vector_of_same_ident_idempotent", test_many_ref_vector_of_same_ident_idempotent
+    ; "many_ref_vector_with_unique_head_is_lookup_ref", test_many_ref_vector_with_unique_head_is_lookup_ref
+    ; "entity_map_lookup_ref_vector_form", test_entity_map_lookup_ref_vector_form
     ; "edn_symbol_special_chars", test_edn_symbol_special_chars
     ]
