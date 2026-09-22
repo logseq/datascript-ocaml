@@ -11,6 +11,8 @@ let file_storage _dir =
 
 let compile_regex = Regexp.regexp
 
+let validate_regex pattern = ignore (compile_regex pattern)
+
 let replace_regex ~first_only regex value replacement =
   if first_only then Regexp.replace_first regex value replacement
   else Regexp.global_replace regex value replacement

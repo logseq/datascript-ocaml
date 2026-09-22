@@ -551,13 +551,20 @@ let eval_string_escape_clause context db bindings value_term replacement_term ou
   | Some _ | None -> []
 
 let regex_pattern_of_result = Built_ins.regex_pattern_of_result
+let validate_regex = Built_ins.validate_regex
 let regex_find = Built_ins.regex_find
 let regex_matches = Built_ins.regex_matches
 let regex_seq = Built_ins.regex_seq
 
 let eval_re_pattern_value_clause context db bindings pattern_term output_var =
   match eval_query_term (context.match_context db) bindings pattern_term with
-  | Some (Result_value (String pattern)) | Some (Result_value (Regex pattern)) ->
+  | Some (Result_value (String pattern)) ->
+    (* cljs re-pattern compiles eagerly, so an invalid pattern raises here *)
+    validate_regex pattern;
+    (match bind_var (context.result_resolution_context db) output_var (Result_value (Regex pattern)) bindings with
+     | Some bindings -> [ bindings ]
+     | None -> [])
+  | Some (Result_value (Regex pattern)) ->
     (match bind_var (context.result_resolution_context db) output_var (Result_value (Regex pattern)) bindings with
      | Some bindings -> [ bindings ]
      | None -> [])
