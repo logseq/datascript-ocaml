@@ -688,8 +688,15 @@ let transact_apply_context : Transact_impl.apply_context =
   { resolve_context = transact_resolve_context
   ; is_filtered
   ; schema_from_transaction_datoms =
-      (fun ~strict ~removed_attrs ~removed_fields ~ignored_schema_entities schema datoms ->
-        schema_from_transaction_datoms ~strict ~removed_attrs ~removed_fields ~ignored_schema_entities schema datoms)
+      (fun ?(validate = true) ~strict ~removed_attrs ~removed_fields ~ignored_schema_entities schema datoms ->
+        schema_from_transaction_datoms
+          ~validate
+          ~strict
+          ~removed_attrs
+          ~removed_fields
+          ~ignored_schema_entities
+          schema
+          datoms)
   ; schema_datoms = schema_datoms_for_tx
   ; schema_fields
   ; current_attr_value = current_attr_value_db

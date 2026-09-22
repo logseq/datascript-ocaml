@@ -309,7 +309,7 @@ let remap_tempid_entity old_e new_e tempids =
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
-  ; schema_from_transaction_datoms : strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_from_transaction_datoms : ?validate:bool -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
   ; schema_datoms : db -> datom list -> datom list
   ; schema_fields : attr list
   ; current_attr_value : db -> entity_id -> attr -> value option
@@ -359,8 +359,12 @@ let apply_tx context tx_ops db =
   in
   let refresh_schema tx_db tx_data =
     let schema_datoms = context.schema_datoms (db_with_current_metadata tx_db) tx_data in
+    (* mid-tx refreshes can see a partially-installed schema spec (e.g.
+       db.type/tuple before its db/tupleTypes land); upstream does not
+       revalidate the whole schema during a transaction *)
     current_schema
     := context.schema_from_transaction_datoms
+         ~validate:false
          ~strict:false
          ~removed_attrs:!removed_schema_attrs
          ~removed_fields:!removed_schema_fields
