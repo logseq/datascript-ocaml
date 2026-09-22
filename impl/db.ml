@@ -650,6 +650,23 @@ let exact_prefix_bound index e a v tx =
        Some (bound_datom ~e ~a ~v ~tx (), fields ~e:true ~a:true ~v:true ~tx:true ())
      | _ -> None)
 
+(* Upstream `-rseek-datoms` bounds the reverse slice at the *end* of the
+   matched component range: missing e/tx components default to emax/txmax
+   while missing a/v components act as wildcards (cmp returns 0 for nil).
+   Reusing [bound_datom] defaults (e = 0, tx = tx0) would instead position
+   the bound at the *start* of the range. *)
+let rseek_prefix_bound e a v tx =
+  let emax = max_int in
+  let txmax = max_int in
+  Some
+    ( bound_datom
+        ~e:(Option.value e ~default:emax)
+        ~a:(Option.value a ~default:"")
+        ~v:(Option.value v ~default:Nil)
+        ~tx:(Option.value tx ~default:txmax)
+        ()
+    , fields ~e:true ~a:(Option.is_some a) ~v:(Option.is_some v) ~tx:true () )
+
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
@@ -708,7 +725,7 @@ let lower_prefix_datoms context db index e a v tx =
        Some (merge_sorted_datom_seqs (Util.compare_datom index) indexed (List.to_seq duplicates)))
 
 let reverse_upper_prefix_datoms context db index e a v tx =
-  match exact_prefix_bound index e a v tx with
+  match rseek_prefix_bound e a v tx with
   | None -> None
   | Some (bound, bound_fields) ->
     let cmp = slice_cmp context index bound bound_fields bound bound_fields in
