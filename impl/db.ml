@@ -222,6 +222,30 @@ let add_datom_to_indexes db datom =
   ; max_datom_e = max db.max_datom_e datom.e
   }
 
+let remove_fact_from_duplicate_tables db active =
+  (* Retraction removes the fact entirely, so every stored copy — including
+     the ones kept out of the PSet indexes in the duplicate tables — must go.
+     The tables are shared with prior db values, so rebuild them rather than
+     mutate in place. *)
+  let duplicate_datoms = List.filter (fun d -> not (same_fact d active)) db.duplicate_datoms in
+  if duplicate_datoms == db.duplicate_datoms then
+    db
+  else
+    let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
+    let duplicate_avet_datoms =
+      duplicate_datoms
+      |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible db.schema datom.a)
+      |> List.sort (Util.compare_datom Avet)
+    in
+    { db with
+      duplicate_datoms
+    ; duplicate_aevt_datoms
+    ; duplicate_avet_datoms
+    ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
+    ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
+    ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
+    }
+
 let refresh_indexes_with_tx_data db tx_data =
   let db =
     List.fold_left
@@ -232,6 +256,7 @@ let refresh_indexes_with_tx_data db tx_data =
           match find_active_datom_by_fact db datom with
           | None -> db
           | Some active ->
+            let db = remove_fact_from_duplicate_tables db active in
             { db with
               eavt_index = PSet.remove active db.eavt_index
             ; aevt_index = PSet.remove active db.aevt_index
