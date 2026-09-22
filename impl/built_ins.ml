@@ -45,9 +45,11 @@ let value_is_not_empty value =
   | None -> false
 
 let matches_value_predicate predicate value =
+  (* Ref values are entity ids — plain numbers upstream — so numeric
+     predicates and arithmetic see them as integers *)
   match predicate, value with
-  | NumberValue, (Int _ | Float _) -> true
-  | IntegerValue, Int _ -> true
+  | NumberValue, (Int _ | Float _ | Ref _) -> true
+  | IntegerValue, (Int _ | Ref _) -> true
   | StringValue, String _ -> true
   | BooleanValue, Bool _ -> true
   | KeywordValue, Keyword _ -> true
@@ -56,13 +58,18 @@ let matches_value_predicate predicate value =
 let matches_numeric_predicate predicate value =
   match predicate, value with
   | ZeroNumber, Int value -> value = 0
+  | ZeroNumber, Ref value -> value = 0
   | ZeroNumber, Float value -> value = 0.0
   | PositiveNumber, Int value -> value > 0
+  | PositiveNumber, Ref value -> value > 0
   | PositiveNumber, Float value -> value > 0.0
   | NegativeNumber, Int value -> value < 0
+  | NegativeNumber, Ref value -> value < 0
   | NegativeNumber, Float value -> value < 0.0
   | EvenInteger, Int value -> value mod 2 = 0
+  | EvenInteger, Ref value -> value mod 2 = 0
   | OddInteger, Int value -> value mod 2 <> 0
+  | OddInteger, Ref value -> value mod 2 <> 0
   | (EvenInteger | OddInteger), Float _ -> false
   | _, _ -> false
 
@@ -90,6 +97,7 @@ let all_values_equal = function
 
 let numeric_value = function
   | Int value -> Some (`Int value)
+  | Ref value -> Some (`Int value)
   | Float value -> Some (`Float value)
   | _ -> None
 

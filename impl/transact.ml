@@ -45,6 +45,13 @@ let remember_current_tx_alias tempids tx alias =
     in
     insert_after_current_tx_aliases [] tempids
 
+(* Raised when a lookup ref cannot be resolved yet: the target may be defined
+   by a later op in the same transaction. apply_ops defers such ops and retries
+   them as the tx datoms accumulate; if they still cannot resolve at tx end the
+   original "Nothing found" error is raised (matching upstream's strict
+   sequential behavior for genuinely missing targets). *)
+exception Unresolved_lookup_ref of attr * value
+
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
   | Entity_id e ->
     let e = context.validate_entity_id e in
@@ -65,9 +72,9 @@ let rec resolve_entity_ref context db datoms tx max_eid tempids = function
          e, context.max_eid_with_entity_id max_eid e, remember_tempid tempids tempid e)
   | Lookup_ref (attr, value) ->
     let value, max_eid, tempids = resolve_value context db datoms tx max_eid tempids value in
-    (match context.lookup_ref_entity_id ~strict_missing:true datoms attr value with
+    (match context.lookup_ref_entity_id ~strict_missing:false datoms attr value with
      | Some e -> e, context.max_eid_with_entity_id max_eid e, tempids
-     | None -> invalid_arg (context.unresolved_lookup_ref_message attr value))
+     | None -> raise (Unresolved_lookup_ref (attr, value)))
 
 and resolve_value context db datoms tx max_eid tempids = function
   | TxRef -> Ref tx, max_eid, remember_current_tx tempids tx
@@ -420,6 +427,7 @@ let apply_tx context tx_ops db =
   in
   let initial_max_eid = List.fold_left max_explicit_tx_op db.max_eid tx_ops in
   let max_tx_seen = ref tx in
+  let deferred_ops = ref [] in
   let mark_entity_tempid entity_tempids = function
     | Temp_id tempid -> tempid :: entity_tempids
     | _ -> entity_tempids
@@ -746,7 +754,7 @@ let apply_tx context tx_ops db =
                         max_eid
                         tempids
                         tx_value)
-                 with Invalid_argument _ -> None)
+                 with Invalid_argument _ | Unresolved_lookup_ref _ -> None)
               with
               | Some (tx_value, max_eid, tempids) ->
                 (attr, tx_value) :: probe_attrs, max_eid, tempids
@@ -1160,7 +1168,7 @@ let apply_tx context tx_ops db =
         in
         (match context.existing_unique_entity db lookup_attr lookup_value with
          | Some entity_id -> Ref entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
-         | None -> invalid_arg (context.resolve_context.unresolved_lookup_ref_message lookup_attr lookup_value))
+         | None -> raise (Unresolved_lookup_ref (lookup_attr, lookup_value)))
       | _ ->
         let value, max_eid, _ =
           resolve_value_for_attr context.resolve_context db attr db tx max_eid [] value
@@ -1512,21 +1520,55 @@ let apply_tx context tx_ops db =
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
-        let state = apply_op state tx_op in
-        let datoms, _, _, _, tx_data = state in
-        if tx_op_affects_schema tx_op then refresh_schema datoms (List.rev tx_data);
-        state)
+        try
+          let state = apply_op state tx_op in
+          let datoms, _, _, _, tx_data = state in
+          if tx_op_affects_schema tx_op then refresh_schema datoms (List.rev tx_data);
+          state
+        with Unresolved_lookup_ref (attr, value) ->
+          (* The lookup ref target may be defined by a later op in this tx:
+             queue the op and retry it once more datoms accumulate. *)
+          deferred_ops := (tx_op, attr, value) :: !deferred_ops;
+          state)
       state
       tx_ops
   in
+  let rec drain_deferred_ops state =
+    let pending = List.rev !deferred_ops in
+    match pending with
+    | [] -> state
+    | (_, first_attr, first_value) :: _ ->
+      deferred_ops := [];
+      let progressed = ref false in
+      let state =
+        List.fold_left
+          (fun state (tx_op, _, _) ->
+            try
+              let state = apply_op state tx_op in
+              let datoms, _, _, _, tx_data = state in
+              if tx_op_affects_schema tx_op then refresh_schema datoms (List.rev tx_data);
+              progressed := true;
+              state
+            with Unresolved_lookup_ref (attr', value') ->
+              deferred_ops := (tx_op, attr', value') :: !deferred_ops;
+              state)
+          state
+          pending
+      in
+      (* No progress means the remaining targets never resolve: raise the same
+         error upstream raises for a lookup ref that points nowhere. *)
+      if not !progressed then
+        invalid_arg (context.resolve_context.unresolved_lookup_ref_message first_attr first_value)
+      else
+        drain_deferred_ops state
+  in
   let datoms, max_eid, tempids, entity_tempids, tx_data, fast_tx_data =
-    match try_apply_bulk_explicit_entities () with
+    match (try try_apply_bulk_explicit_entities () with Unresolved_lookup_ref _ -> None) with
     | Some (datoms, max_eid, tempids, entity_tempids, tx_data) ->
       datoms, max_eid, tempids, entity_tempids, tx_data, Some tx_data
     | None ->
-      let datoms, max_eid, tempids, entity_tempids, tx_data =
-        apply_ops (db, initial_max_eid, [], [], []) tx_ops
-      in
+      let state = apply_ops (db, initial_max_eid, [], [], []) tx_ops in
+      let datoms, max_eid, tempids, entity_tempids, tx_data = drain_deferred_ops state in
       datoms, max_eid, tempids, entity_tempids, tx_data, None
   in
   let tx_data =
