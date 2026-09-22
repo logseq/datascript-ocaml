@@ -1230,7 +1230,14 @@ let parse_complement_predicate_clause context symbol args =
     | _ -> invalid_arg (one_arg_message symbol)
   in
   let unary_value_predicate predicate =
-    unary_result_predicate (function Result_value value -> predicate value | _ -> false)
+    (* Bound entity ids arrive as Result_entity but are plain numbers
+       upstream: convert through value_of_query_result so numeric/value
+       predicates (even?, integer?, number?, ...) apply to them *)
+    unary_result_predicate
+      (fun result ->
+        match context.value_of_query_result result with
+        | Some value -> predicate value
+        | None -> false)
   in
   let binary_string_predicate predicate =
     match args with

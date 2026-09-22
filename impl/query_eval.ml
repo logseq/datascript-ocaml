@@ -156,9 +156,15 @@ let value_has_count = Built_ins.value_has_count
 let value_is_not_empty = Built_ins.value_is_not_empty
 
 let eval_value_predicate_clause context db bindings term predicate =
+  (* Bound entity ids arrive as Result_entity but are plain numbers
+     upstream: convert through value_of_query_result so value/numeric
+     predicates (number?, integer?, even?, ...) apply to them *)
   match eval_query_term (context.match_context db) bindings term with
-  | Some (Result_value value) when predicate value -> [ bindings ]
-  | Some _ | None -> []
+  | Some result ->
+    (match value_of_query_result result with
+     | Some value when predicate value -> [ bindings ]
+     | Some _ | None -> [])
+  | None -> []
 
 let matches_value_predicate = Built_ins.matches_value_predicate
 

@@ -893,6 +893,56 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
         [ [ Result_value (String "Tupen") ] ]
         (q_string restored_again "[:find ?aka :where [1 :aka ?aka]]"))
 
+(* Restore must rebuild the full avet index, including ref-attr values: a
+   reverse-attr (_attr) pattern resolves through avet (attr, value) -> e *)
+let test_sqlite_storage_restored_reverse_ref_lookup () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping SQLite restored reverse-ref lookup test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      let storage = Sqlite_storage.storage db_path in
+      let schema = [ "name", unique_identity; "friend", ref_attr; "parent", ref_attr ] in
+      let conn = create_conn ~schema ~storage () in
+      ignore
+        (transact_conn
+           conn
+           [ Add (Entity_id 1, "name", String "Ivan")
+           ; Add (Entity_id 2, "name", String "Petr")
+           ; Add (Entity_id 2, "friend", Ref 1)
+           ; Add (Entity_id 3, "name", String "Anna")
+           ; Add (Entity_id 3, "parent", Ref 1)
+           ]);
+      let restored =
+        match restore_conn storage with
+        | Some conn -> conn
+        | None -> failwith "SQLite storage should restore a connection for reverse-ref lookup"
+      in
+      let restored_db = conn_db restored in
+      (* avet lookup by ref value: datoms whose v is (Ref 1) *)
+      let friend_refs =
+        datoms restored_db Avet ~a:"friend" ()
+        |> List.filter (fun d -> d.v = Ref 1)
+      in
+      if List.map (fun d -> d.e, d.a, d.v) friend_refs <> [ 2, "friend", Ref 1 ] then
+        failwith "SQLite restored avet should index ref-attr values";
+      (* _attr pattern: who references entity 1 via :friend *)
+      assert_equal_query
+        "restored SQLite conn answers reverse-ref patterns"
+        [ [ Result_value (String "Petr") ] ]
+        (q_string
+           restored_db
+           "[:find ?name
+             :where [1 :_friend ?child]
+                    [?child :name ?name]]");
+      assert_equal_query
+        "restored SQLite conn answers reverse-ref patterns for parent"
+        [ [ Result_value (String "Anna") ] ]
+        (q_string
+           restored_db
+           "[:find ?name
+             :where [1 :_parent ?child]
+                    [?child :name ?name]]"))
+
 let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed filter/entity/rules test: sqlite3 is not available"
@@ -2834,6 +2884,7 @@ let () =
   test_sqlite_storage_does_not_require_sqlite3_binary ();
   test_sqlite_storage_store_and_delete_are_separate ();
   test_sqlite_storage_backed_connections_query_and_transact_after_restore ();
+  test_sqlite_storage_restored_reverse_ref_lookup ();
   test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_transacts ();
   test_sqlite_storage_backed_connections_index_query_and_transact_parity ();
   test_sqlite_storage_backed_composite_values_after_restore ();
