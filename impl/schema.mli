@@ -16,6 +16,7 @@ val schema_from_transaction_datoms :
   schema ->
   datom list ->
   schema
+val folded_datoms : int ref
 val split_namespaced_attr : attr -> string option * string
 val join_namespaced_attr : string option -> string -> attr
 val is_reverse_ref : attr -> bool

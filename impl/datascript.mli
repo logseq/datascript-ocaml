@@ -212,6 +212,7 @@ module Schema : sig
   val schema_attr_is_tuple : schema_attr option -> bool
   val schema_attr_is_avet_accessible : schema -> attr -> bool
   val schema_has_no_history : schema -> attr -> bool
+  val folded_datoms : int ref
   val split_namespaced_attr : attr -> string option * string
   val join_namespaced_attr : string option -> string -> attr
   val is_reverse_ref : attr -> bool
