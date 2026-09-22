@@ -379,6 +379,8 @@ let replace_string ?(first_only = false) value pattern replacement =
 let compile_regex pattern =
   Platform.compile_regex pattern
 
+let validate_regex = Platform.validate_regex
+
 let replace_regex ?(first_only = false) value pattern replacement =
   let regex = compile_regex pattern in
   Platform.replace_regex ~first_only regex value replacement

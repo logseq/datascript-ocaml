@@ -14,6 +14,8 @@ let compile_regex pattern = pattern
 let regexp ?(global = false) pattern =
   make_regexp pattern (if global then "g" else "")
 
+let validate_regex pattern = ignore (regexp pattern)
+
 let first_capture result =
   let captures = Js.Re.captures result in
   if Array.length captures = 0 then ""
