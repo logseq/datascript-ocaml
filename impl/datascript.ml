@@ -492,7 +492,10 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
         | Many -> [ d ]
         | One -> sorted_retractions tx (entity_attr_datoms_db db d.e d.a) @ [ d ]
       in
-      refresh_db_indexes_with_tx_data db tx_data, tx_data
+      (* Index decisions use schema_db (the current schema, which may have been
+         updated by schema datoms earlier in this transaction); the working db
+         is also synced so subsequent datoms see the same schema. *)
+      refresh_db_indexes_with_tx_data { db with schema = schema_db.schema } tx_data, tx_data
   end
 
 let retract_active_datom_with_report_db tx db e a value =

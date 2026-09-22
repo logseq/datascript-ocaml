@@ -487,7 +487,12 @@ let apply_tx context tx_ops db =
   let add_resolved_attr_value e attr value (datoms, max_eid, tempids, entity_tempids, tx_data) =
     let db = current_db () in
     let datoms, datom_tx_data = context.add_entity_attr_value db tx datoms e attr value in
-    datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data
+    let tx_data = append_tx_data tx_data datom_tx_data in
+    (* upstream updates the schema after each schema-field datom, so later
+       datoms of the same entity see it *)
+    (if attr = "db/ident" || List.mem attr context.schema_fields then
+       refresh_schema datoms (List.rev tx_data));
+    datoms, max_eid, tempids, entity_tempids, tx_data
   in
   let merge_tempid_entity tempid old_e target_e datoms tempids tx_data =
     let db = current_db () in
@@ -823,6 +828,7 @@ let apply_tx context tx_ops db =
             value
             (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes)
         =
+        let db = current_db () in
         let actual_e, actual_attr, actual_value = context.normalize_entity_attr_value db parent_e attr value in
         if context.is_tuple_attr db actual_attr then
           if tuple_identity_write_was_lookup actual_attr actual_value then
@@ -858,6 +864,7 @@ let apply_tx context tx_ops db =
             (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes)
             (nested : tx_entity)
         =
+        let db = current_db () in
         if context.resolve_context.is_reverse_ref attr then
           begin
           if not (context.resolve_context.is_ref_attr db (context.resolve_context.reverse_ref attr)) then
@@ -883,6 +890,7 @@ let apply_tx context tx_ops db =
           end
       in
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes) (attr, tx_value) =
+        let db = current_db () in
         let tx_value, max_eid, tempids =
           resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
         in
