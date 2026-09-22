@@ -25,7 +25,14 @@ let entity_has_forward_attrs context db entity_id =
 
 let entity_visible_attr_values context db attr values =
   if context.is_ref_attr db attr then
+    (* upstream entity-attr wraps (:v datom) into an entity whenever the
+       schema marks attr a ref, so a plain number stored before the schema
+       gained :db.type/ref (e.g. a :db/add applied while the attr was not
+       yet ref-typed) is read back as an entity id. *)
     values
+    |> List.map (function
+      | Int entity_id -> Ref entity_id
+      | v -> v)
     |> List.filter (function
       | Ref entity_id -> entity_has_forward_attrs context db entity_id
       | _ -> true)
