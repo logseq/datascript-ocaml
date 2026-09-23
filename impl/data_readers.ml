@@ -77,11 +77,12 @@ and tx_value_of_edn_form context = function
   | QueryFormMap entries -> One_entity (tx_entity_of_edn_map context entries)
   | QueryFormSet values when List.for_all (function QueryFormMap _ -> true | _ -> false) values ->
     Many_entities
-      (List.map
-         (function
-           | QueryFormMap entries -> tx_entity_of_edn_map context entries
-           | _ -> assert false)
-         values)
+      ( EntitySet,
+        List.map
+          (function
+            | QueryFormMap entries -> tx_entity_of_edn_map context entries
+            | _ -> assert false)
+          values )
   | QueryFormSet values -> Many_values (List.map (tx_scalar_value_of_edn_form context) values)
   | (QueryFormVector [ QueryFormKeyword "db/id"; _ ]
     | QueryFormVector [ QueryFormSymbol "db/id"; _ ]
@@ -90,14 +91,15 @@ and tx_value_of_edn_form context = function
     One_value (tx_scalar_value_of_edn_form context form)
   | (QueryFormVector [ attr; _ ] | QueryFormList [ attr; _ ] as form) when is_edn_attr_key attr ->
     One_value (tx_scalar_value_of_edn_form context form)
-  | QueryFormVector values | QueryFormList values ->
+  | QueryFormVector values | QueryFormList values as form ->
     if List.for_all (function QueryFormMap _ -> true | _ -> false) values then
       Many_entities
-        (List.map
-           (function
-             | QueryFormMap entries -> tx_entity_of_edn_map context entries
-             | _ -> assert false)
-           values)
+        ( (match form with QueryFormVector _ -> EntityVector | _ -> EntityList),
+          List.map
+            (function
+              | QueryFormMap entries -> tx_entity_of_edn_map context entries
+              | _ -> assert false)
+            values )
     else
       Many_values (List.map (tx_scalar_value_of_edn_form context) values)
   | form -> One_value (tx_scalar_value_of_edn_form context form)
@@ -120,10 +122,16 @@ and tx_attr_values_of_edn_form context attr = function
       | QueryFormVector _ -> Vector values
       | _ -> List values
     in
+    let entity_coll =
+      match form with
+      | QueryFormSet _ -> EntitySet
+      | QueryFormVector _ -> EntityVector
+      | _ -> EntityList
+    in
     (match List.rev nested, List.rev scalars with
      | [], scalars -> [ attr, One_value (scalar_collection scalars) ]
-     | nested, [] -> [ attr, Many_entities nested ]
-     | nested, scalars -> [ attr, Many_entities nested; attr, One_value (scalar_collection scalars) ])
+     | nested, [] -> [ attr, Many_entities (entity_coll, nested) ]
+     | nested, scalars -> [ attr, Many_entities (entity_coll, nested); attr, One_value (scalar_collection scalars) ])
   | form -> [ attr, tx_value_of_edn_form context form ]
 
 and tx_entity_of_edn_map context entries =

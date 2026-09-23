@@ -216,11 +216,18 @@ let resolve_optional_existing_entity_ref context db datoms tx max_eid tempids = 
    ref attributes; under a non-ref attribute a map stays a literal value. The
    EDN parser is schema-agnostic and produces One_entity for every map form, so
    apply-time resolution converts it back to a plain Map value here. *)
+let value_of_entity_coll (coll : entity_coll) values =
+  match coll with
+  | EntityVector -> Vector values
+  | EntityList -> List values
+  | EntitySet -> Set values
+
 let rec scalar_value_of_tx_value = function
   | One_value value -> value
   | Many_values values -> Set values
   | One_entity entity -> Map (map_entries_of_tx_entity entity)
-  | Many_entities entities -> Set (List.map (fun entity -> Map (map_entries_of_tx_entity entity)) entities)
+  | Many_entities (coll, entities) ->
+    value_of_entity_coll coll (List.map (fun entity -> Map (map_entries_of_tx_entity entity)) entities)
 
 and map_entries_of_tx_entity (entity : tx_entity) : (value * value) list =
   let entries =
@@ -274,7 +281,7 @@ let resolve_tx_value_for_attr context db attr datoms tx max_eid tempids = functi
     in
     Many_values (List.rev values), max_eid, tempids
   | One_entity entity -> One_entity entity, max_eid, tempids
-  | Many_entities entities -> Many_entities entities, max_eid, tempids
+  | Many_entities _ as tx_value -> tx_value, max_eid, tempids
 
 let resolve_optional_value_for_attr context db attr datoms tx max_eid tempids = function
   | Some value ->
@@ -526,7 +533,7 @@ let apply_tx context tx_ops db =
     | _ -> max_eid
   and max_explicit_tx_value max_eid = function
     | One_entity entity -> max_explicit_tx_entity max_eid entity
-    | Many_entities entities -> List.fold_left max_explicit_tx_entity max_eid entities
+    | Many_entities (_, entities) -> List.fold_left max_explicit_tx_entity max_eid entities
     | _ -> max_eid
   and max_explicit_tx_entity max_eid entity =
     (* a db_id only reserves an entity id when the entity map materializes
@@ -582,7 +589,7 @@ let apply_tx context tx_ops db =
   in
   let rec tx_value_has_assertions attr = function
     | One_value (List []) | One_value (Vector []) | One_value (Set []) when attr_expands_collection context.resolve_context db attr -> false
-    | Many_values [] | Many_entities [] -> false
+    | Many_values [] | Many_entities (_, []) -> false
     | One_entity _ | Many_entities _ -> true
     | One_value _ | Many_values _ -> true
   and tx_entity_has_assertions (entity : tx_entity) =
@@ -744,7 +751,7 @@ let apply_tx context tx_ops db =
   let rec tx_value_has_schema_fields = function
     | One_value _ | Many_values _ -> false
     | One_entity entity -> tx_entity_has_schema_fields entity
-    | Many_entities entities -> List.exists tx_entity_has_schema_fields entities
+    | Many_entities (_, entities) -> List.exists tx_entity_has_schema_fields entities
   and tx_entity_has_schema_fields entity =
     entity.attrs
     |> List.exists (fun (attr, value) -> attr = "db/ident" || List.mem attr context.schema_fields || tx_value_has_schema_fields value)
@@ -1066,13 +1073,26 @@ let apply_tx context tx_ops db =
             apply_nested_entity e attr state nested
           else
             add_entity_map_attr_value e attr (Map (map_entries_of_tx_entity nested)) state
-        | Many_entities nested_entities ->
+        | Many_entities (coll, nested_entities) ->
           let state = datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes in
-          if context.resolve_context.is_reverse_ref attr || context.resolve_context.is_ref_attr db attr then
+          if context.resolve_context.is_reverse_ref attr then
             List.fold_left (apply_nested_entity e attr) state nested_entities
+          else if context.resolve_context.cardinality db attr = Many then
+            (* upstream maybe-wrap-multival explodes the collection on a
+               multival attr; each map element becomes a nested entity on a
+               ref attr, a literal Map datom value otherwise *)
+            List.fold_left
+              (fun state nested ->
+                 if context.resolve_context.is_ref_attr db attr then
+                   apply_nested_entity e attr state nested
+                 else
+                   add_entity_map_attr_value e attr (Map (map_entries_of_tx_entity nested)) state)
+              state nested_entities
           else
+            (* cardinality-one: the collection itself is the datom value *)
             add_entity_map_attr_value e attr
-              (Set (List.map (fun nested -> Map (map_entries_of_tx_entity nested)) nested_entities))
+              (value_of_entity_coll coll
+                 (List.map (fun nested -> Map (map_entries_of_tx_entity nested)) nested_entities))
               state
       in
       let datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes =
@@ -1108,7 +1128,7 @@ let apply_tx context tx_ops db =
         | One_entity nested ->
           let state, ref_value = transact_nested state nested in
           state, (attr, One_value ref_value) :: attrs
-        | Many_entities nested_entities ->
+        | Many_entities (_, nested_entities) ->
           let state, values =
             List.fold_left
               (fun (state, values) nested ->
