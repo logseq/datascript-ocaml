@@ -762,6 +762,21 @@ let db_with tx_ops db =
   db_after
 
 let apply_tail_group db group =
+  (* upstream replays each committed tx through the transact path, so schema
+     datoms carried by the tail update db.schema for later groups; refresh it
+     before inserting so unique/cardinality checks and ref value tags see
+     the attrs this and earlier groups installed *)
+  let db =
+    match schema_datoms_for_tx db group with
+    | [] -> db
+    | schema_datoms ->
+      { db with
+        schema =
+          schema_from_transaction_datoms ~strict:false ~validate:false
+            db.schema schema_datoms
+      }
+  in
+  let group = List.map (Storage.normalize_stored_datom db.schema) group in
   List.iter
     (fun datom ->
       if datom.added && is_unique db datom.a then
