@@ -812,8 +812,11 @@ let resolved_entity_ref_option context db = Option.map (context.resolve_entity_r
 let resolved_value_option_for_optional_attr context db attr =
   Option.map (context.resolve_value_for_optional_attr db attr)
 
+(* cljs d/datoms is ISearch/-search — it does not validate index access;
+   only -datoms/-seek-datoms/-rseek-datoms/-index-range/find-datom do.
+   An avet scan on a non-indexed attr simply yields nothing (avet only
+   stores avet-accessible datoms). *)
 let datoms context db index ?e ?a ?v ?tx () =
-  validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
     let prefix_v, prefix_tx =
@@ -840,7 +843,6 @@ let datoms context db index ?e ?a ?v ?tx () =
   apply_filter_pred db datoms
 
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
-  validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let prefix_v, prefix_tx =
     match index, e, a, v with
@@ -894,7 +896,6 @@ let apply_filter_pred_list db datoms =
   | Some pred -> List.filter pred datoms
 
 let datoms_list context db index ?e ?a ?v ?tx () =
-  validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
     let prefix_v, prefix_tx =
