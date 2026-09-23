@@ -18,6 +18,14 @@ let test_parser_find__test_parse_find () =
     (Parser.parse_find (list [ sym "pull"; sym "?b"; vec [ sym "*" ] ]));
   assert_equal "find collection" (Return_collection, [ Find_var "a" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "..." ] ]));
   assert_equal "find scalar" (Return_scalar, [ Find_var "a" ]) (Parser.parse_find (vec [ sym "?a"; sym "." ]));
+  assert_equal
+    "find scalar bracketed"
+    (Return_scalar, [ Find_var "a" ])
+    (Parser.parse_find (vec [ vec [ sym "?a"; sym "." ] ]));
+  assert_equal
+    "find scalar bracketed pull"
+    (Return_scalar, [ Find_pull ("e", [ Pull_wildcard ]) ])
+    (Parser.parse_find (vec [ vec [ list [ sym "pull"; sym "?e"; vec [ sym "*" ] ]; sym "." ] ]));
   assert_equal "find tuple" (Return_tuple, [ Find_var "a"; Find_var "b" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "?b" ] ]))
 
 let test_parser_find__test_parse_aggregate () =

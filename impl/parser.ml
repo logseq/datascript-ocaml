@@ -1174,12 +1174,18 @@ let is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_sour
   | _ -> true
   | exception Invalid_argument _ -> false
 
-let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source = function
+let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source input =
+  match input with
   | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                            | QueryFormList [ form; QueryFormSymbol "..." ]) ])
   | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                          | QueryFormList [ form; QueryFormSymbol "..." ]) ]) ->
     Return_collection, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
+  | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "." ]
+                           | QueryFormList [ form; QueryFormSymbol "." ]) ])
+  | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "." ]
+                         | QueryFormList [ form; QueryFormSymbol "." ]) ]) ->
+    Return_scalar, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ form; QueryFormSymbol "." ])
   | Some (QueryFormList [ form; QueryFormSymbol "." ]) ->
     Return_scalar, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
@@ -1193,7 +1199,8 @@ let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for
      | _ -> assert false)
   | Some form when is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ->
     Return_relation, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
-  | form -> Return_relation, parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form
+  | form ->
+    Return_relation, parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form
 
 let parse_find context form = parse_find_return context (Some form)
 
