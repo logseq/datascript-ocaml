@@ -183,7 +183,9 @@ let rec value_to_transit = function
   | Bool value -> Transit.Bool value
   | Keyword value -> Transit.Keyword value
   | Uuid value -> Transit.Uuid value
-  | Instant value -> Transit.Date value
+  | Instant value -> Transit.Int64 value
+    (* int64-range scalars (ms timestamps) stay integers on the wire;
+       cljs writes plain numbers (~i), not dates, for these values *)
   | Regex value -> Transit.Tagged ("regex", Transit.String value)
   | Ref entity_id -> Transit.Int entity_id
   | List values -> Transit.List (List.map value_to_transit values)
