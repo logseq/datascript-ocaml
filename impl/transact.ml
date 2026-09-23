@@ -203,7 +203,15 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
       in
       if String.length inner > 400 then String.sub inner 0 400 ^ "..." else inner
     in
-    Printf.eprintf "resolve-fail attr=%s value=%s\n%!" attr (dump value);
+    let has_schema =
+      match List.assoc_opt attr db.schema with
+      | Some sa ->
+        Printf.sprintf "card=%s vt=%s"
+          (match sa.cardinality with Many -> "many" | One -> "one")
+          (match sa.value_type with Some _ -> "some" | None -> "none")
+      | None -> "absent"
+    in
+    Printf.eprintf "resolve-fail attr=%s value=%s schema=%s\n%!" attr (dump value) has_schema;
     invalid_arg "Expected number or lookup ref for entity id"
   | _ ->
     resolve_value context db datoms tx max_eid tempids value
