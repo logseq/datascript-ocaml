@@ -180,39 +180,7 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
      | _ -> ());
     let entity_id, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
     Ref entity_id, max_eid, tempids
-  | Some _, None ->
-    let rec dump (v : value) =
-      let inner =
-        match v with
-        | Nil -> "nil" | Bool b -> string_of_bool b | Int n -> string_of_int n
-        | Float f -> string_of_float f | String s -> "\"" ^ s ^ "\""
-        | Keyword s -> ":" ^ s | Symbol s -> s
-        | Uuid s -> "#uuid " ^ s | Instant _ -> "#inst"
-        | Ref n -> "#ref " ^ string_of_int n | Ref_to _ -> "#ref_to"
-        | TxRef -> "tx" | Regex _ -> "#regex"
-        | List vs -> "(" ^ String.concat " " (List.map dump vs) ^ ")"
-        | Vector vs -> "[" ^ String.concat " " (List.map dump vs) ^ "]"
-        | Set vs -> "#{" ^ String.concat " " (List.map dump vs) ^ "}"
-        | Map kvs ->
-          "{" ^ String.concat " "
-                  (List.map (fun (k, v) -> dump k ^ " " ^ dump v) kvs) ^ "}"
-        | Tuple vs ->
-          "#tup[" ^ String.concat " "
-                    (List.map (function Some v -> dump v | None -> "nil") vs)
-          ^ "]"
-      in
-      if String.length inner > 400 then String.sub inner 0 400 ^ "..." else inner
-    in
-    let has_schema =
-      match List.assoc_opt attr db.schema with
-      | Some sa ->
-        Printf.sprintf "card=%s vt=%s"
-          (match sa.cardinality with Many -> "many" | One -> "one")
-          (match sa.value_type with Some _ -> "some" | None -> "none")
-      | None -> "absent"
-    in
-    Printf.eprintf "resolve-fail attr=%s value=%s schema=%s\n%!" attr (dump value) has_schema;
-    invalid_arg "Expected number or lookup ref for entity id"
+  | Some _, None -> invalid_arg "Expected number or lookup ref for entity id"
   | _ ->
     resolve_value context db datoms tx max_eid tempids value
 
@@ -1079,19 +1047,7 @@ let apply_tx context tx_ops db =
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes) (attr, tx_value) =
         let db = current_db () in
         let tx_value, max_eid, tempids =
-          try
-            resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
-          with e ->
-            let ident =
-              List.assoc_opt "db/ident" entity.attrs
-            in
-            let ident =
-              match ident with
-              | Some (One_value (Keyword s)) -> s
-              | _ -> "?"
-            in
-            Printf.eprintf "resolve-fail-parent ident=%s attrs=%d\n%!" ident (List.length entity.attrs);
-            raise e
+          resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
         in
         match tx_value with
         | One_value (List values | Vector values) when attr_expands_collection context.resolve_context db attr ->
