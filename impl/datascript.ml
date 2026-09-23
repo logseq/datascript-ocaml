@@ -478,10 +478,11 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
     else invalid_arg "cannot modify tuple attributes directly"
   else begin
     if validate_value then validate_datom_value schema_db d;
-    (match find_avet_exact db d.a d.v with
-     | Some existing when is_unique schema_db d.a && existing.e <> d.e ->
-       invalid_arg "unique constraint"
-     | Some _ | None -> ());
+    (if is_unique schema_db d.a then
+       match find_avet_exact db d.a d.v with
+       | Some existing when existing.e <> d.e ->
+         invalid_arg "unique constraint"
+       | Some _ | None -> ());
     let same_fact_exists =
       find_eavt_exact db d.e d.a d.v |> Option.is_some
     in
