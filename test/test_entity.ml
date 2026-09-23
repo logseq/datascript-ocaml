@@ -340,7 +340,7 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
   ignore (Entity.entity_attr context entity "_friend");
   assert_equal_int "reverse attr lookup should use AVET instead of all datoms" 0 !all_datoms_calls;
   ignore (Entity.entity_attrs entity);
-  assert_equal_int "full entity materialization may scan all datoms once" 1 !all_datoms_calls
+  assert_equal_int "full entity materialization must not scan all datoms" 0 !all_datoms_calls
 
 let () =
   test_entity__test_entity ();
