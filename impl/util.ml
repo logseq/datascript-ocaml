@@ -298,6 +298,12 @@ let rec compare_value left right =
   | Ref left, Int right -> compare left right
   | Float left, Ref right -> compare left (float_of_int right)
   | Ref left, Float right -> compare (float_of_int left) right
+  | Instant left, Int right -> Int64.compare left (Int64.of_int right)
+  | Int left, Instant right -> Int64.compare (Int64.of_int left) right
+  | Instant left, Ref right -> Int64.compare left (Int64.of_int right)
+  | Ref left, Instant right -> Int64.compare (Int64.of_int left) right
+  | Instant left, Float right -> compare (Int64.to_float left) right
+  | Float left, Instant right -> compare left (Int64.to_float right)
   | String left, String right -> compare left right
   | Symbol left, Symbol right -> compare (split_keyword left) (split_keyword right)
   | Bool left, Bool right -> compare left right

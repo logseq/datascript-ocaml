@@ -48,8 +48,8 @@ let matches_value_predicate predicate value =
   (* Ref values are entity ids — plain numbers upstream — so numeric
      predicates and arithmetic see them as integers *)
   match predicate, value with
-  | NumberValue, (Int _ | Float _ | Ref _) -> true
-  | IntegerValue, (Int _ | Ref _) -> true
+  | NumberValue, (Int _ | Float _ | Ref _ | Instant _) -> true
+  | IntegerValue, (Int _ | Ref _ | Instant _) -> true
   | StringValue, String _ -> true
   | BooleanValue, Bool _ -> true
   | KeywordValue, Keyword _ -> true
@@ -60,16 +60,21 @@ let matches_numeric_predicate predicate value =
   | ZeroNumber, Int value -> value = 0
   | ZeroNumber, Ref value -> value = 0
   | ZeroNumber, Float value -> value = 0.0
+  | ZeroNumber, Instant value -> value = 0L
   | PositiveNumber, Int value -> value > 0
   | PositiveNumber, Ref value -> value > 0
   | PositiveNumber, Float value -> value > 0.0
+  | PositiveNumber, Instant value -> value > 0L
   | NegativeNumber, Int value -> value < 0
   | NegativeNumber, Ref value -> value < 0
   | NegativeNumber, Float value -> value < 0.0
+  | NegativeNumber, Instant value -> value < 0L
   | EvenInteger, Int value -> value mod 2 = 0
   | EvenInteger, Ref value -> value mod 2 = 0
+  | EvenInteger, Instant value -> Int64.rem value 2L = 0L
   | OddInteger, Int value -> value mod 2 <> 0
   | OddInteger, Ref value -> value mod 2 <> 0
+  | OddInteger, Instant value -> Int64.rem value 2L <> 0L
   | (EvenInteger | OddInteger), Float _ -> false
   | _, _ -> false
 
@@ -98,6 +103,7 @@ let all_values_equal = function
 let numeric_value = function
   | Int value -> Some (`Int value)
   | Ref value -> Some (`Int value)
+  | Instant value -> Some (`Int64 value)
   | Float value -> Some (`Float value)
   | _ -> None
 
@@ -114,6 +120,7 @@ let arithmetic_values values =
       (match numeric_value value with
        | None -> None
        | Some (`Int value) -> collect (float_of_int value :: acc) has_float rest
+       | Some (`Int64 value) -> collect (Int64.to_float value :: acc) true rest
        | Some (`Float value) -> collect (value :: acc) true rest)
   in
   collect [] false values
@@ -468,6 +475,7 @@ let query_result_value = function
 let float_of_result = function
   | Result_value (Int value) -> float_of_int value
   | Result_value (Float value) -> value
+  | Result_value (Instant value) -> Int64.to_float value
   | _ -> invalid_arg "aggregate expects numeric values"
 
 let numeric_values values = List.map float_of_result values
@@ -480,6 +488,8 @@ let sum_result values =
       sum (int_total + value) (float_total +. float_of_int value) has_float rest
     | Result_value (Float value) :: rest ->
       sum int_total (float_total +. value) true rest
+    | Result_value (Instant value) :: rest ->
+      sum int_total (float_total +. Int64.to_float value) true rest
     | _ -> invalid_arg "aggregate expects numeric values"
   in
   sum 0 0.0 false values
