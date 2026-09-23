@@ -153,7 +153,9 @@ let store ?storage db =
 let store_tail storage tail =
   storage.storage_store [ tail_address, Storage_tail tail ]
 
-let tail_compaction_threshold = 32
+(* cljs store-after-transact! compacts the tail once its datom count
+   exceeds the index's :branching-factor (512 by default). *)
+let tail_compaction_threshold = 512
 
 let tail_datom_count tail =
   tail |> List.concat |> List.length
