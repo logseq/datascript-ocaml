@@ -846,7 +846,7 @@ let persist_transact_tail ~tx_meta db tx_data =
     | None -> ()
     | Some storage ->
       let tail = restore_tail_groups storage @ [ tx_data ] in
-      if storage_tail_datom_count tail > storage_tail_compaction_threshold then
+      if storage_tail_datom_count tail > storage_tail_compaction_threshold db then
         store ~storage db
       else
         store_tail storage tail

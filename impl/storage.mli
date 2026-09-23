@@ -16,7 +16,7 @@ val file_storage : string -> storage
 val store : ?storage:storage -> db -> unit
 val store_tail : storage -> datom list list -> unit
 val normalize_stored_datom : schema -> datom -> datom
-val tail_compaction_threshold : int
+val tail_compaction_threshold : db -> int
 val tail_datom_count : datom list list -> int
 val restore_root_snapshot : storage -> serializable_db option
 val restore_tail_groups : storage -> datom list list

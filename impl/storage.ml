@@ -194,8 +194,10 @@ let store_tail storage tail =
   storage.storage_store [ tail_address, Storage_tail tail ]
 
 (* cljs store-after-transact! compacts the tail once its datom count
-   exceeds the index's :branching-factor (512 by default). *)
-let tail_compaction_threshold = 512
+   exceeds (:branching-factor (set/settings (:eavt db))) — read the
+   branching factor off the db's eavt index, never a constant. *)
+let tail_compaction_threshold (db : db) =
+  (PSet.settings db.eavt_index).branching_factor
 
 let tail_datom_count tail =
   tail |> List.concat |> List.length

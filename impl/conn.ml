@@ -28,7 +28,7 @@ type transact_context =
   { store : ?storage:storage -> db -> unit
   ; store_tail : storage -> datom list list -> unit
   ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
+  ; storage_tail_compaction_threshold : db -> int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
@@ -45,7 +45,7 @@ type context =
   ; restore : storage -> db option
   ; restore_tail_groups : storage -> datom list list
   ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : int
+  ; storage_tail_compaction_threshold : db -> int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db
@@ -142,7 +142,7 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
      | Some storage ->
        if report.tx_data <> [] then begin
          let tail = conn.storage_tail @ [ report.tx_data ] in
-         if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold then begin
+         if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold report.db_after then begin
            context.store ~storage report.db_after;
            conn.storage_tail <- []
          end else begin
@@ -170,7 +170,7 @@ let apply_report (context : transact_context) conn (report : tx_report) =
    | Some storage ->
      if report.tx_data <> [] then begin
        let tail = conn.storage_tail @ [ report.tx_data ] in
-       if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold then begin
+       if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold db_after then begin
          context.store ~storage db_after;
          conn.storage_tail <- []
        end else begin
