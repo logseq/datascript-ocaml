@@ -1071,7 +1071,19 @@ let apply_tx context tx_ops db =
       let apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes) (attr, tx_value) =
         let db = current_db () in
         let tx_value, max_eid, tempids =
-          resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
+          try
+            resolve_tx_value_for_attr context.resolve_context db attr datoms tx max_eid tempids tx_value
+          with e ->
+            let ident =
+              List.assoc_opt "db/ident" entity.attrs
+            in
+            let ident =
+              match ident with
+              | Some (One_value (Keyword s)) -> s
+              | _ -> "?"
+            in
+            Printf.eprintf "resolve-fail-parent ident=%s attrs=%d\n%!" ident (List.length entity.attrs);
+            raise e
         in
         match tx_value with
         | One_value (List values | Vector values) when attr_expands_collection context.resolve_context db attr ->
