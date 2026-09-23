@@ -175,7 +175,7 @@ and materialize_ref_values context db visited = function
         | _ -> None)
       |> List.sort (fun left right -> compare left.db_id right.db_id)
     in
-    if entities = [] && values <> [] then Many_values values else Many_entities (EntitySet, entities)
+    if entities = [] && values <> [] then Many_values values else Many_entities entities
   | value -> value
 
 let entity_attr context (entity : entity) attr =
@@ -219,7 +219,7 @@ let touch context ent =
             | _ -> None)
           |> List.sort (fun left right -> compare left.db_id right.db_id)
         in
-        if entities = [] && values <> [] then tx_value else Many_entities (EntitySet, entities)
+        if entities = [] && values <> [] then tx_value else Many_entities entities
       | One_value _ | One_entity _ | Many_entities _ -> tx_value
   and touched_tx_entity db visited entity_id =
     if List.mem entity_id visited then

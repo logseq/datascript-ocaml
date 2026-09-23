@@ -103,19 +103,11 @@ type storage =
   ; storage_delete : storage_address list -> unit
   }
 
-(* upstream maybe-wrap-multival preserves the collection form written in the
-   tx — a cardinality-one attribute stores the collection itself as its datom
-   value, so the kind of collection is observable. *)
-type entity_coll =
-  | EntityVector
-  | EntityList
-  | EntitySet
-
 type tx_value =
   | One_value of value
   | Many_values of value list
   | One_entity of tx_entity
-  | Many_entities of entity_coll * tx_entity list
+  | Many_entities of tx_entity list
 
 and tx_entity =
   { db_id : entity_ref option

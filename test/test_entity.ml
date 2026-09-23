@@ -160,28 +160,28 @@ let test_entity__test_entity_refs () =
   assert_equal_tx_value
     "cardinality-many refs navigate to target entities"
     (Some
-       (Many_entities (EntitySet,
+       (Many_entities
           [ { db_id = Some (Entity_id 10)
             ; attrs = [ "children", Many_values [ Ref 100; Ref 101 ]; "father", One_value (Ref 1) ]
             }
-          ])))
+          ]))
     (entity_attr (entity_or_fail 1) "children");
   assert_equal_tx_value
     "nested navigation reads child refs"
     (Some
-       (Many_entities (EntitySet,
+       (Many_entities
           [ { db_id = Some (Entity_id 100); attrs = [ "father", One_value (Ref 10) ] }
           ; { db_id = Some (Entity_id 101); attrs = [ "father", One_value (Ref 10) ] }
-          ])))
+          ]))
     (entity_attr (entity_or_fail 10) "children");
   assert_equal_tx_value
     "backward navigation uses reverse attrs"
     (Some
-       (Many_entities (EntitySet,
+       (Many_entities
           [ { db_id = Some (Entity_id 10)
             ; attrs = [ "children", Many_values [ Ref 100; Ref 101 ]; "father", One_value (Ref 1) ]
             }
-          ])))
+          ]))
     (entity_attr (entity_or_fail 1) "_father");
   assert_equal_tx_value
     "reverse component attrs navigate to the single owner"
@@ -189,7 +189,7 @@ let test_entity__test_entity_refs () =
     (entity_attr (entity_or_fail 10) "_profile");
   assert_equal_tx_value
     "namespaced reverse attrs preserve namespace"
-    (Some (Many_entities (EntitySet, [ { db_id = Some (Entity_id 1); attrs = [ "children", Many_values [ Ref 10 ] ] } ])))
+    (Some (Many_entities [ { db_id = Some (Entity_id 1); attrs = [ "children", Many_values [ Ref 10 ] ] } ]))
     (entity_attr (entity_or_fail 10) "_children")
 
 let test_entity__test_missing_refs () =
@@ -222,9 +222,9 @@ let test_entity__test_missing_refs () =
     assert_equal_tx_value
       "cardinality-many refs keep only existing targets"
       (Some
-         (Many_entities (EntitySet,
+         (Many_entities
             [ { db_id = Some (Entity_id 7); attrs = [ "name", One_value (String "Existing") ] }
-            ])))
+            ]))
       (entity_attr entity "multiref");
     assert_equal_tx_value "cardinality-many missing component targets are omitted" None (entity_attr entity "multicomp")
 

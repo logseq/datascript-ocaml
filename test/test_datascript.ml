@@ -2450,14 +2450,14 @@ let test_entity_maps_expand_nested_entity_values () =
                        ; attrs = [ "email", One_value (String "ivan@example.com") ]
                        } )
                  ; ( "child"
-                   , Many_entities (EntitySet,
+                   , Many_entities
                        [ { db_id = Some (Entity_id 3)
                          ; attrs = [ "name", One_value (String "David") ]
                          }
                        ; { db_id = None
                          ; attrs = [ "name", One_value (String "Thomas") ]
                          }
-                       ]) )
+                       ] )
                  ]
              }
          ]
@@ -2531,10 +2531,10 @@ let test_entity_maps_expand_many_reverse_nested_entity_values () =
              ; attrs =
                  [ "email", One_value (String "ivan@example.com")
                  ; ( "_profile"
-                   , Many_entities (EntitySet,
+                   , Many_entities
                        [ { db_id = None; attrs = [ "name", One_value (String "Ivan") ] }
                        ; { db_id = None; attrs = [ "name", One_value (String "Petr") ] }
-                       ]) )
+                       ] )
                  ]
              }
          ]
@@ -16484,7 +16484,7 @@ let test_filter_predicates_read_unfiltered_db_like_upstream () =
        | Some (Many_values values) -> List.length values
        | Some (One_value _) -> 1
        | Some (One_entity _) -> 1
-       | Some (Many_entities (_, values)) -> List.length values
+       | Some (Many_entities values) -> List.length values
        | None -> 0)
     | None -> 0
   in
