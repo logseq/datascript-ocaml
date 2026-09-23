@@ -181,20 +181,29 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
     let entity_id, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
     Ref entity_id, max_eid, tempids
   | Some _, None ->
-    let tag =
-      match value with
-      | Nil -> "Nil" | Bool _ -> "Bool" | Int _ -> "Int" | Float _ -> "Float"
-      | String _ -> "String" | Keyword _ -> "Keyword" | Symbol _ -> "Symbol"
-      | Uuid _ -> "Uuid" | Instant _ -> "Instant" | Ref _ -> "Ref" | Ref_to _ -> "Ref_to"
-      | List vs ->
-        Printf.sprintf "List(len=%d head=%s)" (List.length vs)
-          (match vs with
-           | (Keyword h | String h | Symbol h) :: _ -> h
-           | _ -> "?")
-      | Vector _ -> "Vector" | Set _ -> "Set" | Map _ -> "Map"
-      | Tuple _ -> "Tuple" | TxRef -> "TxRef" | Regex _ -> "Regex"
+    let rec dump (v : value) =
+      let inner =
+        match v with
+        | Nil -> "nil" | Bool b -> string_of_bool b | Int n -> string_of_int n
+        | Float f -> string_of_float f | String s -> "\"" ^ s ^ "\""
+        | Keyword s -> ":" ^ s | Symbol s -> s
+        | Uuid s -> "#uuid " ^ s | Instant _ -> "#inst"
+        | Ref n -> "#ref " ^ string_of_int n | Ref_to _ -> "#ref_to"
+        | TxRef -> "tx" | Regex _ -> "#regex"
+        | List vs -> "(" ^ String.concat " " (List.map dump vs) ^ ")"
+        | Vector vs -> "[" ^ String.concat " " (List.map dump vs) ^ "]"
+        | Set vs -> "#{" ^ String.concat " " (List.map dump vs) ^ "}"
+        | Map kvs ->
+          "{" ^ String.concat " "
+                  (List.map (fun (k, v) -> dump k ^ " " ^ dump v) kvs) ^ "}"
+        | Tuple vs ->
+          "#tup[" ^ String.concat " "
+                    (List.map (function Some v -> dump v | None -> "nil") vs)
+          ^ "]"
+      in
+      if String.length inner > 400 then String.sub inner 0 400 ^ "..." else inner
     in
-    Printf.eprintf "resolve-fail attr=%s tag=%s\n%!" attr tag;
+    Printf.eprintf "resolve-fail attr=%s value=%s\n%!" attr (dump value);
     invalid_arg "Expected number or lookup ref for entity id"
   | _ ->
     resolve_value context db datoms tx max_eid tempids value
