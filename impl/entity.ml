@@ -52,36 +52,6 @@ let group_forward_entity_attrs context db entity_id =
     | [] -> None
     | values -> Some (attr, tx_value_of_attr_values context db attr values))
 
-let group_reverse_entity_attrs context db entity_id =
-  context.all_datoms db
-  |> Seq.filter_map (fun d ->
-    match d.v with
-    | Ref ref_id when ref_id = entity_id -> Some (context.reverse_ref d.a, d.a, Ref d.e)
-    | _ -> None)
-  |> Seq.fold_left
-       (fun groups (reverse_attr, forward_attr, value) ->
-         match List.assoc_opt reverse_attr groups with
-         | None -> (reverse_attr, (forward_attr, [ value ])) :: groups
-         | Some (_, values) ->
-           (reverse_attr, (forward_attr, value :: values)) :: List.remove_assoc reverse_attr groups)
-       []
-  |> List.map (fun (attr, (forward_attr, values)) ->
-    let values = List.sort context.compare_value values in
-    if context.is_component db forward_attr then
-      match values with
-      | value :: _ -> attr, One_value value
-      | [] -> attr, Many_values []
-    else
-      attr, Many_values values)
-
-let group_entity_attrs context db entity_id =
-  match group_forward_entity_attrs context db entity_id with
-  | [] -> []
-  | forward_attrs ->
-    forward_attrs
-    @ group_reverse_entity_attrs context db entity_id
-    |> List.sort (fun (left, _) (right, _) -> compare left right)
-
 let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
   |> List.sort (fun (left, _) (right, _) -> compare left right)
@@ -109,7 +79,7 @@ let reverse_entity_attr context db entity_id attr =
   | values -> Some (Many_values values)
 
 let lazy_entity context db entity_id =
-  let materialized = lazy (group_entity_attrs context db entity_id) in
+  let materialized = lazy (sorted_forward_entity_attrs context db entity_id) in
   { id = entity_id
   ; db
   ; attrs = []
