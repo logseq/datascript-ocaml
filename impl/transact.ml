@@ -186,7 +186,12 @@ let resolve_value_for_attr context db attr datoms tx max_eid tempids value =
       | Nil -> "Nil" | Bool _ -> "Bool" | Int _ -> "Int" | Float _ -> "Float"
       | String _ -> "String" | Keyword _ -> "Keyword" | Symbol _ -> "Symbol"
       | Uuid _ -> "Uuid" | Instant _ -> "Instant" | Ref _ -> "Ref" | Ref_to _ -> "Ref_to"
-      | List _ -> "List" | Vector _ -> "Vector" | Set _ -> "Set" | Map _ -> "Map"
+      | List vs ->
+        Printf.sprintf "List(len=%d head=%s)" (List.length vs)
+          (match vs with
+           | (Keyword h | String h | Symbol h) :: _ -> h
+           | _ -> "?")
+      | Vector _ -> "Vector" | Set _ -> "Set" | Map _ -> "Map"
       | Tuple _ -> "Tuple" | TxRef -> "TxRef" | Regex _ -> "Regex"
     in
     Printf.eprintf "resolve-fail attr=%s tag=%s\n%!" attr tag;
