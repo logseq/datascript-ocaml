@@ -258,20 +258,34 @@ let datoms_of_transit = function
   | Transit.Array datoms | Transit.List datoms -> List.map datom_of_transit datoms
   | _ -> invalid_arg "storage datoms must be a Transit array"
 
-let storage_root_to_transit root =
+let index_metadata_to_transit metadata =
   Transit.Map
     [
-      (Transit.Keyword "schema", schema_to_transit root.storage_schema);
-      (Transit.Keyword "max-eid", Transit.Int root.storage_max_eid);
-      (Transit.Keyword "max-tx", Transit.Int root.storage_max_tx);
-      (Transit.Keyword "eavt", address_to_transit root.storage_eavt);
-      (Transit.Keyword "aevt", address_to_transit root.storage_aevt);
-      (Transit.Keyword "avet", address_to_transit root.storage_avet);
-      (Transit.Keyword "duplicate-datoms", datoms_to_transit root.storage_duplicate_datoms);
-      (Transit.Keyword "max-addr", Transit.Int root.storage_max_addr);
-      (Transit.Keyword "branching-factor", Transit.Int root.storage_branching_factor);
-      (Transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type);
+      (Transit.Keyword "count", Transit.Int metadata.storage_index_count);
+      (Transit.Keyword "shift", Transit.Int metadata.storage_index_shift);
     ]
+
+let optional_metadata_entry key = function
+  | Some metadata -> [ (Transit.Keyword key, index_metadata_to_transit metadata) ]
+  | None -> []
+
+let storage_root_to_transit root =
+  Transit.Map
+    ([
+       (Transit.Keyword "schema", schema_to_transit root.storage_schema);
+       (Transit.Keyword "max-eid", Transit.Int root.storage_max_eid);
+       (Transit.Keyword "max-tx", Transit.Int root.storage_max_tx);
+       (Transit.Keyword "eavt", address_to_transit root.storage_eavt);
+       (Transit.Keyword "aevt", address_to_transit root.storage_aevt);
+       (Transit.Keyword "avet", address_to_transit root.storage_avet);
+       (Transit.Keyword "duplicate-datoms", datoms_to_transit root.storage_duplicate_datoms);
+       (Transit.Keyword "max-addr", Transit.Int root.storage_max_addr);
+       (Transit.Keyword "branching-factor", Transit.Int root.storage_branching_factor);
+       (Transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type);
+     ]
+    @ optional_metadata_entry "eavt-metadata" root.storage_eavt_metadata
+    @ optional_metadata_entry "aevt-metadata" root.storage_aevt_metadata
+    @ optional_metadata_entry "avet-metadata" root.storage_avet_metadata)
 
 let storage_node_to_transit = function
   | PSet.Leaf datoms -> Transit.Map [ (Transit.Keyword "keys", datoms_to_transit datoms) ]
@@ -300,6 +314,21 @@ let optional_datoms key entries =
   | None -> []
   | Some value -> datoms_of_transit value
 
+let index_metadata_of_transit entries =
+  match lookup_transit_key "count" entries, lookup_transit_key "shift" entries with
+  | Some count, Some shift ->
+      Some
+        {
+          Ds.storage_index_count = int_of_transit "index metadata :count" count;
+          storage_index_shift = int_of_transit "index metadata :shift" shift;
+        }
+  | _ -> None
+
+let optional_metadata key entries =
+  match lookup_transit_key key entries with
+  | Some (Transit.Map metadata) -> index_metadata_of_transit metadata
+  | _ -> None
+
 let storage_root_of_transit entries =
   {
     Ds.storage_schema = schema_of_transit (require_key "schema" entries);
@@ -308,6 +337,9 @@ let storage_root_of_transit entries =
     storage_eavt = address_of_transit "storage root :eavt" (require_key "eavt" entries);
     storage_aevt = address_of_transit "storage root :aevt" (require_key "aevt" entries);
     storage_avet = address_of_transit "storage root :avet" (require_key "avet" entries);
+    storage_eavt_metadata = optional_metadata "eavt-metadata" entries;
+    storage_aevt_metadata = optional_metadata "aevt-metadata" entries;
+    storage_avet_metadata = optional_metadata "avet-metadata" entries;
     storage_duplicate_datoms = optional_datoms "duplicate-datoms" entries;
     storage_max_addr = int_of_transit "storage root :max-addr" (require_key "max-addr" entries);
     storage_branching_factor =

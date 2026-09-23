@@ -78,6 +78,11 @@ type serializable_db =
 
 type storage_address = string
 
+type storage_index_metadata =
+  { storage_index_count : int
+  ; storage_index_shift : int
+  }
+
 type storage_root =
   { storage_schema : schema
   ; storage_max_eid : entity_id
@@ -85,6 +90,9 @@ type storage_root =
   ; storage_eavt : storage_address
   ; storage_aevt : storage_address
   ; storage_avet : storage_address
+  ; storage_eavt_metadata : storage_index_metadata option
+  ; storage_aevt_metadata : storage_index_metadata option
+  ; storage_avet_metadata : storage_index_metadata option
   ; storage_duplicate_datoms : datom list
   ; storage_max_addr : int
   ; storage_branching_factor : int
