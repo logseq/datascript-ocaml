@@ -66,14 +66,15 @@ exception Upsert_retry of string * entity_id * (string * entity_id) list
 type tempid_map =
   { tbl : (string, entity_id) Hashtbl.t
   ; mutable rev : (string * entity_id) list (* newest first *)
+  ; frozen : bool (* upsert probes resolve without recording tempid writes *)
   }
 
-let tempid_map_empty () = { tbl = Hashtbl.create 16; rev = [] }
+let tempid_map_empty () = { tbl = Hashtbl.create 16; rev = []; frozen = false }
 
 let tempid_map_of_list list =
   let tbl = Hashtbl.create (List.length list) in
   List.iter (fun (tempid, eid) -> Hashtbl.replace tbl tempid eid) list;
-  { tbl; rev = List.rev list }
+  { tbl; rev = List.rev list; frozen = false }
 
 let list_of_tempid_map m = List.rev m.rev
 
@@ -82,25 +83,33 @@ let tempid_find m tempid = Hashtbl.find_opt m.tbl tempid
 (* rebuild the map from an authoritative insertion-order list; used by the
    rare current-tx paths so their ordering logic stays in one place *)
 let sync_tempid_map m list =
-  Hashtbl.reset m.tbl;
-  List.iter (fun (tempid, eid) -> Hashtbl.replace m.tbl tempid eid) list;
-  m.rev <- List.rev list;
-  m
+  if m.frozen then m
+  else begin
+    Hashtbl.reset m.tbl;
+    List.iter (fun (tempid, eid) -> Hashtbl.replace m.tbl tempid eid) list;
+    m.rev <- List.rev list;
+    m
+  end
 
 let remember_tempid_m m tempid eid =
-  match Hashtbl.find_opt m.tbl tempid with
-  | Some existing when existing = eid -> m
-  | Some _ -> invalid_arg ("conflicting tempid: " ^ tempid)
-  | None ->
-    Hashtbl.add m.tbl tempid eid;
-    m.rev <- (tempid, eid) :: m.rev;
-    m
+  if m.frozen then m
+  else
+    match Hashtbl.find_opt m.tbl tempid with
+    | Some existing when existing = eid -> m
+    | Some _ -> invalid_arg ("conflicting tempid: " ^ tempid)
+    | None ->
+      Hashtbl.add m.tbl tempid eid;
+      m.rev <- (tempid, eid) :: m.rev;
+      m
 
 (* bulk-path insert where the caller already knows the tempid is fresh *)
 let tempid_remember_unchecked m tempid eid =
-  Hashtbl.replace m.tbl tempid eid;
-  m.rev <- (tempid, eid) :: m.rev;
-  m
+  if m.frozen then m
+  else begin
+    Hashtbl.replace m.tbl tempid eid;
+    m.rev <- (tempid, eid) :: m.rev;
+    m
+  end
 
 let remember_current_tx_m m tx = remember_tempid_m m "db/current-tx" tx
 
@@ -914,6 +923,10 @@ let apply_tx context tx_ops db =
          unresolvable refs keep their raw form and simply never match. Strict
          resolution happens per attr at add time, matching upstream's
          sequential [:db/add] resolution order. *)
+      (* the probe resolves values on a frozen tempid map: minting eids for
+         referenced tempids here would both leak writes into the real map and
+         mint them before the entity's own :db/id, which upstream resolves
+         first. *)
       let probe_attrs =
         let probe_attrs, _, _ =
           List.fold_left
@@ -935,7 +948,7 @@ let apply_tx context tx_ops db =
               | Some (tx_value, max_eid, tempids) ->
                 (attr, tx_value) :: probe_attrs, max_eid, tempids
               | None -> (attr, tx_value) :: probe_attrs, max_eid, tempids)
-            ([], max_eid, tempids)
+            ([], max_eid, { tempids with frozen = true })
             entity.attrs
         in
         List.rev probe_attrs
