@@ -518,3 +518,24 @@ type tx_report =
   ; tempids : (string * entity_id) list
   ; tx_meta : tx_meta
   }
+
+(* The Melange stdlib compiles List.concat_map/concat/flatten into recursive
+   JS calls whose depth grows with the input (concat_map once per element
+   mapped to [], concat/flatten once per sublist), which overflows the JS
+   call stack on data-sized lists such as query binding sets. These
+   tail-recursive versions keep the exact Stdlib.List semantics on every
+   platform. Declared here so the universal `open Datascript_types` (and
+   `open Datascript`) shadows them module-wide. *)
+module List = struct
+  include List
+
+  let concat_map f l =
+    let rec rev_chunks acc = function
+      | [] -> acc
+      | x :: xs -> rev_chunks (List.rev_append (f x) acc) xs
+    in
+    List.rev (rev_chunks [] l)
+
+  let concat l = concat_map (fun x -> x) l
+  let flatten = concat
+end
