@@ -111,6 +111,17 @@ let tempid_remember_unchecked m tempid eid =
     m
   end
 
+(* tempid bindings minted inside an op that aborts (e.g. an unresolved lookup
+   ref queued for retry) must roll back together with the discarded store:
+   the mutable tbl outlives the state tuple, so rebuild it from the
+   pre-attempt rev list *)
+let restore_tempid_map m saved_rev =
+  if not m.frozen && m.rev != saved_rev then begin
+    Hashtbl.reset m.tbl;
+    List.iter (fun (tempid, eid) -> Hashtbl.replace m.tbl tempid eid) (List.rev saved_rev);
+    m.rev <- saved_rev
+  end
+
 let remember_current_tx_m m tx = remember_tempid_m m "db/current-tx" tx
 
 let ensure_current_tx_tempid_m m tx =
@@ -1727,16 +1738,20 @@ let apply_tx context tx_ops db =
   and apply_ops state tx_ops =
     List.fold_left
       (fun state tx_op ->
-        try
+        let _, _, tempids, _, _ = state in
+        let saved_rev = tempids.rev in
+        (try
           let state = apply_op state tx_op in
           let datoms, _, _, _, _ = state in
           if tx_op_affects_schema tx_op then refresh_schema datoms;
           state
         with Unresolved_lookup_ref (attr, value) ->
           (* The lookup ref target may be defined by a later op in this tx:
-             queue the op and retry it once more datoms accumulate. *)
+             queue the op and retry it once more datoms accumulate; bindings
+             minted by the aborted attempt roll back with its store. *)
+          restore_tempid_map tempids saved_rev;
           deferred_ops := (tx_op, attr, value) :: !deferred_ops;
-          state)
+          state))
       state
       tx_ops
   in
@@ -1750,15 +1765,18 @@ let apply_tx context tx_ops db =
       let state =
         List.fold_left
           (fun state (tx_op, _, _) ->
-            try
+            let _, _, tempids, _, _ = state in
+            let saved_rev = tempids.rev in
+            (try
               let state = apply_op state tx_op in
               let datoms, _, _, _, _ = state in
               if tx_op_affects_schema tx_op then refresh_schema datoms;
               progressed := true;
               state
             with Unresolved_lookup_ref (attr', value') ->
+              restore_tempid_map tempids saved_rev;
               deferred_ops := (tx_op, attr', value') :: !deferred_ops;
-              state)
+              state))
           state
           pending
       in
