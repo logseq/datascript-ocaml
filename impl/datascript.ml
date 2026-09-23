@@ -478,10 +478,11 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
     else invalid_arg "cannot modify tuple attributes directly"
   else begin
     if validate_value then validate_datom_value schema_db d;
-    (match find_avet_exact db d.a d.v with
-     | Some existing when is_unique schema_db d.a && existing.e <> d.e ->
-       invalid_arg "unique constraint"
-     | Some _ | None -> ());
+    (* upstream only hits the avet index for the unique-constraint check *)
+    (if is_unique schema_db d.a then
+       match find_avet_exact db d.a d.v with
+       | Some existing when existing.e <> d.e -> invalid_arg "unique constraint"
+       | _ -> ());
     let same_fact_exists =
       find_eavt_exact db d.e d.a d.v |> Option.is_some
     in
@@ -496,7 +497,8 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
       (* Index decisions use schema_db (the current schema, which may have been
          updated by schema datoms earlier in this transaction); the working db
          is also synced so subsequent datoms see the same schema. *)
-      refresh_db_indexes_with_tx_data { db with schema = schema_db.schema } tx_data, tx_data
+      let db', tx_data' = refresh_db_indexes_with_tx_data { db with schema = schema_db.schema } tx_data, tx_data in
+      db', tx_data'
   end
 
 let retract_active_datom_with_report_db tx db e a value =
