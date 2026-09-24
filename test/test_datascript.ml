@@ -1691,6 +1691,37 @@ let test_empty_entity_tempids_are_not_entity_usage () =
            ]
            db))
 
+let test_tempid_shared_between_entity_id_and_ref_values () =
+  (* upstream shares one tempids table across the whole tx: `{:db/id -1}
+     {:db/id -2 :friend -1}` resolves both -1 mentions to one entity. *)
+  let report =
+    transact
+      (empty_db ~schema:[ "friend", ref_attr; "parent", ref_attr ] ())
+      [ Entity
+          { db_id = Some (Temp_id "-1")
+          ; attrs = [ "name", One_value (String "Ivan") ]
+          }
+      ; Entity
+          { db_id = Some (Temp_id "-2")
+          ; attrs =
+              [ "name", One_value (String "Petr")
+              ; "friend", One_value (Int (-1))
+              ; "parent", One_value (Int (-1))
+              ]
+          }
+      ]
+  in
+  let e1 = Option.get (resolve_tempid report.tempids "-1") in
+  let e2 = Option.get (resolve_tempid report.tempids "-2") in
+  assert_equal_triples
+    "value-position tempids share the entity-id tempid's allocation"
+    [ e1, "name", String "Ivan"
+    ; e2, "name", String "Petr"
+    ; e2, "friend", Ref e1
+    ; e2, "parent", Ref e1
+    ]
+    (datoms report.db_after Eavt ())
+
 let test_tempid_generates_unique_entity_refs () =
   let first = tempid () in
   let second = tempid () in
@@ -17369,6 +17400,7 @@ let () =
   test_tempids_are_rejected_in_non_add_ops ();
   test_value_only_tempids_are_rejected ();
   test_empty_entity_tempids_are_not_entity_usage ();
+  test_tempid_shared_between_entity_id_and_ref_values ();
   test_tempid_generates_unique_entity_refs ();
   test_transact__test_db_fn ();
   test_transact__test_db_fn_returning_entity_without_db_id_issue_474 ();
