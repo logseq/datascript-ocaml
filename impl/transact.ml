@@ -208,6 +208,12 @@ let resolve_optional_existing_entity_ref context db datoms tx max_eid tempids = 
     (match context.lookup_ref_entity_id ~strict_missing:false datoms attr value with
      | Some e -> Some e, context.max_eid_with_entity_id max_eid e, tempids
      | None -> None, max_eid, tempids)
+  | Ident ident ->
+    (* upstream retract ops resolve e through non-strict entid and skip the op
+       when it returns nil — a missing :db/ident is a no-op, not an error *)
+    (match context.entid datoms context.ident_attr (Keyword ident) with
+     | Some e -> Some e, context.max_eid_with_entity_id max_eid e, tempids
+     | None -> None, max_eid, tempids)
   | entity_ref ->
     let e, max_eid, tempids = resolve_entity_ref context db datoms tx max_eid tempids entity_ref in
     Some e, max_eid, tempids

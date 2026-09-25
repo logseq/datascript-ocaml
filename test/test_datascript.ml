@@ -1040,6 +1040,26 @@ let test_transact__test_retract_fns_not_found () =
     [ 1, "aka", String "Vanya"; 1, "name", String "Ivan" ]
     (datoms db Eavt ())
 
+let test_transact__test_retract_idents_not_found () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "aka", many ] ()
+    |> db_with [ Add (Entity_id 1, "name", String "Ivan"); Add (Entity_id 1, "aka", String "Vanya") ]
+  in
+  let report =
+    with_tx
+      db
+      [ Retract (Ident "missing/ident", "name", Some (String "Ivan"))
+      ; Retract (Ident "missing/ident", "name", None)
+      ; RetractAttr (Ident "missing/ident", "aka")
+      ; RetractEntity (Ident "missing/ident")
+      ]
+  in
+  assert_equal_triples
+    "missing idents in retract operations are no-ops"
+    [ 1, "aka", String "Vanya"; 1, "name", String "Ivan" ]
+    (datoms report.db_after Eavt ());
+  assert_equal_triples "missing ident retracts emit no tx data" [] report.tx_data
+
 let test_tuple_attrs_track_source_attrs () =
   let db =
     empty_db ~schema:[ "a+b", tuple [ "a"; "b" ] ] ()
@@ -17374,6 +17394,7 @@ let () =
   test_entity_map_db_id_attr_is_not_stored ();
   test_transact__test_with ();
   test_transact__test_retract_fns_not_found ();
+  test_transact__test_retract_idents_not_found ();
   test_tuple_attrs_track_source_attrs ();
   test_tuple_attrs_reject_direct_writes ();
   test_tuple_attrs_ignore_direct_writes_that_match_sources ();
