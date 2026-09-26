@@ -291,14 +291,14 @@ let test_predicate_over_in_scalar () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int 2) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 2L) ] }
          ]
   in
   assert_rows
     "[(= ?v ?target)] filters by :in binding"
     [ [ Result_entity 2 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_value (Int 2)) ] db
+    (q_string ~inputs:[ Arg_scalar (Result_value (Int64 2L)) ] db
        "[:find ?e :in $ ?target :where [?e :attr ?v] [(= ?v ?target)]]")
 
 (* Bug 3: collection-form :in binds each element *)
@@ -306,15 +306,15 @@ let test_collection_in_binding () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int 2) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "attr", One_value (Int 3) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 2L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "attr", One_value (Int64 3L) ] }
          ]
   in
   assert_rows
     "[?x ...] collection :in iterates elements"
     [ [ Result_entity 1 ]; [ Result_entity 3 ] ]
-    (q_string ~inputs:[ Arg_collection [ Result_value (Int 1); Result_value (Int 3) ] ] db
+    (q_string ~inputs:[ Arg_collection [ Result_value (Int64 1L); Result_value (Int64 3L) ] ] db
        "[:find ?e :in $ [?x ...] :where [?e :attr ?x]]")
 
 (* Bug 2 extended: comparison predicates over :in-bound vars *)
@@ -322,20 +322,20 @@ let test_comparison_predicates_over_in () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "d", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "d", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "d", One_value (Int 5) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "d", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "d", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "d", One_value (Int64 5L) ] }
          ]
   in
   assert_rows
     "[(<= ?d ?cutoff)] filters by :in binding"
     [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_value (Int 3)) ] db
+    (q_string ~inputs:[ Arg_scalar (Result_value (Int64 3L)) ] db
        "[:find ?e :in $ ?cutoff :where [?e :d ?d] [(<= ?d ?cutoff)]]");
   assert_rows
     "[(not= ?d ?x)] filters by :in binding"
     [ [ Result_entity 1 ]; [ Result_entity 3 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_value (Int 3)) ] db
+    (q_string ~inputs:[ Arg_scalar (Result_value (Int64 3L)) ] db
        "[:find ?e :in $ ?x :where [?e :d ?d] [(not= ?d ?x)]]")
 
 (* Bug 2 extended: predicate over collection-bound :in var sees each element *)
@@ -343,14 +343,14 @@ let test_predicate_over_collection_in () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int 3) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 3L) ] }
          ]
   in
   assert_rows
     "[(= ?v ?x)] sees collection :in elements"
     [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
-    (q_string ~inputs:[ Arg_collection [ Result_value (Int 1); Result_value (Int 3) ] ] db
+    (q_string ~inputs:[ Arg_collection [ Result_value (Int64 1L); Result_value (Int64 3L) ] ] db
        "[:find ?e :in $ [?x ...] :where [?e :attr ?v] [(= ?v ?x)]]")
 
 (* Bug 5: lookup refs inside a transaction resolve against the db with the
@@ -818,7 +818,7 @@ let logseq_rule_db () =
                [ "block/title", One_value (String "Page1")
                ; "block/tags", Many_values [ Keyword "user.class/Person" ]
                ; "user.property/foo", One_value (String "bar")
-               ; "user.property/number-many", Many_values [ Int 5; Int 10 ]
+               ; "user.property/number-many", Many_values [ Int64 5L; Int64 10L ]
                ; "user.property/page-many", Many_values [ Keyword "logseq.class/Page" ]
                ]
            }
@@ -921,7 +921,7 @@ let test_rule_tags_query_with_eid_input () =
     (q_string db
        ~inputs:
          [ Arg_rules (rules_of_string logseq_dsl_rules)
-         ; Arg_scalar (Result_value (Set [ Int 17 ]))
+         ; Arg_scalar (Result_value (Set [ Int64 17L ]))
          ]
        "[:find ?b :in $ % ?tag-ids :where (tags ?b ?tag-ids)]")
 

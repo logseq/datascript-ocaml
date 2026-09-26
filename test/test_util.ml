@@ -30,12 +30,12 @@ let test_util__value_semantics () =
   let nested =
     Map
       [ Keyword "b", Vector [ String "x"; String "y" ]
-      ; Keyword "a", Set [ Int 2; Int 1; Int 1 ]
+      ; Keyword "a", Set [ Int64 2L; Int64 1L; Int64 1L ]
       ]
   in
   let normalized =
     Map
-      [ Keyword "a", Set [ Int 1; Int 2 ]
+      [ Keyword "a", Set [ Int64 1L; Int64 2L ]
       ; Keyword "b", Vector [ String "x"; String "y" ]
       ]
   in
@@ -43,7 +43,7 @@ let test_util__value_semantics () =
     "Util.normalize_value normalizes unordered values without losing vector shape"
     normalized
     (Util.normalize_value nested);
-  if Util.compare_value (Vector [ Int 1; Int 2 ]) (List [ Int 1; Int 2 ]) = 0 then
+  if Util.compare_value (Vector [ Int64 1L; Int64 2L ]) (List [ Int64 1L; Int64 2L ]) = 0 then
     failf "vectors and lists must remain distinct values"
 
 let test_util__keyword_order_matches_upstream () =
@@ -106,7 +106,7 @@ let test_util__keyword_order_matches_upstream () =
     failf "normalized nested filter map value ordering should match upstream DataScript value-compare"
 
 let test_util__vector_values_in_db () =
-  let vector = Vector [ Int 1; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ] in
+  let vector = Vector [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ] in
   let db =
     empty_db ~schema:[ "shape", indexed ] ()
     |> db_with [ Add (Entity_id 1, "shape", vector) ]
@@ -118,7 +118,7 @@ let test_util__vector_values_in_db () =
   assert_equal_triples
     "list values do not match vector values with the same members"
     []
-    (datoms db Avet ~a:"shape" ~v:(List [ Int 1; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ]) ())
+    (datoms db Avet ~a:"shape" ~v:(List [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ]) ())
 
 let () =
   test_util__value_semantics ();

@@ -17,7 +17,7 @@ let test_listen__test_listen_bang () =
   ignore (listen_bang conn "test" (fun report -> reports := !reports @ [ report ]));
   ignore
     (transact_bang_string
-       ~tx_meta:[ "some-metadata", Int 1 ]
+       ~tx_meta:[ "some-metadata", Int64 1L ]
        conn
        "[[:db/add -1 :name \"Dima\"]
          [:db/add -1 :age 19]
@@ -36,11 +36,11 @@ let test_listen__test_listen_bang () =
     assert_equal_tx_flags
       "listen reports first observed tx-data like upstream"
       [ 3, "name", String "Dima", true
-      ; 3, "age", Int 19, true
+      ; 3, "age", Int64 19L, true
       ; 4, "name", String "Evgeny", true
       ]
       first.tx_data;
-    if first.tx_meta <> [ "some-metadata", Int 1 ] then
+    if first.tx_meta <> [ "some-metadata", Int64 1L ] then
       failwith "listen should preserve tx metadata for the first observed report";
     assert_equal_tx_flags
       "listen reports replacements and skips no-op retracts like upstream"

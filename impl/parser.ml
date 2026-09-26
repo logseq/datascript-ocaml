@@ -112,7 +112,7 @@ let read_edn input =
     | _ when String.length token > 0 && token.[0] = ':' ->
       QueryFormKeyword (String.sub token 1 (String.length token - 1))
     | _ ->
-      (match int_of_string_opt token with
+      (match Int64.of_string_opt token with
        | Some value -> QueryFormInt value
        | None ->
          if String.contains token '.' || String.contains token 'e' || String.contains token 'E' then
@@ -302,7 +302,7 @@ let read_edn input =
 let rec query_value_of_form = function
   | QueryFormNil -> Nil
   | QueryFormBool value -> Bool value
-  | QueryFormInt value -> Int value
+  | QueryFormInt value -> Int64 value
   | QueryFormFloat value -> Float value
   | QueryFormString value -> String value
   | QueryFormKeyword value -> Keyword value
@@ -326,7 +326,7 @@ let rec query_value_of_form = function
 let rec query_form_of_value = function
   | Nil -> QueryFormNil
   | Bool value -> QueryFormBool value
-  | Int value -> QueryFormInt value
+  | Int64 value -> QueryFormInt value
   | Float value -> QueryFormFloat value
   | String value -> QueryFormString value
   | Keyword value -> QueryFormKeyword value
@@ -339,9 +339,9 @@ let rec query_form_of_value = function
   | Map entries ->
     QueryFormMap (List.map (fun (key, value) -> query_form_of_value key, query_form_of_value value) entries)
   | Uuid value -> QueryFormTagged ("uuid", QueryFormString value)
-  | Instant value -> QueryFormInt (Int64.to_int value)
+  | Instant value -> QueryFormInt value
   | Regex value -> QueryFormTagged ("regex", QueryFormString value)
-  | Ref entity_id -> QueryFormInt entity_id
+  | Ref entity_id -> QueryFormInt (Int64.of_int entity_id)
   | TxRef
   | Ref_to _ ->
     invalid_arg "cannot convert value to query form"
@@ -689,10 +689,13 @@ let parse_pattern_term
      | QueryFormSymbol symbol when source_position && is_query_source_symbol symbol ->
        QSource (query_source_name symbol)
      | QueryFormSymbol symbol -> QValue (Symbol symbol)
-     | QueryFormInt entity_id when entity_position -> QEntity entity_id
+     | QueryFormInt entity_id when entity_position ->
+       (match Util.int64_to_int entity_id with
+        | Some entity_id -> QEntity entity_id
+        | None -> QValue (Int64 entity_id))
      | QueryFormKeyword attr when attr_position -> QAttr attr
      | QueryFormKeyword value -> QValue (Keyword value)
-     | QueryFormInt value -> QValue (Int value)
+     | QueryFormInt value -> QValue (Int64 value)
      | QueryFormFloat value -> QValue (Float value)
      | QueryFormString value -> QValue (String value)
      | QueryFormBool value -> QValue (Bool value)
@@ -1142,7 +1145,7 @@ let parse_find_form context ?(defer_pull_patterns = false) ?default_pull_db ?pul
         | [] -> invalid_arg "aggregate custom aggregate requires at least one argument"
         | args -> Find_aggregate (CustomVar (query_symbol_name aggregate_var), parse_find_args args))
      | Some [ QueryFormSymbol aggregate; QueryFormInt amount; QueryFormSymbol var ] ->
-       (match amount_aggregate_of_symbol aggregate amount with
+       (match amount_aggregate_of_symbol aggregate (Util.int64_to_int_exn "aggregate amount" amount) with
         | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
         | None -> invalid_arg "find elements must be variable symbols")
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol amount_var; QueryFormSymbol var ]

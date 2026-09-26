@@ -44,8 +44,11 @@ let keyword_name_of_form = function
   | _ -> invalid_arg "expected EDN keyword or symbol"
 
 let rec entity_ref_of_edn_form context = function
-  | QueryFormInt entity_id when entity_id < 0 -> Temp_id (string_of_int entity_id)
-  | QueryFormInt entity_id -> Entity_id entity_id
+  | QueryFormInt entity_id when entity_id < 0L -> Temp_id (Int64.to_string entity_id)
+  | QueryFormInt entity_id ->
+    (match Util.int64_to_int entity_id with
+     | Some entity_id -> Entity_id entity_id
+     | None -> invalid_arg ("entity id out of int range: " ^ Int64.to_string entity_id))
   | QueryFormString tempid -> Temp_id tempid
   | QueryFormKeyword "db/current-tx"
   | QueryFormSymbol "db/current-tx" -> CurrentTx
@@ -139,7 +142,7 @@ and tx_entity_of_edn_map context entries =
   { db_id; attrs = List.rev attrs }
 
 let explicit_tx_of_edn_form = function
-  | QueryFormInt tx -> tx
+  | QueryFormInt tx -> Util.int64_to_int_exn "explicit transaction tx" tx
   | _ -> invalid_arg "explicit transaction tx must be an integer"
 
 let entity_id_of_explicit_datom_edn_form context form =
@@ -160,7 +163,7 @@ let raw_datom_of_edn_forms context ?(added = true) entity_ref attr value tx =
 let raw_datom_of_tagged_edn_form context = function
   | QueryFormVector [ entity_ref; attr; value ]
   | QueryFormList [ entity_ref; attr; value ] ->
-    raw_datom_of_edn_forms context entity_ref attr value (QueryFormInt context.tx0)
+    raw_datom_of_edn_forms context entity_ref attr value (QueryFormInt (Int64.of_int context.tx0))
   | QueryFormVector [ entity_ref; attr; value; tx ]
   | QueryFormList [ entity_ref; attr; value; tx ] ->
     raw_datom_of_edn_forms context entity_ref attr value tx

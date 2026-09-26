@@ -52,7 +52,7 @@ let rec max_eid_in_value max_eid = function
         | Some value -> max_eid_in_value max_eid value)
       max_eid
       values
-  | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
+  | Nil | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
 
 let value_equal = Util.value_equal
 
@@ -493,11 +493,14 @@ let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual 
 let values_compare_equal context actual expected =
   match actual, expected with
   | Nil, Nil -> true
-  | Int actual, Int expected
-  | Ref actual, Ref expected
-  | Int actual, Ref expected
-  | Ref actual, Int expected ->
+  | Int64 actual, Int64 expected ->
     actual = expected
+  | Ref actual, Ref expected ->
+    actual = expected
+  | Int64 actual, Ref expected ->
+    actual = Int64.of_int expected
+  | Ref actual, Int64 expected ->
+    Int64.of_int actual = expected
   | String actual, String expected
   | Symbol actual, Symbol expected
   | Keyword actual, Keyword expected
@@ -1031,7 +1034,7 @@ let squuid ?msec () =
   incr squuid_counter;
   let seconds =
     match msec with
-    | Some msec -> Float.of_int msec /. 1000.0
+    | Some msec -> Int64.to_float msec /. 1000.0
     | None -> Platform.now_seconds ()
   in
   let seconds_hex = hex8_of_seconds seconds in
@@ -1046,5 +1049,5 @@ let squuid ?msec () =
 let squuid_time_millis = function
   | Uuid uuid ->
     if String.length uuid < 8 then invalid_arg "invalid squuid";
-    int_of_string ("0x" ^ String.sub uuid 0 8) * 1000
+    Int64.mul (Int64.of_string ("0x" ^ String.sub uuid 0 8)) 1000L
   | _ -> invalid_arg "squuid_time_millis expects a uuid value"

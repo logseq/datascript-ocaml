@@ -184,8 +184,8 @@ let random_man rng i =
         ; "full-name", One_value (String (name ^ " " ^ last_name))
         ; "alias", Many_values alias_values
         ; "sex", One_value (Keyword (if next_int rng 2 = 0 then "male" else "female"))
-        ; "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
         ]
     }
 
@@ -255,7 +255,7 @@ let main () =
   bench config "q5-shortcircuit" (fun () ->
     consume_rows
       (q_string
-         ~inputs:[ Arg_scalar (Result_value (String "Anastasia")); Arg_scalar (Result_value (Int 35)) ]
+         ~inputs:[ Arg_scalar (Result_value (String "Anastasia")); Arg_scalar (Result_value (Int64 35L)) ]
          (Lazy.force db)
          "[:find ?e ?n ?l ?a ?s ?al :in $ ?n ?a :where [?e :name ?n] [?e :age ?a] [?e :last-name ?l] [?e :sex ?s] [?e :alias ?al]]"));
   bench config "qpred1" (fun () ->
@@ -263,7 +263,7 @@ let main () =
   bench config "qpred2" (fun () ->
     consume_rows
       (q_string
-         ~inputs:[ Arg_scalar (Result_value (Int 50000)) ]
+         ~inputs:[ Arg_scalar (Result_value (Int64 50000L)) ]
          (Lazy.force db)
          "[:find ?e ?s :in $ ?min-s :where [?e :salary ?s] [(> ?s ?min-s)]]"));
   bench config "q2pred" (fun () ->

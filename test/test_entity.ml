@@ -78,7 +78,7 @@ let test_entity__test_entity () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 19)
+                 ; "age", One_value (Int64 19L)
                  ; "aka", Many_values [ String "X"; String "Y" ]
                  ]
              }
@@ -101,7 +101,7 @@ let test_entity__test_entity () =
      assert_equal_int "entity id" 1 entity.id;
      assert_equal_tx_value
        "entity exposes db/id as a virtual attribute"
-       (Some (One_value (Int 1)))
+       (Some (One_value (Int64 1L)))
        (entity_attr entity "db/id");
      assert_equal_tx_value
        "entity reads current cardinality-one value"
@@ -109,7 +109,7 @@ let test_entity__test_entity () =
        (entity_attr entity "name");
      assert_equal_tx_value
        "entity reads ordinary scalar attrs"
-       (Some (One_value (Int 19)))
+       (Some (One_value (Int64 19L)))
        (entity_attr entity "age");
      assert_equal_tx_value
        "entity reads current cardinality-many values"
@@ -243,7 +243,7 @@ let test_entity__test_entity_misses () =
     failwith "incoming refs alone should not make an entity exist";
   assert_raises_invalid_arg
     "entity lookup refs require unique attrs like upstream"
-    (fun () -> ignore (entity db (Lookup_ref ("not-an-attr", Int 777))))
+    (fun () -> ignore (entity db (Lookup_ref ("not-an-attr", Int64 777L))))
 
 let test_entity__test_entity_equality () =
   let db1 =

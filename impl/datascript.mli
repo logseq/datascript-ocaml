@@ -57,7 +57,7 @@ module Built_ins : sig
   val values_equal : value -> value -> bool
   val type_keyword_of_value : value -> string
   val value_contains : value -> value -> bool
-  val range_values : int -> int -> int -> int list
+  val range_values : int64 -> int64 -> int64 -> int64 list
 end
 
 module Data_readers : sig
@@ -152,8 +152,8 @@ module Db : sig
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
-  val squuid : ?msec:int -> unit -> value
-  val squuid_time_millis : value -> int
+  val squuid : ?msec:int64 -> unit -> value
+  val squuid_time_millis : value -> int64
 end
 
 module Entity : sig
@@ -262,6 +262,10 @@ module Storage : sig
 end
 
 module Util : sig
+  val int64_to_int : int64 -> int option
+  val int64_to_int_exn : string -> int64 -> int
+  val civil_from_days : int64 -> int * int * int
+  val string_of_instant_millis : int64 -> string
   val list_equal_by : ('a -> 'a -> bool) -> 'a list -> 'a list -> bool
   val entity_ref_equal : entity_ref -> entity_ref -> bool
   val value_equal : value -> value -> bool
@@ -419,8 +423,8 @@ val collect_garbage : storage -> unit
 val db_hash : db -> int
 val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
-val squuid : ?msec:int -> unit -> value
-val squuid_time_millis : value -> int
+val squuid : ?msec:int64 -> unit -> value
+val squuid_time_millis : value -> int64
 val create_conn : ?schema:schema -> ?storage:storage -> unit -> conn
 val conn_from_db : db -> conn
 val conn_from_datoms : ?schema:schema -> ?storage:storage -> datom list -> conn

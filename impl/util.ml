@@ -7,6 +7,53 @@ let rec list_equal_by equal left right =
     equal left right && list_equal_by equal left_rest right_rest
   | [], _ :: _ | _ :: _, [] -> false
 
+let int64_to_int value =
+  if Int64.compare value (Int64.of_int min_int) >= 0
+     && Int64.compare value (Int64.of_int max_int) <= 0
+  then Some (Int64.to_int value)
+  else None
+
+let int64_to_int_exn label value =
+  match int64_to_int value with
+  | Some value -> value
+  | None -> invalid_arg (label ^ ": int64 out of int range: " ^ Int64.to_string value)
+
+(* days-from-civil inverse (Howard Hinnant's civil calendar algorithm) *)
+let civil_from_days days =
+  let days = Int64.add days 719468L in
+  let era = Int64.div (if Int64.compare days 0L >= 0 then days else Int64.sub days 146096L) 146097L in
+  let day_of_era = Int64.sub days (Int64.mul era 146097L) in
+  let year_of_era =
+    Int64.div
+      (Int64.sub day_of_era (Int64.add (Int64.div day_of_era 1460L) (Int64.sub (Int64.div day_of_era 36524L) (Int64.div day_of_era 146096L))))
+      365L
+  in
+  let year = Int64.add year_of_era (Int64.mul era 400L) in
+  let day_of_year =
+    Int64.sub day_of_era
+      (Int64.add (Int64.mul 365L year_of_era) (Int64.sub (Int64.div year_of_era 4L) (Int64.div year_of_era 100L)))
+  in
+  let month_prime = Int64.div (Int64.add (Int64.mul 5L day_of_year) 2L) 153L in
+  let day = Int64.sub day_of_year (Int64.sub (Int64.div (Int64.add (Int64.mul 153L month_prime) 2L) 5L) 1L) in
+  let month = if Int64.compare month_prime 10L < 0 then Int64.add month_prime 3L else Int64.sub month_prime 9L in
+  let year = if Int64.compare month 2L <= 0 then Int64.add year 1L else year in
+  Int64.to_int year, Int64.to_int month, Int64.to_int day
+
+(* "YYYY-MM-DDTHH:MM:SS.mmmZ" — the canonical #inst literal form *)
+let string_of_instant_millis millis =
+  let days =
+    let d = Int64.div millis 86400000L in
+    (* floor division: shift down when millis is negative and not a whole day *)
+    if Int64.compare millis 0L < 0 && Int64.rem millis 86400000L <> 0L then Int64.sub d 1L else d
+  in
+  let rem = Int64.sub millis (Int64.mul days 86400000L) in
+  let year, month, day = civil_from_days days in
+  let hour = Int64.to_int (Int64.div rem 3600000L) in
+  let minute = Int64.to_int (Int64.div (Int64.rem rem 3600000L) 60000L) in
+  let second = Int64.to_int (Int64.div (Int64.rem rem 60000L) 1000L) in
+  let ms = Int64.to_int (Int64.rem rem 1000L) in
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ" year month day hour minute second ms
+
 let rec entity_ref_equal left right =
   match left, right with
   | Entity_id left, Entity_id right -> left = right
@@ -20,7 +67,7 @@ let rec entity_ref_equal left right =
 and value_equal left right =
   match left, right with
   | Nil, Nil -> true
-  | Int left, Int right -> left = right
+  | Int64 left, Int64 right -> Int64.equal left right
   | Float left, Float right ->
     (classify_float left = FP_nan && classify_float right = FP_nan) || left = right
   | String left, String right -> left = right
@@ -247,7 +294,7 @@ let rec clojure_hasheq = function
   | Nil -> 0
   | Bool true -> 1231
   | Bool false -> 1237
-  | Int value -> murmur3_hash_long (Int64.of_int value)
+  | Int64 value -> murmur3_hash_long value
   | Float value -> Hashtbl.hash value
   | String value -> murmur3_hash_int (java_string_hash value)
   | Symbol value -> clojure_symbol_hash value
@@ -279,7 +326,7 @@ let value_type_rank = function
   | Vector _ -> 6
   | Tuple _ -> 7
   | Bool _ -> 8
-  | Int _ | Float _ | Ref _ -> 9
+  | Int64 _ | Float _ | Ref _ -> 9
   | String _ -> 10
   | Regex _ -> 11
   | Instant _ -> 12
@@ -289,17 +336,17 @@ let value_type_rank = function
 
 let rec compare_value left right =
   match left, right with
-  | Int left, Int right -> compare left right
+  | Int64 left, Int64 right -> Int64.compare left right
   | Float left, Float right -> compare left right
-  | Int left, Float right -> compare (float_of_int left) right
-  | Float left, Int right -> compare left (float_of_int right)
+  | Int64 left, Float right -> compare (Int64.to_float left) right
+  | Float left, Int64 right -> compare left (Int64.to_float right)
   | Ref left, Ref right -> compare left right
-  | Int left, Ref right -> compare left right
-  | Ref left, Int right -> compare left right
+  | Int64 left, Ref right -> Int64.compare left (Int64.of_int right)
+  | Ref left, Int64 right -> Int64.compare (Int64.of_int left) right
   | Float left, Ref right -> compare left (float_of_int right)
   | Ref left, Float right -> compare (float_of_int left) right
-  | Instant left, Int right -> Int64.compare left (Int64.of_int right)
-  | Int left, Instant right -> Int64.compare (Int64.of_int left) right
+  | Instant left, Int64 right -> Int64.compare left right
+  | Int64 left, Instant right -> Int64.compare left right
   | Instant left, Ref right -> Int64.compare left (Int64.of_int right)
   | Ref left, Instant right -> Int64.compare (Int64.of_int left) right
   | Instant left, Float right -> compare (Int64.to_float left) right

@@ -67,5 +67,5 @@ val index_range : index_context -> db -> attr -> ?start:value -> ?stop:value -> 
 val hash : db -> int
 val hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
-val squuid : ?msec:int -> unit -> value
-val squuid_time_millis : value -> int
+val squuid : ?msec:int64 -> unit -> value
+val squuid_time_millis : value -> int64

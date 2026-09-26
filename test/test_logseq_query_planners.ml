@@ -421,7 +421,7 @@ let test_simple_not_uses_relation_antijoin () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int index) () ]
+         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
          @
          if index mod 2 = 0 then
            [ datom ~e:entity ~a:"item/excluded?" ~v:(Bool true) () ]
@@ -445,7 +445,7 @@ let test_source_not_uses_relation_antijoin () =
   let item_datoms =
     List.init count (fun index ->
       let entity = 1_000 + index in
-      datom ~e:entity ~a:"item/value" ~v:(Int index) ())
+      datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ())
   in
   let excluded_datoms =
     List.filter_map
@@ -792,7 +792,7 @@ let test_has_property_with_bound_title_uses_rule_suffix_context () =
        ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "noise/value") ()
        ]
        @ List.init count (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(Int index) ()))
+         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   match
     timed "has-property bound title suffix context" 0.250 (fun () ->
@@ -1033,7 +1033,7 @@ let test_rule_call_uses_relation_context_for_many_bindings () =
       (List.concat
          (List.init count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"item/value" ~v:(Int index) () ]
+            [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
             @
             if index mod 2 = 0 then
               [ datom ~e:entity ~a:"item/flag?" ~v:(Bool true) ()
@@ -1080,7 +1080,7 @@ let test_source_rule_call_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let source_datoms =
     List.filter_map
@@ -1127,7 +1127,7 @@ let test_top_level_or_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int index) () ]
+         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
          @
          if index mod 2 = 0 then
            [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
@@ -1162,7 +1162,7 @@ let test_top_level_or_join_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int index) () ]
+         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
          @
          if index mod 2 = 0 then
            [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
@@ -1200,8 +1200,8 @@ let test_top_level_or_join_required_uses_relation_context_for_many_bindings () =
       (List.init count (fun index ->
          let entity = 1_000 + index in
          let group = index mod 16 in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int index) ()
-         ; datom ~e:entity ~a:"item/group" ~v:(Int group) ()
+         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()
+         ; datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) ()
          ]
          @
          if index mod 2 = 0 then
@@ -1250,8 +1250,8 @@ let test_source_or_join_required_uses_relation_context_for_many_bindings () =
          (List.init count (fun index ->
             let entity = 1_000 + index in
             let group = index mod 16 in
-            [ datom ~e:entity ~a:"item/value" ~v:(Int index) ()
-            ; datom ~e:entity ~a:"item/group" ~v:(Int group) ()
+            [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()
+            ; datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) ()
             ])))
   in
   let source_db =
@@ -1261,7 +1261,7 @@ let test_source_or_join_required_uses_relation_context_for_many_bindings () =
          (List.init count (fun index ->
             let entity = 1_000 + index in
             let group = index mod 16 in
-            [ datom ~e:entity ~a:"item/group" ~v:(Int group) () ]
+            [ datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) () ]
             @
             if index mod 2 = 0 then
               [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
@@ -1304,7 +1304,7 @@ let test_top_level_not_join_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int index) () ]
+         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
          @
          if index mod 2 = 0 then
            [ datom ~e:entity ~a:"item/excluded?" ~v:(Bool true) () ]
@@ -1336,7 +1336,7 @@ let test_source_not_join_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let excluded_db =
     init_db
@@ -1374,11 +1374,11 @@ let test_relation_source_join_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let labels =
     List.init count (fun index ->
-      [ Result_value (Int index)
+      [ Result_value (Int64 (Int64.of_int index))
       ; Result_value (String (Printf.sprintf "label-%d" index))
       ])
   in
@@ -1406,13 +1406,13 @@ let test_input_bound_predicate_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let threshold = 0 in
   let rows =
     timed "input-bound predicate relation rows" 0.100 (fun () ->
       q_sources_string
-        ~inputs:[ Arg_scalar (Result_value (Int threshold)) ]
+        ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int threshold))) ]
         db
         []
         "[:find ?e
@@ -1429,7 +1429,7 @@ let test_source_clause_predicate_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let source_db = empty_db () in
   let query =
@@ -1439,7 +1439,7 @@ let test_source_clause_predicate_uses_relation_rows () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "score/value", QVar "score")
-        ; SourceClause ("scores", ComparisonPredicate (GreaterThan, QVar "score", QValue (Int 0)))
+        ; SourceClause ("scores", ComparisonPredicate (GreaterThan, QVar "score", QValue (Int64 0L)))
         ]
     }
   in
@@ -1456,7 +1456,7 @@ let test_source_clause_function_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let source_db = empty_db () in
   let query =
@@ -1466,7 +1466,7 @@ let test_source_clause_function_uses_relation_rows () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "score/value", QVar "score")
-        ; SourceClause ("scores", ArithmeticValue (AddNumbers, [ QVar "score"; QValue (Int 1) ], "next"))
+        ; SourceClause ("scores", ArithmeticValue (AddNumbers, [ QVar "score"; QValue (Int64 1L) ], "next"))
         ]
     }
   in
@@ -1483,13 +1483,13 @@ let test_input_bound_predicate_uses_index_range () =
     init_db
       ~schema:[ "score/value", { one with indexed = true } ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int index) ()))
+         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
   in
   let threshold = count - 11 in
   let rows =
     timed "input-bound predicate index range" 0.020 (fun () ->
       q_string
-        ~inputs:[ Arg_scalar (Result_value (Int threshold)) ]
+        ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int threshold))) ]
         db
         "[:find ?e
           :in $ ?threshold
@@ -1514,7 +1514,7 @@ let test_same_entity_indexed_chain_uses_sparse_candidate_scan () =
          let entity = 1_000 + index in
          [ datom ~e:entity ~a:"person/name" ~v:(String (if index mod 8 = 0 then "Ivan" else "Petr")) ()
          ; datom ~e:entity ~a:"person/last-name" ~v:(String (Printf.sprintf "L%d" (index mod 97))) ()
-         ; datom ~e:entity ~a:"person/age" ~v:(Int (index mod 100)) ()
+         ; datom ~e:entity ~a:"person/age" ~v:(Int64 (Int64.of_int (index mod 100))) ()
          ; datom ~e:entity ~a:"person/sex" ~v:(Keyword (if index mod 2 = 0 then "male" else "female")) ()
          ]))
   in

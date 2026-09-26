@@ -40,10 +40,10 @@ let person i =
   Entity
     { db_id = Some (Entity_id i)
     ; attrs =
-        [ "id", One_value (Int i)
+        [ "id", One_value (Int64 (Int64.of_int i))
         ; "name", One_value (String names.((i - 1) mod Array.length names))
-        ; "age", One_value (Int ((i * 37) mod 100))
-        ; "salary", One_value (Int ((i * 7919) mod 100_000))
+        ; "age", One_value (Int64 (Int64.of_int ((i * 37) mod 100)))
+        ; "salary", One_value (Int64 (Int64.of_int ((i * 7919) mod 100_000)))
         ; "sex", One_value (Keyword (if i mod 2 = 0 then "male" else "female"))
         ; "alias", Many_values [ String ("alias-" ^ string_of_int (i mod 10)); String ("tag-" ^ string_of_int (i mod 17)) ]
         ]

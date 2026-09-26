@@ -355,11 +355,11 @@ let test_storage__test_conn () =
 let test_storage__test_db_with_tail () =
   let db =
     empty_db ~schema:[ "block/updated-at", indexed; "block/uuid", unique_identity ] ()
-    |> db_with [ Add (Entity_id 1, "block/updated-at", Int 2); Add (Entity_id 1, "block/uuid", String "u1") ]
+    |> db_with [ Add (Entity_id 1, "block/updated-at", Int64 2L); Add (Entity_id 1, "block/uuid", String "u1") ]
   in
   let tail =
-    [ [ datom ~tx:(tx0 + 3) ~e:1 ~a:"block/updated-at" ~v:(Int 1772979060646) () ]
-    ; [ datom ~tx:(tx0 + 4) ~e:1 ~a:"block/updated-at" ~v:(Int 1772979061145) () ]
+    [ [ datom ~tx:(tx0 + 3) ~e:1 ~a:"block/updated-at" ~v:(Int64 1772979060646L) () ]
+    ; [ datom ~tx:(tx0 + 4) ~e:1 ~a:"block/updated-at" ~v:(Int64 1772979061145L) () ]
     ; [ datom ~tx:(tx0 + 5) ~e:2 ~a:"block/uuid" ~v:(String "u1") ()
       ; datom ~tx:(tx0 + 5) ~e:2 ~a:"block/title" ~v:(String "Rejected") ()
       ]
@@ -369,7 +369,7 @@ let test_storage__test_db_with_tail () =
   let restored = db_with_tail db tail in
   assert_equal_triples
     "db_with_tail retracts stale cardinality-one values"
-    [ 1, "block/updated-at", Int 1772979061145 ]
+    [ 1, "block/updated-at", Int64 1772979061145L ]
     (datoms restored Avet ~a:"block/updated-at" ());
   assert_equal_triples
     "db_with_tail drops rejected unique-conflict tail groups"

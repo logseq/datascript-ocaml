@@ -102,8 +102,8 @@ let schema_of_json = function
 let rec value_of_json = function
   | `Null -> Nil
   | `Bool value -> Bool value
-  | `Int value -> Int value
-  | `Intlit value -> Int (int_of_string value)
+  | `Int value -> Int64 (Int64.of_int value)
+  | `Intlit value -> Int64 (Int64.of_string value)
   | `Float value -> Float value
   | `String value when String.starts_with ~prefix:":" value -> Keyword (attr_name value)
   | `String value -> String value
@@ -131,7 +131,10 @@ let schema_attr_is_ref db attr =
 
 let value_of_json_for_attr ?db attr json =
   match value_of_json json with
-  | Int entity_id when schema_attr_is_ref db attr -> Ref entity_id
+  | Int64 entity_id when schema_attr_is_ref db attr ->
+    (match Util.int64_to_int entity_id with
+     | Some entity_id -> Ref entity_id
+     | None -> Int64 entity_id)
   | value -> value
 
 let tx_value_of_json_for_attr ?db attr = function
@@ -143,8 +146,8 @@ let entity_ref_of_json = function
   | `Int entity_id when entity_id < 0 -> Temp_id (string_of_int entity_id)
   | `Int entity_id -> Entity_id entity_id
   | `Intlit value ->
-    let entity_id = int_of_string value in
-    if entity_id < 0 then Temp_id value else Entity_id entity_id
+    let entity_id = Int64.of_string value in
+    if entity_id < 0L then Temp_id value else Entity_id (Util.int64_to_int_exn "entity id" entity_id)
   | `String "db/current-tx" | `String ":db/current-tx" -> CurrentTx
   | `String value when String.starts_with ~prefix:":" value -> Ident (attr_name value)
   | `String value -> Temp_id value
@@ -210,7 +213,7 @@ let datoms_of_json = function
 
 let rec json_of_value = function
   | Nil -> `Null
-  | Int value -> `Int value
+  | Int64 value -> `Intlit (Int64.to_string value)
   | Float value -> `Float value
   | String value -> `String value
   | Symbol value -> `String value

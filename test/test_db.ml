@@ -19,7 +19,7 @@ let hash_hash_beef (_ : hash_beef) = 0xBEEF
 
 let rec debug_value = function
   | Nil -> "nil"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> Printf.sprintf "%S" value
   | Symbol value -> value
@@ -92,18 +92,16 @@ let test_db__test_db_hash_cache () =
   assert_equal_int "different db identity gets a separate hash cache entry" (before + 2) (db_hash_cache_size ())
 
 let test_db__test_uuid () =
-  let first = squuid ~msec:1_710_000_123_456 () in
-  let second = squuid ~msec:1_710_000_123_456 () in
+  let first = squuid ~msec:1_710_000_123_456L () in
+  let second = squuid ~msec:1_710_000_123_456L () in
   if first = second then failwith "squuid should include random bits";
   let first_uuid =
     match first with
     | Uuid uuid -> uuid
     | _ -> failwith "squuid should return a Uuid value"
   in
-  assert_equal_int
-    "squuid_time_millis returns the embedded second"
-    1_710_000_123_000
-    (squuid_time_millis first);
+  if not (Int64.equal (squuid_time_millis first) 1_710_000_123_000L) then
+    failwith "squuid_time_millis should return the embedded second";
   assert_equal_string
     "squuid uses the timestamp as its first UUID segment"
     "65ec87fb"
@@ -129,27 +127,27 @@ let test_db__test_diff () =
   let left =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int 1); "b", One_value (Int 2); "c", One_value (Int 4) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "a", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int64 1L); "b", One_value (Int64 2L); "c", One_value (Int64 4L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "a", One_value (Int64 1L) ] }
          ]
   in
   let right =
     empty_db ()
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "b", One_value (Int 3); "d", One_value (Int 5) ] } ]
-    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int 1) ] } ]
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "b", One_value (Int64 3L); "d", One_value (Int64 5L) ] } ]
+    |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "a", One_value (Int64 1L) ] } ]
   in
   let only_left, only_right, both = diff left right in
   assert_equal_triples
     "db diff returns datoms only on the left"
-    [ 1, "b", Int 2; 1, "c", Int 4; 2, "a", Int 1 ]
+    [ 1, "b", Int64 2L; 1, "c", Int64 4L; 2, "a", Int64 1L ]
     only_left;
   assert_equal_triples
     "db diff returns datoms only on the right"
-    [ 1, "b", Int 3; 1, "d", Int 5 ]
+    [ 1, "b", Int64 3L; 1, "d", Int64 5L ]
     only_right;
   assert_equal_triples
     "db diff returns datoms present in both dbs"
-    [ 1, "a", Int 1 ]
+    [ 1, "a", Int64 1L ]
     both
 
 let test_db__test_index_api () =
@@ -207,22 +205,22 @@ let test_db__test_index_lookup_matches_upstream_numeric_comparator_bounds () =
   let db =
     empty_db ~schema:[ "x", { indexed with cardinality = Many } ] ()
     |> db_with
-         [ Add (Entity_id 1, "x", Int 1)
+         [ Add (Entity_id 1, "x", Int64 1L)
          ; Add (Entity_id 2, "x", Float 1.0)
-         ; Add (Entity_id 3, "x", Int 2)
+         ; Add (Entity_id 3, "x", Int64 2L)
          ]
   in
   assert_equal_triples
     "AVET exact int lookup includes comparator-equal float values like upstream DataScript"
-    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
-    (Db.datoms db Avet ~a:"x" ~v:(Int 1) () |> List.of_seq);
+    [ 1, "x", Int64 1L; 2, "x", Float 1.0 ]
+    (Db.datoms db Avet ~a:"x" ~v:(Int64 1L) () |> List.of_seq);
   assert_equal_triples
     "AVET exact float lookup includes comparator-equal int values like upstream DataScript"
-    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
+    [ 1, "x", Int64 1L; 2, "x", Float 1.0 ]
     (Db.datoms db Avet ~a:"x" ~v:(Float 1.0) () |> List.of_seq);
   assert_equal_triples
     "AVET range preserves comparator-bound numeric behavior"
-    [ 1, "x", Int 1; 2, "x", Float 1.0 ]
+    [ 1, "x", Int64 1L; 2, "x", Float 1.0 ]
     (Db.index_range db "x" ~start:(Float 1.0) ~stop:(Float 1.0) () |> List.of_seq)
 
 let () =

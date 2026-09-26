@@ -86,15 +86,15 @@ let with_pull_limit_form context db selector limit_form =
   validate_pull_limit_target context db selector;
   match limit_form with
   | QueryFormInt limit ->
-    if limit <= 0 then invalid_arg "pull :limit must be positive";
-    with_pull_limit selector limit
+    if limit <= 0L then invalid_arg "pull :limit must be positive";
+    with_pull_limit selector (Util.int64_to_int_exn "pull :limit" limit)
   | QueryFormNil -> with_pull_unlimited selector
   | _ -> invalid_arg "pull :limit requires an integer or nil"
 
 let pull_string_of_value = function
   | String value | Symbol value -> value
   | Nil -> ""
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | Bool true -> "true"
   | Bool false -> "false"
@@ -148,7 +148,7 @@ let rec with_pull_xform selector f =
 let pull_alias_key_of_form = function
   | QueryFormKeyword alias -> Keyword alias
   | QueryFormString alias -> String alias
-  | QueryFormInt alias -> Int alias
+  | QueryFormInt alias -> Int64 alias
   | QueryFormNil -> Nil
   | _ -> invalid_arg "pull :as requires keyword, string, integer, or nil"
 
@@ -263,8 +263,8 @@ and parse_pull_map_spec context db attr_spec pattern =
   | QueryFormSymbol "..." | QueryFormString "..." ->
     with_pull_recursive_ref context db selector None
   | QueryFormInt depth ->
-    if depth <= 0 then invalid_arg "recursive pull depth must be positive";
-    with_pull_recursive_ref context db selector (Some depth)
+    if depth <= 0L then invalid_arg "recursive pull depth must be positive";
+    with_pull_recursive_ref context db selector (Some (Util.int64_to_int_exn "recursive pull depth" depth))
   | _ -> with_pull_ref_pattern context db selector (parse_pattern context db pattern)
 
 and parse_pattern context db = function

@@ -153,8 +153,9 @@ let entity_ref_of_ref_attr_value = function
   | TxRef -> Some CurrentTx
   | Ref entity_id -> Some (Entity_id entity_id)
   | Ref_to entity_ref -> Some entity_ref
-  | Int entity_id when entity_id < 0 -> Some (Temp_id (string_of_int entity_id))
-  | Int entity_id -> Some (Entity_id entity_id)
+  | Int64 entity_id when entity_id < 0L -> Some (Temp_id (Int64.to_string entity_id))
+  | Int64 entity_id ->
+    Option.map (fun entity_id -> Entity_id entity_id) (Util.int64_to_int entity_id)
   | String tempid -> Some (Temp_id tempid)
   | Keyword "db/current-tx" -> Some CurrentTx
   | Keyword ident -> Some (Ident ident)
@@ -239,8 +240,9 @@ and map_entries_of_tx_entity (entity : tx_entity) : (value * value) list =
   | None -> entries
 
 and value_of_entity_ref = function
-  | Entity_id entity_id -> Int entity_id
-  | Temp_id tempid -> (match int_of_string_opt tempid with Some n -> Int n | None -> String tempid)
+  | Entity_id entity_id -> Int64 (Int64.of_int entity_id)
+  | Temp_id tempid ->
+    (match Int64.of_string_opt tempid with Some n -> Int64 n | None -> String tempid)
   | Ident ident -> Keyword ident
   | Lookup_ref (attr, value) -> Vector [ Keyword attr; value ]
   | CurrentTx -> Keyword "db/current-tx"
@@ -1166,7 +1168,7 @@ let apply_tx context tx_ops db =
             | None -> false
             | Some value -> has_complex_ref_value value)
           values
-      | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> false
+      | Nil | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> false
     in
     let unique_attr attr =
       attr = "db/ident"
@@ -1196,7 +1198,7 @@ let apply_tx context tx_ops db =
     in
     let simple_lookup_value = function
       | Nil | Ref_to _ | TxRef | List _ | Vector _ | Map _ | Set _ | Tuple _ -> false
-      | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> true
+      | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ -> true
     in
     let supported_ref_lookup = function
       | Ref_to (Lookup_ref (lookup_attr, lookup_value)) ->
@@ -1208,7 +1210,7 @@ let apply_tx context tx_ops db =
       &&
       if context.resolve_context.is_ref_attr db attr then
         match value with
-        | Ref _ | Int _ -> true
+        | Ref _ | Int64 _ -> true
         | value when supported_ref_lookup value -> true
         | _ -> false
       else

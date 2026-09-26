@@ -417,7 +417,11 @@ end) = struct
       (match query_result_entity_id db result with
        | Some entity_id -> Result_entity entity_id
        | None -> relation_join_key_value result)
-    | Result_value (Int entity_id | Ref entity_id) -> Result_entity entity_id
+    | Result_value (Ref entity_id) -> Result_entity entity_id
+    | Result_value (Int64 entity_id) ->
+      (match Util.int64_to_int entity_id with
+       | Some entity_id -> Result_entity entity_id
+       | None -> relation_join_key_value result)
     | _ -> relation_join_key_value result
 
   let relation_attr_index attrs attr =

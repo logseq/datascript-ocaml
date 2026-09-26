@@ -56,4 +56,4 @@ val split_at : int -> 'a list -> 'a list * 'a list
 val values_equal : value -> value -> bool
 val type_keyword_of_value : value -> string
 val value_contains : value -> value -> bool
-val range_values : int -> int -> int -> int list
+val range_values : int64 -> int64 -> int64 -> int64 list

@@ -6,7 +6,7 @@ let assert_equal label expected actual =
   if expected <> actual then failf "%s" label
 
 let sym name = QueryFormSymbol name
-let int value = QueryFormInt value
+let int value = QueryFormInt (Int64.of_int value)
 let vec forms = QueryFormVector forms
 let list forms = QueryFormList forms
 
@@ -71,7 +71,7 @@ let test_parser_find__test_parse_custom_aggregates () =
 let test_parser_find__test_parse_find_elements () =
   assert_equal
     "aggregate supports constants and source vars"
-    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int 1); QSource "x" ]) ])
+    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int64 1L); QSource "x" ]) ])
     (Parser.parse_find (vec [ list [ sym "count"; sym "?b"; int 1; sym "$x" ]; sym "." ]))
 
 let () =

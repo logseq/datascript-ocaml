@@ -176,16 +176,14 @@ let schema_of_transit = function
 
 let rec value_to_transit = function
   | Ds.Nil -> Transit.Null
-  | Int value -> Transit.Int value
+  | Int64 value -> Transit.Int64 value
   | Float value -> Transit.Float value
   | String value -> Transit.String value
   | Symbol value -> Transit.Symbol value
   | Bool value -> Transit.Bool value
   | Keyword value -> Transit.Keyword value
   | Uuid value -> Transit.Uuid value
-  | Instant value -> Transit.Int64 value
-    (* int64-range scalars (ms timestamps) stay integers on the wire;
-       cljs writes plain numbers (~i), not dates, for these values *)
+  | Instant value -> Transit.Date value
   | Regex value -> Transit.Tagged ("regex", Transit.String value)
   | Ref entity_id -> Transit.Int entity_id
   | List values -> Transit.List (List.map value_to_transit values)
@@ -207,17 +205,12 @@ let rec value_of_transit = function
   | Transit.Null -> Ds.Nil
   | Bool value -> Bool value
   | String value -> String value
-  | Int value -> Int value
-  | Int64 value ->
-      if
-        Int64.compare value (Int64.of_int min_int) >= 0
-        && Int64.compare value (Int64.of_int max_int) <= 0
-      then Int (Int64.to_int value)
-      else Instant value
+  | Int value -> Int64 (Int64.of_int value)
+  | Int64 value -> Int64 value
   | Float value -> Float value
   | Binary value -> String value
   | Big_decimal value -> Float (float_of_string value)
-  | Big_int value -> Transit.Int64 (Int64.of_string value) |> value_of_transit
+  | Big_int value -> Int64 (Int64.of_string value)
   | Date value -> Instant value
   | Uuid value -> Uuid value
   | Uri value -> String value

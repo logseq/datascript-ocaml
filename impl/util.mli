@@ -11,3 +11,7 @@ val first_nonzero : int list -> int
 val compare_datom : index -> datom -> datom -> int
 val normalize_value : value -> value
 val normalize_datom_value : datom -> datom
+val int64_to_int : int64 -> int option
+val int64_to_int_exn : string -> int64 -> int
+val civil_from_days : int64 -> int * int * int
+val string_of_instant_millis : int64 -> string

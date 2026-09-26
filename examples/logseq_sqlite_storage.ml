@@ -240,7 +240,7 @@ let schema_to_transit schema =
 
 let rec value_to_transit = function
   | Nil -> Transit.Null
-  | Int value -> Transit.Int value
+  | Int64 value -> Transit.Int64 value
   | Float value -> Transit.Float value
   | String value -> Transit.String value
   | Symbol value -> Transit.Symbol value
@@ -401,16 +401,12 @@ let rec value_of_transit = function
   | Transit.Null -> Nil
   | Transit.Bool value -> Bool value
   | Transit.String value -> String value
-  | Transit.Int value -> Int value
-  | Transit.Int64 value ->
-    if value >= Int64.of_int min_int && value <= Int64.of_int max_int then
-      Int (Int64.to_int value)
-    else
-      Instant value
+  | Transit.Int value -> Int64 (Int64.of_int value)
+  | Transit.Int64 value -> Int64 value
   | Transit.Float value -> Float value
   | Transit.Binary value -> String value
   | Transit.Big_decimal value -> Float (float_of_string value)
-  | Transit.Big_int value -> Transit.Int64 (Int64.of_string value) |> value_of_transit
+  | Transit.Big_int value -> Int64 (Int64.of_string value)
   | Transit.Date value -> Instant value
   | Transit.Uuid value -> Uuid value
   | Transit.Uri value -> String value
@@ -899,18 +895,25 @@ let int_of_shallow_string text =
   | Some value -> value
   | None -> invalid_arg ("invalid Logseq integer value: " ^ text)
 
+let int64_of_shallow_string text =
+  match Int64.of_string_opt text with
+  | Some value -> value
+  | None -> invalid_arg ("invalid Logseq integer value: " ^ text)
+
 let rec logseq_value_of_shallow_json reader = function
   | `Null -> Nil
   | `Bool value -> Bool value
-  | `Int value -> Int value
-  | `Intlit value -> Int (int_of_shallow_string value)
+  | `Int value -> Int64 (Int64.of_int value)
+  | `Intlit value -> Int64 (int64_of_shallow_string value)
   | `Float value -> Float value
   | `Floatlit value -> Float (float_of_string value)
   | `String text ->
     let text = shallow_decode_string reader text in
     if starts_with "~:" text then Keyword (String.sub text 2 (String.length text - 2))
     else if starts_with "~$" text then Symbol (String.sub text 2 (String.length text - 2))
-    else if starts_with "~i" text then Int (int_of_shallow_string (String.sub text 2 (String.length text - 2)))
+    else if starts_with "~i" text then Int64 (int64_of_shallow_string (String.sub text 2 (String.length text - 2)))
+    else if starts_with "~n" text then Int64 (int64_of_shallow_string (String.sub text 2 (String.length text - 2)))
+    else if starts_with "~m" text then Instant (int64_of_shallow_string (String.sub text 2 (String.length text - 2)))
     else if starts_with "~u" text then Uuid (String.sub text 2 (String.length text - 2))
     else if starts_with "~?" text then
       (match String.sub text 2 (String.length text - 2) with
