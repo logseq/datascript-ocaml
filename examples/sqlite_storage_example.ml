@@ -67,7 +67,7 @@ let rec edn_of_pulled_value = function
 
 and edn_of_pulled_entity entity =
   let attrs =
-    (Keyword "db/id", Pulled_scalar (Int entity.pulled_id)) :: entity.pulled_attrs
+    (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity.pulled_id))) :: entity.pulled_attrs
     |> List.sort (fun (left, _) (right, _) -> compare left right)
     |> List.map (fun (key, value) ->
       Built_ins.print_query_value ~readably:true key ^ " " ^ edn_of_pulled_value value)

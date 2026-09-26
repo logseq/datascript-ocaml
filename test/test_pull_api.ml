@@ -74,7 +74,7 @@ let test_db () =
 
 let rec string_of_value = function
   | Nil -> "nil"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> Printf.sprintf "%S" value
   | Symbol value -> value
@@ -167,7 +167,7 @@ let test_pull_api__test_pull_reverse_attr_spec () =
     db
     [ Pull_attr "name"; Pull_reverse_ref ("child", [ Pull_id ]) ]
     (Entity_id 2)
-    [ kw "child", many_values [ entity 1 [ kw "db/id", scalar (Int 1) ] ]
+    [ kw "child", many_values [ entity 1 [ kw "db/id", scalar (Int64 1L) ] ]
     ; kw "name", scalar (String "David")
     ];
   expect_pull
@@ -204,7 +204,7 @@ let test_pull_api__test_pull_component_attr () =
 let test_pull_api__test_pull_wildcard () =
   let db = test_db () in
   match Pull_api.pull db [ Pull_wildcard ] (Entity_id 1) with
-  | Some entity when List.assoc_opt (kw "db/id") entity.pulled_attrs = Some (scalar (Int 1))
+  | Some entity when List.assoc_opt (kw "db/id") entity.pulled_attrs = Some (scalar (Int64 1L))
                  && List.assoc_opt (kw "name") entity.pulled_attrs = Some (scalar (String "Petr")) -> ()
   | _ -> failf "wildcard pull should include db/id and attrs"
 

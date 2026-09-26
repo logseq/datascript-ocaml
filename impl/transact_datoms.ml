@@ -59,7 +59,7 @@ end) = struct
       | TupleType, Tuple _ -> true
       | StringType, String _ -> true
       | KeywordType, Keyword _ -> true
-      | NumberType, (Int _ | Float _) -> true
+      | NumberType, (Int64 _ | Float _) -> true
       | UuidType, Uuid _ -> true
       | InstantType, Instant _ -> true
       | _ -> false
@@ -99,7 +99,7 @@ end) = struct
        | _ -> invalid_arg ("keyword attribute requires keyword value: " ^ d.a))
     | Some { value_type = Some NumberType; _ } ->
       (match d.v with
-       | Int _ | Float _ -> ()
+       | Int64 _ | Float _ -> ()
        | _ -> invalid_arg ("number attribute requires numeric value: " ^ d.a))
     | Some { value_type = Some UuidType; _ } ->
       (match d.v with
@@ -280,7 +280,8 @@ end) = struct
       let coerce_component source_attr value =
         match value with
         | Nil -> None
-        | Int entity_id when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+        | Int64 entity_id when is_ref_attr db source_attr ->
+          Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
         | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
           (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
            | Some entity_id -> Some (Ref entity_id)
@@ -297,7 +298,8 @@ end) = struct
       let coerce_component source_attr = function
         | None -> None
         | Some Nil -> None
-        | Some (Int entity_id) when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+        | Some (Int64 entity_id) when is_ref_attr db source_attr ->
+          Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
         | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
           (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
            | Some entity_id -> Some (Ref entity_id)

@@ -27,11 +27,12 @@ let compare_pull_key context left right =
   | _ -> context.compare_value left right
 
 let pulled_id_stub entity_id =
-  Pulled_entity { pulled_id = entity_id; pulled_attrs = [ pull_key_of_attr "db/id", Pulled_scalar (Int entity_id) ] }
+  Pulled_entity { pulled_id = entity_id; pulled_attrs = [ pull_key_of_attr "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)) ] }
 
 let ref_entity_id_of_value context db attr = function
   | Ref entity_id -> Some entity_id
-  | Int entity_id when context.is_ref_attr db attr -> context.entity_id_of_ref db (Entity_id entity_id)
+  | Int64 entity_id when context.is_ref_attr db attr ->
+    Option.bind (Util.int64_to_int entity_id) (fun entity_id -> context.entity_id_of_ref db (Entity_id entity_id))
   | _ -> None
 
 let shallow_pulled_value context db attr value =
@@ -248,11 +249,11 @@ and pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visi
      | attrs -> Some { pulled_id = entity.id; pulled_attrs = attrs })
 
 and pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited context_selector entity = function
-  | Pull_id -> [ pull_key_of_attr "db/id", Pulled_scalar (Int entity.id) ]
+  | Pull_id -> [ pull_key_of_attr "db/id", Pulled_scalar (Int64 (Int64.of_int entity.id)) ]
   | Pull_wildcard ->
     visit_pull visitor (PullVisitWildcard entity.id);
     let shadowed_attrs = wildcard_shadowed_attrs context context_selector in
-    (pull_key_of_attr "db/id", Pulled_scalar (Int entity.id))
+    (pull_key_of_attr "db/id", Pulled_scalar (Int64 (Int64.of_int entity.id)))
     :: (context.entity_attrs entity
         |> List.filter (fun (attr, _) ->
           (not (context.is_reverse_ref attr)) && not (List.mem attr shadowed_attrs))
@@ -682,7 +683,7 @@ let pull_wildcard_entity ?visitor context db entity_id attrs =
     }
   in
   visit_pull visitor (PullVisitWildcard entity_id);
-  (pull_key_of_attr "db/id", Pulled_scalar (Int entity_id))
+  (pull_key_of_attr "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
   :: (attrs
       |> List.filter (fun (attr, _) -> not (context.is_reverse_ref attr))
       |> List.map (fun (attr, value) ->

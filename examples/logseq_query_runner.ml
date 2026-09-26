@@ -34,7 +34,7 @@ let edn_keyword value = ":" ^ value
 
 let rec edn_value = function
   | Nil -> "nil"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> Built_ins.print_query_value ~readably:true (String value)
   | Symbol value -> value
@@ -42,7 +42,7 @@ let rec edn_value = function
   | Bool false -> "false"
   | Keyword value -> edn_keyword value
   | Uuid value -> "#uuid " ^ json_string value
-  | Instant value -> Int64.to_string value
+  | Instant value -> "#inst \"" ^ Util.string_of_instant_millis value ^ "\""
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref value -> string_of_int value
   | List values -> "(" ^ String.concat " " (List.map edn_value values) ^ ")"
@@ -153,7 +153,7 @@ let schema_of_graph_edn_form = function
 let rec graph_value_of_form = function
   | QueryFormNil -> Nil
   | QueryFormBool value -> Bool value
-  | QueryFormInt value -> Int value
+  | QueryFormInt value -> Int64 value
   | QueryFormFloat value -> Float value
   | QueryFormString value -> String value
   | QueryFormKeyword value -> Keyword value
@@ -170,7 +170,12 @@ let rec graph_value_of_form = function
 let datom_of_graph_edn_form = function
   | QueryFormVector [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ]
   | QueryFormList [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ] ->
-    datom ~e ~a:(Data_readers.attr_of_edn_key attr) ~v:(Util.normalize_value (graph_value_of_form value)) ~tx ~added ()
+    datom ~e:(Util.int64_to_int_exn "graph datom entity" e)
+      ~a:(Data_readers.attr_of_edn_key attr)
+      ~v:(Util.normalize_value (graph_value_of_form value))
+      ~tx:(Util.int64_to_int_exn "graph datom tx" tx)
+      ~added
+      ()
   | _ -> invalid_arg "graph EDN :datoms entries must be [e attr value tx added]"
 
 let datoms_of_graph_edn_form = function

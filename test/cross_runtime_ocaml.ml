@@ -71,14 +71,14 @@ let schema_json db =
 
 let rec value_json = function
   | Nil -> json_null
-  | Int value -> json_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> json_string value
   | Symbol value -> json_string value
   | Bool value -> json_bool value
   | Keyword value -> json_string (":" ^ value)
   | Uuid value -> json_string value
-  | Instant value -> json_int (Int64.to_int value)
+  | Instant value -> Int64.to_string value
   | Regex value -> json_string value
   | Ref value -> json_int value
   | List values | Vector values | Set values -> json_list (List.map value_json values)
@@ -194,7 +194,7 @@ let fuzz_generated_batch i =
   let score = 10 + ((i * 17) mod 90) in
   let ops =
     [ Add (fuzz_lookup source, "tag", String tag)
-    ; Add (fuzz_lookup source, "score", Int score)
+    ; Add (fuzz_lookup source, "score", Int64 (Int64.of_int score))
     ]
   in
   let ops =
@@ -322,14 +322,14 @@ let () =
           { db_id = Some (Temp_id "-1")
           ; attrs =
               [ "name", One_value (String "Ivan")
-              ; "age", One_value (Int 31)
+              ; "age", One_value (Int64 31L)
               ; "aka", Many_values [ String "Vanya"; String "I" ]
               ; "friend", One_value (Ref_to (Temp_id "-2"))
               ]
           }
       ; Entity
           { db_id = Some (Temp_id "-2")
-          ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ]
+          ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ]
           }
       ]
   in
@@ -345,7 +345,7 @@ let () =
   let second_report =
     transact_conn
       conn
-      [ Add (Entity_id 1, "age", Int 32); Retract (Entity_id 1, "aka", Some (String "I")) ]
+      [ Add (Entity_id 1, "age", Int64 32L); Retract (Entity_id 1, "aka", Some (String "I")) ]
   in
   let second_db = second_report.db_after in
   emit "tx.second.datoms" (datoms_json second_report.tx_data);

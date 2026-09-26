@@ -31,7 +31,10 @@ let entity_visible_attr_values context db attr values =
        yet ref-typed) is read back as an entity id. *)
     values
     |> List.map (function
-      | Int entity_id -> Ref entity_id
+      | Int64 entity_id ->
+        (match Util.int64_to_int entity_id with
+         | Some entity_id -> Ref entity_id
+         | None -> invalid_arg ("entity id out of range: " ^ Int64.to_string entity_id))
       | v -> v)
     |> List.filter (function
       | Ref entity_id -> entity_has_forward_attrs context db entity_id
@@ -118,7 +121,7 @@ let entity context db entity_ref =
       None
 
 let entity_attr_raw (entity : entity) = function
-  | "db/id" -> Some (One_value (Int entity.id))
+  | "db/id" -> Some (One_value (Int64 (Int64.of_int entity.id)))
   | attr -> entity.lookup_attr attr
 
 let rec materialized_tx_entity context db visited entity_id =

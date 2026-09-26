@@ -40,7 +40,7 @@ let unique_identity =
   }
 
 let conn_datoms =
-  [ datom ~e:1 ~a:"age" ~v:(Int 17) ()
+  [ datom ~e:1 ~a:"age" ~v:(Int64 17L) ()
   ; datom ~e:1 ~a:"name" ~v:(String "Ivan") ()
   ]
 
@@ -55,22 +55,22 @@ let test_conn__test_ways_to_create_conn () =
   assert_conn
     "conn_from_datoms"
     []
-    [ 1, "age", Int 17; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 17L; 1, "name", String "Ivan" ]
     (conn_from_datoms conn_datoms);
   assert_conn
     "conn_from_datoms with schema"
     [ "aka", many ]
-    [ 1, "age", Int 17; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 17L; 1, "name", String "Ivan" ]
     (conn_from_datoms ~schema:[ "aka", many ] conn_datoms);
   assert_conn
     "conn_from_db"
     []
-    [ 1, "age", Int 17; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 17L; 1, "name", String "Ivan" ]
     (conn_from_db (init_db conn_datoms));
   assert_conn
     "conn_from_db with schema"
     [ "aka", many ]
-    [ 1, "age", Int 17; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 17L; 1, "name", String "Ivan" ]
     (conn_from_db (init_db ~schema:[ "aka", many ] conn_datoms))
 
 let test_conn__test_reset_conn_bang () =
@@ -78,7 +78,7 @@ let test_conn__test_reset_conn_bang () =
   let report = ref None in
   ignore (listen_auto conn (fun tx_report -> report := Some tx_report));
   let replacement_datoms =
-    [ datom ~e:1 ~a:"age" ~v:(Int 20) ()
+    [ datom ~e:1 ~a:"age" ~v:(Int64 20L) ()
     ; datom ~e:1 ~a:"sex" ~v:(Keyword "male") ()
     ]
   in
@@ -86,11 +86,11 @@ let test_conn__test_reset_conn_bang () =
   let reset_db = reset_conn_bang ~tx_meta:[ "meta", Bool true ] conn replacement in
   assert_equal_triples
     "reset_conn_bang returns the replacement db"
-    [ 1, "age", Int 20; 1, "sex", Keyword "male" ]
+    [ 1, "age", Int64 20L; 1, "sex", Keyword "male" ]
     (datoms reset_db Eavt ());
   assert_equal_triples
     "reset_conn_bang updates conn db"
-    [ 1, "age", Int 20; 1, "sex", Keyword "male" ]
+    [ 1, "age", Int64 20L; 1, "sex", Keyword "male" ]
     (datoms (conn_db conn) Eavt ());
   if schema (conn_db conn) <> [ "email", unique_identity ] then
     failwith "reset_conn_bang should update schema";
@@ -99,17 +99,17 @@ let test_conn__test_reset_conn_bang () =
   | Some report ->
     assert_equal_triples
       "reset report exposes db-before"
-      [ 1, "age", Int 17; 1, "name", String "Ivan" ]
+      [ 1, "age", Int64 17L; 1, "name", String "Ivan" ]
       (datoms report.db_before Eavt ());
     assert_equal_triples
       "reset report exposes db-after"
-      [ 1, "age", Int 20; 1, "sex", Keyword "male" ]
+      [ 1, "age", Int64 20L; 1, "sex", Keyword "male" ]
       (datoms report.db_after Eavt ());
     assert_equal_tx_flags
       "reset report tx-data retracts old datoms and adds new datoms"
-      [ 1, "age", Int 17, false
+      [ 1, "age", Int64 17L, false
       ; 1, "name", String "Ivan", false
-      ; 1, "age", Int 20, true
+      ; 1, "age", Int64 20L, true
       ; 1, "sex", Keyword "male", true
       ]
       report.tx_data;

@@ -52,7 +52,7 @@ let rec max_eid_in_value max_eid = function
         | Some value -> max_eid_in_value max_eid value)
       max_eid
       values
-  | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
+  | Nil | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
 
 let value_equal = Util.value_equal
 
@@ -493,11 +493,14 @@ let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual 
 let values_compare_equal context actual expected =
   match actual, expected with
   | Nil, Nil -> true
-  | Int actual, Int expected
-  | Ref actual, Ref expected
-  | Int actual, Ref expected
-  | Ref actual, Int expected ->
+  | Int64 actual, Int64 expected ->
     actual = expected
+  | Ref actual, Ref expected ->
+    actual = expected
+  | Int64 actual, Ref expected ->
+    actual = Int64.of_int expected
+  | Ref actual, Int64 expected ->
+    Int64.of_int actual = expected
   | String actual, String expected
   | Symbol actual, Symbol expected
   | Keyword actual, Keyword expected
@@ -812,11 +815,13 @@ let resolved_entity_ref_option context db = Option.map (context.resolve_entity_r
 let resolved_value_option_for_optional_attr context db attr =
   Option.map (context.resolve_value_for_optional_attr db attr)
 
-(* cljs d/datoms is ISearch/-search — it does not validate index access;
-   only -datoms/-seek-datoms/-rseek-datoms/-index-range/find-datom do.
-   An avet scan on a non-indexed attr simply yields nothing (avet only
-   stores avet-accessible datoms). *)
-let datoms context db index ?e ?a ?v ?tx () =
+(* cljs ISearch/-search (used by the query engine and entity reverse-attr
+   lookups) does not validate index access; an avet scan on a non-indexed
+   attr simply yields nothing (avet only stores avet-accessible datoms).
+   IIndexAccess entry points (d/datoms, d/find-datom, d/seek-datoms,
+   d/rseek-datoms, d/index-range) all run upstream's validate-indexed and
+   raise when the :avet attr is not a ref, unique, or :db/index true. *)
+let search_datoms context db index ?e ?a ?v ?tx () =
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
     let prefix_v, prefix_tx =
@@ -842,7 +847,12 @@ let datoms context db index ?e ?a ?v ?tx () =
   in
   apply_filter_pred db datoms
 
+let datoms context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  search_datoms context db index ?e ?a ?v ?tx ()
+
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let prefix_v, prefix_tx =
     match index, e, a, v with
@@ -888,7 +898,7 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
      | Some pred ->
        PSet.fold (fun acc datom -> if pred datom then f acc datom else acc) init (stored_index db index))
   | _ ->
-    datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
+    search_datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
 
 let apply_filter_pred_list db datoms =
   match db.filter_pred with
@@ -896,6 +906,7 @@ let apply_filter_pred_list db datoms =
   | Some pred -> List.filter pred datoms
 
 let datoms_list context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
     let prefix_v, prefix_tx =
@@ -922,8 +933,9 @@ let datoms_list context db index ?e ?a ?v ?tx () =
   apply_filter_pred_list db datoms
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
-  datoms context db index ?e ?a ?v ?tx ()
+  search_datoms context db index ?e ?a ?v ?tx ()
 
 let find_datom context db index ?e ?a ?v ?tx () =
   datoms context db index ?e ?a ?v ?tx () |> Seq.uncons |> Option.map fst
@@ -969,10 +981,11 @@ let seek_datoms context db index ?e ?a ?v ?tx () =
   match lower_prefix_datoms context db index e a v tx with
   | Some datoms -> apply_filter_pred db datoms
   | None ->
-    datoms context db index ()
+    search_datoms context db index ()
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
 
 let seek_datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
   seek_datoms context db index ?e ?a ?v ?tx ()
 
@@ -987,6 +1000,7 @@ let rseek_datoms context db index ?e ?a ?v ?tx () =
     |> apply_filter_pred db
 
 let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
   rseek_datoms context db index ?e ?a ?v ?tx ()
 
@@ -1031,7 +1045,7 @@ let squuid ?msec () =
   incr squuid_counter;
   let seconds =
     match msec with
-    | Some msec -> Float.of_int msec /. 1000.0
+    | Some msec -> Int64.to_float msec /. 1000.0
     | None -> Platform.now_seconds ()
   in
   let seconds_hex = hex8_of_seconds seconds in
@@ -1046,5 +1060,5 @@ let squuid ?msec () =
 let squuid_time_millis = function
   | Uuid uuid ->
     if String.length uuid < 8 then invalid_arg "invalid squuid";
-    int_of_string ("0x" ^ String.sub uuid 0 8) * 1000
+    Int64.mul (Int64.of_string ("0x" ^ String.sub uuid 0 8)) 1000L
   | _ -> invalid_arg "squuid_time_millis expects a uuid value"

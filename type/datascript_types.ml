@@ -11,7 +11,7 @@ type entity_ref =
 
 and value =
   | Nil
-  | Int of int
+  | Int64 of int64
   | Float of float
   | String of string
   | Symbol of string
@@ -441,7 +441,7 @@ type query_arg =
 type query_form =
   | QueryFormNil
   | QueryFormBool of bool
-  | QueryFormInt of int
+  | QueryFormInt of int64
   | QueryFormFloat of float
   | QueryFormString of string
   | QueryFormKeyword of string

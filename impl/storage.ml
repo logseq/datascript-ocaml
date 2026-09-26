@@ -62,7 +62,18 @@ let buffered_node_storage pending_entries =
 let normalize_stored_datom schema datom =
   let schema_attr = Schema.schema_attr_by_name schema datom.a in
   match schema_attr, datom.v with
-  | Some { value_type = Some RefType; _ }, Int entity_id -> { datom with v = Ref entity_id }
+  | Some { value_type = Some RefType; _ }, Int64 entity_id ->
+    (match Util.int64_to_int entity_id with
+     | Some entity_id -> { datom with v = Ref entity_id }
+     | None -> datom)
+  | Some { value_type = Some InstantType; _ }, Int64 millis ->
+    (* older databases stored plain ints under instant attrs as Instant *)
+    { datom with v = Instant millis }
+  | Some { value_type = Some InstantType; _ }, Instant _ -> datom
+  | _, Instant millis ->
+    (* older databases stored plain ints as Instant; only db.type/instant
+       attrs are real dates *)
+    { datom with v = Int64 millis }
   | Some { value_type = Some TupleType; _ }, Vector values ->
     { datom with v = Tuple (List.map (fun value -> Some value) values) }
   | Some { value_type = Some TupleType; _ }, List values ->
@@ -351,7 +362,7 @@ let ref_type_keyword = function
 
 let settings (db : db) =
   let index_settings = PSet.settings db.eavt_index in
-  [ "branching-factor", Int index_settings.branching_factor
+  [ "branching-factor", Int64 (Int64.of_int index_settings.branching_factor)
   ; "ref-type", Keyword (ref_type_keyword index_settings.ref_type)
   ; "storage", Bool (Option.is_some db.storage_ref)
   ]

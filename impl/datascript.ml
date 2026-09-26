@@ -185,13 +185,13 @@ let entid_in_datoms = Transact_datoms_impl.entid_in_datoms
 let rec edn_string_of_value = function
   | Nil -> "nil"
   | Bool value -> if value then "true" else "false"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> "\"" ^ String.escaped value ^ "\""
   | Keyword value -> ":" ^ value
   | Symbol value -> value
   | Uuid value -> "#uuid \"" ^ value ^ "\""
-  | Instant millis -> Int64.to_string millis
+  | Instant millis -> "#inst \"" ^ Util.string_of_instant_millis millis ^ "\""
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | TxRef -> ":db/current-tx"
@@ -290,7 +290,8 @@ let rec coerce_tuple_lookup_value_db db attr value =
     let coerce_component source_attr value =
       match value with
       | Nil -> None
-      | Int entity_id when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+      | Int64 entity_id when is_ref_attr db source_attr ->
+        Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
       | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
         (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
          | Some entity_id -> Some (Ref entity_id)
@@ -307,7 +308,8 @@ let rec coerce_tuple_lookup_value_db db attr value =
     let coerce_component source_attr = function
       | None -> None
       | Some Nil -> None
-      | Some (Int entity_id) when is_ref_attr db source_attr -> Some (Ref (validate_entity_id entity_id))
+      | Some (Int64 entity_id) when is_ref_attr db source_attr ->
+        Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
       | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
         (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
          | Some entity_id -> Some (Ref entity_id)
@@ -411,7 +413,7 @@ let validate_datom_value db d =
     | TupleType, Tuple _ -> true
     | StringType, String _ -> true
     | KeywordType, Keyword _ -> true
-    | NumberType, (Int _ | Float _) -> true
+    | NumberType, (Int64 _ | Float _) -> true
     | UuidType, Uuid _ -> true
     | InstantType, Instant _ -> true
     | _ -> false
@@ -451,7 +453,7 @@ let validate_datom_value db d =
      | _ -> invalid_arg ("keyword attribute requires keyword value: " ^ d.a))
   | Some { value_type = Some NumberType; _ } ->
     (match d.v with
-     | Int _ | Float _ -> ()
+     | Int64 _ | Float _ -> ()
      | _ -> invalid_arg ("number attribute requires numeric value: " ^ d.a))
   | Some { value_type = Some UuidType; _ } ->
     (match d.v with
@@ -945,9 +947,40 @@ end)
 let entity_id_of_ref = Entity_refs_impl.entity_id_of_ref
 let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
+let values_compare_equal_fast left right =
+  match left, right with
+  | Nil, Nil -> true
+  | Int64 left, Int64 right ->
+    left = right
+  | Ref left, Ref right ->
+    left = right
+  | Int64 left, Ref right ->
+    left = Int64.of_int right
+  | Ref left, Int64 right ->
+    Int64.of_int left = right
+  | String left, String right
+  | Symbol left, Symbol right
+  | Keyword left, Keyword right
+  | Uuid left, Uuid right
+  | Regex left, Regex right ->
+    left = right
+  | Bool left, Bool right -> left = right
+  | Instant left, Instant right -> left = right
+  | TxRef, TxRef -> true
+  | _ -> compare_value left right = 0
+
+(* upstream -search db [nil attr v]: avet slice when the attr is indexed
+   (a ref, unique, or :db/index attr), else an aevt scan filtered by value *)
+let search_attr_value db attr value =
+  if Db_access_impl.is_avet_accessible db attr then
+    Db_access_impl.datoms db Avet ~a:attr ~v:value ()
+  else
+    Db_access_impl.search_datoms db Aevt ~a:attr ()
+    |> Seq.filter (fun datom -> values_compare_equal_fast datom.v value)
+
 let entity_context =
   { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
   ; cardinality
@@ -988,7 +1021,7 @@ let pull_api_context : Pull_api_impl.context =
   ; entity_attrs
   ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
   ; all_datoms = (fun db -> datoms db Eavt ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; cardinality
   ; is_ref_attr
   ; is_component
@@ -1136,7 +1169,10 @@ let query_entity_id_term db = function
     (match entid db ident_attr (Keyword ident) with
      | Some entity_id -> Resolved_eid entity_id
      | None -> Unresolved_eid)
-  | QValue (Int entity_id) -> Resolved_eid entity_id
+  | QValue (Int64 entity_id) ->
+    (match Util.int64_to_int entity_id with
+     | Some entity_id -> Resolved_eid entity_id
+     | None -> Unresolved_eid)
   | QValue value ->
     (match Query.query_result_entity_id (query_result_context db) (Result_value value) with
      | Some entity_id -> Resolved_eid entity_id
@@ -1158,7 +1194,7 @@ let query_value_term = function
   | _ -> None
 
 let query_tx_term = function
-  | Some (QValue (Int tx)) -> Some tx
+  | Some (QValue (Int64 tx)) -> Util.int64_to_int tx
   | _ -> None
 
 let query_attr_uses_avet db attr =
@@ -1166,32 +1202,13 @@ let query_attr_uses_avet db attr =
 
 let query_value_uses_avet = function
   | Nil | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef -> false
-  | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ | Ref_to _ -> true
+  | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | Ref _ | Ref_to _ -> true
 
 let resolve_query_value_for_attr db attr value =
   match ref_attr_for_value_resolution db attr, entity_ref_of_ref_attr_value value with
   | Some _, Some entity_ref ->
     Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
   | _ -> resolve_query_value db value
-
-let values_compare_equal_fast left right =
-  match left, right with
-  | Nil, Nil -> true
-  | Int left, Int right
-  | Ref left, Ref right
-  | Int left, Ref right
-  | Ref left, Int right ->
-    left = right
-  | String left, String right
-  | Symbol left, Symbol right
-  | Keyword left, Keyword right
-  | Uuid left, Uuid right
-  | Regex left, Regex right ->
-    left = right
-  | Bool left, Bool right -> left = right
-  | Instant left, Instant right -> left = right
-  | TxRef, TxRef -> true
-  | _ -> compare_value left right = 0
 
 let datoms_by_attr_value db attr value =
   match resolve_query_value_for_attr db attr value with
@@ -2102,7 +2119,7 @@ module Query = struct
           attrs
           |> List.filter_map (fun attr ->
             if attr = "db/id" then
-              Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+              Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
             else
               let values =
                 Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
@@ -2136,7 +2153,7 @@ module Query = struct
         attrs
         |> List.filter_map (fun attr ->
           if attr = "db/id" then
-            Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+            Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
           else
             let values = Option.value (List.assoc_opt attr tables) ~default:[] in
             Option.map (fun value -> Keyword attr, value) (pulled_value attr values))
@@ -2172,7 +2189,7 @@ module Query = struct
     in
     let ref_id_of_value attr = function
       | Ref entity_id -> Some entity_id
-      | Int entity_id when is_ref_attr_cached attr -> Some entity_id
+      | Int64 entity_id when is_ref_attr_cached attr -> Util.int64_to_int entity_id
       | _ -> None
     in
     let batch_nested_pull_values selector entity_ids =
@@ -2252,7 +2269,7 @@ module Query = struct
             attrs
             |> List.filter_map (fun attr ->
               if attr = "db/id" then
-                Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+                Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
               else
                 Option.map
                   (fun value -> Keyword attr, value)
@@ -2277,7 +2294,7 @@ module Query = struct
           let pulled_attrs =
             roots
             |> List.filter_map (function
-              | `Attr "db/id" -> Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+              | `Attr "db/id" -> Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
               | `Attr attr ->
                 Option.map (fun value -> Keyword attr, value) (pulled_value attr (root_values attr entity_id))
             | `Ref (attr, nested) ->
@@ -2665,7 +2682,7 @@ module Query = struct
           attrs
           |> List.filter_map (fun attr ->
             if attr = "db/id" then
-              Some (Keyword "db/id", Pulled_scalar (Int entity_id))
+              Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
             else
               Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
               |> Option.map (fun value -> Keyword attr, Pulled_scalar value))
@@ -2748,9 +2765,19 @@ module Query = struct
             let timestamp_datoms =
               match lower, upper with
               | Some lower, Some upper when values_compare_equal_fast lower upper ->
-                datoms db Avet ~a:timestamp_attr ~v:lower ()
-              | Some lower, _ -> index_range db timestamp_attr ~start:lower ()
-              | _, Some upper -> index_range db timestamp_attr ~stop:upper ()
+                search_attr_value db timestamp_attr lower
+              | Some lower, _ ->
+                if Db_access_impl.is_avet_accessible db timestamp_attr then
+                  index_range db timestamp_attr ~start:lower ()
+                else
+                  Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
+                  |> Seq.filter (fun datom -> compare_value datom.v lower >= 0)
+              | _, Some upper ->
+                if Db_access_impl.is_avet_accessible db timestamp_attr then
+                  index_range db timestamp_attr ~stop:upper ()
+                else
+                  Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
+                  |> Seq.filter (fun datom -> compare_value datom.v upper <= 0)
               | None, None -> Seq.empty
             in
             let entity_ids =
@@ -2908,7 +2935,7 @@ module Query = struct
                 | None -> Some (Query_collection [])
                 | Some class_id ->
                   let tagged =
-                    datoms db Avet ~a:"block/tags" ~v:(Ref class_id) ()
+                    search_attr_value db "block/tags" (Ref class_id)
                     |> Seq.map (fun datom -> datom.e)
                     |> List.of_seq
                     |> List.sort_uniq compare

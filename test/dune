@@ -4,6 +4,11 @@
  (libraries datascript-ocaml-native unix))
 
 (test
+ (name test_int64)
+ (modules test_int64)
+ (libraries datascript-ocaml-native datascript-ocaml-native.sqlite melange-transit-native unix))
+
+(test
  (name test_lru)
  (modules test_lru)
  (libraries datascript-ocaml-native))

@@ -17,7 +17,7 @@ let assert_none label = function
 
 let sym name = QueryFormSymbol name
 let kw name = QueryFormKeyword name
-let int value = QueryFormInt value
+let int value = QueryFormInt (Int64.of_int value)
 let str value = QueryFormString value
 let vec forms = QueryFormVector forms
 let list forms = QueryFormList forms
@@ -47,7 +47,7 @@ let test_parser_where__pattern () =
 let test_parser_where__test_pred () =
   assert_equal
     "plain predicate"
-    (DynamicPredicate ("pred", [ QVar "a"; QValue (Int 1) ]))
+    (DynamicPredicate ("pred", [ QVar "a"; QValue (Int64 1L) ]))
     (Parser.parse_clause (vec [ list [ sym "pred"; sym "?a"; int 1 ] ]));
   assert_equal "plain predicate no args" (DynamicPredicate ("pred", [])) (Parser.parse_clause (vec [ list [ sym "pred" ] ]));
   assert_equal
@@ -58,7 +58,7 @@ let test_parser_where__test_pred () =
 let test_parser_where__test_fn () =
   assert_equal
     "plain function"
-    (DynamicFunction ("fn", [ QVar "a"; QValue (Int 1) ], [ "x" ]))
+    (DynamicFunction ("fn", [ QVar "a"; QValue (Int64 1L) ], [ "x" ]))
     (Parser.parse_clause (vec [ list [ sym "fn"; sym "?a"; int 1 ]; sym "?x" ]));
   assert_equal "plain function no args" (DynamicFunction ("fn", [], [ "x" ])) (Parser.parse_clause (vec [ list [ sym "fn" ]; sym "?x" ]));
   assert_equal "custom function" (DynamicFunction ("custom-fn", [], [ "x" ])) (Parser.parse_clause (vec [ list [ sym "?custom-fn" ]; sym "?x" ]));
@@ -149,11 +149,11 @@ let test_parser_where__value_function_helper_batch () =
     ignore (Parser.parse_core_value_function "compare" [ sym "?x" ] "?out"));
   assert_equal
     "parse_collection_function parses vectors"
-    (VectorValue ([ QVar "x"; QValue (Int 1) ], "out"))
+    (VectorValue ([ QVar "x"; QValue (Int64 1L) ], "out"))
     (Parser.parse_collection_function "vector" [ sym "?x"; int 1 ] "?out");
   assert_equal
     "parse_collection_function parses ranges"
-    (RangeStepValue (QValue (Int 1), QValue (Int 5), QValue (Int 2), "out"))
+    (RangeStepValue (QValue (Int64 1L), QValue (Int64 5L), QValue (Int64 2L), "out"))
     (Parser.parse_collection_function "range" [ int 1; int 5; int 2 ] "?out");
   assert_invalid "parse_collection_function validates hash-map arity" (fun () ->
     ignore (Parser.parse_collection_function "hash-map" [ kw "a" ] "?out"));
@@ -171,11 +171,11 @@ let test_parser_where__value_function_helper_batch () =
     (Parser.parse_clause (vec [ list [ sym "untuple"; sym "?pages" ]; vec [ sym "?page"; sym "..." ] ]));
   assert_equal
     "ground_values_of_form parses tuple ground values"
-    [ String "a"; Int 1 ]
+    [ String "a"; Int64 1L ]
     (Parser.ground_values_of_form (vec [ str "a"; int 1 ]));
   assert_equal
     "ground_relation_rows_of_form parses relation ground values"
-    [ [ String "a"; Int 1 ]; [ String "b"; Int 2 ] ]
+    [ [ String "a"; Int64 1L ]; [ String "b"; Int64 2L ] ]
     (Parser.ground_relation_rows_of_form (vec [ vec [ str "a"; int 1 ]; vec [ str "b"; int 2 ] ]));
   assert_equal
     "dynamic_ground_term accepts query vars"
@@ -187,7 +187,7 @@ let test_parser_where__value_function_helper_batch () =
     (Parser.parse_ground_function [ sym "?x" ] (sym "?out"));
   assert_equal
     "parse_ground_function parses static relation ground"
-    (GroundRelation ([ [ String "a"; Int 1 ] ], [ "name"; "age" ]))
+    (GroundRelation ([ [ String "a"; Int64 1L ] ], [ "name"; "age" ]))
     (Parser.parse_ground_function
        [ vec [ vec [ str "a"; int 1 ] ] ]
        (vec [ vec [ sym "?name"; sym "?age" ]; sym "..." ]));
@@ -219,15 +219,15 @@ let test_parser_where__string_transform_helper_batch () =
     (Parser.parse_string_transform_function "clojure.string/replace" [ sym "?s"; str "a"; str "b" ] "?out");
   assert_equal
     "parse_string_transform_function parses split with limit"
-    (StringSplitLimitValue (QVar "s", QValue (String ","), QValue (Int 2), "out"))
+    (StringSplitLimitValue (QVar "s", QValue (String ","), QValue (Int64 2L), "out"))
     (Parser.parse_string_transform_function "clojure.string/split" [ sym "?s"; str ","; int 2 ] "?out");
   assert_equal
     "parse_string_transform_function parses subs without end"
-    (StringSubstringValue (QVar "s", QValue (Int 1), None, "out"))
+    (StringSubstringValue (QVar "s", QValue (Int64 1L), None, "out"))
     (Parser.parse_string_transform_function "subs" [ sym "?s"; int 1 ] "?out");
   assert_equal
     "parse_string_transform_function parses subs with end"
-    (StringSubstringValue (QVar "s", QValue (Int 1), Some (QValue (Int 3)), "out"))
+    (StringSubstringValue (QVar "s", QValue (Int64 1L), Some (QValue (Int64 3L)), "out"))
     (Parser.parse_string_transform_function "subs" [ sym "?s"; int 1; int 3 ] "?out");
   assert_equal
     "parse_string_transform_function falls through to metadata/value functions"
