@@ -42,6 +42,7 @@ type index_context =
 val indexed_attr_required_message : attr -> string
 val validate_index_access : index_context -> db -> index -> attr option -> unit
 val datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+val search_datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val fold_datoms :
   ('acc -> datom -> 'acc) ->
   'acc ->

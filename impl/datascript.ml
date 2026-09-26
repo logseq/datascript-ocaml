@@ -947,9 +947,40 @@ end)
 let entity_id_of_ref = Entity_refs_impl.entity_id_of_ref
 let resolve_ref_value = Entity_refs_impl.resolve_ref_value
 
+let values_compare_equal_fast left right =
+  match left, right with
+  | Nil, Nil -> true
+  | Int64 left, Int64 right ->
+    left = right
+  | Ref left, Ref right ->
+    left = right
+  | Int64 left, Ref right ->
+    left = Int64.of_int right
+  | Ref left, Int64 right ->
+    Int64.of_int left = right
+  | String left, String right
+  | Symbol left, Symbol right
+  | Keyword left, Keyword right
+  | Uuid left, Uuid right
+  | Regex left, Regex right ->
+    left = right
+  | Bool left, Bool right -> left = right
+  | Instant left, Instant right -> left = right
+  | TxRef, TxRef -> true
+  | _ -> compare_value left right = 0
+
+(* upstream -search db [nil attr v]: avet slice when the attr is indexed
+   (a ref, unique, or :db/index attr), else an aevt scan filtered by value *)
+let search_attr_value db attr value =
+  if Db_access_impl.is_avet_accessible db attr then
+    Db_access_impl.datoms db Avet ~a:attr ~v:value ()
+  else
+    Db_access_impl.search_datoms db Aevt ~a:attr ()
+    |> Seq.filter (fun datom -> values_compare_equal_fast datom.v value)
+
 let entity_context =
   { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
   ; cardinality
@@ -990,7 +1021,7 @@ let pull_api_context : Pull_api_impl.context =
   ; entity_attrs
   ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
   ; all_datoms = (fun db -> datoms db Eavt ())
-  ; datoms_by_avet_ref = (fun db attr entity_id -> datoms db Avet ~a:attr ~v:(Ref entity_id) ())
+  ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; cardinality
   ; is_ref_attr
   ; is_component
@@ -1178,28 +1209,6 @@ let resolve_query_value_for_attr db attr value =
   | Some _, Some entity_ref ->
     Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
   | _ -> resolve_query_value db value
-
-let values_compare_equal_fast left right =
-  match left, right with
-  | Nil, Nil -> true
-  | Int64 left, Int64 right ->
-    left = right
-  | Ref left, Ref right ->
-    left = right
-  | Int64 left, Ref right ->
-    left = Int64.of_int right
-  | Ref left, Int64 right ->
-    Int64.of_int left = right
-  | String left, String right
-  | Symbol left, Symbol right
-  | Keyword left, Keyword right
-  | Uuid left, Uuid right
-  | Regex left, Regex right ->
-    left = right
-  | Bool left, Bool right -> left = right
-  | Instant left, Instant right -> left = right
-  | TxRef, TxRef -> true
-  | _ -> compare_value left right = 0
 
 let datoms_by_attr_value db attr value =
   match resolve_query_value_for_attr db attr value with
@@ -2756,9 +2765,19 @@ module Query = struct
             let timestamp_datoms =
               match lower, upper with
               | Some lower, Some upper when values_compare_equal_fast lower upper ->
-                datoms db Avet ~a:timestamp_attr ~v:lower ()
-              | Some lower, _ -> index_range db timestamp_attr ~start:lower ()
-              | _, Some upper -> index_range db timestamp_attr ~stop:upper ()
+                search_attr_value db timestamp_attr lower
+              | Some lower, _ ->
+                if Db_access_impl.is_avet_accessible db timestamp_attr then
+                  index_range db timestamp_attr ~start:lower ()
+                else
+                  Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
+                  |> Seq.filter (fun datom -> compare_value datom.v lower >= 0)
+              | _, Some upper ->
+                if Db_access_impl.is_avet_accessible db timestamp_attr then
+                  index_range db timestamp_attr ~stop:upper ()
+                else
+                  Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
+                  |> Seq.filter (fun datom -> compare_value datom.v upper <= 0)
               | None, None -> Seq.empty
             in
             let entity_ids =
@@ -2916,7 +2935,7 @@ module Query = struct
                 | None -> Some (Query_collection [])
                 | Some class_id ->
                   let tagged =
-                    datoms db Avet ~a:"block/tags" ~v:(Ref class_id) ()
+                    search_attr_value db "block/tags" (Ref class_id)
                     |> Seq.map (fun datom -> datom.e)
                     |> List.of_seq
                     |> List.sort_uniq compare
