@@ -6,7 +6,7 @@ let assert_equal label expected actual =
   if expected <> actual then failf "%s" label
 
 let sym name = QueryFormSymbol name
-let int value = QueryFormInt value
+let int value = QueryFormInt (Int64.of_int value)
 let vec forms = QueryFormVector forms
 let list forms = QueryFormList forms
 
@@ -25,6 +25,14 @@ let test_parser_find__test_parse_find () =
     (Parser.parse_find (list [ sym "pull"; sym "?b"; vec [ sym "*" ] ]));
   assert_equal "find collection" (Return_collection, [ Find_var "a" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "..." ] ]));
   assert_equal "find scalar" (Return_scalar, [ Find_var "a" ]) (Parser.parse_find (vec [ sym "?a"; sym "." ]));
+  assert_equal
+    "find scalar bracketed"
+    (Return_scalar, [ Find_var "a" ])
+    (Parser.parse_find (vec [ vec [ sym "?a"; sym "." ] ]));
+  assert_equal
+    "find scalar bracketed pull"
+    (Return_scalar, [ Find_pull ("e", [ Pull_wildcard ]) ])
+    (Parser.parse_find (vec [ vec [ list [ sym "pull"; sym "?e"; vec [ sym "*" ] ]; sym "." ] ]));
   assert_equal "find tuple" (Return_tuple, [ Find_var "a"; Find_var "b" ]) (Parser.parse_find (vec [ vec [ sym "?a"; sym "?b" ] ]))
 
 let test_parser_find__test_parse_aggregate () =
@@ -70,7 +78,7 @@ let test_parser_find__test_parse_custom_aggregates () =
 let test_parser_find__test_parse_find_elements () =
   assert_equal
     "aggregate supports constants and source vars"
-    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int 1); QSource "x" ]) ])
+    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int64 1L); QSource "x" ]) ])
     (Parser.parse_find (vec [ list [ sym "count"; sym "?b"; int 1; sym "$x" ]; sym "." ]))
 
 let test_parser_find__plain_find_does_not_allocate_a_pull_database () =

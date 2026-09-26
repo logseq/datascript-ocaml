@@ -11,14 +11,14 @@ type entity_ref =
 
 and value =
   | Nil
-  | Int of int
+  | Int64 of int64
   | Float of float
   | String of string
   | Symbol of string
   | Bool of bool
   | Keyword of string
   | Uuid of string
-  | Instant of int
+  | Instant of int64
   | Regex of string
   | Ref of entity_id
   | List of value list
@@ -79,6 +79,11 @@ type serializable_db =
   }
 
 type storage_address = string
+
+type storage_index_metadata =
+  { storage_index_count : int
+  ; storage_index_shift : int
+  }
 
 type storage_kind = string
 
@@ -428,7 +433,7 @@ type query_arg =
 type query_form =
   | QueryFormNil
   | QueryFormBool of bool
-  | QueryFormInt of int
+  | QueryFormInt of int64
   | QueryFormFloat of float
   | QueryFormString of string
   | QueryFormKeyword of string
@@ -712,7 +717,7 @@ module Compare = struct
     | Nil -> 0
     | Bool true -> 1231
     | Bool false -> 1237
-    | Int value -> murmur3_hash_long (Int64.of_int value)
+    | Int64 value -> murmur3_hash_long value
     | Float value -> Hashtbl.hash value
     | String value -> murmur3_hash_int (java_string_hash value)
     | Symbol value -> clojure_symbol_hash value
@@ -729,7 +734,7 @@ module Compare = struct
       |> murmur3_hash_ordered
     | Ref value -> murmur3_hash_long (Int64.of_int value)
     | Uuid value -> java_uuid_hash value
-    | Instant value -> murmur3_hash_long (Int64.of_int value)
+    | Instant value -> murmur3_hash_long value
     | Regex value -> Hashtbl.hash value
     | TxRef -> Hashtbl.hash TxRef
     | Ref_to value -> Hashtbl.hash (Ref_to value)
@@ -744,7 +749,7 @@ module Compare = struct
     | Vector _ -> 6
     | Tuple _ -> 7
     | Bool _ -> 8
-    | Int _ | Float _ | Ref _ -> 9
+    | Int64 _ | Float _ | Ref _ -> 9
     | String _ -> 10
     | Regex _ -> 11
     | Instant _ -> 12
@@ -754,15 +759,21 @@ module Compare = struct
   
   let rec compare_value left right =
     match left, right with
-    | Int left, Int right -> compare left right
+    | Int64 left, Int64 right -> Int64.compare left right
     | Float left, Float right -> compare left right
-    | Int left, Float right -> compare (float_of_int left) right
-    | Float left, Int right -> compare left (float_of_int right)
+    | Int64 left, Float right -> compare (Int64.to_float left) right
+    | Float left, Int64 right -> compare left (Int64.to_float right)
     | Ref left, Ref right -> compare left right
-    | Int left, Ref right -> compare left right
-    | Ref left, Int right -> compare left right
+    | Int64 left, Ref right -> Int64.compare left (Int64.of_int right)
+    | Ref left, Int64 right -> Int64.compare (Int64.of_int left) right
     | Float left, Ref right -> compare left (float_of_int right)
     | Ref left, Float right -> compare (float_of_int left) right
+    | Instant left, Int64 right -> Int64.compare left right
+    | Int64 left, Instant right -> Int64.compare left right
+    | Instant left, Ref right -> Int64.compare left (Int64.of_int right)
+    | Ref left, Instant right -> Int64.compare (Int64.of_int left) right
+    | Instant left, Float right -> compare (Int64.to_float left) right
+    | Float left, Instant right -> compare left (Int64.to_float right)
     | String left, String right -> compare left right
     | Symbol left, Symbol right -> compare (split_keyword left) (split_keyword right)
     | Bool left, Bool right -> compare left right
@@ -830,4 +841,25 @@ module Compare = struct
            (compare left.a right.a)
            (compare_value left.v right.v)
            (compare left.e right.e))
+end
+
+(* The Melange stdlib compiles List.concat_map/concat/flatten into recursive
+   JS calls whose depth grows with the input (concat_map once per element
+   mapped to [], concat/flatten once per sublist), which overflows the JS
+   call stack on data-sized lists such as query binding sets. These
+   tail-recursive versions keep the exact Stdlib.List semantics on every
+   platform. Declared here so the universal `open Datascript_types` (and
+   `open Datascript`) shadows them module-wide. *)
+module List = struct
+  include List
+
+  let concat_map f l =
+    let rec rev_chunks acc = function
+      | [] -> acc
+      | x :: xs -> rev_chunks (List.rev_append (f x) acc) xs
+    in
+    List.rev (rev_chunks [] l)
+
+  let concat l = concat_map (fun x -> x) l
+  let flatten = concat
 end

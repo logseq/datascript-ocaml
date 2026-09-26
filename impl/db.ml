@@ -52,7 +52,7 @@ let rec max_eid_in_value max_eid = function
         | Some value -> max_eid_in_value max_eid value)
       max_eid
       values
-  | Nil | Int _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
+  | Nil | Int64 _ | Float _ | String _ | Symbol _ | Bool _ | Keyword _ | Uuid _ | Instant _ | Regex _ | TxRef | Ref_to _ -> max_eid
 
 let value_equal = Util.value_equal
 
@@ -338,6 +338,34 @@ let refresh_indexes_with_added_datoms db added_datoms =
 let refresh_indexes_with_tx_data db tx_data =
   if tx_data = [] then db
   else
+    (* Retraction removes the fact entirely, so every stored copy — including
+       the ones kept out of the indexes in the duplicate tables — must go.
+       The tables are shared with prior db values, so rebuild them rather
+       than mutate in place. *)
+    let db =
+      match List.exists (fun d -> not d.added) tx_data && db.duplicate_datoms <> [] with
+      | false -> db
+      | true ->
+        let is_retracted d = List.exists (same_fact d) tx_data in
+        let duplicate_datoms = List.filter (fun d -> not (is_retracted d)) db.duplicate_datoms in
+        if duplicate_datoms == db.duplicate_datoms then
+          db
+        else
+          let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
+          let duplicate_avet_datoms =
+            duplicate_datoms
+            |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible db.schema datom.a)
+            |> List.sort (Util.compare_datom Avet)
+          in
+          { db with
+            duplicate_datoms
+          ; duplicate_aevt_datoms
+          ; duplicate_avet_datoms
+          ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
+          ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
+          ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
+          }
+    in
     let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) db.max_datom_e tx_data in
     if indexes_on_storage db then
       let avet attr = Schema.schema_attr_is_avet_accessible db.schema attr in
@@ -373,6 +401,9 @@ let refresh_indexes_with_removed_datoms db removed_datoms =
     let duplicate_datoms = without_stored_datoms removed_datoms db.duplicate_datoms in
     let duplicate_aevt_datoms = without_stored_datoms removed_datoms db.duplicate_aevt_datoms in
     let duplicate_avet_datoms = without_stored_datoms removed_datoms db.duplicate_avet_datoms in
+    let duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms in
+    let duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms in
+    let duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms in
     let pending_datoms = without_stored_datoms removed_datoms db.pending_datoms in
     { db with
       eavt_index
@@ -382,6 +413,9 @@ let refresh_indexes_with_removed_datoms db removed_datoms =
     ; duplicate_datoms
     ; duplicate_aevt_datoms
     ; duplicate_avet_datoms
+    ; duplicate_eavt_by_entity
+    ; duplicate_aevt_by_attr
+    ; duplicate_avet_by_attr
     ; pending_datoms
     }
     |> invalidate_attr_tables_for_datoms removed_datoms
@@ -424,6 +458,7 @@ let is_history db = db.history
 let as_of_tx = as_of_t
 
 let since_tx = since_t
+
 
 let with_datoms db datoms =
   set_indexes_from_datoms db datoms
@@ -766,8 +801,8 @@ let retention_tx_lo db =
   match !tave_retention_days with
   | 0 -> None
   | days ->
-    let now_ms = int_of_float (Platform.now_seconds () *. 1000.) in
-    let cutoff_ms = now_ms - (days * millis_per_day) in
+    let now_ms = Int64.of_float (Platform.now_seconds () *. 1000.) in
+    let cutoff_ms = Int64.sub now_ms (Int64.of_int (days * millis_per_day)) in
     (* Automatic retention must stay cheap for databases that do not stamp
        transactions. The public instant lookup keeps its compatibility fallback,
        but pruning only uses the indexed AEVT prefix and skips when it is empty. *)
@@ -814,11 +849,14 @@ let matches maybe expected = Option.fold ~none:true ~some:(fun actual -> actual 
 let values_compare_equal context actual expected =
   match actual, expected with
   | Nil, Nil -> true
-  | Int actual, Int expected
-  | Ref actual, Ref expected
-  | Int actual, Ref expected
-  | Ref actual, Int expected ->
+  | Int64 actual, Int64 expected ->
     actual = expected
+  | Ref actual, Ref expected ->
+    actual = expected
+  | Int64 actual, Ref expected ->
+    actual = Int64.of_int expected
+  | Ref actual, Int64 expected ->
+    Int64.of_int actual = expected
   | String actual, String expected
   | Symbol actual, Symbol expected
   | Keyword actual, Keyword expected
@@ -1012,9 +1050,31 @@ let rehydrate_value_from_schema schema attr = function
      | Some { value_type = Some RefType; _ } ->
        (match whole_int_of_float f with Some i -> Ref i | None -> original)
      | Some { value_type = Some InstantType; _ } ->
-       (match whole_int_of_float f with Some i -> Instant i | None -> original)
+       (match whole_int_of_float f with Some i -> Instant (Int64.of_int i) | None -> original)
      | _ ->
-       (match whole_int_of_float f with Some i -> Int i | None -> Float f))
+       (match whole_int_of_float f with Some i -> Int64 (Int64.of_int i) | None -> Float f))
+  | Int64 millis as original ->
+    (match Schema.schema_attr_by_name schema attr with
+     | Some { value_type = Some InstantType; _ } -> Instant millis
+     | Some { value_type = Some RefType; _ } ->
+       (match Util.int64_to_int millis with Some entity_id -> Ref entity_id | None -> original)
+     | _ -> original)
+  | Instant millis as original ->
+    (* older databases stored plain ints as Instant; only db.type/instant
+       attrs are real dates *)
+    (match Schema.schema_attr_by_name schema attr with
+     | Some { value_type = Some InstantType; _ } -> original
+     | _ -> Int64 millis)
+  | Vector values as original ->
+    (match Schema.schema_attr_by_name schema attr with
+     | Some { value_type = Some TupleType; _ } ->
+       Tuple (List.map (fun value -> Some value) values)
+     | _ -> original)
+  | List values as original ->
+    (match Schema.schema_attr_by_name schema attr with
+     | Some { value_type = Some TupleType; _ } ->
+       Tuple (List.map (fun value -> Some value) values)
+     | _ -> original)
   | other -> other
 
 let rehydrate_datom_value db index datom =
@@ -1034,7 +1094,16 @@ let rehydrate_datom_value db index datom =
       (match find_datom_in_sorted_array Aevt arr datom with
        | None -> datom
        | Some cached -> { datom with v = cached.v }))
-  | Eavt -> datom
+  | Eavt -> (
+    match datom.v with
+    | (Instant _ | Int64 _ | Vector _ | List _) when Option.is_some db.storage_ref ->
+      (* On storage-attached dbs the index holds the stored datoms, so the
+         legacy-value migration upstream applies at restore happens on read:
+         Instant/Int64/Vector under the wrong schema type rehydrate to their
+         declared representation. Live (non-storage) datoms keep their raw
+         written value like upstream. *)
+      { datom with v = rehydrate_value_from_schema db.schema datom.a datom.v }
+    | _ -> datom)
 
 let rehydrate_datom_seq db index seq = Seq.map (rehydrate_datom_value db index) seq
 
@@ -1233,6 +1302,24 @@ let eavt_entity_datoms context db entity_id =
       Hashtbl.replace eavt_entity_datoms_cache key datoms;
       datoms
 
+(* Upstream `-rseek-datoms` bounds the reverse slice at the *end* of the
+   matched component range: missing e/tx components default to emax/txmax
+   while missing a/v components act as wildcards (cmp returns 0 for nil).
+   Reusing [bound_datom] defaults (e = 0, tx = tx0) would instead position
+   the bound at the *start* of the range. e/tx are int32-encoded in the
+   storage index keys, so the upper bound uses upstream's emax/txmax
+   (0x7FFFFFFF), not OCaml [max_int]. *)
+let rseek_prefix_bound e a v tx =
+  let emax = 0x7FFFFFFF in
+  let txmax = 0x7FFFFFFF in
+  ( bound_datom
+      ~e:(Option.value e ~default:emax)
+      ~a:(Option.value a ~default:"")
+      ~v:(Option.value v ~default:Nil)
+      ~tx:(Option.value tx ~default:txmax)
+      ()
+  , fields ~e:true ~a:(Option.is_some a) ~v:(Option.is_some v) ~tx:true () )
+
 let exact_prefix_datoms context db index e a v tx =
   match exact_prefix_bound index e a v tx with
   | None -> None
@@ -1345,10 +1432,16 @@ let lower_prefix_datoms context db index e a v tx =
        Some (merge_sorted_datom_seqs (Util.compare_datom index) indexed (List.to_seq duplicates)))
 
 let reverse_upper_prefix_datoms context db index e a v tx =
-  match exact_prefix_bound index e a v tx with
-  | None -> None
-  | Some (bound, bound_fields) ->
-    let cmp = slice_cmp context index bound bound_fields bound bound_fields in
+  let bound, bound_fields =
+    match index, e, a, v, tx with
+    | (Aevt | Avet), None, Some attr, None, None ->
+      (* Storage indexes detect the attr-only bound (e = 0, v = Nil) and take
+         a lazy per-attr reverse scan; the cmp then only compares the attr. *)
+      (bound_datom ~a:attr (), fields ~a:true ())
+    | _ ->
+      rseek_prefix_bound e a v tx
+  in
+  let cmp = slice_cmp context index bound bound_fields bound bound_fields in
     let debug = match Sys.getenv_opt "DS_DEBUG_INDEX" with Some "1" -> true | _ -> false in
     let indexed =
       match index, e, a, v, tx with
@@ -1534,8 +1627,13 @@ let resolved_entity_ref_option context db = Option.map (context.resolve_entity_r
 let resolved_value_option_for_optional_attr context db attr =
   Option.map (context.resolve_value_for_optional_attr db attr)
 
-let datoms context db index ?e ?a ?v ?tx () =
-  validate_index_access context db index a;
+(* cljs ISearch/-search (used by the query engine and entity reverse-attr
+   lookups) does not validate index access; an avet scan on a non-indexed
+   attr simply yields nothing (avet only stores avet-accessible datoms).
+   IIndexAccess entry points (d/datoms, d/find-datom, d/seek-datoms,
+   d/rseek-datoms, d/index-range) all run upstream's validate-indexed and
+   raise when the :avet attr is not a ref, unique, or :db/index true. *)
+let search_datoms context db index ?e ?a ?v ?tx () =
   let v = resolved_value_option_for_optional_attr context db a v in
   let datoms, exact =
     let prefix_v, prefix_tx =
@@ -1561,6 +1659,10 @@ let datoms context db index ?e ?a ?v ?tx () =
       |> Seq.filter (fun d -> matches e d.e && matches a d.a && matches_value context v d.v && matches tx d.tx)
   in
   apply_db_view_seq db (rehydrate_datom_seq db index datoms) |> apply_filter_pred db
+
+let datoms context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
+  search_datoms context db index ?e ?a ?v ?tx ()
 
 let fold_datoms f init context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;
@@ -1631,7 +1733,7 @@ let fold_datoms f init context db index ?e ?a ?v ?tx () =
            if pred datom then f acc datom else acc)
          init (stored_index db index))
   | _ ->
-    datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
+    search_datoms context db index ?e ?a ?v ?tx () |> Seq.fold_left f init
 
 let apply_filter_pred_list db datoms =
   match db.filter_pred with
@@ -1666,8 +1768,9 @@ let datoms_list context db index ?e ?a ?v ?tx () =
   apply_db_view db (rehydrate_datom_list db index datoms) |> apply_filter_pred_list db
 
 let datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
-  datoms context db index ?e ?a ?v ?tx ()
+  search_datoms context db index ?e ?a ?v ?tx ()
 
 let find_datom context db index ?e ?a ?v ?tx () =
   match temporal_view db, db.filter_pred, index, e, a, v, tx with
@@ -1729,12 +1832,13 @@ let seek_datoms context db index ?e ?a ?v ?tx () =
   | Some datoms ->
     apply_db_view_seq db (rehydrate_datom_seq db index datoms) |> apply_filter_pred db
   | None ->
-    datoms context db index ()
+    search_datoms context db index ()
     |> Seq.filter (fun d -> compare_datom_to_bound context index d e a v tx >= 0)
     |> rehydrate_datom_seq db index
     |> apply_filter_pred db
 
 let seek_datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
   seek_datoms context db index ?e ?a ?v ?tx ()
 
@@ -1752,6 +1856,7 @@ let rseek_datoms context db index ?e ?a ?v ?tx () =
     |> apply_filter_pred db
 
 let rseek_datoms_ref context db index ?e ?a ?v ?tx () =
+  validate_index_access context db index a;
   let e = resolved_entity_ref_option context db e in
   rseek_datoms context db index ?e ?a ?v ?tx ()
 
@@ -1852,7 +1957,7 @@ let squuid ?msec () =
   incr squuid_counter;
   let seconds =
     match msec with
-    | Some msec -> Float.of_int msec /. 1000.0
+    | Some msec -> Int64.to_float msec /. 1000.0
     | None -> Platform.now_seconds ()
   in
   let seconds_hex = hex8_of_seconds seconds in
@@ -1867,5 +1972,5 @@ let squuid ?msec () =
 let squuid_time_millis = function
   | Uuid uuid ->
     if String.length uuid < 8 then invalid_arg "invalid squuid";
-    int_of_string ("0x" ^ String.sub uuid 0 8) * 1000
+    Int64.mul (Int64.of_string ("0x" ^ String.sub uuid 0 8)) 1000L
   | _ -> invalid_arg "squuid_time_millis expects a uuid value"

@@ -97,8 +97,8 @@ let person rng i =
         [ "name", One_value (String (rand_nth rng names))
         ; "last-name", One_value (String (rand_nth rng last_names))
         ; "sex", One_value (Keyword (rand_sex rng))
-        ; "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
         ]
     }
 
@@ -128,8 +128,8 @@ let update_person rng i =
   Entity
     { db_id = Some (Entity_id (i + 1))
     ; attrs =
-        [ "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        [ "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
         ]
     }
 

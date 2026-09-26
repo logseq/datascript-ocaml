@@ -42,7 +42,7 @@ let test_core__test_protocols () =
              { db_id = Some (Entity_id 2)
              ; attrs =
                  [ "name", One_value (String "Petr")
-                 ; "age", One_value (Int 37)
+                 ; "age", One_value (Int64 37L)
                  ; "huh?", One_value (Bool false)
                  ]
              }
@@ -57,7 +57,7 @@ let test_core__test_protocols () =
     [ 1, "aka", String "IV"
     ; 1, "aka", String "Terrible"
     ; 1, "name", String "Ivan"
-    ; 2, "age", Int 37
+    ; 2, "age", Int64 37L
     ; 2, "huh?", Bool false
     ; 2, "name", String "Petr"
     ]

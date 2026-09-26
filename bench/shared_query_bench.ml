@@ -229,8 +229,8 @@ let random_man rng i =
         [ "name", One_value (String name)
         ; "last-name", One_value (String last_name)
         ; "sex", One_value (Keyword sex)
-        ; "age", One_value (Int age)
-        ; "salary", One_value (Int salary)
+        ; "age", One_value (Int64 (Int64.of_int age))
+        ; "salary", One_value (Int64 (Int64.of_int salary))
         ]
     }
 
@@ -248,7 +248,7 @@ let edn_of_value = function
   | Nil -> "nil"
   | Bool true -> "true"
   | Bool false -> "false"
-  | Int i -> string_of_int i
+  | Int64 i -> Int64.to_string i
   | Float f when float_of_int (int_of_float f) = f -> string_of_int (int_of_float f)
   | Float f ->
     let s = Printf.sprintf "%.15g" f in
@@ -258,7 +258,7 @@ let edn_of_value = function
   | Keyword k -> ":" ^ k
   | Symbol s -> s
   | Uuid u -> "#uuid \"" ^ u ^ "\""
-  | Instant i -> string_of_int i
+  | Instant i -> Int64.to_string i
   | Ref e -> string_of_int e
   | Regex r -> "#\"" ^ String.escaped r ^ "\""
   | _ -> "nil"
@@ -323,7 +323,7 @@ let queries =
       "[:find ?e1 ?l ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e1 :age ?a] [?e1 :last-name ?l]]"
   ; mk_q "qpred1" "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]"
   ; mk_q_inputs "qpred2" "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
-      [ Arg_scalar (Result_value (Int 50_000)) ]
+      [ Arg_scalar (Result_value (Int64 50_000L)) ]
   ; mk_q "q-or" "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]"
   ; mk_q "q-not" "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]"
   ; mk_q

@@ -16,15 +16,17 @@ let value_get collection key =
   | Map entries, key -> map_get_value entries key
   | Set values, key ->
     if List.exists (fun value -> compare_value value key = 0) values then Some key else None
-  | (List values | Vector values), Int index ->
-    if index >= 0 && index < List.length values then Some (List.nth values index) else None
-  | Tuple values, Int index ->
-    if index >= 0 && index < List.length values then
-      match List.nth values index with
-      | Some value -> Some value
-      | None -> Some Nil
-    else
-      None
+  | (List values | Vector values), Int64 index ->
+    (match Util.int64_to_int index with
+     | Some index when index >= 0 && index < List.length values -> Some (List.nth values index)
+     | _ -> None)
+  | Tuple values, Int64 index ->
+    (match Util.int64_to_int index with
+     | Some index when index >= 0 && index < List.length values ->
+       (match List.nth values index with
+        | Some value -> Some value
+        | None -> Some Nil)
+     | _ -> None)
   | _ -> None
 
 let value_count = function
@@ -32,7 +34,7 @@ let value_count = function
   | List values | Vector values | Set values -> Some (List.length values)
   | Map entries -> Some (List.length entries)
   | Tuple values -> Some (List.length values)
-  | Nil | Int _ | Float _ | Bool _ | Keyword _ | Symbol _ | Uuid _ | Instant _ | Regex _ | Ref _ | TxRef | Ref_to _ -> None
+  | Nil | Int64 _ | Float _ | Bool _ | Keyword _ | Symbol _ | Uuid _ | Instant _ | Regex _ | Ref _ | TxRef | Ref_to _ -> None
 
 let value_has_count expected value =
   match value_count value with
@@ -45,9 +47,12 @@ let value_is_not_empty value =
   | None -> false
 
 let matches_value_predicate predicate value =
+  (* Ref values are entity ids — plain numbers upstream — so numeric
+     predicates and arithmetic see them as integers *)
   match predicate, value with
-  | NumberValue, (Int _ | Float _) -> true
-  | IntegerValue, Int _ -> true
+  (* Instant is a date, not a number — upstream number?/integer? reject it *)
+  | NumberValue, (Int64 _ | Float _ | Ref _) -> true
+  | IntegerValue, (Int64 _ | Ref _) -> true
   | StringValue, String _ -> true
   | BooleanValue, Bool _ -> true
   | KeywordValue, Keyword _ -> true
@@ -55,14 +60,24 @@ let matches_value_predicate predicate value =
 
 let matches_numeric_predicate predicate value =
   match predicate, value with
-  | ZeroNumber, Int value -> value = 0
+  | ZeroNumber, Int64 value -> value = 0L
+  | ZeroNumber, Ref value -> value = 0
   | ZeroNumber, Float value -> value = 0.0
-  | PositiveNumber, Int value -> value > 0
+  | ZeroNumber, Instant value -> value = 0L
+  | PositiveNumber, Int64 value -> value > 0L
+  | PositiveNumber, Ref value -> value > 0
   | PositiveNumber, Float value -> value > 0.0
-  | NegativeNumber, Int value -> value < 0
+  | PositiveNumber, Instant value -> value > 0L
+  | NegativeNumber, Int64 value -> value < 0L
+  | NegativeNumber, Ref value -> value < 0
   | NegativeNumber, Float value -> value < 0.0
-  | EvenInteger, Int value -> value mod 2 = 0
-  | OddInteger, Int value -> value mod 2 <> 0
+  | NegativeNumber, Instant value -> value < 0L
+  | EvenInteger, Int64 value -> Int64.rem value 2L = 0L
+  | EvenInteger, Ref value -> value mod 2 = 0
+  | EvenInteger, Instant value -> Int64.rem value 2L = 0L
+  | OddInteger, Int64 value -> Int64.rem value 2L <> 0L
+  | OddInteger, Ref value -> value mod 2 <> 0
+  | OddInteger, Instant value -> Int64.rem value 2L <> 0L
   | (EvenInteger | OddInteger), Float _ -> false
   | _, _ -> false
 
@@ -89,15 +104,11 @@ let all_values_equal = function
   | first :: rest -> List.for_all (fun value -> compare_value first value = 0) rest
 
 let numeric_value = function
-  | Int value -> Some (`Int value)
+  | Int64 value -> Some (`Int64 value)
+  | Ref value -> Some (`Int64 (Int64.of_int value))
+  | Instant value -> Some (`Int64 value)
   | Float value -> Some (`Float value)
   | _ -> None
-
-let numeric_result prefer_float value =
-  if prefer_float then
-    Float value
-  else
-    Int (int_of_float value)
 
 let arithmetic_values values =
   let rec collect acc has_float = function
@@ -105,63 +116,92 @@ let arithmetic_values values =
     | value :: rest ->
       (match numeric_value value with
        | None -> None
-       | Some (`Int value) -> collect (float_of_int value :: acc) has_float rest
-       | Some (`Float value) -> collect (value :: acc) true rest)
+       | Some (`Int64 value) -> collect (`Int64 value :: acc) has_float rest
+       | Some (`Float value) -> collect (`Float value :: acc) true rest)
   in
   collect [] false values
 
+let float_of_numeric = function
+  | `Int64 value -> Int64.to_float value
+  | `Float value -> value
+
+let fold_int64 op initial items =
+  List.fold_left (fun acc item -> match item with `Int64 value -> op acc value | `Float _ -> assert false) initial items
+
+let fold_float op initial items =
+  List.fold_left (fun acc item -> op acc (float_of_numeric item)) initial items
+
 let integer_pair = function
-  | [ Int left; Int right ] -> Some (left, right)
+  | [ `Int64 left; `Int64 right ] -> Some (left, right)
   | _ -> None
 
 let clojure_mod left right =
-  let remainder = left mod right in
-  if remainder = 0 || (remainder > 0) = (right > 0) then
+  let remainder = Int64.rem left right in
+  if remainder = 0L || (remainder > 0L) = (right > 0L) then
     remainder
   else
-    remainder + right
+    Int64.add remainder right
 
 let eval_arithmetic op values =
   match op, values, arithmetic_values values with
-  | QuotientNumbers, _, _ ->
+  | QuotientNumbers, _, Some (items, _) ->
     let left, right =
-      match integer_pair values with
+      match integer_pair items with
       | Some pair -> pair
       | None -> invalid_arg "integer arithmetic expects two integer values"
     in
-    Some (Int (left / right))
-  | RemainderNumbers, _, _ ->
+    Some (Int64 (Int64.div left right))
+  | RemainderNumbers, _, Some (items, _) ->
     let left, right =
-      match integer_pair values with
+      match integer_pair items with
       | Some pair -> pair
       | None -> invalid_arg "integer arithmetic expects two integer values"
     in
-    Some (Int (left mod right))
-  | ModuloNumbers, _, _ ->
+    Some (Int64 (Int64.rem left right))
+  | ModuloNumbers, _, Some (items, _) ->
     let left, right =
-      match integer_pair values with
+      match integer_pair items with
       | Some pair -> pair
       | None -> invalid_arg "integer arithmetic expects two integer values"
     in
-    Some (Int (clojure_mod left right))
+    Some (Int64 (clojure_mod left right))
+  | (QuotientNumbers | RemainderNumbers | ModuloNumbers), _, None ->
+    invalid_arg "integer arithmetic expects two integer values"
   | _, _, None -> invalid_arg "arithmetic expects numeric values"
-  | IncrementNumber, _, Some ([ value ], has_float) -> Some (numeric_result has_float (value +. 1.0))
-  | DecrementNumber, _, Some ([ value ], has_float) -> Some (numeric_result has_float (value -. 1.0))
+  | IncrementNumber, _, Some ([ `Int64 value ], _) -> Some (Int64 (Int64.add value 1L))
+  | IncrementNumber, _, Some ([ `Float value ], _) -> Some (Float (value +. 1.0))
+  | DecrementNumber, _, Some ([ `Int64 value ], _) -> Some (Int64 (Int64.sub value 1L))
+  | DecrementNumber, _, Some ([ `Float value ], _) -> Some (Float (value -. 1.0))
   | (IncrementNumber | DecrementNumber), _, _ -> invalid_arg "unary arithmetic expects one value"
-  | AddNumbers, _, Some (values, has_float) ->
-    Some (numeric_result has_float (List.fold_left ( +. ) 0.0 values))
+  | AddNumbers, _, Some (items, has_float) ->
+    if has_float then
+      Some (Float (fold_float ( +. ) 0.0 items))
+    else
+      Some (Int64 (fold_int64 Int64.add 0L items))
   | SubtractNumbers, _, Some ([], _) -> invalid_arg "subtraction expects at least one value"
-  | SubtractNumbers, _, Some ([ value ], has_float) -> Some (numeric_result has_float (~-. value))
+  | SubtractNumbers, _, Some ([ `Int64 value ], _) -> Some (Int64 (Int64.neg value))
+  | SubtractNumbers, _, Some ([ `Float value ], _) -> Some (Float (~-. value))
   | SubtractNumbers, _, Some (first :: rest, has_float) ->
-    Some (numeric_result has_float (List.fold_left ( -. ) first rest))
-  | MultiplyNumbers, _, Some (values, has_float) ->
-    Some (numeric_result has_float (List.fold_left ( *. ) 1.0 values))
+    if has_float then
+      Some (Float (List.fold_left (fun acc item -> acc -. float_of_numeric item) (float_of_numeric first) rest))
+    else
+      (match first with
+       | `Int64 first -> Some (Int64 (fold_int64 Int64.sub first rest))
+       | `Float _ -> assert false)
+  | MultiplyNumbers, _, Some (items, has_float) ->
+    if has_float then
+      Some (Float (fold_float ( *. ) 1.0 items))
+    else
+      Some (Int64 (fold_int64 Int64.mul 1L items))
   | DivideNumbers, _, Some ([], _) -> invalid_arg "division expects at least one value"
-  | DivideNumbers, _, Some ([ value ], _) -> Some (Float (1.0 /. value))
+  | DivideNumbers, _, Some ([ item ], _) -> Some (Float (1.0 /. float_of_numeric item))
   | DivideNumbers, _, Some (first :: rest, has_float) ->
-    let result = List.fold_left ( /. ) first rest in
+    let result = List.fold_left (fun acc item -> acc /. float_of_numeric item) (float_of_numeric first) rest in
     let integral = Float.is_integer result in
-    Some (numeric_result (has_float || not integral) result)
+    if has_float || not integral then
+      Some (Float result)
+    else
+      Some (Int64 (Int64.of_float result))
 
 let normalized_comparison comparison =
   if comparison < 0 then -1 else if comparison > 0 then 1 else 0
@@ -276,13 +316,13 @@ let string_of_query_value = function
   | String value -> value
   | Symbol value -> value
   | Nil -> ""
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | Bool true -> "true"
   | Bool false -> "false"
   | Keyword value -> ":" ^ value
   | Uuid value -> value
-  | Instant value -> string_of_int value
+  | Instant value -> Int64.to_string value
   | Regex value -> value
   | Ref entity_id -> string_of_int entity_id
   | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite query value"
@@ -306,13 +346,14 @@ let rec print_query_value ~readably = function
   | String value -> if readably then escaped_string_literal value else value
   | Symbol value -> value
   | Nil -> "nil"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | Bool true -> "true"
   | Bool false -> "false"
   | Keyword value -> ":" ^ value
   | Uuid value -> value
-  | Instant value -> string_of_int value
+  | Instant value ->
+    if readably then "#inst \"" ^ Util.string_of_instant_millis value ^ "\"" else Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref entity_id -> string_of_int entity_id
   | List values -> "(" ^ print_query_values ~readably values ^ ")"
@@ -370,6 +411,8 @@ let replace_string ?(first_only = false) value pattern replacement =
 
 let compile_regex pattern =
   Platform.compile_regex pattern
+
+let validate_regex = Platform.validate_regex
 
 let replace_regex ?(first_only = false) value pattern replacement =
   let regex = compile_regex pattern in
@@ -456,8 +499,9 @@ let query_result_value = function
   | Result_db _ | Result_pull _ -> None
 
 let float_of_result = function
-  | Result_value (Int value) -> float_of_int value
+  | Result_value (Int64 value) -> Int64.to_float value
   | Result_value (Float value) -> value
+  | Result_value (Instant value) -> Int64.to_float value
   | _ -> invalid_arg "aggregate expects numeric values"
 
 let numeric_values values = List.map float_of_result values
@@ -465,14 +509,16 @@ let numeric_values values = List.map float_of_result values
 let sum_result values =
   let rec sum int_total float_total has_float = function
     | [] ->
-      if has_float then Result_value (Float float_total) else Result_value (Int int_total)
-    | Result_value (Int value) :: rest ->
-      sum (int_total + value) (float_total +. float_of_int value) has_float rest
+      if has_float then Result_value (Float float_total) else Result_value (Int64 int_total)
+    | Result_value (Int64 value) :: rest ->
+      sum (Int64.add int_total value) (float_total +. Int64.to_float value) has_float rest
     | Result_value (Float value) :: rest ->
       sum int_total (float_total +. value) true rest
+    | Result_value (Instant value) :: rest ->
+      sum int_total (float_total +. Int64.to_float value) true rest
     | _ -> invalid_arg "aggregate expects numeric values"
   in
-  sum 0 0.0 false values
+  sum 0L 0.0 false values
 
 let average values =
   let values = numeric_values values in
@@ -561,8 +607,8 @@ let sample_results amount values =
 
 let aggregate_result aggregate values =
   match aggregate, values with
-  | Count, values -> Result_value (Int (List.length values))
-  | CountDistinct, values -> Result_value (Int (List.length (List.sort_uniq compare values)))
+  | Count, values -> Result_value (Int64 (Int64.of_int (List.length values)))
+  | CountDistinct, values -> Result_value (Int64 (Int64.of_int (List.length (List.sort_uniq compare values))))
   | Distinct, values ->
     values
     |> List.filter_map query_result_value
@@ -652,7 +698,7 @@ let values_equal left right =
   compare_value left right = 0
 
 let type_keyword_of_value = function
-  | Int _ -> "type/int"
+  | Int64 _ -> "type/int"
   | Float _ -> "type/float"
   | String _ -> "type/string"
   | Symbol _ -> "type/symbol"
@@ -677,18 +723,22 @@ let value_contains collection key =
     List.exists (fun (entry_key, _) -> compare_value entry_key key = 0) entries
   | Set values, key ->
     List.exists (fun value -> compare_value value key = 0) values
-  | (List values | Vector values), Int index ->
-    index >= 0 && index < List.length values
-  | Tuple values, Int index ->
-    index >= 0 && index < List.length values
+  | (List values | Vector values), Int64 index ->
+    (match Util.int64_to_int index with
+     | Some index -> index >= 0 && index < List.length values
+     | None -> false)
+  | Tuple values, Int64 index ->
+    (match Util.int64_to_int index with
+     | Some index -> index >= 0 && index < List.length values
+     | None -> false)
   | _ -> false
 
 let range_values start_value end_value step =
-  if step = 0 then invalid_arg "range step cannot be zero";
+  if step = 0L then invalid_arg "range step cannot be zero";
   let rec collect value acc =
-    if (step > 0 && value >= end_value) || (step < 0 && value <= end_value) then
+    if (step > 0L && value >= end_value) || (step < 0L && value <= end_value) then
       List.rev acc
     else
-      collect (value + step) (value :: acc)
+      collect (Int64.add value step) (value :: acc)
   in
   collect start_value []

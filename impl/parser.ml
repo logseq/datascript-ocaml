@@ -64,7 +64,11 @@ let parse_instant_millis value =
   in
   let days = days_from_civil year month day in
   let local_minutes = ((days * 24 + hour) * 60) + minute in
-  (((local_minutes - timezone_offset_minutes) * 60 + second) * 1000) + millis
+  (* epoch milliseconds exceed int32; compute in int64 *)
+  let ( - ) = Int64.sub and ( + ) = Int64.add and ( * ) = Int64.mul in
+  let to_i = Int64.of_int in
+  (((to_i local_minutes - to_i timezone_offset_minutes) * 60L + to_i second) * 1000L)
+  + to_i millis
 
 let read_edn input =
   let length = String.length input in
@@ -73,7 +77,7 @@ let read_edn input =
     | _ -> false
   in
   let is_delimiter = function
-    | '[' | ']' | '(' | ')' | '{' | '}' | '"' | '\'' -> true
+    | '[' | ']' | '(' | ')' | '{' | '}' | '"' -> true
     | c -> is_whitespace c
   in
   let rec skip index =
@@ -108,7 +112,7 @@ let read_edn input =
     | _ when String.length token > 0 && token.[0] = ':' ->
       QueryFormKeyword (String.sub token 1 (String.length token - 1))
     | _ ->
-      (match int_of_string_opt token with
+      (match Int64.of_string_opt token with
        | Some value -> QueryFormInt value
        | None ->
          if String.contains token '.' || String.contains token 'e' || String.contains token 'E' then
@@ -298,7 +302,7 @@ let read_edn input =
 let rec query_value_of_form = function
   | QueryFormNil -> Nil
   | QueryFormBool value -> Bool value
-  | QueryFormInt value -> Int value
+  | QueryFormInt value -> Int64 value
   | QueryFormFloat value -> Float value
   | QueryFormString value -> String value
   | QueryFormKeyword value -> Keyword value
@@ -322,7 +326,7 @@ let rec query_value_of_form = function
 let rec query_form_of_value = function
   | Nil -> QueryFormNil
   | Bool value -> QueryFormBool value
-  | Int value -> QueryFormInt value
+  | Int64 value -> QueryFormInt value
   | Float value -> QueryFormFloat value
   | String value -> QueryFormString value
   | Keyword value -> QueryFormKeyword value
@@ -337,7 +341,7 @@ let rec query_form_of_value = function
   | Uuid value -> QueryFormTagged ("uuid", QueryFormString value)
   | Instant value -> QueryFormInt value
   | Regex value -> QueryFormTagged ("regex", QueryFormString value)
-  | Ref entity_id -> QueryFormInt entity_id
+  | Ref entity_id -> QueryFormInt (Int64.of_int entity_id)
   | TxRef
   | Ref_to _ ->
     invalid_arg "cannot convert value to query form"
@@ -685,10 +689,13 @@ let parse_pattern_term
      | QueryFormSymbol symbol when source_position && is_query_source_symbol symbol ->
        QSource (query_source_name symbol)
      | QueryFormSymbol symbol -> QValue (Symbol symbol)
-     | QueryFormInt entity_id when entity_position -> QEntity entity_id
+     | QueryFormInt entity_id when entity_position ->
+       (match Util.int64_to_int entity_id with
+        | Some entity_id -> QEntity entity_id
+        | None -> QValue (Int64 entity_id))
      | QueryFormKeyword attr when attr_position -> QAttr attr
      | QueryFormKeyword value -> QValue (Keyword value)
-     | QueryFormInt value -> QValue (Int value)
+     | QueryFormInt value -> QValue (Int64 value)
      | QueryFormFloat value -> QValue (Float value)
      | QueryFormString value -> QValue (String value)
      | QueryFormBool value -> QValue (Bool value)
@@ -1142,7 +1149,7 @@ let parse_find_form context ?(defer_pull_patterns = false) ?default_pull_db ?pul
         | [] -> invalid_arg "aggregate custom aggregate requires at least one argument"
         | args -> Find_aggregate (CustomVar (query_symbol_name aggregate_var), parse_find_args args))
      | Some [ QueryFormSymbol aggregate; QueryFormInt amount; QueryFormSymbol var ] ->
-       (match amount_aggregate_of_symbol aggregate amount with
+       (match amount_aggregate_of_symbol aggregate (Util.int64_to_int_exn "aggregate amount" amount) with
         | Some aggregate -> Find_aggregate (aggregate, [ QVar (query_symbol_name var) ])
         | None -> invalid_arg "find elements must be variable symbols")
      | Some [ QueryFormSymbol aggregate; QueryFormSymbol amount_var; QueryFormSymbol var ]
@@ -1174,12 +1181,18 @@ let is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_sour
   | _ -> true
   | exception Invalid_argument _ -> false
 
-let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source = function
+let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source input =
+  match input with
   | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                            | QueryFormList [ form; QueryFormSymbol "..." ]) ])
   | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "..." ]
                          | QueryFormList [ form; QueryFormSymbol "..." ]) ]) ->
     Return_collection, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
+  | Some (QueryFormVector [ (QueryFormVector [ form; QueryFormSymbol "." ]
+                           | QueryFormList [ form; QueryFormSymbol "." ]) ])
+  | Some (QueryFormList [ (QueryFormVector [ form; QueryFormSymbol "." ]
+                         | QueryFormList [ form; QueryFormSymbol "." ]) ]) ->
+    Return_scalar, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
   | Some (QueryFormVector [ form; QueryFormSymbol "." ])
   | Some (QueryFormList [ form; QueryFormSymbol "." ]) ->
     Return_scalar, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
@@ -1193,7 +1206,8 @@ let parse_find_return context ?defer_pull_patterns ?default_pull_db ?pull_db_for
      | _ -> assert false)
   | Some form when is_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ->
     Return_relation, [ parse_find_form context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form ]
-  | form -> Return_relation, parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form
+  | form ->
+    Return_relation, parse_find_relation context ?defer_pull_patterns ?default_pull_db ?pull_db_for_source form
 
 let parse_find context form = parse_find_return context (Some form)
 
@@ -1234,7 +1248,14 @@ let parse_complement_predicate_clause context symbol args =
     | _ -> invalid_arg (one_arg_message symbol)
   in
   let unary_value_predicate predicate =
-    unary_result_predicate (function Result_value value -> predicate value | _ -> false)
+    (* Bound entity ids arrive as Result_entity but are plain numbers
+       upstream: convert through value_of_query_result so numeric/value
+       predicates (even?, integer?, number?, ...) apply to them *)
+    unary_result_predicate
+      (fun result ->
+        match context.value_of_query_result result with
+        | Some value -> predicate value
+        | None -> false)
   in
   let binary_string_predicate predicate =
     match args with

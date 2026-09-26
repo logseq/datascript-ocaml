@@ -9,12 +9,15 @@ val schema_has_no_history : schema -> attr -> bool
 val schema_fields : attr list
 val schema_from_transaction_datoms :
   ?strict:bool ->
+  ?validate:bool ->
   ?removed_attrs:attr list ->
   ?removed_fields:(attr * attr) list ->
   ?ignored_schema_entities:entity_id list ->
+  ?removed_field_attrs:attr list ->
   schema ->
   datom list ->
   schema
+val folded_datoms : int ref
 val split_namespaced_attr : attr -> string option * string
 val join_namespaced_attr : string option -> string -> attr
 val is_reverse_ref : attr -> bool

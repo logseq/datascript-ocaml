@@ -19,9 +19,9 @@ let many_values values = Pulled_many values
 let db =
   empty_db ()
   |> db_with
-       [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
-       ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
-       ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 11) ] }
+       [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
+       ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 25L) ] }
+       ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 11L) ] }
        ]
 
 let test_query_pull__test_basics () =
@@ -31,8 +31,8 @@ let test_query_pull__test_basics () =
     (q_string db "[:find (pull ?e [:name]) :where [?e :age ?a] [(>= ?a 18)]]");
   assert_query_set
     "pull can be mixed with scalars"
-    [ [ Result_entity 1; Result_value (Int 44); pull 1 [ kw "name", scalar (String "Petr") ] ]
-    ; [ Result_entity 2; Result_value (Int 25); pull 2 [ kw "name", scalar (String "Ivan") ] ]
+    [ [ Result_entity 1; Result_value (Int64 44L); pull 1 [ kw "name", scalar (String "Petr") ] ]
+    ; [ Result_entity 2; Result_value (Int64 25L); pull 2 [ kw "name", scalar (String "Ivan") ] ]
     ]
     (q_string db "[:find ?e ?a (pull ?e [:name]) :where [?e :age ?a] [(>= ?a 18)]]")
 
@@ -46,8 +46,8 @@ let test_query_pull__test_var_pattern () =
        "[:find (pull ?e ?pattern) :in $ ?pattern :where [?e :age ?a] [(>= ?a 18)]]")
 
 let test_query_pull__test_multiple_sources () =
-  let db1 = empty_db () |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] } ] in
-  let db2 = empty_db () |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 25) ] } ] in
+  let db1 = empty_db () |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 25L) ] } ] in
+  let db2 = empty_db () |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 25L) ] } ] in
   assert_query_set
     "pull from named source"
     [ [ Result_entity 1; pull 1 [ kw "name", scalar (String "Ivan") ] ] ]
@@ -78,16 +78,16 @@ let test_query_pull__test_aggregates () =
   let db =
     empty_db ~schema:[ "value", value_many ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "value", Many_values [ Int 10; Int 20; Int 30; Int 40 ] ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "value", Many_values [ Int 14; Int 16 ] ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "value", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "value", Many_values [ Int64 10L; Int64 20L; Int64 30L; Int64 40L ] ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "value", Many_values [ Int64 14L; Int64 16L ] ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "value", One_value (Int64 1L) ] }
          ]
   in
   assert_query_set
     "pull with aggregates"
-    [ [ Result_entity 1; pull 1 [ kw "name", scalar (String "Petr") ]; Result_value (Int 10); Result_value (Int 40) ]
-    ; [ Result_entity 2; pull 2 [ kw "name", scalar (String "Ivan") ]; Result_value (Int 14); Result_value (Int 16) ]
-    ; [ Result_entity 3; pull 3 [ kw "name", scalar (String "Oleg") ]; Result_value (Int 1); Result_value (Int 1) ]
+    [ [ Result_entity 1; pull 1 [ kw "name", scalar (String "Petr") ]; Result_value (Int64 10L); Result_value (Int64 40L) ]
+    ; [ Result_entity 2; pull 2 [ kw "name", scalar (String "Ivan") ]; Result_value (Int64 14L); Result_value (Int64 16L) ]
+    ; [ Result_entity 3; pull 3 [ kw "name", scalar (String "Oleg") ]; Result_value (Int64 1L); Result_value (Int64 1L) ]
     ]
     (q_string db "[:find ?e (pull ?e [:name]) (min ?v) (max ?v) :where [?e :value ?v]]")
 
@@ -98,8 +98,8 @@ let test_query_pull__test_lookup_refs () =
   in
   assert_query_set
     "pull accepts lookup refs in query inputs"
-    [ [ Result_value (Vector [ Keyword "name"; String "Petr" ]); Result_value (Int 44); pull 1 [ kw "db/id", scalar (Int 1); kw "name", scalar (String "Petr") ] ]
-    ; [ Result_value (Vector [ Keyword "name"; String "Ivan" ]); Result_value (Int 25); pull 2 [ kw "db/id", scalar (Int 2); kw "name", scalar (String "Ivan") ] ]
+    [ [ Result_value (Vector [ Keyword "name"; String "Petr" ]); Result_value (Int64 44L); pull 1 [ kw "db/id", scalar (Int64 1L); kw "name", scalar (String "Petr") ] ]
+    ; [ Result_value (Vector [ Keyword "name"; String "Ivan" ]); Result_value (Int64 25L); pull 2 [ kw "db/id", scalar (Int64 2L); kw "name", scalar (String "Ivan") ] ]
     ]
     (q_string
        ~inputs:
@@ -182,7 +182,7 @@ let test_query_pull__test_simple_pull_uses_ref_ident_pattern () =
    | Query_relation rows ->
      assert_query_set
        "simple pull query resolves keyword ident in ref value pattern"
-       [ [ pull 1 [ kw "db/id", scalar (Int 1) ] ]; [ pull 3 [ kw "db/id", scalar (Int 3) ] ] ]
+       [ [ pull 1 [ kw "db/id", scalar (Int64 1L) ] ]; [ pull 3 [ kw "db/id", scalar (Int64 3L) ] ] ]
        rows
    | _ -> failf "simple pull query should return a relation")
 

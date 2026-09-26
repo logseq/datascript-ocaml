@@ -19,16 +19,11 @@ let of_edn value =
     | E.Nil -> D.QueryFormNil
     | E.Bool value -> D.QueryFormBool value
     | E.String value -> D.QueryFormString value
-    | E.Char value -> D.QueryFormInt (Uchar.to_int value)
+    | E.Char value -> D.QueryFormInt (Int64.of_int (Uchar.to_int value))
     | E.Symbol value -> D.QueryFormSymbol value
     | E.Keyword value -> D.QueryFormKeyword value
-    | E.Small_int value -> D.QueryFormInt value
-    | E.Int value ->
-        if
-          Int64.compare value (Int64.of_int min_int) < 0
-          || Int64.compare value (Int64.of_int max_int) > 0
-        then fail path "integer is outside this target's DataScript int range";
-        D.QueryFormInt (Int64.to_int value)
+    | E.Small_int value -> D.QueryFormInt (Int64.of_int value)
+    | E.Int value -> D.QueryFormInt value
     | E.Bigint value -> tagged "bigint" value
     | E.Decimal value -> tagged "decimal" value
     | E.Ratio value -> tagged "ratio" value
@@ -57,7 +52,7 @@ let of_edn value =
         D.QueryFormTagged (tag, convert (path ^ ".tagged") value)
     | E.Int_vector values ->
         D.QueryFormVector
-          (Array.to_list (Array.map (fun value -> D.QueryFormInt value) values))
+          (Array.to_list (Array.map (fun value -> D.QueryFormInt (Int64.of_int value)) values))
     | E.Int4_vector (a, b, value, c) -> packed path a b value c
     | E.Int4_array (a, b, values, c) ->
         let length = Array.length a in
@@ -80,10 +75,10 @@ let of_edn value =
   and packed path a b value c =
     D.QueryFormVector
       [
-        D.QueryFormInt a;
-        D.QueryFormInt b;
+        D.QueryFormInt (Int64.of_int a);
+        D.QueryFormInt (Int64.of_int b);
         convert (at path 2) value;
-        D.QueryFormInt c;
+        D.QueryFormInt (Int64.of_int c);
       ]
   in
   try protect (fun () -> convert "$" value)
@@ -118,8 +113,14 @@ module Codec = struct
 
   let int =
     {
-      encode = (fun value -> D.Int value);
-      decode = (function D.Int value -> Ok value | _ -> mismatch "int");
+      encode = (fun value -> D.Int64 (Int64.of_int value));
+      decode =
+        (function
+        | D.Int64 value ->
+          (match D.Util.int64_to_int value with
+           | Some value -> Ok value
+           | None -> mismatch "int")
+        | _ -> mismatch "int");
     }
 
   let float =
@@ -128,7 +129,7 @@ module Codec = struct
       decode =
         (function
         | D.Float value -> Ok value
-        | D.Int value -> Ok (float_of_int value)
+        | D.Int64 value -> Ok (Int64.to_float value)
         | _ -> mismatch "float");
     }
 

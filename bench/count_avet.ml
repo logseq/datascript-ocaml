@@ -39,8 +39,8 @@ let random_man i =
         ; "full-name", One_value (String (name ^ " " ^ last_name))
         ; "alias", Many_values alias_values
         ; "sex", One_value (Keyword (if next_int 2 = 0 then "male" else "female"))
-        ; "age", One_value (Int (next_int 100))
-        ; "salary", One_value (Int (next_int 100_000))
+        ; "age", One_value (Int64 (Int64.of_int (next_int 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int 100_000)))
         ]
     }
 
@@ -57,7 +57,7 @@ let build_db schema size =
             Entity
               {
                 db_id = Some (Temp_id (string_of_int (index + 1)))
-              ; attrs = [ "salary", One_value (Int (next_int 100_000)) ]
+              ; attrs = [ "salary", One_value (Int64 (Int64.of_int (next_int 100_000))) ]
               })
     | _ -> List.init size random_man
   in
@@ -80,8 +80,8 @@ let bench label db =
   let q () =
     q_string db "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]" |> List.length
   in
-  let seq () = seq_len (index_range db "salary" ~start:(Int 50001) ()) in
-  let seq_one () = seq_len (index_range db "salary" ~start:(Int 1) ~stop:(Int 1) ()) in
+  let seq () = seq_len (index_range db "salary" ~start:(Int64 50001L) ()) in
+  let seq_one () = seq_len (index_range db "salary" ~start:(Int64 1L) ~stop:(Int64 1L) ()) in
   Printf.printf "%s count=%d one=%d ms_q=%.4f ms_seq=%.4f ms_one=%.4f max_e=%d\n" label (q ())
     (seq_one ())
     (time_ms 200 q)

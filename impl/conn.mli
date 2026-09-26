@@ -48,3 +48,4 @@ val reset_schema : schema_context -> t -> schema -> db
 val restore : restore_context -> storage -> t option
 val transact : transact_context -> ?tx_meta:tx_meta -> t -> tx_op list -> tx_report
 val reset : reset_context -> ?tx_meta:tx_meta -> t -> db -> db
+val apply_report : transact_context -> t -> tx_report -> tx_report

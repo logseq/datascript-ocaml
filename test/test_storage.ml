@@ -94,35 +94,38 @@ let test_storage__test_multi_tx_incremental_store () =
   let storage = memory_storage () in
   let db =
     empty_db ~schema:[ "name", indexed; "age", indexed ] ()
-    |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 30) ]
+    |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 30L) ]
+
   in
   let tx1 = basis_tx db in
   store ~storage db;
-  let db = db_with [ Add (Entity_id 1, "age", Int 31) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 31L) ] db in
   store ~storage db;
   let restored =
     match restore storage with
     | Some db -> db
     | None -> failwith "restore should read incrementally stored db"
+
   in
   let current_ages =
     datoms restored Eavt ~a:"age" ()
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   Test_alcotest_support.check_int_list "restored db should see current age 31" [ 31 ] current_ages;
   let past = as_of tx1 restored in
   let past_ages =
     datoms past Eavt ~a:"age" ()
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   Test_alcotest_support.check_int_list "restored as_of should see historical age 30" [ 30 ] past_ages;
   let hist_ages =
     datoms (history restored) Eavt ~a:"age" ()
     |> List.filter (fun d -> d.added)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
     |> List.sort compare
   in
   Test_alcotest_support.check_int_list "restored history should expose both age assertions" [ 30; 31 ] hist_ages
+
 
 let () =
   run "storage"

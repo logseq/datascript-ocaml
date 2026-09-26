@@ -275,8 +275,9 @@ let grouping_vars_of_find find =
 
 let aggregate_amount_value var binding =
   match List.assoc_opt var binding with
-  | Some (Result_value (Int amount)) when amount >= 0 -> amount
-  | Some (Result_value (Int _)) -> invalid_arg "aggregate amount must be non-negative"
+  | Some (Result_value (Int64 amount)) when amount >= 0L ->
+    Util.int64_to_int_exn "aggregate amount" amount
+  | Some (Result_value (Int64 _)) -> invalid_arg "aggregate amount must be non-negative"
   | Some _ -> invalid_arg "aggregate amount must be an integer"
   | None -> invalid_arg ("aggregate amount variable is unbound: " ^ var)
 
@@ -414,7 +415,8 @@ let result_of_ref = function
 
 let entity_id_of_resolved_query_result ~validate_entity_id = function
   | Some (Result_entity entity_id) -> Some entity_id
-  | Some (Result_value (Int entity_id)) -> Some (validate_entity_id entity_id)
+  | Some (Result_value (Int64 entity_id)) ->
+    Option.map validate_entity_id (Util.int64_to_int entity_id)
   | Some (Result_value (Ref entity_id)) -> Some entity_id
   | _ -> None
 
@@ -467,7 +469,7 @@ let query_results_equivalent context left right =
     let left_resolved = resolved_query_result context left in
     let right_resolved = resolved_query_result context right in
     let is_entity_candidate = function
-      | Some (Result_entity _) | Some (Result_value (Int _ | Ref _)) -> true
+      | Some (Result_entity _) | Some (Result_value (Int64 _ | Ref _)) -> true
       | _ -> false
     in
     if is_entity_candidate left_resolved || is_entity_candidate right_resolved then

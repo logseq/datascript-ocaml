@@ -10,6 +10,11 @@
  (libraries alcotest))
 
 (test
+ (name test_int64)
+ (modules test_int64)
+ (libraries datascript-ocaml-native))
+
+(test
  (name test_lru)
  (modules test_lru)
  (libraries datascript-ocaml-native))
@@ -172,6 +177,7 @@
  (libraries datascript-ocaml-native))
 
 (test
+
  (name test_sqlite_package)
  (modules test_sqlite_package)
  (libraries datascript-ocaml-native datascript-ocaml-native-sqlite test_support alcotest))
@@ -367,3 +373,10 @@
     %{dep:../lg/datascript/api.cljc}
     %{lib:lg:stdlib/lg_stdlib_native.state}
     %{lib:lg:stdlib/lg_stdlib_melange.state})))
+
+
+(test
+ (name test_query_engine_fixes)
+ (modules test_query_engine_fixes)
+ (libraries datascript-ocaml-native))
+

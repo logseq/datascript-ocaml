@@ -70,8 +70,8 @@ let datoms_for size =
       [
         { e = i; a = "name"; v = String name; tx = 0x20000001; added = true }
       ; { e = i; a = "last-name"; v = String last_name; tx = 0x20000001; added = true }
-      ; { e = i; a = "age"; v = Int (next_int rng 100); tx = 0x20000001; added = true }
-      ; { e = i; a = "salary"; v = Int (next_int rng 100_000); tx = 0x20000001; added = true }
+      ; { e = i; a = "age"; v = Int64 (Int64.of_int (next_int rng 100)); tx = 0x20000001; added = true }
+      ; { e = i; a = "salary"; v = Int64 (Int64.of_int (next_int rng 100_000)); tx = 0x20000001; added = true }
       ])
   |> List.concat
 

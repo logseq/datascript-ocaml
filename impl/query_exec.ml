@@ -516,7 +516,7 @@ end) = struct
             for i = drive_len - 1 downto 0 do
               let eid = ids.(i) in
               let ok = ref true in
-              let vals = Array.make n_bind (Result_value (Int 0)) in
+              let vals = Array.make n_bind (Result_value (Int64 0L)) in
               let vi = ref 0 in
               let mi = ref 0 in
               while !ok && !mi < n_pos do
@@ -746,13 +746,13 @@ end) = struct
 
   let avet_index_start predicate threshold =
     match predicate, threshold with
-    | GreaterThan, Int n when n < max_int -> Some (Int (n + 1))
+    | GreaterThan, Int64 n when Int64.compare n Int64.max_int < 0 -> Some (Int64 (Int64.succ n))
     | GreaterOrEqual, value | GreaterThan, value -> Some value
     | _ -> None
 
   let avet_index_stop predicate threshold =
     match predicate, threshold with
-    | LessThan, Int n when n > min_int -> Some (Int (n - 1))
+    | LessThan, Int64 n when Int64.compare n Int64.min_int > 0 -> Some (Int64 (Int64.pred n))
     | LessOrEqual, value | LessThan, value -> Some value
     | _ -> None
 
@@ -813,8 +813,8 @@ end) = struct
             | ComparisonPredicate (predicate, left, right) -> (
               match range_predicate_for_var value_var predicate left right with
               (* Tightened Int bounds (n±1) are exact only when they do not overflow. *)
-              | Some (GreaterThan, Int n) when n < max_int -> false
-              | Some (LessThan, Int n) when n > min_int -> false
+              | Some (GreaterThan, Int64 n) when Int64.compare n Int64.max_int < 0 -> false
+              | Some (LessThan, Int64 n) when Int64.compare n Int64.min_int > 0 -> false
               | Some _ -> true
               | None -> true)
             | _ -> false)

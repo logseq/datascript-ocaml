@@ -45,14 +45,14 @@ let build size ~sqlite ~prune =
             let e = i + j + 1 in
             let name = names.(e mod Array.length names) in
             [ Add (Entity_id e, "name", String name)
-            ; Add (Entity_id e, "age", Int (e mod 100))
-            ; Add (Entity_id e, "salary", Int (e * 10))
+            ; Add (Entity_id e, "age", Int64 (Int64.of_int (e mod 100)))
+            ; Add (Entity_id e, "salary", Int64 (Int64.of_int (e * 10)))
             ; Add (Entity_id e, "sex", String (if e mod 2 = 0 then "m" else "f"))
             ])
         |> List.concat
       in
       let r =
-        transact ~tx_meta:[ "db/txInstant", Instant (base_ms + i) ] db tx
+        transact ~tx_meta:[ "db/txInstant", Instant (Int64.of_int (base_ms + i)) ] db tx
       in
       loop r.db_after hi
   in

@@ -142,11 +142,11 @@ let test_temporal_views () =
   let storage = storage_of_handle (Datascript_sqlite.storage session) in
   let db =
     empty_db ~schema:[ "name", indexed; "age", age_indexed ] ~storage ()
-    |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 30) ]
+    |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 30L) ]
   in
   let tx1 = basis_tx db in
   store ~storage db;
-  let db = db_with [ Add (Entity_id 1, "age", Int 31) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 31L) ] db in
   store ~storage db;
   let restored =
     match restore storage with
@@ -155,18 +155,18 @@ let test_temporal_views () =
   in
   let current_ages =
     datoms restored Eavt ~a:"age" ()
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   Test_alcotest_support.check_int_list "sqlite current age 31" [ 31 ] current_ages;
   let past_ages =
     datoms (as_of tx1 restored) Eavt ~a:"age" ()
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   Test_alcotest_support.check_int_list "sqlite as_of age 30" [ 30 ] past_ages;
   let hist_ages =
     datoms (history restored) Eavt ~a:"age" ()
     |> List.filter (fun d -> d.added)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
     |> List.sort compare
   in
   Test_alcotest_support.check_int_list "sqlite history ages" [ 30; 31 ] hist_ages;
@@ -178,22 +178,22 @@ let test_tave_since_attr_scan () =
   let storage = storage_of_handle (Datascript_sqlite.storage session) in
   let db = empty_db ~schema:[ "name", indexed; "age", age_indexed ] ~storage () in
   let r1 =
-    transact ~tx_meta:[ "db/txInstant", Instant 1_000 ]
+    transact ~tx_meta:[ "db/txInstant", Instant 1_000L ]
       db
-      [ Add (Temp_id "a", "name", String "Alice"); Add (Temp_id "a", "age", Int 20) ]
+      [ Add (Temp_id "a", "name", String "Alice"); Add (Temp_id "a", "age", Int64 20L) ]
   in
   let tx1 = r1.db_after.max_tx in
   let r2 =
-    transact ~tx_meta:[ "db/txInstant", Instant 2_000 ]
+    transact ~tx_meta:[ "db/txInstant", Instant 2_000L ]
       r1.db_after
-      [ Add (Temp_id "b", "name", String "Bob"); Add (Temp_id "b", "age", Int 30) ]
+      [ Add (Temp_id "b", "name", String "Bob"); Add (Temp_id "b", "age", Int64 30L) ]
   in
   store ~storage r2.db_after;
   (* since tx1: only Bob's age should appear via since-bounded AEVT (TAVE path). *)
   let ages =
     datoms (since tx1 r2.db_after) Aevt ~a:"age" ()
     |> List.filter (fun d -> d.added)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   Test_alcotest_support.check_int_list "since+AEVT ages via TAVE" [ 30 ] ages;
   set_tave_retention_days 30;

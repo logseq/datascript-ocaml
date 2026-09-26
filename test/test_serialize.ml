@@ -72,7 +72,7 @@ let test_serialize__test_pr_read () =
   in
   assert_equal_datoms
     "db_from_reader_string restores active datoms from #datascript/DB"
-    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int 44) ()
+    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int64 44L) ()
     ; datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Petr") ()
     ; datom ~tx:(tx0 + 2) ~e:2 ~a:"friend" ~v:(Ref 1) ()
     ; datom ~e:3 ~a:"name" ~v:(String "DefaultTx") ()
@@ -86,10 +86,10 @@ let test_serialize__test_init_db () =
     [ datom ~e:1 ~a:"name" ~v:(String "Petr") ()
     ; datom ~e:1 ~a:"aka" ~v:(String "Devil") ()
     ; datom ~e:1 ~a:"aka" ~v:(String "Tupen") ()
-    ; datom ~e:1 ~a:"age" ~v:(Int 15) ()
+    ; datom ~e:1 ~a:"age" ~v:(Int64 15L) ()
     ; datom ~e:1 ~a:"follows" ~v:(Ref 2) ()
     ; datom ~e:2 ~a:"name" ~v:(String "Oleg") ()
-    ; datom ~e:2 ~a:"age" ~v:(Int 30) ()
+    ; datom ~e:2 ~a:"age" ~v:(Int64 30L) ()
     ; datom ~e:30 ~a:"url" ~v:(String "https://") ()
     ]
   in
@@ -101,10 +101,10 @@ let test_serialize__test_init_db () =
          [ Add (Entity_id 1, "name", String "Petr")
          ; Add (Entity_id 1, "aka", String "Devil")
          ; Add (Entity_id 1, "aka", String "Tupen")
-         ; Add (Entity_id 1, "age", Int 15)
+         ; Add (Entity_id 1, "age", Int64 15L)
          ; Add (Entity_id 1, "follows", Ref 2)
          ; Add (Entity_id 2, "name", String "Oleg")
-         ; Add (Entity_id 2, "age", Int 30)
+         ; Add (Entity_id 2, "age", Int64 30L)
          ; Add (Entity_id 30, "url", String "https://")
          ]
   in
@@ -138,7 +138,7 @@ let test_serialize__serialize () =
              ; attrs =
                  [ "name", One_value (String "Ivan")
                  ; "aka", Many_values [ String "IV"; String "Terrible" ]
-                 ; "created-at", One_value (Instant 1_710_000_123_456)
+                 ; "created-at", One_value (Instant 1_710_000_123_456L)
                  ; "uuid", One_value (Uuid "65ec87fb-0000-0000-0000-000000000001")
                  ]
              }

@@ -37,7 +37,7 @@ let unique_identity = { indexed with unique = Some Identity }
 
 let int_values db ?a ?e () =
   datoms_list db Eavt ?a ?e ()
-  |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   |> List.sort compare
 
 let string_values db ?a ?e () =
@@ -48,16 +48,16 @@ let string_values db ?a ?e () =
 let history_asserted_values db ?a ?e () =
   datoms_list (history db) Eavt ?a ?e ()
   |> List.filter (fun d -> d.added)
-  |> List.map (fun d -> match d.v with Int n -> string_of_int n | String s -> s | _ -> "?")
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_string n | String s -> s | _ -> "?")
   |> List.sort compare
 
 let test_basis_tx_tracks_latest_transaction () =
   let db =
     empty_db ~schema:[ "age", indexed ] ()
-    |> db_with [ Add (Entity_id 1, "age", Int 25) ]
+    |> db_with [ Add (Entity_id 1, "age", Int64 25L) ]
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let tx1 = basis_tx db in
   check_int "basis advances across transactions" 1 (if tx1 > tx0 then 1 else 0);
   check_int "current view uses latest basis" 30 (List.hd (int_values db ~a:"age" ()))
@@ -65,13 +65,13 @@ let test_basis_tx_tracks_latest_transaction () =
 let test_as_of_point_in_time () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
-      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int64 35L)
       ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let past = as_of tx0 db in
   (match as_of_t past, as_of_tx past with
    | Some tx, Some tx' when tx = tx0 && tx' = tx0 -> ()
@@ -104,10 +104,10 @@ let test_since_delta_is_exclusive () =
 let test_history_exposes_assertions_and_retractions () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L) ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let db = db_with [ Retract (Entity_id 1, "name", Some (String "Alice")) ] db in
   check_string_list "current db keeps latest age only" [ "30" ]
     (List.map string_of_int (int_values db ~a:"age" ()));
@@ -126,11 +126,11 @@ let test_history_exposes_assertions_and_retractions () =
 let test_history_survives_entity_retraction () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L) ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   ignore (basis_tx db);
   let db = db_with [ RetractEntity (Entity_id 1) ] db in
   check_string_list "retracted entity absent from current db" []
@@ -166,7 +166,7 @@ let test_as_of_beyond_store_basis_fails () =
 let test_view_constructors_do_not_mutate_input_db () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L) ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
@@ -194,13 +194,13 @@ let test_with_tx_preserves_db_before_basis () =
 let test_history_as_of_composition () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
-      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int64 35L)
       ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let bootstrap = as_of tx0 (history db) in
   check_string_list "history then as_of tx0 sees bootstrap ages" [ "25"; "35" ]
     (List.map string_of_int (int_values bootstrap ~a:"age" ()))
@@ -208,11 +208,11 @@ let test_history_as_of_composition () =
 let test_temporal_views_preserve_index_parity () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 30) ]
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 30L) ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 31) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 31L) ] db in
   let past = as_of tx0 db in
   let eavt = datoms_list past Eavt ~e:1 ~a:"age" () |> List.map (fun d -> d.v) in
   let aevt = datoms_list past Aevt ~a:"age" () |> List.filter (fun d -> d.e = 1) |> List.map (fun d -> d.v) in
@@ -235,25 +235,25 @@ let test_history_cardinality_many () =
 let test_seek_respects_as_of_view () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
-      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int64 35L)
       ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let tx0 = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let past = as_of tx0 db in
   let seek_ages =
     seek_datoms past Aevt ~a:"age" ()
     |> List.of_seq
     |> List.filter (fun d -> d.e = 1)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   let rseek_ages =
     rseek_datoms past Aevt ~a:"age" ()
     |> List.of_seq
     |> List.filter (fun d -> d.e = 1)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   check_string_list "seek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int seek_ages);
   check_string_list "rseek_datoms on as_of sees past age" [ "25" ] (List.map string_of_int rseek_ages)
@@ -261,8 +261,8 @@ let test_seek_respects_as_of_view () =
 let test_attr_caches_detach_and_preserve_untouched () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25)
-      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int 35)
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L)
+      ; Add (Entity_id 2, "name", String "Bob"); Add (Entity_id 2, "age", Int64 35L)
       ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
@@ -275,7 +275,7 @@ let test_attr_caches_detach_and_preserve_untouched () =
   let past = as_of tx0 db in
   check_int "as_of detaches attr caches" 0 (Hashtbl.length past.aevt_by_attr);
   check_int "live name cache survives as_of" 1 (if Hashtbl.mem db.aevt_by_attr "name" then 1 else 0);
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   check_int "untouched name cache survives age write" 1 (if Hashtbl.mem db.aevt_by_attr "name" then 1 else 0);
   check_int "touched age cache invalidated" 0 (if Hashtbl.mem db.aevt_by_attr "age" then 1 else 0);
   check_string_list "name still readable after selective invalidate" [ "Alice"; "Bob" ]
@@ -286,18 +286,18 @@ let test_as_of_instant_and_purge_history_before () =
     empty_db ~schema:[ "name", unique_identity; "age", indexed ] ()
     |> fun db ->
     (transact
-       ~tx_meta:[ "db/txInstant", Instant 1_000 ]
+       ~tx_meta:[ "db/txInstant", Instant 1_000L ]
        db
-       [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]).db_after
+       [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L) ]).db_after
   in
   let tx0 = basis_tx db in
   let db =
     (transact
-       ~tx_meta:[ "db/txInstant", Instant 2_000 ]
+       ~tx_meta:[ "db/txInstant", Instant 2_000L ]
        db
-       [ Add (Entity_id 1, "age", Int 30) ]).db_after
+       [ Add (Entity_id 1, "age", Int64 30L) ]).db_after
   in
-  let past = as_of_instant (Instant 1_500) db in
+  let past = as_of_instant (Instant 1_500L) db in
   check_int "as_of_instant resolves to first tx" tx0 (basis_tx past);
   check_string_list "as_of_instant sees age 25" [ "25" ]
     (List.map string_of_int (int_values past ~e:1 ~a:"age" ()));
@@ -325,11 +325,11 @@ let test_public_api_aliases () =
 let test_history_datoms_since_returns_only_new_assertions_and_retractions () =
   let db =
     db_with
-      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 25) ]
+      [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 25L) ]
       (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
   in
   let checkpoint = basis_tx db in
-  let db = db_with [ Add (Entity_id 1, "age", Int 30) ] db in
+  let db = db_with [ Add (Entity_id 1, "age", Int64 30L) ] db in
   let db = db_with [ Retract (Entity_id 1, "name", Some (String "Alice")) ] db in
   let delta = history_datoms_since checkpoint db in
   check_int "replacement and deletion include three history datoms" 3 (List.length delta);

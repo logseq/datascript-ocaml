@@ -26,7 +26,17 @@ let entity_has_forward_attrs context db entity_id =
 
 let entity_visible_attr_values context db attr values =
   if context.is_ref_attr db attr then
+    (* upstream entity-attr wraps (:v datom) into an entity whenever the
+       schema marks attr a ref, so a plain number stored before the schema
+       gained :db.type/ref (e.g. a :db/add applied while the attr was not
+       yet ref-typed) is read back as an entity id. *)
     values
+    |> List.map (function
+      | Int64 entity_id ->
+        (match Util.int64_to_int entity_id with
+         | Some entity_id -> Ref entity_id
+         | None -> invalid_arg ("entity id out of range: " ^ Int64.to_string entity_id))
+      | v -> v)
     |> List.filter (function
       | Ref entity_id -> entity_has_forward_attrs context db entity_id
       | _ -> true)
@@ -59,36 +69,6 @@ let group_forward_entity_attrs context db entity_id =
     Hashtbl.replace forward_attr_cache key attrs;
     attrs
 
-let group_reverse_entity_attrs context db entity_id =
-  context.all_datoms db
-  |> Seq.filter_map (fun d ->
-    match d.v with
-    | Ref ref_id when ref_id = entity_id -> Some (context.reverse_ref d.a, d.a, Ref d.e)
-    | _ -> None)
-  |> Seq.fold_left
-       (fun groups (reverse_attr, forward_attr, value) ->
-         match List.assoc_opt reverse_attr groups with
-         | None -> (reverse_attr, (forward_attr, [ value ])) :: groups
-         | Some (_, values) ->
-           (reverse_attr, (forward_attr, value :: values)) :: List.remove_assoc reverse_attr groups)
-       []
-  |> List.map (fun (attr, (forward_attr, values)) ->
-    let values = List.sort context.compare_value values in
-    if context.is_component db forward_attr then
-      match values with
-      | value :: _ -> attr, One_value value
-      | [] -> attr, Many_values []
-    else
-      attr, Many_values values)
-
-let group_entity_attrs context db entity_id =
-  match group_forward_entity_attrs context db entity_id with
-  | [] -> []
-  | forward_attrs ->
-    forward_attrs
-    @ group_reverse_entity_attrs context db entity_id
-    |> List.sort (fun (left, _) (right, _) -> compare left right)
-
 let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
   |> List.sort (fun (left, _) (right, _) -> compare left right)
@@ -114,7 +94,8 @@ let lazy_entity context db entity_id =
        |> List.to_seq
        |> Hashtbl.of_seq)
   in
-  let materialized = lazy (group_entity_attrs context db entity_id) in
+  let materialized = lazy (sorted_forward_entity_attrs context db entity_id) in
+
   { id = entity_id
   ; db
   ; attrs = []
@@ -154,7 +135,7 @@ let entity context db entity_ref =
     | _ -> Some (lazy_entity context db entity_id)
 
 let entity_attr_raw (entity : entity) = function
-  | "db/id" -> Some (One_value (Int entity.id))
+  | "db/id" -> Some (One_value (Int64 (Int64.of_int entity.id)))
   | attr -> entity.lookup_attr attr
 
 let rec materialized_tx_entity context db visited entity_id =

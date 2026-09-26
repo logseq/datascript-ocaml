@@ -68,8 +68,8 @@ let build_db size =
               [ "name", One_value (String (rand_nth rng names))
               ; "last-name", One_value (String (rand_nth rng last_names))
               ; "sex", One_value (Keyword (rand_sex rng))
-              ; "age", One_value (Int (next_int rng 100))
-              ; "salary", One_value (Int (next_int rng 100_000))
+              ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+              ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
               ]
           })
   in
@@ -110,7 +110,7 @@ let sort_rows rows =
         (List.map
            (function
              | Result_value v -> v
-             | Result_entity e -> Int e
+             | Result_entity e -> Int64 (Int64.of_int e)
              | Result_attr a -> Keyword a
              | Result_db _ -> Nil
              | Result_pull _ -> Nil)
@@ -118,7 +118,7 @@ let sort_rows rows =
         (List.map
            (function
              | Result_value v -> v
-             | Result_entity e -> Int e
+             | Result_entity e -> Int64 (Int64.of_int e)
              | Result_attr a -> Keyword a
              | Result_db _ -> Nil
              | Result_pull _ -> Nil)
@@ -128,7 +128,7 @@ let sort_rows rows =
 let cell_digest = function
   | Result_entity e -> "e:" ^ string_of_int e
   | Result_attr a -> "a:" ^ a
-  | Result_value (Int i) -> "i:" ^ string_of_int i
+  | Result_value (Int64 i) -> "i:" ^ Int64.to_string i
   | Result_value (Float f) -> "f:" ^ string_of_float f
   | Result_value (String s) -> "s:" ^ s
   | Result_value (Keyword k) -> "k:" ^ k
@@ -178,7 +178,7 @@ let () =
     dump "q5" "[:find ?e1 ?l ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e1 :age ?a] [?e1 :last-name ?l]]";
     dump "qpred1" "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]";
     dump_in "qpred2" "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
-      [ Arg_scalar (Result_value (Int 50_000)) ];
+      [ Arg_scalar (Result_value (Int64 50_000L)) ];
     dump "q-or" "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]";
     dump "q-not" "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]";
     dump "q-or-join" "[:find ?e ?a :where [?e :age ?a] (or-join [?e] [?e :name \"Ivan\"] [?e :name \"Petr\"])]";
@@ -229,7 +229,7 @@ let () =
             (fun () ->
               check_query_inputs "qpred2" 997 "e4d5c52c111db71906000b3929ad50e3"
                 "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
-                [ Arg_scalar (Result_value (Int 50_000)) ])
+                [ Arg_scalar (Result_value (Int64 50_000L)) ])
         ; test_case "q-or names" `Quick
             (fun () ->
               check_query "q-or" 500 "c6a640c51b7729e6c19ad62b389139e4"

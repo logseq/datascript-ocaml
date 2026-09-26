@@ -82,8 +82,8 @@ let random_man rng i =
         ; "full-name", One_value (String (name ^ " " ^ last_name))
         ; "alias", Many_values alias_values
         ; "sex", One_value (Keyword (if next_int rng 2 = 0 then "male" else "female"))
-        ; "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
         ]
     }
 
@@ -297,22 +297,22 @@ let () =
   measure "q-name-last-age-sex" iterations (fun () -> q_len db "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]");
   measure "qpred1" iterations (fun () -> q_len db "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]");
   measure "avet-salary-range-seq" iterations (fun () ->
-      seq_len (index_range db "salary" ~start:(Int 50001) ()));
+      seq_len (index_range db "salary" ~start:(Int64 50001L) ()));
   measure "avet-salary-range-bounded" iterations (fun () ->
-      seq_len (index_range db "salary" ~start:(Int 50001) ~stop:(Int 80_000) ()));
+      seq_len (index_range db "salary" ~start:(Int64 50001L) ~stop:(Int64 80_000L) ()));
   measure
     "qpred2"
     iterations
     (fun () ->
        q_len_inputs
          db
-         [ Arg_scalar (Result_value (Int 50000)) ]
+         [ Arg_scalar (Result_value (Int64 50000L)) ]
          "[:find ?e ?s :in $ ?min-s :where [?e :salary ?s] [(> ?s ?min-s)]]");
   measure
     "qpred2-parsed"
     iterations
     (fun () ->
-       q db ~inputs:[ Arg_scalar (Result_value (Int 50000)) ] qpred2_query
+       q db ~inputs:[ Arg_scalar (Result_value (Int64 50000L)) ] qpred2_query
        |> rows_len);
   measure "q2pred" iterations (fun () -> q_len db "[:find ?e ?s :where [?e :name \"Ivan\"] [?e :salary ?s] [(> ?s 50000)]]");
   measure "direct-q3-index-join" iterations (fun () -> direct_q3 db);

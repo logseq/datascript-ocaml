@@ -95,8 +95,8 @@ let schema_of_json = function
 let rec value_of_json = function
   | `Null -> Nil
   | `Bool value -> Bool value
-  | `Int value -> Int value
-  | `Intlit value -> Int (int_of_string value)
+  | `Int value -> Int64 (Int64.of_int value)
+  | `Intlit value -> Int64 (Int64.of_string value)
   | `Float value -> Float value
   | `String value when String.length value > 0 && value.[0] = ':' -> Keyword (attr_name value)
   | `String value -> String value
@@ -124,14 +124,14 @@ let tx_batch_of_json = function
 
 let string_of_value = function
   | Nil -> "nil"
-  | Int value -> "int:" ^ string_of_int value
+  | Int64 value -> "int:" ^ Int64.to_string value
   | Float value -> "float:" ^ string_of_float value
   | String value -> "string:" ^ value
   | Symbol value -> "symbol:" ^ value
   | Bool value -> "bool:" ^ string_of_bool value
   | Keyword value -> "keyword:" ^ value
   | Uuid value -> "uuid:" ^ value
-  | Instant value -> "instant:" ^ string_of_int value
+  | Instant value -> "instant:" ^ Int64.to_string value
   | Regex value -> "regex:" ^ value
   | Ref entity_id -> "ref:" ^ string_of_int entity_id
   | List _ | Vector _ | Set _ | Map _ | Tuple _ -> "compound"

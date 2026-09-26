@@ -174,7 +174,7 @@ let test_tuples__test_ignore_correct () =
     "matching direct tuple write is ignored"
     (conn_db conn)
     (Entity_id 1)
-    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "B" ]); Keyword "b", scalar (String "B"); Keyword "db/id", scalar (Int 1) ]
+    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "B" ]); Keyword "b", scalar (String "B"); Keyword "db/id", scalar (Int64 1L) ]
 
 let test_tuples__test_unique () =
   let conn = create_conn ~schema:[ "a+b", tuple_unique_identity [ "a"; "b" ] ] () in
@@ -195,13 +195,13 @@ let test_tuples__test_unique () =
     "multiple tuple updates are atomic"
     (conn_db conn)
     (Entity_id 1)
-    [ Keyword "a", scalar (String "A"); Keyword "a+b", scalar (tuple_value [ String "A"; String "B" ]); Keyword "b", scalar (String "B"); Keyword "db/id", scalar (Int 1) ];
+    [ Keyword "a", scalar (String "A"); Keyword "a+b", scalar (tuple_value [ String "A"; String "B" ]); Keyword "b", scalar (String "B"); Keyword "db/id", scalar (Int64 1L) ];
   ignore (transact_bang conn [ Entity { db_id = Some (Entity_id 4); attrs = [ "a", One_value (String "a"); "b", One_value (String "b") ] } ]);
   expect_pull_attrs
     "insert with two tuple components is atomic"
     (conn_db conn)
     (Entity_id 4)
-    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "db/id", scalar (Int 4) ]
+    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "db/id", scalar (Int64 4L) ]
 
 let test_tuples__test_upsert () =
   let conn = create_conn ~schema:[ "a+b", tuple_unique_identity [ "a"; "b" ]; "c", unique_identity ] () in
@@ -231,7 +231,7 @@ let test_tuples__test_upsert () =
     "change tuple source during upsert"
     (conn_db conn)
     (Entity_id 1)
-    [ Keyword "a", scalar (String "A"); Keyword "a+b", scalar (tuple_value [ String "A"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "c", scalar (String "C"); Keyword "d", scalar (String "D"); Keyword "db/id", scalar (Int 1) ]
+    [ Keyword "a", scalar (String "A"); Keyword "a+b", scalar (tuple_value [ String "A"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "c", scalar (String "C"); Keyword "d", scalar (String "D"); Keyword "db/id", scalar (Int64 1L) ]
 
 let test_tuples__test_upsert_by_tuple_components () =
   let db =
@@ -279,7 +279,7 @@ let test_tuples__test_lookup_refs () =
     "pull by tuple lookup ref"
     (conn_db conn)
     (Lookup_ref ("a+b", tuple_value [ String "a"; String "b" ]))
-    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "c", scalar (String "c"); Keyword "db/id", scalar (Int 2) ]
+    [ Keyword "a", scalar (String "a"); Keyword "a+b", scalar (tuple_value [ String "a"; String "b" ]); Keyword "b", scalar (String "b"); Keyword "c", scalar (String "c"); Keyword "db/id", scalar (Int64 2L) ]
 
 let test_tuples__lookup_refs_in_tuple () =
   let db =
@@ -291,18 +291,18 @@ let test_tuples__lookup_refs_in_tuple () =
          ; Entity { db_id = Some (Temp_id "yuri"); attrs = [ "name", One_value (String "Yuri"); "ref", One_value (Ref_to (Temp_id "oleg")) ] }
          ]
   in
-  let by_id = db_with [ Entity { db_id = None; attrs = [ "ref+name", One_value (tuple_value [ Ref 1; String "Petr" ]); "age", One_value (Int 32) ] } ] db in
-  expect_pull_attrs ~pattern:[ Pull_attr "age" ] "tuple lookup with id ref" by_id (Entity_id 3) [ Keyword "age", scalar (Int 32) ];
+  let by_id = db_with [ Entity { db_id = None; attrs = [ "ref+name", One_value (tuple_value [ Ref 1; String "Petr" ]); "age", One_value (Int64 32L) ] } ] db in
+  expect_pull_attrs ~pattern:[ Pull_attr "age" ] "tuple lookup with id ref" by_id (Entity_id 3) [ Keyword "age", scalar (Int64 32L) ];
   let by_lookup =
     db_with
       [ Entity
           { db_id = None
-          ; attrs = [ "ref+name", One_value (Tuple [ Some (Vector [ Keyword "name"; String "Ivan" ]); Some (String "Petr") ]); "age", One_value (Int 32) ]
+          ; attrs = [ "ref+name", One_value (Tuple [ Some (Vector [ Keyword "name"; String "Ivan" ]); Some (String "Petr") ]); "age", One_value (Int64 32L) ]
           }
       ]
       db
   in
-  expect_pull_attrs ~pattern:[ Pull_attr "age" ] "tuple lookup with nested lookup ref" by_lookup (Entity_id 3) [ Keyword "age", scalar (Int 32) ];
+  expect_pull_attrs ~pattern:[ Pull_attr "age" ] "tuple lookup with nested lookup ref" by_lookup (Entity_id 3) [ Keyword "age", scalar (Int64 32L) ];
   if entid db "ref+name" (tuple_value [ Ref 1; String "Petr" ]) <> Some 3 then failf "tuple entid by id ref";
   if entid db "ref+name" (Vector [ Vector [ Keyword "name"; String "Ivan" ]; String "Petr" ]) <> Some 3 then failf "tuple entid by nested lookup ref"
 

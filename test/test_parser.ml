@@ -167,8 +167,8 @@ let test_parser__aggregate_and_find_arg_helpers () =
     (Parser.parse_find_arg (QueryFormKeyword "status"));
   assert_equal
     "parse_find_args preserves arg order"
-    [ QVar "name"; QSource "other"; QValue (Int 1) ]
-    (Parser.parse_find_args [ sym "?name"; sym "$other"; QueryFormInt 1 ])
+    [ QVar "name"; QSource "other"; QValue (Int64 1L) ]
+    (Parser.parse_find_args [ sym "?name"; sym "$other"; QueryFormInt 1L ])
 
 let test_parser__output_var_helpers () =
   assert_equal_string "parse_output_var preserves placeholders" "_" (Parser.parse_output_var (sym "_"));
@@ -313,7 +313,7 @@ let test_parser__pattern_term_helpers () =
   assert_equal
     "parse_pattern_term parses entity ids in entity position"
     (QEntity 42)
-    (Parser.parse_pattern_term ~entity_position:true (QueryFormInt 42));
+    (Parser.parse_pattern_term ~entity_position:true (QueryFormInt 42L));
   assert_equal "comparison_predicate_of_symbol parses <" (Some LessThan) (Parser.comparison_predicate_of_symbol "<");
   assert_equal "value_predicate_of_symbol parses keyword?" (Some KeywordValue) (Parser.value_predicate_of_symbol "keyword?");
   assert_equal "numeric_predicate_of_symbol parses odd?" (Some OddInteger) (Parser.numeric_predicate_of_symbol "odd?");

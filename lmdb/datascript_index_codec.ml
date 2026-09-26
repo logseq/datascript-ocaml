@@ -107,10 +107,10 @@ let rec encode_value_key = function
       Buffer.contents buffer
   | Bool false -> "\008\000"
   | Bool true -> "\008\001"
-  | Int value ->
+  | Int64 value ->
       let buffer = Buffer.create 16 in
       append_byte buffer 9;
-      append_int64 buffer (float_sort_bits (float_of_int value));
+      append_int64 buffer (float_sort_bits (Int64.to_float value));
       Buffer.contents buffer
   | Float value ->
       let buffer = Buffer.create 16 in
@@ -133,9 +133,9 @@ let rec encode_value_key = function
       append_string buffer value;
       Buffer.contents buffer
   | Instant value ->
-      let buffer = Buffer.create 16 in
+      let buffer = Buffer.create 24 in
       append_byte buffer 12;
-      append_int32 buffer value;
+      append_int64 buffer value;
       Buffer.contents buffer
   | Uuid value ->
       let buffer = Buffer.create (String.length value + 8) in
@@ -212,7 +212,10 @@ let rec decode_value_key bytes offset =
       let value, offset = read_string bytes offset in
       Regex value, offset
   | 12 ->
-      let value, offset = read_int32 bytes offset in
+      let value, offset =
+        if offset + 8 > String.length bytes then invalid_arg "truncated instant key"
+        else int64_of_be (String.sub bytes offset 8), offset + 8
+      in
       Instant value, offset
   | 13 ->
       let value, offset = read_string bytes offset in
@@ -281,9 +284,9 @@ let rec encode_value_payload buffer value =
   | Bool true ->
       append_byte buffer 8;
       append_byte buffer 1
-  | Int value ->
+  | Int64 value ->
       append_byte buffer 9;
-      append_int64 buffer (Int64.of_int value)
+      append_int64 buffer value
   | Float value ->
       append_byte buffer 10;
       append_int64 buffer (Int64.bits_of_float value)
@@ -298,7 +301,7 @@ let rec encode_value_payload buffer value =
       append_len_string buffer text
   | Instant value ->
       append_byte buffer 14;
-      append_int64 buffer (Int64.of_int value)
+      append_int64 buffer value
   | Uuid text ->
       append_byte buffer 15;
       append_len_string buffer text
@@ -383,7 +386,7 @@ let rec decode_value_payload bytes offset =
         if offset + 8 > String.length bytes then invalid_arg "truncated int payload"
         else int64_of_be (String.sub bytes offset 8), offset + 8
       in
-      Int (Int64.to_int raw), offset
+      Int64 raw, offset
   | 10 ->
       let raw, offset =
         if offset + 8 > String.length bytes then invalid_arg "truncated float payload"
@@ -404,7 +407,7 @@ let rec decode_value_payload bytes offset =
         if offset + 8 > String.length bytes then invalid_arg "truncated instant payload"
         else int64_of_be (String.sub bytes offset 8), offset + 8
       in
-      Instant (Int64.to_int raw), offset
+      Instant raw, offset
   | 15 ->
       let text, offset = read_len_string bytes offset in
       Uuid text, offset

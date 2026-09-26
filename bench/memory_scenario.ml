@@ -75,12 +75,12 @@ let person size i =
   Entity
     { db_id = Some (Entity_id i)
     ; attrs =
-        [ "id", One_value (Int i)
+        [ "id", One_value (Int64 (Int64.of_int i))
         ; "name", One_value (String names.((i - 1) mod Array.length names))
-        ; "age", One_value (Int ((i * 37) mod 100))
-        ; "salary", One_value (Int ((i * 7919) mod 100_000))
+        ; "age", One_value (Int64 (Int64.of_int ((i * 37) mod 100)))
+        ; "salary", One_value (Int64 (Int64.of_int ((i * 7919) mod 100_000)))
         ; "status", One_value (String statuses.(i mod Array.length statuses))
-        ; "score", One_value (Int ((i * 13) mod 10_000))
+        ; "score", One_value (Int64 (Int64.of_int ((i * 13) mod 10_000)))
         ; "friend", One_value (Ref friend)
         ; "mentor", One_value (Ref mentor)
         ; ( "team"
@@ -104,7 +104,7 @@ let update_entity size i =
     { db_id = Some (Entity_id entity_id)
     ; attrs =
         [ "status", One_value (String statuses.((i + 1) mod Array.length statuses))
-        ; "score", One_value (Int ((i * 97) mod 10_000))
+        ; "score", One_value (Int64 (Int64.of_int ((i * 97) mod 10_000)))
         ; "alias", Many_values [ String ("updated-" ^ string_of_int (i mod 128)) ]
         ]
     }
@@ -152,8 +152,8 @@ let ref_attrs =
   [ "friend"; "mentor"; "team" ]
 
 let canonical_value attr = function
-  | Int value when List.mem attr ref_attrs -> "ref:" ^ string_of_int value
-  | Int value -> "int:" ^ string_of_int value
+  | Int64 value when List.mem attr ref_attrs -> "ref:" ^ Int64.to_string value
+  | Int64 value -> "int:" ^ Int64.to_string value
   | Ref entity_id -> "ref:" ^ string_of_int entity_id
   | String value -> "string:" ^ value
   | Bool value -> "bool:" ^ string_of_bool value
@@ -162,7 +162,7 @@ let canonical_value attr = function
   | Float value -> "float:" ^ string_of_float value
   | Nil -> "nil"
   | Uuid value -> "uuid:" ^ value
-  | Instant value -> "instant:" ^ string_of_int value
+  | Instant value -> "instant:" ^ Int64.to_string value
   | Regex value -> "regex:" ^ value
   | TxRef -> "tx-ref"
   | Ref_to _ -> "ref-to"

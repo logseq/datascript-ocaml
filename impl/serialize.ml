@@ -23,6 +23,16 @@ let from_serializable context snapshot =
   let schema = context.validate_schema snapshot.serializable_schema in
   let datoms = List.map (context.normalize_datom_for_schema schema) snapshot.serializable_datoms in
   let lmdb, storage_ref = Index.create_lmdb None in
+  (* upstream restores a db through the same datom fold as init-db, so the
+     allocation floor is derived from the datoms themselves; the snapshot
+     fields only raise it further (retracted entities keep max-eid
+     monotonic). *)
+  let max_eid =
+    List.fold_left
+      (fun max_eid d -> Db.max_eid_in_value (Db.max_eid_with_entity_id max_eid d.e) d.v)
+      snapshot.serializable_max_eid datoms
+  in
+  let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) snapshot.serializable_max_tx datoms in
   { db_uid = context.next_db_uid ()
   ; schema
   ; eavt_index = Index.empty Eavt lmdb
@@ -38,9 +48,9 @@ let from_serializable context snapshot =
   ; duplicate_eavt_by_entity = Hashtbl.create 0
   ; duplicate_aevt_by_attr = Hashtbl.create 0
   ; duplicate_avet_by_attr = Hashtbl.create 0
-  ; max_eid = snapshot.serializable_max_eid
+  ; max_eid
   ; max_datom_e = 0
-  ; max_tx = snapshot.serializable_max_tx
+  ; max_tx
   ; store_max_tx = snapshot.serializable_max_tx
   ; as_of_tx = None
   ; since_tx = None

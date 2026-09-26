@@ -53,7 +53,7 @@ let expect_triples label expected actual =
              a
              (match v with
               | String s -> Printf.sprintf "%S" s
-              | Int n -> string_of_int n
+              | Int64 n -> Int64.to_string n
               | Float f -> string_of_float f
               | _ -> "?"))
       |> String.concat "; "

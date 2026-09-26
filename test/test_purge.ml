@@ -25,18 +25,18 @@ let datoms_list db ?e ?a () =
 
 let int_values db ?a ?e () =
   datoms_list db ?a ?e ()
-  |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   |> List.sort compare
 
 let history_int_values db ?a ?e () =
   datoms_list (history db) ?a ?e ()
   |> List.filter (fun d -> d.added)
-  |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   |> List.sort compare
 
 let history_all_int_values db ?a ?e () =
   datoms_list (history db) ?a ?e ()
-  |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   |> List.sort compare
 
 let string_values db ?a ?e () =
@@ -47,23 +47,23 @@ let string_values db ?a ?e () =
 let setup_db () =
   db_with
     [ Add (Entity_id 1, "name", String "Alice")
-    ; Add (Entity_id 1, "age", Int 25)
+    ; Add (Entity_id 1, "age", Int64 25L)
     ; Add (Entity_id 2, "name", String "Bob")
-    ; Add (Entity_id 2, "age", Int 35)
+    ; Add (Entity_id 2, "age", Int64 35L)
     ]
     (empty_db ~schema:[ "name", unique_identity; "age", indexed ] ())
 
 let test_purge_datom_from_current_and_history () =
   let db = setup_db () in
-  let db = db_with [ Retract (Lookup_ref ("name", String "Alice"), "age", Some (Int 25)) ] db in
+  let db = db_with [ Retract (Lookup_ref ("name", String "Alice"), "age", Some (Int64 25L)) ] db in
   check_int_list "Alice age should be absent after retract" [] (int_values db ~a:"age" ~e:1 ());
   check_int_list "Alice age should remain in history after retract" [ 25 ]
     (history_int_values db ~a:"age" ~e:1 ());
-  let db = db_with [ Purge (Lookup_ref ("name", String "Bob"), "age", Int 35) ] db in
+  let db = db_with [ Purge (Lookup_ref ("name", String "Bob"), "age", Int64 35L) ] db in
   check_int_list "Bob age should be absent after purge" [] (int_values db ~a:"age" ~e:2 ());
   check_int_list "Bob age should be absent from history after purge" []
     (history_all_int_values db ~a:"age" ~e:2 ());
-  let db = db_with [ Purge (Lookup_ref ("name", String "Alice"), "age", Int 25) ] db in
+  let db = db_with [ Purge (Lookup_ref ("name", String "Alice"), "age", Int64 25L) ] db in
   check_int_list "purged retracted datom should leave history" []
     (history_all_int_values db ~a:"age" ~e:1 ())
 

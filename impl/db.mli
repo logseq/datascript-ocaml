@@ -65,6 +65,7 @@ type index_context =
 val indexed_attr_required_message : attr -> string
 val validate_index_access : index_context -> db -> index -> attr option -> unit
 val datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+val search_datoms : index_context -> db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
 val fold_datoms :
   ('acc -> datom -> 'acc) ->
   'acc ->
@@ -103,5 +104,5 @@ val fold_index_range :
 val hash : db -> int
 val hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
-val squuid : ?msec:int -> unit -> value
-val squuid_time_millis : value -> int
+val squuid : ?msec:int64 -> unit -> value
+val squuid_time_millis : value -> int64

@@ -146,7 +146,7 @@ let eval_count_value_clause context db bindings term output_var =
     (match value_count value with
      | None -> []
      | Some count ->
-       (match bind_var (context.result_resolution_context db) output_var (Result_value (Int count)) bindings with
+       (match bind_var (context.result_resolution_context db) output_var (Result_value (Int64 (Int64.of_int count))) bindings with
         | Some bindings -> [ bindings ]
         | None -> []))
   | Some (Result_entity _) | Some (Result_attr _) | Some (Result_db _) | Some (Result_pull _) | None -> []
@@ -156,9 +156,15 @@ let value_has_count = Built_ins.value_has_count
 let value_is_not_empty = Built_ins.value_is_not_empty
 
 let eval_value_predicate_clause context db bindings term predicate =
+  (* Bound entity ids arrive as Result_entity but are plain numbers
+     upstream: convert through value_of_query_result so value/numeric
+     predicates (number?, integer?, even?, ...) apply to them *)
   match eval_query_term (context.match_context db) bindings term with
-  | Some (Result_value value) when predicate value -> [ bindings ]
-  | Some _ | None -> []
+  | Some result ->
+    (match value_of_query_result result with
+     | Some value when predicate value -> [ bindings ]
+     | Some _ | None -> [])
+  | None -> []
 
 let matches_value_predicate = Built_ins.matches_value_predicate
 
@@ -216,7 +222,7 @@ let normalized_comparison = Built_ins.normalized_comparison
 let eval_compare_value_clause context db bindings left_term right_term output_var =
   match collect_query_values context db bindings [ left_term; right_term ] with
   | Some [ left; right ] ->
-    (match bind_var (context.result_resolution_context db) output_var (Result_value (Int (normalized_comparison (context.compare_value left right)))) bindings with
+    (match bind_var (context.result_resolution_context db) output_var (Result_value (Int64 (Int64.of_int (normalized_comparison (context.compare_value left right))))) bindings with
      | Some bindings -> [ bindings ]
      | None -> [])
   | Some _ | None -> []
@@ -310,11 +316,12 @@ let eval_random_value_clause context db bindings output_var =
 
 let eval_random_int_value_clause context db bindings bound_term output_var =
   match eval_query_term (context.match_context db) bindings bound_term with
-  | Some (Result_value (Int bound)) when bound > 0 ->
-    (match bind_var (context.result_resolution_context db) output_var (Result_value (Int (Random.int bound))) bindings with
+  | Some (Result_value (Int64 bound)) when bound > 0L ->
+    let bound = Util.int64_to_int_exn "rand-int bound" bound in
+    (match bind_var (context.result_resolution_context db) output_var (Result_value (Int64 (Int64.of_int (Random.int bound)))) bindings with
      | Some bindings -> [ bindings ]
      | None -> [])
-  | Some (Result_value (Int _)) -> invalid_arg "rand-int bound must be positive"
+  | Some (Result_value (Int64 _)) -> invalid_arg "rand-int bound must be positive"
   | Some _ | None -> []
 
 let split_at = Built_ins.split_at
@@ -443,13 +450,13 @@ let eval_string_index_clause context db bindings value_term needle_term output_v
     (match index_of value needle with
      | None -> []
      | Some index ->
-       (match bind_var (context.result_resolution_context db) output_var (Result_value (Int index)) bindings with
+       (match bind_var (context.result_resolution_context db) output_var (Result_value (Int64 (Int64.of_int index))) bindings with
         | Some bindings -> [ bindings ]
         | None -> []))
   | Some _ | None -> []
 
 let query_result_int = function
-  | Result_value (Int value) -> Some value
+  | Result_value (Int64 value) -> Util.int64_to_int value
   | Result_value _ | Result_entity _ | Result_attr _ | Result_db _ | Result_pull _ -> None
 
 let eval_string_substring_clause context db bindings value_term start_term end_term output_var =
@@ -545,13 +552,20 @@ let eval_string_escape_clause context db bindings value_term replacement_term ou
   | Some _ | None -> []
 
 let regex_pattern_of_result = Built_ins.regex_pattern_of_result
+let validate_regex = Built_ins.validate_regex
 let regex_find = Built_ins.regex_find
 let regex_matches = Built_ins.regex_matches
 let regex_seq = Built_ins.regex_seq
 
 let eval_re_pattern_value_clause context db bindings pattern_term output_var =
   match eval_query_term (context.match_context db) bindings pattern_term with
-  | Some (Result_value (String pattern)) | Some (Result_value (Regex pattern)) ->
+  | Some (Result_value (String pattern)) ->
+    (* cljs re-pattern compiles eagerly, so an invalid pattern raises here *)
+    validate_regex pattern;
+    (match bind_var (context.result_resolution_context db) output_var (Result_value (Regex pattern)) bindings with
+     | Some bindings -> [ bindings ]
+     | None -> [])
+  | Some (Result_value (Regex pattern)) ->
     (match bind_var (context.result_resolution_context db) output_var (Result_value (Regex pattern)) bindings with
      | Some bindings -> [ bindings ]
      | None -> [])
@@ -624,14 +638,16 @@ let eval_string_split_clause context db bindings value_term separator_term outpu
 
 let eval_string_split_limit_clause context db bindings value_term separator_term limit_term output_var =
   match collect_query_terms (context.match_context db) bindings [ value_term; separator_term; limit_term ] with
-  | Some [ Result_value (String value); Result_value (String separator); Result_value (Int limit) ] ->
-    (match bind_string_list context db output_var (split_string_limited value separator limit) bindings with
-     | Some bindings -> [ bindings ]
-     | None -> [])
-  | Some [ Result_value (String value); Result_value (Regex pattern); Result_value (Int limit) ] ->
-    (match bind_string_list context db output_var (split_regex_limited value pattern limit) bindings with
-     | Some bindings -> [ bindings ]
-     | None -> [])
+  | Some [ Result_value (String value); Result_value (String separator); Result_value (Int64 limit) ] ->
+    (match Util.int64_to_int limit with
+     | Some limit -> bind_string_list context db output_var (split_string_limited value separator limit) bindings
+     | None -> bind_string_list context db output_var (split_string value separator) bindings)
+    |> Option.to_list
+  | Some [ Result_value (String value); Result_value (Regex pattern); Result_value (Int64 limit) ] ->
+    (match Util.int64_to_int limit with
+     | Some limit -> bind_string_list context db output_var (split_regex_limited value pattern limit) bindings
+     | None -> bind_string_list context db output_var (split_regex value pattern) bindings)
+    |> Option.to_list
   | Some _ | None -> []
 
 let eval_string_split_lines_clause context db bindings value_term output_var =
@@ -704,25 +720,25 @@ let range_values = Built_ins.range_values
 
 let eval_range_values context db bindings output_var start_value end_value step =
   range_values start_value end_value step
-  |> List.filter_map (fun value -> bind_var (context.result_resolution_context db) output_var (Result_value (Int value)) bindings)
+  |> List.filter_map (fun value -> bind_var (context.result_resolution_context db) output_var (Result_value (Int64 value)) bindings)
 
 let eval_range_end_value_clause context db bindings end_term output_var =
   match collect_query_terms (context.match_context db) bindings [ end_term ] with
   | None -> []
-  | Some [ Result_value (Int end_value) ] -> eval_range_values context db bindings output_var 0 end_value 1
+  | Some [ Result_value (Int64 end_value) ] -> eval_range_values context db bindings output_var 0L end_value 1L
   | Some _ -> invalid_arg "range requires integer bounds"
 
 let eval_range_value_clause context db bindings start_term end_term output_var =
   match collect_query_terms (context.match_context db) bindings [ start_term; end_term ] with
   | None -> []
-  | Some [ Result_value (Int start_value); Result_value (Int end_value) ] ->
-    eval_range_values context db bindings output_var start_value end_value 1
+  | Some [ Result_value (Int64 start_value); Result_value (Int64 end_value) ] ->
+    eval_range_values context db bindings output_var start_value end_value 1L
   | Some _ -> invalid_arg "range requires integer bounds"
 
 let eval_range_step_value_clause context db bindings start_term end_term step_term output_var =
   match collect_query_terms (context.match_context db) bindings [ start_term; end_term; step_term ] with
   | None -> []
-  | Some [ Result_value (Int start_value); Result_value (Int end_value); Result_value (Int step) ] ->
+  | Some [ Result_value (Int64 start_value); Result_value (Int64 end_value); Result_value (Int64 step) ] ->
     eval_range_values context db bindings output_var start_value end_value step
   | Some _ -> invalid_arg "range requires integer bounds"
 

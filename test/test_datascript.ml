@@ -39,14 +39,14 @@ let str_key name = String name
 
 let rec debug_value = function
   | Nil -> "nil"
-  | Int value -> string_of_int value
+  | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
   | String value -> Printf.sprintf "%S" value
   | Symbol value -> value
   | Bool value -> string_of_bool value
   | Keyword value -> ":" ^ value
   | Uuid value -> "#uuid " ^ value
-  | Instant value -> "#inst " ^ string_of_int value
+  | Instant value -> "#inst " ^ Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
   | Ref value -> "Ref " ^ string_of_int value
   | List values -> "[" ^ (values |> List.map debug_value |> String.concat " ") ^ "]"
@@ -253,17 +253,17 @@ let test_init_db_preserves_raw_int_datoms_for_ref_attrs () =
     init_db
       ~schema:[ "friend", ref_attr ]
       [ datom ~e:1 ~a:"name" ~v:(String "Ivan") ()
-      ; datom ~e:1 ~a:"friend" ~v:(Int 2) ()
+      ; datom ~e:1 ~a:"friend" ~v:(Int64 2L) ()
       ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
       ]
   in
   assert_equal_datoms
     "init_db should preserve raw numeric datom values under ref schema like upstream d/datom"
-    [ datom ~e:1 ~a:"friend" ~v:(Int 2) () ]
+    [ datom ~e:1 ~a:"friend" ~v:(Int64 2L) () ]
     (datoms db Eavt ~e:1 ~a:"friend" ());
   assert_equal_query
     "q should expose init_db raw numeric ref-attr datoms as scalar values"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q_string db "[:find ?friend :where [1 :friend ?friend]]")
 
 let test_datoms_returns_lazy_sequence () =
@@ -289,7 +289,7 @@ let test_datoms_returns_lazy_sequence () =
 let test_datoms_slices_before_filtered_predicate () =
   let db =
     init_db
-      [ datom ~e:1 ~a:"age" ~v:(Int 30) ()
+      [ datom ~e:1 ~a:"age" ~v:(Int64 30L) ()
       ; datom ~e:2 ~a:"name" ~v:(String "Petr") ()
       ]
   in
@@ -331,7 +331,7 @@ let test_wildcard_pull_plan_uses_entity_slices () =
     [ [ Result_pull
           { pulled_id = 1
           ; pulled_attrs =
-              [ Keyword "db/id", Pulled_scalar (Int 1)
+              [ Keyword "db/id", Pulled_scalar (Int64 1L)
               ; Keyword "marker", Pulled_scalar (Bool true)
               ; Keyword "name", Pulled_scalar (String "Ivan")
               ]
@@ -355,17 +355,17 @@ let test_raw_datom_counts_ref_values_in_max_eid () =
   let db =
     empty_db ~schema:[ "friend", ref_attr ] ()
     |> db_with
-         [ Raw_datom (datom ~e:1 ~a:"friend" ~v:(Int 2) ())
+         [ Raw_datom (datom ~e:1 ~a:"friend" ~v:(Int64 2L) ())
          ; Raw_datom (datom ~e:2 ~a:"name" ~v:(String "Petr") ())
          ]
   in
   assert_equal_datoms
     "Raw_datom should preserve raw numeric values under ref schema like upstream d/datom"
-    [ datom ~e:1 ~a:"friend" ~v:(Int 2) () ]
+    [ datom ~e:1 ~a:"friend" ~v:(Int64 2L) () ]
     (datoms db Eavt ~e:1 ~a:"friend" ());
   assert_equal_query
     "q should expose Raw_datom raw numeric ref-attr values as scalars"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q_string db "[:find ?friend :where [1 :friend ?friend]]")
 
 let test_raw_datom_counts_tx_in_max_tx () =
@@ -384,13 +384,13 @@ let test_transact__test_with_datoms () =
     empty_db ()
     |> db_with
          [ Raw_datom (datom ~e:1 ~a:"name" ~v:(String "Oleg") ())
-         ; Raw_datom (datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int 17) ())
+         ; Raw_datom (datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int64 17L) ())
          ; Raw_datom (datom ~tx:(tx0 + 2) ~e:1 ~a:"aka" ~v:(String "x") ())
          ]
   in
   assert_equal_datoms
     "Raw_datom assertions keep their own transaction numbers"
-    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int 17) ()
+    [ datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int64 17L) ()
     ; datom ~tx:(tx0 + 2) ~e:1 ~a:"aka" ~v:(String "x") ()
     ; datom ~e:1 ~a:"name" ~v:(String "Oleg") ()
     ]
@@ -399,13 +399,13 @@ let test_transact__test_with_datoms () =
     empty_db ()
     |> db_with
          [ Raw_datom (datom ~e:1 ~a:"name" ~v:(String "Oleg") ())
-         ; Raw_datom (datom ~e:1 ~a:"age" ~v:(Int 17) ())
+         ; Raw_datom (datom ~e:1 ~a:"age" ~v:(Int64 17L) ())
          ; Raw_datom (datom ~added:false ~e:1 ~a:"name" ~v:(String "Oleg") ())
          ]
   in
   assert_equal_datoms
     "Raw_datom retractions remove matching active facts"
-    [ datom ~e:1 ~a:"age" ~v:(Int 17) () ]
+    [ datom ~e:1 ~a:"age" ~v:(Int64 17L) () ]
     (datoms db Eavt ())
 
 let test_find_datom_returns_first_index_match () =
@@ -474,7 +474,7 @@ let test_incremental_writes_keep_public_datoms_indexes_correct () =
       { db_id = Some (Entity_id id)
       ; attrs =
           [ "name", One_value (String name)
-          ; "age", One_value (Int age)
+          ; "age", One_value (Int64 (Int64.of_int age))
           ; "friend", One_value (Ref friend)
           ]
       }
@@ -490,13 +490,13 @@ let test_incremental_writes_keep_public_datoms_indexes_correct () =
   in
   assert_equal_triples
     "incremental EAVT remains sorted by entity"
-    [ 1, "age", Int 30
+    [ 1, "age", Int64 30L
     ; 1, "friend", Ref 2
     ; 1, "name", String "Ivan"
-    ; 2, "age", Int 20
+    ; 2, "age", Int64 20L
     ; 2, "friend", Ref 1
     ; 2, "name", String "Petr"
-    ; 3, "age", Int 40
+    ; 3, "age", Int64 40L
     ; 3, "friend", Ref 1
     ; 3, "name", String "Ivan"
     ]
@@ -518,11 +518,11 @@ let test_index_range_returns_avet_values_between_bounds () =
   let db =
     empty_db ~schema:[ "age", indexed; "name", indexed ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 20) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int 7) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Pavel"); "age", One_value (Int 45) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 20) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 20L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int64 7L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Pavel"); "age", One_value (Int64 45L) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 20L) ] }
          ]
   in
   assert_equal_triples
@@ -552,16 +552,16 @@ let test_index_range_returns_avet_values_between_bounds () =
     (index_range db "name" ());
   assert_equal_triples
     "index_range supports repeated numeric values"
-    [ 1, "age", Int 15; 2, "age", Int 20; 5, "age", Int 20 ]
-    (index_range db "age" ~start:(Int 15) ~stop:(Int 20) ());
+    [ 1, "age", Int64 15L; 2, "age", Int64 20L; 5, "age", Int64 20L ]
+    (index_range db "age" ~start:(Int64 15L) ~stop:(Int64 20L) ());
   assert_equal_triples
     "index_range supports wide numeric bounds"
-    [ 3, "age", Int 7; 1, "age", Int 15; 2, "age", Int 20; 5, "age", Int 20; 4, "age", Int 45 ]
-    (index_range db "age" ~start:(Int 7) ~stop:(Int 45) ());
+    [ 3, "age", Int64 7L; 1, "age", Int64 15L; 2, "age", Int64 20L; 5, "age", Int64 20L; 4, "age", Int64 45L ]
+    (index_range db "age" ~start:(Int64 7L) ~stop:(Int64 45L) ());
   assert_equal_triples
     "index_range supports numeric bounds outside the indexed values"
-    [ 3, "age", Int 7; 1, "age", Int 15; 2, "age", Int 20; 5, "age", Int 20; 4, "age", Int 45 ]
-    (index_range db "age" ~start:(Int 0) ~stop:(Int 100) ());
+    [ 3, "age", Int64 7L; 1, "age", Int64 15L; 2, "age", Int64 20L; 5, "age", Int64 20L; 4, "age", Int64 45L ]
+    (index_range db "age" ~start:(Int64 0L) ~stop:(Int64 100L) ());
   assert_raises_invalid_arg
     "index_range rejects unindexed attrs"
     (fun () -> ignore (index_range db "alias" ~start:(String "A") ~stop:(String "Z") ()));
@@ -600,29 +600,29 @@ let test_indexes_compare_numbers_across_value_constructors () =
   let db =
     empty_db ~schema:[ "score", indexed ] ()
     |> db_with
-         [ Add (Entity_id 1, "score", Int 100)
+         [ Add (Entity_id 1, "score", Int64 100L)
          ; Add (Entity_id 2, "score", Float 1.5)
-         ; Add (Entity_id 3, "score", Int 2)
+         ; Add (Entity_id 3, "score", Int64 2L)
          ]
   in
   assert_equal_triples
     "AVET sorts int and float values numerically"
-    [ 2, "score", Float 1.5; 3, "score", Int 2; 1, "score", Int 100 ]
+    [ 2, "score", Float 1.5; 3, "score", Int64 2L; 1, "score", Int64 100L ]
     (datoms db Avet ~a:"score" ());
   assert_equal_triples
     "index_range compares int and float bounds numerically"
-    [ 3, "score", Int 2 ]
+    [ 3, "score", Int64 2L ]
     (index_range db "score" ~start:(Float 1.6) ~stop:(Float 99.9) ());
   assert_equal_triples
     "seek_datoms compares mixed numeric lower bounds numerically"
-    [ 3, "score", Int 2; 1, "score", Int 100 ]
+    [ 3, "score", Int64 2L; 1, "score", Int64 100L ]
     (seek_datoms db Avet ~a:"score" ~v:(Float 1.6) ())
 
 let test_transact__test_compare_numbers_js_issue_404 () =
   let db =
     empty_db ()
     |> db_with [ Entity { db_id = Some (Entity_id 1); attrs = [ "num", One_value (Float 42.5) ] } ]
-    |> db_with [ Retract (Entity_id 1, "num", Some (Int 42)) ]
+    |> db_with [ Retract (Entity_id 1, "num", Some (Int64 42L)) ]
   in
   assert_equal_triples
     "retracting int 42 must not remove float 42.5"
@@ -633,25 +633,25 @@ let test_avet_exact_lookup_compares_entire_sequences () =
   let db =
     empty_db ~schema:[ "path", indexed ] ()
     |> db_with
-         [ Add (Entity_id 1, "path", List [ Int 1; Int 2 ])
-         ; Add (Entity_id 2, "path", List [ Int 1; Int 2; Int 3 ])
+         [ Add (Entity_id 1, "path", List [ Int64 1L; Int64 2L ])
+         ; Add (Entity_id 2, "path", List [ Int64 1L; Int64 2L; Int64 3L ])
          ]
   in
   let entity_ids value =
     datoms db Avet ~a:"path" ~v:value ()
     |> List.map (fun datom -> datom.e)
   in
-  if entity_ids (List [ Int 1 ]) <> [] then
+  if entity_ids (List [ Int64 1L ]) <> [] then
     failwith "AVET exact lookup should not match shorter sequence prefixes";
-  if entity_ids (List [ Int 1; Int 1 ]) <> [] then
+  if entity_ids (List [ Int64 1L; Int64 1L ]) <> [] then
     failwith "AVET exact lookup should not match different second sequence item";
-  if entity_ids (List [ Int 1; Int 2 ]) <> [ 1 ] then
+  if entity_ids (List [ Int64 1L; Int64 2L ]) <> [ 1 ] then
     failwith "AVET exact lookup should match the exact shorter sequence";
-  if entity_ids (List [ Int 1; Int 2; Int 2 ]) <> [] then
+  if entity_ids (List [ Int64 1L; Int64 2L; Int64 2L ]) <> [] then
     failwith "AVET exact lookup should not match a sequence between indexed values";
-  if entity_ids (List [ Int 1; Int 2; Int 3 ]) <> [ 2 ] then
+  if entity_ids (List [ Int64 1L; Int64 2L; Int64 3L ]) <> [ 2 ] then
     failwith "AVET exact lookup should match the exact longer sequence";
-  if entity_ids (List [ Int 1; Int 2; Int 3; Int 4 ]) <> [] then
+  if entity_ids (List [ Int64 1L; Int64 2L; Int64 3L; Int64 4L ]) <> [] then
     failwith "AVET exact lookup should not match longer sequence extensions"
 
 let test_indexes_compare_mixed_value_types_like_datascript () =
@@ -661,7 +661,7 @@ let test_indexes_compare_mixed_value_types_like_datascript () =
          [ Add (Entity_id 1, "value", String "z")
          ; Add (Entity_id 2, "value", Keyword "kind/name")
          ; Add (Entity_id 3, "value", Bool false)
-         ; Add (Entity_id 4, "value", Int 7)
+         ; Add (Entity_id 4, "value", Int64 7L)
          ; Add (Entity_id 5, "value", String "a")
          ]
   in
@@ -669,15 +669,15 @@ let test_indexes_compare_mixed_value_types_like_datascript () =
     "AVET sorts mixed value types by DataScript class order"
     [ 2, "value", Keyword "kind/name"
     ; 3, "value", Bool false
-    ; 4, "value", Int 7
+    ; 4, "value", Int64 7L
     ; 5, "value", String "a"
     ; 1, "value", String "z"
     ]
     (datoms db Avet ~a:"value" ());
   assert_equal_triples
     "index_range follows DataScript mixed value type order"
-    [ 3, "value", Bool false; 4, "value", Int 7 ]
-    (index_range db "value" ~start:(Bool false) ~stop:(Int 99) ())
+    [ 3, "value", Bool false; 4, "value", Int64 7L ]
+    (index_range db "value" ~start:(Bool false) ~stop:(Int64 99L) ())
 
 let test_avet_excludes_unindexed_scalar_attrs () =
   let db =
@@ -687,7 +687,7 @@ let test_avet_excludes_unindexed_scalar_attrs () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 31)
+                 ; "age", One_value (Int64 31L)
                  ; "friend", One_value (Ref 2)
                  ]
              }
@@ -705,10 +705,10 @@ let test_avet_excludes_unindexed_scalar_attrs () =
     "AVET includes schema ref attrs even without explicit index flag"
     [ 1, "friend", Ref 2 ]
     (datoms db Avet ());
-  let db = empty_db ~schema:[ "age", indexed ] () |> db_with [ Add (Entity_id 1, "age", Int 31) ] in
+  let db = empty_db ~schema:[ "age", indexed ] () |> db_with [ Add (Entity_id 1, "age", Int64 31L) ] in
   assert_equal_triples
     "AVET includes indexed scalar attrs"
-    [ 1, "age", Int 31 ]
+    [ 1, "age", Int64 31L ]
     (datoms db Avet ());
   assert_raises_invalid_arg
     "AVET datoms reject unindexed attrs"
@@ -763,23 +763,23 @@ let test_seek_datoms_continues_across_avet_attributes () =
     init_db
       ~schema:[ "age", indexed; "name", indexed ]
       [ datom ~e:1 ~a:"name" ~v:(String "Petr") ()
-      ; datom ~e:1 ~a:"age" ~v:(Int 44) ()
+      ; datom ~e:1 ~a:"age" ~v:(Int64 44L) ()
       ; datom ~e:2 ~a:"name" ~v:(String "Ivan") ()
-      ; datom ~e:2 ~a:"age" ~v:(Int 25) ()
+      ; datom ~e:2 ~a:"age" ~v:(Int64 25L) ()
       ; datom ~e:3 ~a:"name" ~v:(String "Sergey") ()
-      ; datom ~e:3 ~a:"age" ~v:(Int 11) ()
+      ; datom ~e:3 ~a:"age" ~v:(Int64 11L) ()
       ]
   in
   assert_equal_triples
     "seek_datoms on AVET starts at the value bound and continues into later attrs"
-    [ 3, "age", Int 11
-    ; 2, "age", Int 25
-    ; 1, "age", Int 44
+    [ 3, "age", Int64 11L
+    ; 2, "age", Int64 25L
+    ; 1, "age", Int64 44L
     ; 2, "name", String "Ivan"
     ; 1, "name", String "Petr"
     ; 3, "name", String "Sergey"
     ]
-    (seek_datoms db Avet ~a:"age" ~v:(Int 10) ());
+    (seek_datoms db Avet ~a:"age" ~v:(Int64 10L) ());
   assert_equal_triples
     "seek_datoms on AVET uses string prefix bounds"
     [ 1, "name", String "Petr"; 3, "name", String "Sergey" ]
@@ -794,48 +794,48 @@ let test_rseek_datoms_continues_across_avet_attributes () =
     init_db
       ~schema:[ "age", indexed; "name", indexed ]
       [ datom ~e:1 ~a:"name" ~v:(String "Petr") ()
-      ; datom ~e:1 ~a:"age" ~v:(Int 44) ()
+      ; datom ~e:1 ~a:"age" ~v:(Int64 44L) ()
       ; datom ~e:2 ~a:"name" ~v:(String "Ivan") ()
-      ; datom ~e:2 ~a:"age" ~v:(Int 25) ()
+      ; datom ~e:2 ~a:"age" ~v:(Int64 25L) ()
       ; datom ~e:3 ~a:"name" ~v:(String "Sergey") ()
-      ; datom ~e:3 ~a:"age" ~v:(Int 11) ()
+      ; datom ~e:3 ~a:"age" ~v:(Int64 11L) ()
       ]
   in
   assert_equal_triples
     "rseek_datoms on AVET starts at the value bound and continues into earlier attrs"
     [ 1, "name", String "Petr"
     ; 2, "name", String "Ivan"
-    ; 1, "age", Int 44
-    ; 2, "age", Int 25
-    ; 3, "age", Int 11
+    ; 1, "age", Int64 44L
+    ; 2, "age", Int64 25L
+    ; 3, "age", Int64 11L
     ]
     (rseek_datoms db Avet ~a:"name" ~v:(String "Petr") ());
   assert_equal_triples
     "rseek_datoms on AVET uses the greatest value below a missing bound"
-    [ 2, "age", Int 25; 3, "age", Int 11 ]
-    (rseek_datoms db Avet ~a:"age" ~v:(Int 26) ());
+    [ 2, "age", Int64 25L; 3, "age", Int64 11L ]
+    (rseek_datoms db Avet ~a:"age" ~v:(Int64 26L) ());
   assert_equal_triples
     "rseek_datoms on AVET includes the exact upper bound"
-    [ 2, "age", Int 25; 3, "age", Int 11 ]
-    (rseek_datoms db Avet ~a:"age" ~v:(Int 25) ())
+    [ 2, "age", Int64 25L; 3, "age", Int64 11L ]
+    (rseek_datoms db Avet ~a:"age" ~v:(Int64 25L) ())
 
 let test_upstream_index_api_parity_batch () =
   let db =
     empty_db ~schema:[ "age", indexed; "name", indexed ] ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Petr")
-         ; Add (Entity_id 1, "age", Int 44)
+         ; Add (Entity_id 1, "age", Int64 44L)
          ; Add (Entity_id 2, "name", String "Ivan")
-         ; Add (Entity_id 2, "age", Int 25)
+         ; Add (Entity_id 2, "age", Int64 25L)
          ; Add (Entity_id 3, "name", String "Sergey")
-         ; Add (Entity_id 3, "age", Int 11)
+         ; Add (Entity_id 3, "age", Int64 11L)
          ]
   in
   assert_equal_triples
     "upstream index parity AEVT sort order"
-    [ 1, "age", Int 44
-    ; 2, "age", Int 25
-    ; 3, "age", Int 11
+    [ 1, "age", Int64 44L
+    ; 2, "age", Int64 25L
+    ; 3, "age", Int64 11L
     ; 1, "name", String "Petr"
     ; 2, "name", String "Ivan"
     ; 3, "name", String "Sergey"
@@ -843,19 +843,19 @@ let test_upstream_index_api_parity_batch () =
     (datoms db Aevt ());
   assert_equal_triples
     "upstream index parity EAVT sort order"
-    [ 1, "age", Int 44
+    [ 1, "age", Int64 44L
     ; 1, "name", String "Petr"
-    ; 2, "age", Int 25
+    ; 2, "age", Int64 25L
     ; 2, "name", String "Ivan"
-    ; 3, "age", Int 11
+    ; 3, "age", Int64 11L
     ; 3, "name", String "Sergey"
     ]
     (datoms db Eavt ());
   assert_equal_triples
     "upstream index parity AVET sort order"
-    [ 3, "age", Int 11
-    ; 2, "age", Int 25
-    ; 1, "age", Int 44
+    [ 3, "age", Int64 11L
+    ; 2, "age", Int64 25L
+    ; 1, "age", Int64 44L
     ; 2, "name", String "Ivan"
     ; 1, "name", String "Petr"
     ; 3, "name", String "Sergey"
@@ -863,13 +863,13 @@ let test_upstream_index_api_parity_batch () =
     (datoms db Avet ());
   assert_equal_triples
     "upstream index parity find_datom with empty prefix"
-    [ 1, "age", Int 44 ]
+    [ 1, "age", Int64 44L ]
     (match find_datom db Eavt () with
      | Some datom -> [ datom ]
      | None -> []);
   assert_equal_triples
     "upstream index parity find_datom with entity prefix"
-    [ 2, "age", Int 25 ]
+    [ 2, "age", Int64 25L ]
     (match find_datom db Eavt ~e:2 () with
      | Some datom -> [ datom ]
      | None -> []);
@@ -902,21 +902,21 @@ let test_upstream_index_api_parity_batch () =
   let path_db =
     empty_db ~schema:[ "path", indexed ] ()
     |> db_with
-         [ Add (Entity_id 1, "path", List [ Int 1; Int 2 ])
-         ; Add (Entity_id 2, "path", List [ Int 1; Int 2; Int 3 ])
+         [ Add (Entity_id 1, "path", List [ Int64 1L; Int64 2L ])
+         ; Add (Entity_id 2, "path", List [ Int64 1L; Int64 2L; Int64 3L ])
          ]
   in
   let path_entities value =
     datoms path_db Avet ~a:"path" ~v:value ()
     |> List.map (fun datom -> datom.e)
   in
-  if path_entities (List [ Int 1 ]) <> [] then
+  if path_entities (List [ Int64 1L ]) <> [] then
     failwith "AVET sequence exact lookup should reject shorter prefixes";
-  if path_entities (List [ Int 1; Int 2 ]) <> [ 1 ] then
+  if path_entities (List [ Int64 1L; Int64 2L ]) <> [ 1 ] then
     failwith "AVET sequence exact lookup should match the shorter stored value";
-  if path_entities (List [ Int 1; Int 2; Int 3 ]) <> [ 2 ] then
+  if path_entities (List [ Int64 1L; Int64 2L; Int64 3L ]) <> [ 2 ] then
     failwith "AVET sequence exact lookup should match the longer stored value";
-  if path_entities (List [ Int 1; Int 2; Int 3; Int 4 ]) <> [] then
+  if path_entities (List [ Int64 1L; Int64 2L; Int64 3L; Int64 4L ]) <> [] then
     failwith "AVET sequence exact lookup should reject longer extensions"
 
 let test_db_with_adds_entities () =
@@ -935,7 +935,7 @@ let test_db_with_adds_entities () =
              { db_id = Some (Entity_id 2)
              ; attrs =
                  [ "name", One_value (String "Petr")
-                 ; "age", One_value (Int 37)
+                 ; "age", One_value (Int64 37L)
                  ; "active", One_value (Bool false)
                  ]
              }
@@ -947,7 +947,7 @@ let test_db_with_adds_entities () =
     ; 1, "aka", String "Terrible"
     ; 1, "name", String "Ivan"
     ; 2, "active", Bool false
-    ; 2, "age", Int 37
+    ; 2, "age", Int64 37L
     ; 2, "name", String "Petr"
     ]
     (datoms db Eavt ())
@@ -993,7 +993,7 @@ let test_entity_map_db_id_attr_is_not_stored () =
          [ Entity
              { db_id = Some (Entity_id 1)
              ; attrs =
-                 [ "db/id", One_value (Int 99)
+                 [ "db/id", One_value (Int64 99L)
                  ; "name", One_value (String "Ivan")
                  ]
              }
@@ -1039,6 +1039,26 @@ let test_transact__test_retract_fns_not_found () =
     "missing lookup refs in retract operations are no-ops"
     [ 1, "aka", String "Vanya"; 1, "name", String "Ivan" ]
     (datoms db Eavt ())
+
+let test_transact__test_retract_idents_not_found () =
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "aka", many ] ()
+    |> db_with [ Add (Entity_id 1, "name", String "Ivan"); Add (Entity_id 1, "aka", String "Vanya") ]
+  in
+  let report =
+    with_tx
+      db
+      [ Retract (Ident "missing/ident", "name", Some (String "Ivan"))
+      ; Retract (Ident "missing/ident", "name", None)
+      ; RetractAttr (Ident "missing/ident", "aka")
+      ; RetractEntity (Ident "missing/ident")
+      ]
+  in
+  assert_equal_triples
+    "missing idents in retract operations are no-ops"
+    [ 1, "aka", String "Vanya"; 1, "name", String "Ivan" ]
+    (datoms report.db_after Eavt ());
+  assert_equal_triples "missing ident retracts emit no tx data" [] report.tx_data
 
 let test_tuple_attrs_track_source_attrs () =
   let db =
@@ -1185,7 +1205,7 @@ let test_tuple_lookup_refs_resolve_nested_lookup_refs () =
   (match entity db lookup with
    | Some entity -> assert_equal_int "tuple lookup ref entity id" 3 entity.id
    | None -> failwith "expected tuple lookup ref to resolve nested lookup ref");
-  (match entity db (Lookup_ref ("ref+name", List [ Int 1; String "Petr" ])) with
+  (match entity db (Lookup_ref ("ref+name", List [ Int64 1L; String "Petr" ])) with
    | Some entity -> assert_equal_int "list tuple lookup ref entity id" 3 entity.id
    | None -> failwith "expected list tuple lookup ref to resolve");
   (match
@@ -1220,7 +1240,7 @@ let test_edn_tuple_lookup_refs_resolve_nested_lookup_refs () =
   in
   assert_equal_triples
     "EDN list tuple lookup refs resolve nested lookup refs"
-    [ 3, "age", Int 32
+    [ 3, "age", Int64 32L
     ; 3, "name", String "Petr"
     ; 3, "ref", Ref 1
     ; 3, "ref+name", Tuple [ Some (Ref 1); Some (String "Petr") ]
@@ -1290,11 +1310,11 @@ let test_tuple_attrs_support_avet_range_bounds () =
 let test_tuple_types_validate_direct_tuple_values () =
   let db =
     empty_db ~schema:[ "name+score", typed_tuple [ StringType; NumberType ] ] ()
-    |> db_with [ Add (Entity_id 1, "name+score", Tuple [ Some (String "Ivan"); Some (Int 10) ]) ]
+    |> db_with [ Add (Entity_id 1, "name+score", Tuple [ Some (String "Ivan"); Some (Int64 10L) ]) ]
   in
   assert_equal_triples
     "typed tuple attrs accept matching direct tuple values"
-    [ 1, "name+score", Tuple [ Some (String "Ivan"); Some (Int 10) ] ]
+    [ 1, "name+score", Tuple [ Some (String "Ivan"); Some (Int64 10L) ] ]
     (datoms db Eavt ());
   assert_raises_invalid_arg
     "typed tuple attrs reject wrong arity"
@@ -1311,23 +1331,23 @@ let test_tuple_types_validate_direct_tuple_values () =
 let test_transact__test_db_fn_cas () =
   let db =
     empty_db ()
-    |> db_with [ Add (Entity_id 1, "age", Int 31) ]
-    |> db_with [ CompareAndSet (Entity_id 1, "age", Some (Int 31), Int 32) ]
+    |> db_with [ Add (Entity_id 1, "age", Int64 31L) ]
+    |> db_with [ CompareAndSet (Entity_id 1, "age", Some (Int64 31L), Int64 32L) ]
   in
   assert_equal_triples
     "CompareAndSet updates when expected value matches"
-    [ 1, "age", Int 32 ]
+    [ 1, "age", Int64 32L ]
     (datoms db Eavt ());
   assert_raises_invalid_arg_message
     "CompareAndSet reports mismatched cardinality-one values like upstream"
     ":db.fn/cas failed on datom [1 :age 32], expected 31"
-    (fun () -> ignore (db_with [ CompareAndSet (Entity_id 1, "age", Some (Int 31), Int 33) ] db));
+    (fun () -> ignore (db_with [ CompareAndSet (Entity_id 1, "age", Some (Int64 31L), Int64 33L) ] db));
   let db =
     db_with [ CompareAndSet (Entity_id 1, "nickname", None, String "p") ] db
   in
   assert_equal_triples
     "CompareAndSet can assert missing attributes with expected None"
-    [ 1, "age", Int 32; 1, "nickname", String "p" ]
+    [ 1, "age", Int64 32L; 1, "nickname", String "p" ]
     (datoms db Eavt ())
 
 let test_db_with_compare_and_set_on_many_attr () =
@@ -1353,7 +1373,7 @@ let test_transact__test_retract_without_value_issue_339 () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 15)
+                 ; "age", One_value (Int64 15L)
                  ; "aka", Many_values [ String "X"; String "Y"; String "Z" ]
                  ; "friend", One_value (Ref 2)
                  ]
@@ -1362,7 +1382,7 @@ let test_transact__test_retract_without_value_issue_339 () =
              { db_id = Some (Entity_id 2)
              ; attrs =
                  [ "name", One_value (String "Petr")
-                 ; "age", One_value (Int 37)
+                 ; "age", One_value (Int64 37L)
                  ; "employed", One_value (Bool true)
                  ; "married", One_value (Bool false)
                  ]
@@ -1380,7 +1400,7 @@ let test_transact__test_retract_without_value_issue_339 () =
   in
   assert_equal_triples
     "Retract without a value removes true and false values"
-    [ 1, "age", Int 15; 1, "friend", Ref 2; 2, "age", Int 37; 2, "name", String "Petr" ]
+    [ 1, "age", Int64 15L; 1, "friend", Ref 2; 2, "age", Int64 37L; 2, "name", String "Petr" ]
     (datoms retracted Eavt ());
   let unchanged = db_with [ Retract (Entity_id 2, "employed", Some (Bool false)) ] db in
   assert_equal_triples
@@ -1389,9 +1409,9 @@ let test_transact__test_retract_without_value_issue_339 () =
     (datoms unchanged Eavt ~e:2 ~a:"employed" ())
 
 let test_transact__test_uncomparable_issue_356 () =
-  let map1 = Map [ Keyword "map", Int 1 ] in
-  let map2 = Map [ Keyword "map", Int 2 ] in
-  let map3 = Map [ Keyword "map", Int 3 ] in
+  let map1 = Map [ Keyword "map", Int64 1L ] in
+  let map2 = Map [ Keyword "map", Int64 2L ] in
+  let map3 = Map [ Keyword "map", Int64 3L ] in
   let db =
     empty_db ~schema:[ "multi", many; "index", indexed ] ()
   in
@@ -1447,8 +1467,8 @@ let test_nil_values_are_query_only () =
     (fun () -> ignore (empty_db () |> db_with [ Add (Entity_id 1, "maybe", Nil) ]))
 
 let test_list_values_can_be_indexed_exactly () =
-  let path12 = List [ Int 1; Int 2 ] in
-  let path123 = List [ Int 1; Int 2; Int 3 ] in
+  let path12 = List [ Int64 1L; Int64 2L ] in
+  let path123 = List [ Int64 1L; Int64 2L; Int64 3L ] in
   let db =
     empty_db ~schema:[ "path", indexed ] ()
     |> db_with
@@ -1467,12 +1487,12 @@ let test_list_values_can_be_indexed_exactly () =
   assert_equal_triples
     "shorter list prefixes are not exact AVET matches"
     []
-    (datoms db Avet ~a:"path" ~v:(List [ Int 1 ]) ())
+    (datoms db Avet ~a:"path" ~v:(List [ Int64 1L ]) ())
 
 let test_list_values_use_datascript_length_first_ordering () =
-  let single_high = List [ Int 2 ] in
-  let pair_low = List [ Int 1; Int 100 ] in
-  let pair_high = List [ Int 2; Int 0 ] in
+  let single_high = List [ Int64 2L ] in
+  let pair_low = List [ Int64 1L; Int64 100L ] in
+  let pair_high = List [ Int64 2L; Int64 0L ] in
   let db =
     empty_db ~schema:[ "path", indexed ] ()
     |> db_with
@@ -1488,15 +1508,15 @@ let test_list_values_use_datascript_length_first_ordering () =
   assert_equal_triples
     "index_range uses length-first sequential ordering"
     [ 1, "path", pair_low; 3, "path", pair_high ]
-    (index_range db "path" ~start:(List [ Int 0; Int 0 ]) ~stop:(List [ Int 9; Int 9 ]) ());
+    (index_range db "path" ~start:(List [ Int64 0L; Int64 0L ]) ~stop:(List [ Int64 9L; Int64 9L ]) ());
   assert_equal_triples
     "seek_datoms uses length-first sequential lower bounds"
     [ 1, "path", pair_low; 3, "path", pair_high ]
-    (seek_datoms db Avet ~a:"path" ~v:(List [ Int 0; Int 0 ]) ())
+    (seek_datoms db Avet ~a:"path" ~v:(List [ Int64 0L; Int64 0L ]) ())
 
 let test_map_values_are_order_insensitive () =
-  let ordered = Map [ Keyword "a", Int 1; Keyword "b", Int 2 ] in
-  let reversed = Map [ Keyword "b", Int 2; Keyword "a", Int 1 ] in
+  let ordered = Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L ] in
+  let reversed = Map [ Keyword "b", Int64 2L; Keyword "a", Int64 1L ] in
   let db =
     empty_db ~schema:[ "index", indexed ] ()
     |> db_with [ Add (Entity_id 1, "index", ordered) ]
@@ -1512,8 +1532,8 @@ let test_map_values_are_order_insensitive () =
     (datoms db Eavt ())
 
 let test_init_db_normalizes_map_values () =
-  let ordered = Map [ Keyword "a", Int 1; Keyword "b", Int 2 ] in
-  let reversed = Map [ Keyword "b", Int 2; Keyword "a", Int 1 ] in
+  let ordered = Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L ] in
+  let reversed = Map [ Keyword "b", Int64 2L; Keyword "a", Int64 1L ] in
   let db =
     init_db
       ~schema:[ "index", indexed ]
@@ -1559,8 +1579,8 @@ let test_init_db_normalizes_set_values () =
     (datoms db Avet ~a:"tags" ~v:ordered ())
 
 let test_entid_normalizes_unordered_values () =
-  let ordered_map = Map [ Keyword "a", Int 1; Keyword "b", Int 2 ] in
-  let reversed_map = Map [ Keyword "b", Int 2; Keyword "a", Int 1 ] in
+  let ordered_map = Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L ] in
+  let reversed_map = Map [ Keyword "b", Int64 2L; Keyword "a", Int64 1L ] in
   let ordered_set = Set [ Keyword "a"; Keyword "b" ] in
   let reversed_set = Set [ Keyword "b"; Keyword "a"; Keyword "a" ] in
   let db =
@@ -1596,7 +1616,7 @@ let test_transact__test_transitive_type_compare_issue_386 () =
     ; String "wRmp6bXAx"
     ; String "rfL-iQOZm"
     ; String "tya6s422-"
-    ; Int 45619
+    ; Int64 45619L
     ]
   in
   let db =
@@ -1691,6 +1711,37 @@ let test_empty_entity_tempids_are_not_entity_usage () =
            ]
            db))
 
+let test_tempid_shared_between_entity_id_and_ref_values () =
+  (* upstream shares one tempids table across the whole tx: `{:db/id -1}
+     {:db/id -2 :friend -1}` resolves both -1 mentions to one entity. *)
+  let report =
+    transact
+      (empty_db ~schema:[ "friend", ref_attr; "parent", ref_attr ] ())
+      [ Entity
+          { db_id = Some (Temp_id "-1")
+          ; attrs = [ "name", One_value (String "Ivan") ]
+          }
+      ; Entity
+          { db_id = Some (Temp_id "-2")
+          ; attrs =
+              [ "name", One_value (String "Petr")
+              ; "friend", One_value (Int64 (-1L))
+              ; "parent", One_value (Int64 (-1L))
+              ]
+          }
+      ]
+  in
+  let e1 = Option.get (resolve_tempid report.tempids "-1") in
+  let e2 = Option.get (resolve_tempid report.tempids "-2") in
+  assert_equal_triples
+    "value-position tempids share the entity-id tempid's allocation"
+    [ e1, "name", String "Ivan"
+    ; e2, "friend", Ref e1
+    ; e2, "name", String "Petr"
+    ; e2, "parent", Ref e1
+    ]
+    (datoms report.db_after Eavt ())
+
 let test_tempid_generates_unique_entity_refs () =
   let first = tempid () in
   let second = tempid () in
@@ -1777,7 +1828,7 @@ let test_transact__test_db_ident_fn () =
              ; attrs =
                  [ "db/ident", One_value (Keyword "Petr")
                  ; "name", One_value (String "Petr")
-                 ; "age", One_value (Int 31)
+                 ; "age", One_value (Int64 31L)
                  ]
              }
          ; Entity
@@ -1791,7 +1842,7 @@ let test_transact__test_db_ident_fn () =
                  | [ String name ] ->
                    (match entid db "name" (String name) with
                     | Some entity_id ->
-                      [ Add (Entity_id entity_id, "age", Int 32)
+                      [ Add (Entity_id entity_id, "age", Int64 32L)
                       ; Add (Entity_id entity_id, "had-birthday", Bool true)
                       ]
                     | None -> invalid_arg ("No entity with name: " ^ name))
@@ -1810,7 +1861,7 @@ let test_transact__test_db_ident_fn () =
   let db = db_with [ CallIdent (Ident "inc-age", [ String "Petr" ]) ] db in
   assert_equal_triples
     "CallIdent invokes db/fn metadata by ident"
-    [ 1, "age", Int 32
+    [ 1, "age", Int64 32L
     ; 1, "db/ident", Keyword "Petr"
     ; 1, "had-birthday", Bool true
     ; 1, "name", String "Petr"
@@ -2052,7 +2103,7 @@ let test_upstream_ident_parity_batch () =
   | Some pulled ->
     assert_equal_pulled_attrs
       "ident.cljc pull resolves ident entity refs"
-      [ kw "db/id", Pulled_scalar (Int 1)
+      [ kw "db/id", Pulled_scalar (Int64 1L)
       ; kw "db/ident", Pulled_scalar (Keyword "ent1")
       ]
       pulled
@@ -2238,13 +2289,13 @@ let test_transact_report_exposes_resolved_tx_datoms () =
     transact
       (empty_db ())
       [ Add (Entity_id 1, "name", String "Ivan")
-      ; Add (Entity_id 1, "age", Int 31)
+      ; Add (Entity_id 1, "age", Int64 31L)
       ]
   in
   assert_equal_datoms
     "tx_data exposes datoms with the transaction id"
     [ datom ~tx:(tx0 + 1) ~e:1 ~a:"name" ~v:(String "Ivan") ()
-    ; datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int 31) ()
+    ; datom ~tx:(tx0 + 1) ~e:1 ~a:"age" ~v:(Int64 31L) ()
     ]
     report.tx_data
 
@@ -2354,20 +2405,20 @@ let test_schema_transactions_install_tuple_types () =
 let test_datoms_filter_by_tx_component () =
   let db =
     empty_db ()
-    |> db_with [ Add (Entity_id 1, "age", Int 31) ]
-    |> db_with [ Add (Entity_id 1, "age", Int 32) ]
+    |> db_with [ Add (Entity_id 1, "age", Int64 31L) ]
+    |> db_with [ Add (Entity_id 1, "age", Int64 32L) ]
   in
   assert_equal_triples
     "datoms tx filtering sees current facts only"
     []
     (datoms db Eavt ~tx:(tx0 + 1) ());
   (match find_datom db Eavt ~tx:(tx0 + 2) () with
-   | Some datom -> assert_equal_tx_value "find_datom supports tx component" (Int 32) datom.v
+   | Some datom -> assert_equal_tx_value "find_datom supports tx component" (Int64 32L) datom.v
    | None -> failwith "expected tx datom");
   assert_equal_triples
     "seek_datoms supports tx component bounds"
-    [ 1, "age", Int 32 ]
-    (seek_datoms db Eavt ~e:1 ~a:"age" ~v:(Int 32) ~tx:(tx0 + 2) ())
+    [ 1, "age", Int64 32L ]
+    (seek_datoms db Eavt ~e:1 ~a:"age" ~v:(Int64 32L) ~tx:(tx0 + 2) ())
 
 let test_reverse_ref_helpers () =
   if is_reverse_ref "friend" then failwith "plain attr should not be reverse";
@@ -2616,7 +2667,7 @@ let test_upstream_components_and_explode_parity_batch () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 16)
+                 ; "age", One_value (Int64 16L)
                  ; "aka", One_value (List [ String "Devil"; String "Tupen" ])
                  ; "also", One_value (String "ok")
                  ]
@@ -2638,7 +2689,7 @@ let test_upstream_components_and_explode_parity_batch () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "children", One_value (List [ Int (-2); Int (-3) ])
+                 ; "children", One_value (List [ Int64 (-2L); Int64 (-3L) ])
                  ]
              }
          ; Entity { db_id = Some (Temp_id "-2"); attrs = [ "name", One_value (String "Petr") ] }
@@ -2672,7 +2723,7 @@ let test_upstream_components_and_explode_parity_batch () =
 
 let test_init_db_preserves_uuid_and_instant_values () =
   let uuid = Uuid "65ec87fb-0000-0000-0000-000000000001" in
-  let instant = Instant 1_710_000_123_456 in
+  let instant = Instant 1_710_000_123_456L in
   let db =
     init_db
       ~schema:[ "uuid", indexed; "created-at", indexed ]
@@ -2825,13 +2876,13 @@ let test_edn_string_top_level_apis () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 31)
+                 ; "age", One_value (Int64 31L)
                  ; "friend", One_value (Ref 2)
                  ]
              }
          ; Entity
              { db_id = Some (Entity_id 2)
-             ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 19) ]
+             ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 19L) ]
              }
          ]
   in
@@ -2846,8 +2897,8 @@ let test_edn_string_top_level_apis () =
   if
     q_return_map_string db "[:find ?name ?age :keys name age :where [?e :name ?name] [?e :age ?age]]"
     <> Query_relation_maps
-         [ [ Keyword "age", Result_value (Int 31); Keyword "name", Result_value (String "Ivan") ]
-         ; [ Keyword "age", Result_value (Int 19); Keyword "name", Result_value (String "Petr") ]
+         [ [ Keyword "age", Result_value (Int64 31L); Keyword "name", Result_value (String "Ivan") ]
+         ; [ Keyword "age", Result_value (Int64 19L); Keyword "name", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map_string should parse return map labels and execute query";
   (match pull_string db "[:name {:friend [:name]}]" (Entity_id 1) with
@@ -2876,13 +2927,13 @@ let test_edn_string_top_level_apis () =
 let test_query__test_symbol_comparison () =
   assert_equal_query
     "query.cljc test-symbol-comparison matches plain symbols in relation sources"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q_sources_string
        (empty_db ())
        [ ( "$"
          , Relation_source
-             [ [ Result_value (Int 1); Result_attr "s"; Result_value (Symbol "a") ]
-             ; [ Result_value (Int 2); Result_attr "s"; Result_value (Symbol "b") ]
+             [ [ Result_value (Int64 1L); Result_attr "s"; Result_value (Symbol "a") ]
+             ; [ Result_value (Int64 2L); Result_attr "s"; Result_value (Symbol "b") ]
              ] )
        ]
        "[:find ?e
@@ -3288,7 +3339,7 @@ let test_edn_reader_parses_transaction_and_schema_strings () =
   in
   assert_equal_triples
     "db_with_string stores collection values on cardinality-one attrs"
-    [ 1, "path", Vector [ Int 1; Int 2 ]; 1, "tags", Set [ Keyword "blue"; Keyword "red" ] ]
+    [ 1, "path", Vector [ Int64 1L; Int64 2L ]; 1, "tags", Set [ Keyword "blue"; Keyword "red" ] ]
     (datoms collection_value_db Eavt ~e:1 ~a:"path" ()
      @ datoms collection_value_db Eavt ~e:1 ~a:"tags" ());
   assert_equal_triples
@@ -3338,14 +3389,14 @@ let test_edn_reader_parses_common_literals () =
   in
   assert_equal_triples
     "db_with_string parses EDN set, regex, uuid, and instant literals"
-    [ 1, "created-at", Instant 1_710_000_123_456
+    [ 1, "created-at", Instant 1_710_000_123_456L
     ; 1, "pattern", Regex "[a-z]+[0-9]+"
     ; 1, "tags", Keyword "admin"
     ; 1, "tags", Keyword "user"
     ; 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001"
-    ; 2, "created-at", Instant 1_710_000_123_456
-    ; 3, "created-at", Instant 1_710_000_123_456
-    ; 4, "created-at", Instant 1_710_000_123_456
+    ; 2, "created-at", Instant 1_710_000_123_456L
+    ; 3, "created-at", Instant 1_710_000_123_456L
+    ; 4, "created-at", Instant 1_710_000_123_456L
     ]
     (datoms db Eavt ());
   assert_equal_query
@@ -3402,9 +3453,9 @@ let test_parse_query_comparison_predicates () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
-         ; Add (Entity_id 1, "age", Int 31)
+         ; Add (Entity_id 1, "age", Int64 31L)
          ; Add (Entity_id 2, "name", String "Petr")
-         ; Add (Entity_id 2, "age", Int 17)
+         ; Add (Entity_id 2, "age", Int64 17L)
          ]
   in
   let query =
@@ -3414,7 +3465,7 @@ let test_parse_query_comparison_predicates () =
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">"; QueryFormSymbol "?age"; QueryFormInt 18 ] ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">"; QueryFormSymbol "?age"; QueryFormInt 18L ] ]
       ]
   in
   assert_equal_query
@@ -3429,7 +3480,7 @@ let test_parse_query_comparison_predicates () =
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
       ; QueryFormVector
-          [ QueryFormVector [ QueryFormSymbol ">"; QueryFormSymbol "?age"; QueryFormInt 18 ] ]
+          [ QueryFormVector [ QueryFormSymbol ">"; QueryFormSymbol "?age"; QueryFormInt 18L ] ]
       ]
   in
   assert_equal_query
@@ -3494,8 +3545,8 @@ let test_parse_query_arithmetic_functions () =
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "left", Int 2)
-         ; Add (Entity_id 1, "right", Int 5)
+         [ Add (Entity_id 1, "left", Int64 2L)
+         ; Add (Entity_id 1, "right", Int64 5L)
          ]
   in
   let query =
@@ -3513,7 +3564,7 @@ let test_parse_query_arithmetic_functions () =
   in
   assert_equal_query
     "parse_query parses arithmetic function expressions"
-    [ [ Result_value (Int 7) ] ]
+    [ [ Result_value (Int64 7L) ] ]
     (q db (parse_query query));
   let vector_call_query =
     QueryFormVector
@@ -3531,7 +3582,7 @@ let test_parse_query_arithmetic_functions () =
   in
   assert_equal_query
     "parse_query parses vector-form arithmetic function calls"
-    [ [ Result_value (Int 7) ] ]
+    [ [ Result_value (Int64 7L) ] ]
     (q db (parse_query vector_call_query))
 
 let test_parse_query_transaction_patterns () =
@@ -3568,7 +3619,7 @@ let test_parse_query_transaction_patterns () =
       ; QueryFormSymbol "?op"
       ; QueryFormKeyword "where"
       ; QueryFormVector
-          [ QueryFormInt 1
+          [ QueryFormInt 1L
           ; QueryFormKeyword "name"
           ; QueryFormString "Ivan"
           ; QueryFormSymbol "?tx"
@@ -3595,9 +3646,9 @@ let test_parse_query_source_qualified_patterns () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 10, "email", String "ivan@example.com")
-         ; Add (Entity_id 10, "score", Int 7)
+         ; Add (Entity_id 10, "score", Int64 7L)
          ; Add (Entity_id 11, "email", String "olga@example.com")
-         ; Add (Entity_id 11, "score", Int 9)
+         ; Add (Entity_id 11, "score", Int64 9L)
          ]
   in
   let source_query =
@@ -3617,7 +3668,7 @@ let test_parse_query_source_qualified_patterns () =
   in
   assert_equal_query
     "parse_query parses source-qualified database patterns"
-    [ [ Result_value (String "Ivan"); Result_value (Int 7) ] ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 7L) ] ]
     (q_sources names [ "scores", Db_source scores ] (parse_query source_query));
   let source_call_query =
     QueryFormVector
@@ -3634,18 +3685,18 @@ let test_parse_query_source_qualified_patterns () =
       ; QueryFormVector [ QueryFormSymbol "$scores"; QueryFormSymbol "?s"; QueryFormKeyword "score"; QueryFormSymbol "?score" ]
       ; QueryFormVector
           [ QueryFormSymbol "$scores"
-          ; QueryFormVector [ QueryFormSymbol ">"; QueryFormSymbol "?score"; QueryFormInt 6 ]
+          ; QueryFormVector [ QueryFormSymbol ">"; QueryFormSymbol "?score"; QueryFormInt 6L ]
           ]
       ; QueryFormVector
           [ QueryFormSymbol "$scores"
-          ; QueryFormVector [ QueryFormSymbol "+"; QueryFormSymbol "?score"; QueryFormInt 1 ]
+          ; QueryFormVector [ QueryFormSymbol "+"; QueryFormSymbol "?score"; QueryFormInt 1L ]
           ; QueryFormSymbol "?next"
           ]
       ]
   in
   assert_equal_query
     "parse_query parses source-qualified predicate and function clauses"
-    [ [ Result_value (String "Ivan"); Result_value (Int 8) ] ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 8L) ] ]
     (q_sources names [ "scores", Db_source scores ] (parse_query source_call_query));
   assert_raises_invalid_arg
     "parse_query rejects undeclared sources on source-qualified predicates"
@@ -3694,9 +3745,9 @@ let test_parse_query_find_pull_expressions () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
-         ; Add (Entity_id 1, "age", Int 31)
+         ; Add (Entity_id 1, "age", Int64 31L)
          ; Add (Entity_id 2, "name", String "Petr")
-         ; Add (Entity_id 2, "age", Int 22)
+         ; Add (Entity_id 2, "age", Int64 22L)
          ]
   in
   let query =
@@ -3748,7 +3799,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query supports dynamic pull find patterns"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int 31) ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int64 31L) ] } ] ]
     (q
        ~inputs:[ Arg_scalar (Result_value (List [ Keyword "age" ])) ]
        db
@@ -3770,7 +3821,7 @@ let test_parse_query_find_pull_expressions () =
   in
   assert_equal_query
     "parse_query supports plain-symbol dynamic pull pattern inputs"
-    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int 31) ] } ] ]
+    [ [ Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "age", Pulled_scalar (Int64 31L) ] } ] ]
     (q
        ~inputs:[ Arg_scalar (Result_value (List [ Keyword "age" ])) ]
        db
@@ -3844,11 +3895,11 @@ let test_parse_query_find_pull_expressions () =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Petr")
-         ; Add (Entity_id 1, "age", Int 44)
+         ; Add (Entity_id 1, "age", Int64 44L)
          ; Add (Entity_id 2, "name", String "Ivan")
-         ; Add (Entity_id 2, "age", Int 25)
+         ; Add (Entity_id 2, "age", Int64 25L)
          ; Add (Entity_id 3, "name", String "Oleg")
-         ; Add (Entity_id 3, "age", Int 11)
+         ; Add (Entity_id 3, "age", Int64 11L)
          ]
   in
   let lookup_ref_query =
@@ -3866,23 +3917,23 @@ let test_parse_query_find_pull_expressions () =
       ; QueryFormVector [ QueryFormSymbol "?ref"; QueryFormSymbol "..." ]
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?ref"; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">="; QueryFormSymbol "?age"; QueryFormInt 18 ] ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">="; QueryFormSymbol "?age"; QueryFormInt 18L ] ]
       ]
   in
   assert_equal_query
     "parse_query resolves lookup-ref collection inputs in pull find expressions"
     [ [ Result_value (List [ Keyword "name"; String "Ivan" ])
-      ; Result_value (Int 25)
+      ; Result_value (Int64 25L)
       ; Result_pull
           { pulled_id = 2
-          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Ivan") ]
+          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L); kw "name", Pulled_scalar (String "Ivan") ]
           }
       ]
     ; [ Result_value (List [ Keyword "name"; String "Petr" ])
-      ; Result_value (Int 44)
+      ; Result_value (Int64 44L)
       ; Result_pull
           { pulled_id = 1
-          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1); kw "name", Pulled_scalar (String "Petr") ]
+          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 1L); kw "name", Pulled_scalar (String "Petr") ]
           }
       ]
     ]
@@ -3902,7 +3953,7 @@ let test_parse_query_missing_and_get_else_clauses () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
-         ; Add (Entity_id 1, "height", Int 180)
+         ; Add (Entity_id 1, "height", Int64 180L)
          ; Add (Entity_id 2, "name", String "Petr")
          ]
   in
@@ -3945,7 +3996,7 @@ let test_parse_query_missing_and_get_else_clauses () =
   in
   assert_equal_query
     "parse_query parses get-else clauses"
-    [ [ Result_value (String "Ivan"); Result_value (Int 180) ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 180L) ]
     ; [ Result_value (String "Petr"); Result_value (String "Unknown") ]
     ]
     (q db (parse_query get_else_query));
@@ -3957,7 +4008,7 @@ let test_parse_query_missing_and_get_else_clauses () =
       ; QueryFormVector
           [ QueryFormList
               [ QueryFormSymbol "get-else"
-              ; QueryFormInt 2
+              ; QueryFormInt 2L
               ; QueryFormKeyword "height"
               ; QueryFormNil
               ]
@@ -3973,7 +4024,7 @@ let test_parse_query_missing_and_get_else_clauses () =
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
          ; Add (Entity_id 2, "name", String "Petr")
-         ; Add (Entity_id 2, "height", Int 175)
+         ; Add (Entity_id 2, "height", Int64 175L)
          ]
   in
   let source_query =
@@ -4009,7 +4060,7 @@ let test_parse_query_missing_and_get_else_clauses () =
   assert_equal_query
     "parse_query parses source-qualified missing? and get-else clauses"
     [ [ Result_value (String "Ivan"); Result_value (String "Unknown") ]
-    ; [ Result_value (String "Petr"); Result_value (Int 175) ]
+    ; [ Result_value (String "Petr"); Result_value (Int64 175L) ]
     ]
     (q_sources db [ "people", Db_source people ] (parse_query source_query))
 
@@ -4018,10 +4069,10 @@ let test_parse_query_get_some_and_get_clauses () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
-         ; Add (Entity_id 1, "age", Int 15)
+         ; Add (Entity_id 1, "age", Int64 15L)
          ; Add (Entity_id 2, "name", String "Petr")
-         ; Add (Entity_id 2, "age", Int 22)
-         ; Add (Entity_id 2, "height", Int 240)
+         ; Add (Entity_id 2, "age", Int64 22L)
+         ; Add (Entity_id 2, "height", Int64 240L)
          ]
   in
   let get_some_query =
@@ -4046,13 +4097,13 @@ let test_parse_query_get_some_and_get_clauses () =
   in
   assert_equal_query
     "parse_query parses get-some clauses with tuple outputs"
-    [ [ Result_entity 1; Result_attr "age"; Result_value (Int 15) ]
-    ; [ Result_entity 2; Result_attr "height"; Result_value (Int 240) ]
+    [ [ Result_entity 1; Result_attr "age"; Result_value (Int64 15L) ]
+    ; [ Result_entity 2; Result_attr "height"; Result_value (Int64 240L) ]
     ]
     (q db (parse_query get_some_query));
   let source_db =
     empty_db ()
-    |> db_with [ Add (Entity_id 10, "name", String "Oleg"); Add (Entity_id 10, "age", Int 37) ]
+    |> db_with [ Add (Entity_id 10, "name", String "Oleg"); Add (Entity_id 10, "age", Int64 37L) ]
   in
   let source_get_some_query =
     QueryFormVector
@@ -4078,7 +4129,7 @@ let test_parse_query_get_some_and_get_clauses () =
   in
   assert_equal_query
     "parse_query parses source-qualified get-some clauses"
-    [ [ Result_attr "age"; Result_value (Int 37) ] ]
+    [ [ Result_attr "age"; Result_value (Int64 37L) ] ]
     (q_sources db [ "people", Db_source source_db ] (parse_query source_get_some_query));
   let get_query =
     QueryFormVector
@@ -4088,7 +4139,7 @@ let test_parse_query_get_some_and_get_clauses () =
       ; QueryFormVector
           [ QueryFormList
               [ QueryFormSymbol "get"
-              ; QueryFormMap [ QueryFormKeyword "a", QueryFormInt 1; QueryFormKeyword "b", QueryFormInt 2 ]
+              ; QueryFormMap [ QueryFormKeyword "a", QueryFormInt 1L; QueryFormKeyword "b", QueryFormInt 2L ]
               ; QueryFormKeyword "b"
               ]
           ; QueryFormSymbol "?value"
@@ -4097,7 +4148,7 @@ let test_parse_query_get_some_and_get_clauses () =
   in
   assert_equal_query
     "parse_query parses get clauses"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q db (parse_query get_query));
   assert_raises_invalid_arg
     "parse_query rejects get-some without attributes"
@@ -4140,8 +4191,8 @@ let test_parse_query_collection_value_clauses () =
   in
   assert_equal_query
     "parse_query parses count clauses"
-    [ [ Result_value (String "empty"); Result_value (Int 0) ]
-    ; [ Result_value (String "full"); Result_value (Int 2) ]
+    [ [ Result_value (String "empty"); Result_value (Int64 0L) ]
+    ; [ Result_value (String "full"); Result_value (Int64 2L) ]
     ]
     (q db (parse_query count_query));
   let empty_query =
@@ -4179,7 +4230,7 @@ let test_parse_query_collection_value_clauses () =
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "label"; QueryFormSymbol "?label" ]
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "items"; QueryFormSymbol "?items" ]
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "contains?"; QueryFormSymbol "?items"; QueryFormInt 1 ] ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "contains?"; QueryFormSymbol "?items"; QueryFormInt 1L ] ]
       ]
   in
   assert_equal_query
@@ -4195,7 +4246,7 @@ let test_parse_query_collection_value_clauses () =
       ; QueryFormVector
           [ QueryFormList
               [ QueryFormSymbol "get"
-              ; QueryFormMap [ QueryFormKeyword "answer", QueryFormInt 42 ]
+              ; QueryFormMap [ QueryFormKeyword "answer", QueryFormInt 42L ]
               ; QueryFormKeyword "answer"
               ; QueryFormString "missing"
               ]
@@ -4204,7 +4255,7 @@ let test_parse_query_collection_value_clauses () =
       ; QueryFormVector
           [ QueryFormList
               [ QueryFormSymbol "get"
-              ; QueryFormMap [ QueryFormKeyword "answer", QueryFormInt 42 ]
+              ; QueryFormMap [ QueryFormKeyword "answer", QueryFormInt 42L ]
               ; QueryFormKeyword "missing"
               ; QueryFormString "fallback"
               ]
@@ -4214,7 +4265,7 @@ let test_parse_query_collection_value_clauses () =
   in
   assert_equal_query
     "parse_query parses get default clauses"
-    [ [ Result_value (Int 42); Result_value (String "fallback") ] ]
+    [ [ Result_value (Int64 42L); Result_value (String "fallback") ] ]
     (q db (parse_query get_default_query))
 
 let test_parse_query_type_and_numeric_predicates () =
@@ -4226,7 +4277,7 @@ let test_parse_query_type_and_numeric_predicates () =
          ; Add (Entity_id 2, "label", String "float")
          ; Add (Entity_id 2, "value", Float 2.5)
          ; Add (Entity_id 3, "label", String "int")
-         ; Add (Entity_id 3, "value", Int 1)
+         ; Add (Entity_id 3, "value", Int64 1L)
          ; Add (Entity_id 4, "label", String "keyword")
          ; Add (Entity_id 4, "value", Keyword "user/name")
          ; Add (Entity_id 5, "label", String "string")
@@ -4271,13 +4322,13 @@ let test_parse_query_type_and_numeric_predicates () =
          ; Add (Entity_id 2, "label", String "float-zero")
          ; Add (Entity_id 2, "value", Float 0.0)
          ; Add (Entity_id 3, "label", String "negative")
-         ; Add (Entity_id 3, "value", Int (-2))
+         ; Add (Entity_id 3, "value", Int64 (-2L))
          ; Add (Entity_id 4, "label", String "odd-negative")
-         ; Add (Entity_id 4, "value", Int (-1))
+         ; Add (Entity_id 4, "value", Int64 (-1L))
          ; Add (Entity_id 5, "label", String "positive")
-         ; Add (Entity_id 5, "value", Int 3)
+         ; Add (Entity_id 5, "value", Int64 3L)
          ; Add (Entity_id 6, "label", String "zero")
-         ; Add (Entity_id 6, "value", Int 0)
+         ; Add (Entity_id 6, "value", Int64 0L)
          ; Add (Entity_id 7, "label", String "string")
          ; Add (Entity_id 7, "value", String "0")
          ]
@@ -4315,7 +4366,7 @@ let test_parse_query_type_and_numeric_predicates () =
                    [ QueryFormList
                        [ QueryFormSymbol "number?"
                        ; QueryFormSymbol "?value"
-                       ; QueryFormInt 1
+                       ; QueryFormInt 1L
                        ]
                    ]
                ])))
@@ -4325,17 +4376,17 @@ let test_parse_query_variadic_comparison_predicates () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "label", String "ascending")
-         ; Add (Entity_id 1, "x", Int 1)
-         ; Add (Entity_id 1, "y", Int 2)
-         ; Add (Entity_id 1, "z", Int 3)
+         ; Add (Entity_id 1, "x", Int64 1L)
+         ; Add (Entity_id 1, "y", Int64 2L)
+         ; Add (Entity_id 1, "z", Int64 3L)
          ; Add (Entity_id 2, "label", String "descending")
-         ; Add (Entity_id 2, "x", Int 3)
-         ; Add (Entity_id 2, "y", Int 2)
-         ; Add (Entity_id 2, "z", Int 1)
+         ; Add (Entity_id 2, "x", Int64 3L)
+         ; Add (Entity_id 2, "y", Int64 2L)
+         ; Add (Entity_id 2, "z", Int64 1L)
          ; Add (Entity_id 3, "label", String "equal")
-         ; Add (Entity_id 3, "x", Int 2)
-         ; Add (Entity_id 3, "y", Int 2)
-         ; Add (Entity_id 3, "z", Int 2)
+         ; Add (Entity_id 3, "x", Int64 2L)
+         ; Add (Entity_id 3, "y", Int64 2L)
+         ; Add (Entity_id 3, "z", Int64 2L)
          ]
   in
   let labels_with_predicate predicate args =
@@ -4381,7 +4432,7 @@ let test_parse_query_boolean_predicates () =
          [ Add (Entity_id 1, "label", String "false")
          ; Add (Entity_id 1, "value", Bool false)
          ; Add (Entity_id 2, "label", String "int")
-         ; Add (Entity_id 2, "value", Int 1)
+         ; Add (Entity_id 2, "value", Int64 1L)
          ; Add (Entity_id 3, "label", String "nil")
          ; Add (Entity_id 4, "label", String "true")
          ; Add (Entity_id 4, "value", Bool true)
@@ -4495,7 +4546,7 @@ let test_parse_query_boolean_predicates () =
       ; QueryFormSymbol "?int-not"
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormList [ QueryFormSymbol "not"; QueryFormNil ]; QueryFormSymbol "?nil-not" ]
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "not"; QueryFormInt 1 ]; QueryFormSymbol "?int-not" ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "not"; QueryFormInt 1L ]; QueryFormSymbol "?int-not" ]
       ]
   in
   assert_equal_query
@@ -4589,15 +4640,15 @@ let test_parse_query_core_value_functions () =
           ; QueryFormSymbol "?or"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "compare"; QueryFormInt 1; QueryFormInt 2 ]
+          [ QueryFormList [ QueryFormSymbol "compare"; QueryFormInt 1L; QueryFormInt 2L ]
           ; QueryFormSymbol "?compare"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "min"; QueryFormInt 3; QueryFormInt 1; QueryFormInt 2 ]
+          [ QueryFormList [ QueryFormSymbol "min"; QueryFormInt 3L; QueryFormInt 1L; QueryFormInt 2L ]
           ; QueryFormSymbol "?min"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3; QueryFormInt 1; QueryFormInt 2 ]
+          [ QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3L; QueryFormInt 1L; QueryFormInt 2L ]
           ; QueryFormSymbol "?max"
           ]
       ]
@@ -4607,9 +4658,9 @@ let test_parse_query_core_value_functions () =
     [ [ Result_value (Keyword "user/name")
       ; Result_value (Bool false)
       ; Result_value (Keyword "user/name")
-      ; Result_value (Int (-1))
-      ; Result_value (Int 1)
-      ; Result_value (Int 3)
+      ; Result_value (Int64 (-1L))
+      ; Result_value (Int64 1L)
+      ; Result_value (Int64 3L)
       ]
     ]
     (q (empty_db ()) (parse_query query));
@@ -4623,7 +4674,7 @@ let test_parse_query_core_value_functions () =
                ; QueryFormSymbol "?compare"
                ; QueryFormKeyword "where"
                ; QueryFormVector
-                   [ QueryFormList [ QueryFormSymbol "compare"; QueryFormInt 1 ]
+                   [ QueryFormList [ QueryFormSymbol "compare"; QueryFormInt 1L ]
                    ; QueryFormSymbol "?compare"
                    ]
                ])))
@@ -4637,29 +4688,29 @@ let test_parse_query_random_and_identity_predicates () =
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormList [ QueryFormSymbol "rand" ]; QueryFormSymbol "?rand" ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "rand-int"; QueryFormInt 10 ]
+          [ QueryFormList [ QueryFormSymbol "rand-int"; QueryFormInt 10L ]
           ; QueryFormSymbol "?rand_int"
           ]
       ]
   in
   (match q (empty_db ()) (parse_query random_query) with
-   | [ [ Result_value (Float rand); Result_value (Int rand_int) ] ] ->
+   | [ [ Result_value (Float rand); Result_value (Int64 rand_int) ] ] ->
      if rand < 0.0 || rand >= 1.0 then failwith "parse_query rand should be in [0, 1)";
-     if rand_int < 0 || rand_int >= 10 then failwith "parse_query rand-int should be in [0, n)"
+     if rand_int < 0L || rand_int >= 10L then failwith "parse_query rand-int should be in [0, n)"
    | _ -> failwith "parse_query random functions should produce one row");
   let db =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "label", String "different")
-         ; Add (Entity_id 1, "a", Int 1)
-         ; Add (Entity_id 1, "b", Int 2)
-         ; Add (Entity_id 1, "c", Int 1)
-         ; Add (Entity_id 1, "d", Int 3)
+         ; Add (Entity_id 1, "a", Int64 1L)
+         ; Add (Entity_id 1, "b", Int64 2L)
+         ; Add (Entity_id 1, "c", Int64 1L)
+         ; Add (Entity_id 1, "d", Int64 3L)
          ; Add (Entity_id 2, "label", String "same")
-         ; Add (Entity_id 2, "a", Int 1)
-         ; Add (Entity_id 2, "b", Int 2)
+         ; Add (Entity_id 2, "a", Int64 1L)
+         ; Add (Entity_id 2, "b", Int64 2L)
          ; Add (Entity_id 2, "c", Float 1.0)
-         ; Add (Entity_id 2, "d", Int 2)
+         ; Add (Entity_id 2, "d", Int64 2L)
          ]
   in
   let base_where =
@@ -4908,7 +4959,7 @@ let test_parse_query_string_trim_index_and_subs () =
   in
   assert_equal_query
     "parse_query parses clojure.string index functions"
-    [ [ Result_value (Int 2); Result_value (Int 4) ] ]
+    [ [ Result_value (Int64 2L); Result_value (Int64 4L) ] ]
     (q (empty_db ()) (parse_query index_query));
   let subs_query =
     QueryFormVector
@@ -4917,11 +4968,11 @@ let test_parse_query_string_trim_index_and_subs () =
       ; QueryFormSymbol "?suffix"
       ; QueryFormKeyword "where"
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "subs"; QueryFormString "datascript"; QueryFormInt 4; QueryFormInt 10 ]
+          [ QueryFormList [ QueryFormSymbol "subs"; QueryFormString "datascript"; QueryFormInt 4L; QueryFormInt 10L ]
           ; QueryFormSymbol "?part"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "subs"; QueryFormString "datascript"; QueryFormInt 4 ]
+          [ QueryFormList [ QueryFormSymbol "subs"; QueryFormString "datascript"; QueryFormInt 4L ]
           ; QueryFormSymbol "?suffix"
           ]
       ]
@@ -4961,7 +5012,7 @@ let test_parse_query_string_build_replace_regex_and_split () =
           [ QueryFormList
               [ QueryFormSymbol "str"
               ; QueryFormString "score="
-              ; QueryFormInt 42
+              ; QueryFormInt 42L
               ; QueryFormBool true
               ]
           ; QueryFormSymbol "?built"
@@ -5093,7 +5144,7 @@ let test_parse_query_string_build_replace_regex_and_split () =
               [ QueryFormSymbol "clojure.string/split"
               ; QueryFormString "red,green;blue"
               ; QueryFormSymbol "?separator"
-              ; QueryFormInt 2
+              ; QueryFormInt 2L
               ]
           ; QueryFormSymbol "?limited-parts"
           ]
@@ -5168,39 +5219,39 @@ let test_parse_query_collection_constructors () =
       ; QueryFormSymbol "?tuple"
       ; QueryFormKeyword "where"
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "vector"; QueryFormKeyword "db/add"; QueryFormInt (-1); QueryFormKeyword "attr"; QueryFormInt 12 ]
+          [ QueryFormList [ QueryFormSymbol "vector"; QueryFormKeyword "db/add"; QueryFormInt (-1L); QueryFormKeyword "attr"; QueryFormInt 12L ]
           ; QueryFormSymbol "?vector"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "list"; QueryFormInt 2; QueryFormInt 1; QueryFormInt 1 ]
+          [ QueryFormList [ QueryFormSymbol "list"; QueryFormInt 2L; QueryFormInt 1L; QueryFormInt 1L ]
           ; QueryFormSymbol "?list"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "set"; QueryFormInt 2; QueryFormInt 1; QueryFormInt 1 ]
+          [ QueryFormList [ QueryFormSymbol "set"; QueryFormInt 2L; QueryFormInt 1L; QueryFormInt 1L ]
           ; QueryFormSymbol "?set"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "hash-map"; QueryFormKeyword "left"; QueryFormInt 1; QueryFormKeyword "right"; QueryFormInt 2 ]
+          [ QueryFormList [ QueryFormSymbol "hash-map"; QueryFormKeyword "left"; QueryFormInt 1L; QueryFormKeyword "right"; QueryFormInt 2L ]
           ; QueryFormSymbol "?hash_map"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "array-map"; QueryFormKeyword "right"; QueryFormInt 2; QueryFormKeyword "left"; QueryFormInt 1 ]
+          [ QueryFormList [ QueryFormSymbol "array-map"; QueryFormKeyword "right"; QueryFormInt 2L; QueryFormKeyword "left"; QueryFormInt 1L ]
           ; QueryFormSymbol "?array_map"
           ]
       ; QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "tuple"; QueryFormInt 1; QueryFormInt 2 ]
+          [ QueryFormList [ QueryFormSymbol "tuple"; QueryFormInt 1L; QueryFormInt 2L ]
           ; QueryFormSymbol "?tuple"
           ]
       ]
   in
   assert_equal_query
     "parse_query parses collection constructor functions"
-    [ [ Result_value (Vector [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ])
-      ; Result_value (List [ Int 2; Int 1; Int 1 ])
-      ; Result_value (Set [ Int 1; Int 2 ])
-      ; Result_value (Map [ Keyword "left", Int 1; Keyword "right", Int 2 ])
-      ; Result_value (Map [ Keyword "left", Int 1; Keyword "right", Int 2 ])
-      ; Result_value (Tuple [ Some (Int 1); Some (Int 2) ])
+    [ [ Result_value (Vector [ Keyword "db/add"; Int64 (-1L); Keyword "attr"; Int64 12L ])
+      ; Result_value (List [ Int64 2L; Int64 1L; Int64 1L ])
+      ; Result_value (Set [ Int64 1L; Int64 2L ])
+      ; Result_value (Map [ Keyword "left", Int64 1L; Keyword "right", Int64 2L ])
+      ; Result_value (Map [ Keyword "left", Int64 1L; Keyword "right", Int64 2L ])
+      ; Result_value (Tuple [ Some (Int64 1L); Some (Int64 2L) ])
       ]
     ]
     (q (empty_db ()) (parse_query collection_query));
@@ -5209,12 +5260,12 @@ let test_parse_query_collection_constructors () =
       [ QueryFormKeyword "find"
       ; QueryFormSymbol "?x"
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "range"; QueryFormInt 1; QueryFormInt 8; QueryFormInt 3 ]; QueryFormSymbol "?x" ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol "range"; QueryFormInt 1L; QueryFormInt 8L; QueryFormInt 3L ]; QueryFormSymbol "?x" ]
       ]
   in
   assert_equal_query
     "parse_query parses range functions"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 4) ]; [ Result_value (Int 7) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 4L) ]; [ Result_value (Int64 7L) ] ]
     (q (empty_db ()) (parse_query range_query));
   let untuple_query =
     QueryFormVector
@@ -5245,7 +5296,7 @@ let test_parse_query_collection_constructors () =
                ; QueryFormSymbol "?m"
                ; QueryFormKeyword "where"
                ; QueryFormVector
-                   [ QueryFormList [ QueryFormSymbol "hash-map"; QueryFormKeyword "left"; QueryFormInt 1; QueryFormKeyword "right" ]
+                   [ QueryFormList [ QueryFormSymbol "hash-map"; QueryFormKeyword "left"; QueryFormInt 1L; QueryFormKeyword "right" ]
                    ; QueryFormSymbol "?m"
                    ]
                ])))
@@ -5430,11 +5481,11 @@ let test_parse_query_aggregate_find_expressions () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "color", String "red")
-         ; Add (Entity_id 1, "heads", Int 3)
+         ; Add (Entity_id 1, "heads", Int64 3L)
          ; Add (Entity_id 2, "color", String "red")
-         ; Add (Entity_id 2, "heads", Int 1)
+         ; Add (Entity_id 2, "heads", Int64 1L)
          ; Add (Entity_id 3, "color", String "blue")
-         ; Add (Entity_id 3, "heads", Int 2)
+         ; Add (Entity_id 3, "heads", Int64 2L)
          ]
   in
   let query =
@@ -5454,18 +5505,18 @@ let test_parse_query_aggregate_find_expressions () =
   assert_equal_query
     "parse_query parses aggregate find expressions"
     [ [ Result_value (String "blue")
-      ; Result_value (Int 2)
-      ; Result_value (Int 2)
-      ; Result_value (Int 2)
-      ; Result_value (Int 1)
-      ; Result_value (Int 1)
+      ; Result_value (Int64 2L)
+      ; Result_value (Int64 2L)
+      ; Result_value (Int64 2L)
+      ; Result_value (Int64 1L)
+      ; Result_value (Int64 1L)
       ]
     ; [ Result_value (String "red")
-      ; Result_value (Int 4)
-      ; Result_value (Int 1)
-      ; Result_value (Int 3)
-      ; Result_value (Int 2)
-      ; Result_value (Int 2)
+      ; Result_value (Int64 4L)
+      ; Result_value (Int64 1L)
+      ; Result_value (Int64 3L)
+      ; Result_value (Int64 2L)
+      ; Result_value (Int64 2L)
       ]
     ]
     (q db (parse_query query));
@@ -5482,8 +5533,8 @@ let test_parse_query_aggregate_find_expressions () =
   in
   assert_equal_query
     "parse_query parses vector-form aggregate find expressions"
-    [ [ Result_value (String "blue"); Result_value (Int 2); Result_value (Int 1) ]
-    ; [ Result_value (String "red"); Result_value (Int 4); Result_value (Int 2) ]
+    [ [ Result_value (String "blue"); Result_value (Int64 2L); Result_value (Int64 1L) ]
+    ; [ Result_value (String "red"); Result_value (Int64 4L); Result_value (Int64 2L) ]
     ]
     (q db (parse_query vector_query));
   assert_raises_invalid_arg
@@ -5503,25 +5554,25 @@ let test_parse_query_extended_aggregate_find_expressions () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "color", String "red")
-         ; Add (Entity_id 1, "amount", Int 1)
+         ; Add (Entity_id 1, "amount", Int64 1L)
          ; Add (Entity_id 2, "color", String "red")
-         ; Add (Entity_id 2, "amount", Int 2)
+         ; Add (Entity_id 2, "amount", Int64 2L)
          ; Add (Entity_id 3, "color", String "red")
-         ; Add (Entity_id 3, "amount", Int 3)
+         ; Add (Entity_id 3, "amount", Int64 3L)
          ; Add (Entity_id 4, "color", String "red")
-         ; Add (Entity_id 4, "amount", Int 4)
+         ; Add (Entity_id 4, "amount", Int64 4L)
          ; Add (Entity_id 5, "color", String "blue")
-         ; Add (Entity_id 5, "amount", Int 7)
+         ; Add (Entity_id 5, "amount", Int64 7L)
          ; Add (Entity_id 6, "color", String "blue")
-         ; Add (Entity_id 6, "amount", Int 8)
+         ; Add (Entity_id 6, "amount", Int64 8L)
          ]
   in
   let min_max_n_query =
     QueryFormVector
       [ QueryFormKeyword "find"
       ; QueryFormSymbol "?color"
-      ; QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3; QueryFormSymbol "?amount" ]
-      ; QueryFormList [ QueryFormSymbol "min"; QueryFormInt 3; QueryFormSymbol "?amount" ]
+      ; QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3L; QueryFormSymbol "?amount" ]
+      ; QueryFormList [ QueryFormSymbol "min"; QueryFormInt 3L; QueryFormSymbol "?amount" ]
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "color"; QueryFormSymbol "?color" ]
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "amount"; QueryFormSymbol "?amount" ]
@@ -5530,23 +5581,23 @@ let test_parse_query_extended_aggregate_find_expressions () =
   assert_equal_query
     "parse_query parses min/max n aggregate find expressions"
     [ [ Result_value (String "blue")
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
       ]
     ; [ Result_value (String "red")
-      ; Result_value (Tuple [ Some (Int 2); Some (Int 3); Some (Int 4) ])
-      ; Result_value (Tuple [ Some (Int 1); Some (Int 2); Some (Int 3) ])
+      ; Result_value (Tuple [ Some (Int64 2L); Some (Int64 3L); Some (Int64 4L) ])
+      ; Result_value (Tuple [ Some (Int64 1L); Some (Int64 2L); Some (Int64 3L) ])
       ]
     ]
     (q db (parse_query min_max_n_query));
   let stats_db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "sample", Int 10)
-         ; Add (Entity_id 2, "sample", Int 15)
-         ; Add (Entity_id 3, "sample", Int 20)
-         ; Add (Entity_id 4, "sample", Int 35)
-         ; Add (Entity_id 5, "sample", Int 75)
+         [ Add (Entity_id 1, "sample", Int64 10L)
+         ; Add (Entity_id 2, "sample", Int64 15L)
+         ; Add (Entity_id 3, "sample", Int64 20L)
+         ; Add (Entity_id 4, "sample", Int64 35L)
+         ; Add (Entity_id 5, "sample", Int64 75L)
          ]
   in
   let stats_query =
@@ -5581,8 +5632,8 @@ let test_parse_query_extended_aggregate_find_expressions () =
   in
   assert_equal_query
     "parse_query parses distinct aggregate find expressions"
-    [ [ Result_value (String "blue"); Result_value (Set [ Int 7; Int 8 ]) ]
-    ; [ Result_value (String "red"); Result_value (Set [ Int 1; Int 2; Int 3; Int 4 ]) ]
+    [ [ Result_value (String "blue"); Result_value (Set [ Int64 7L; Int64 8L ]) ]
+    ; [ Result_value (String "red"); Result_value (Set [ Int64 1L; Int64 2L; Int64 3L; Int64 4L ]) ]
     ]
     (q db (parse_query distinct_query));
   let parameterized_min_max_query =
@@ -5600,26 +5651,26 @@ let test_parse_query_extended_aggregate_find_expressions () =
   assert_equal_query
     "parse_query parses aggregate parameter passing"
     [ [ Result_value (String "blue")
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
       ]
     ; [ Result_value (String "red")
-      ; Result_value (Tuple [ Some (Int 3); Some (Int 4); Some (Int 5) ])
-      ; Result_value (Tuple [ Some (Int 1); Some (Int 2); Some (Int 3) ])
+      ; Result_value (Tuple [ Some (Int64 3L); Some (Int64 4L); Some (Int64 5L) ])
+      ; Result_value (Tuple [ Some (Int64 1L); Some (Int64 2L); Some (Int64 3L) ])
       ]
     ]
     (q
        ~inputs:
          [ Arg_relation
-             [ [ Result_value (String "red"); Result_value (Int 1) ]
-             ; [ Result_value (String "red"); Result_value (Int 2) ]
-             ; [ Result_value (String "red"); Result_value (Int 3) ]
-             ; [ Result_value (String "red"); Result_value (Int 4) ]
-             ; [ Result_value (String "red"); Result_value (Int 5) ]
-             ; [ Result_value (String "blue"); Result_value (Int 7) ]
-             ; [ Result_value (String "blue"); Result_value (Int 8) ]
+             [ [ Result_value (String "red"); Result_value (Int64 1L) ]
+             ; [ Result_value (String "red"); Result_value (Int64 2L) ]
+             ; [ Result_value (String "red"); Result_value (Int64 3L) ]
+             ; [ Result_value (String "red"); Result_value (Int64 4L) ]
+             ; [ Result_value (String "red"); Result_value (Int64 5L) ]
+             ; [ Result_value (String "blue"); Result_value (Int64 7L) ]
+             ; [ Result_value (String "blue"); Result_value (Int64 8L) ]
              ]
-         ; Arg_scalar (Result_value (Int 3))
+         ; Arg_scalar (Result_value (Int64 3L))
          ]
        (empty_db ())
        (parse_query parameterized_min_max_query));
@@ -5627,8 +5678,8 @@ let test_parse_query_extended_aggregate_find_expressions () =
     QueryFormVector
       [ QueryFormKeyword "find"
       ; QueryFormList [ QueryFormSymbol "rand"; QueryFormSymbol "?x" ]
-      ; QueryFormList [ QueryFormSymbol "rand"; QueryFormInt 5; QueryFormSymbol "?x" ]
-      ; QueryFormList [ QueryFormSymbol "sample"; QueryFormInt 2; QueryFormSymbol "?x" ]
+      ; QueryFormList [ QueryFormSymbol "rand"; QueryFormInt 5L; QueryFormSymbol "?x" ]
+      ; QueryFormList [ QueryFormSymbol "sample"; QueryFormInt 2L; QueryFormSymbol "?x" ]
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "x"; QueryFormSymbol "?x" ]
       ]
@@ -5636,14 +5687,14 @@ let test_parse_query_extended_aggregate_find_expressions () =
   let random_db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "x", Int 1)
-         ; Add (Entity_id 2, "x", Int 2)
-         ; Add (Entity_id 3, "x", Int 3)
+         [ Add (Entity_id 1, "x", Int64 1L)
+         ; Add (Entity_id 2, "x", Int64 2L)
+         ; Add (Entity_id 3, "x", Int64 3L)
          ]
   in
   (match q random_db (parse_query random_query) with
    | [ [ Result_value rand_value; Result_value (Tuple rand_values); Result_value (Tuple sample_values) ] ] ->
-     let values = [ Int 1; Int 2; Int 3 ] in
+     let values = [ Int64 1L; Int64 2L; Int64 3L ] in
      let member value = List.mem value values in
      if not (member rand_value) then failwith "parse_query rand aggregate returned a value outside the input";
      let rand_values = List.map Option.get rand_values in
@@ -5662,7 +5713,7 @@ let test_parse_query_extended_aggregate_find_expressions () =
                [ QueryFormKeyword "find"
                ; QueryFormList [ QueryFormSymbol "min"; QueryFormString "n"; QueryFormSymbol "?x" ]
                ; QueryFormKeyword "where"
-               ; QueryFormVector [ QueryFormList [ QueryFormSymbol "ground"; QueryFormVector [ QueryFormInt 1 ] ]; QueryFormSymbol "?x" ]
+               ; QueryFormVector [ QueryFormList [ QueryFormSymbol "ground"; QueryFormVector [ QueryFormInt 1L ] ]; QueryFormSymbol "?x" ]
                ])))
 
 let test_parse_query_not_and_not_join_clauses () =
@@ -5720,9 +5771,9 @@ let test_parse_query_not_and_not_join_clauses () =
   let releases_db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1970) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1971) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int 1971) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1970L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1971L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int64 1971L) ] }
          ]
   in
   let not_join_query =
@@ -5735,7 +5786,7 @@ let test_parse_query_not_and_not_join_clauses () =
       ; QueryFormVector
           [ QueryFormSymbol "not-join"
           ; QueryFormVector [ QueryFormSymbol "?artist" ]
-          ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970 ]
+          ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970L ]
           ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "artist"; QueryFormSymbol "?artist" ]
           ]
       ]
@@ -5789,11 +5840,11 @@ let test_parse_query_or_and_or_join_clauses () =
     empty_db ()
     |> db_with
          [ Add (Entity_id 1, "artist", String "A")
-         ; Add (Entity_id 1, "year", Int 1970)
+         ; Add (Entity_id 1, "year", Int64 1970L)
          ; Add (Entity_id 2, "artist", String "A")
-         ; Add (Entity_id 2, "year", Int 1971)
+         ; Add (Entity_id 2, "year", Int64 1971L)
          ; Add (Entity_id 3, "artist", String "B")
-         ; Add (Entity_id 3, "year", Int 1971)
+         ; Add (Entity_id 3, "year", Int64 1971L)
          ]
   in
   let or_join_query =
@@ -5807,12 +5858,12 @@ let test_parse_query_or_and_or_join_clauses () =
           ; QueryFormVector [ QueryFormSymbol "?artist" ]
           ; QueryFormVector
               [ QueryFormSymbol "and"
-              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970 ]
+              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970L ]
               ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "artist"; QueryFormSymbol "?artist" ]
               ]
           ; QueryFormVector
               [ QueryFormSymbol "and"
-              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1972 ]
+              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1972L ]
               ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "artist"; QueryFormSymbol "?artist" ]
               ]
           ]
@@ -5833,12 +5884,12 @@ let test_parse_query_or_and_or_join_clauses () =
           ; QueryFormVector [ QueryFormSymbol "?artist" ]
           ; QueryFormList
               [ QueryFormSymbol "and"
-              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970 ]
+              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1970L ]
               ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "artist"; QueryFormSymbol "?artist" ]
               ]
           ; QueryFormList
               [ QueryFormSymbol "and"
-              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1972 ]
+              ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "year"; QueryFormInt 1972L ]
               ; QueryFormVector [ QueryFormSymbol "?release"; QueryFormKeyword "artist"; QueryFormSymbol "?artist" ]
               ]
           ]
@@ -6194,9 +6245,9 @@ let test_parse_query_source_qualified_composite_clauses () =
   let ages =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "age", Int 10)
-         ; Add (Entity_id 2, "age", Int 20)
-         ; Add (Entity_id 3, "score", Int 1)
+         [ Add (Entity_id 1, "age", Int64 10L)
+         ; Add (Entity_id 2, "age", Int64 20L)
+         ; Add (Entity_id 3, "score", Int64 1L)
          ]
   in
   let sources = [ "names", Db_source names; "ages", Db_source ages ] in
@@ -6214,7 +6265,7 @@ let test_parse_query_source_qualified_composite_clauses () =
           [ QueryFormSymbol "$ages"
           ; QueryFormVector
               [ QueryFormSymbol "not"
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
               ]
           ]
       ]
@@ -6238,7 +6289,7 @@ let test_parse_query_source_qualified_composite_clauses () =
           ; QueryFormVector
               [ QueryFormSymbol "not-join"
               ; QueryFormVector [ QueryFormSymbol "?e" ]
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
               ]
           ]
       ]
@@ -6261,8 +6312,8 @@ let test_parse_query_source_qualified_composite_clauses () =
           [ QueryFormSymbol "$ages"
           ; QueryFormVector
               [ QueryFormSymbol "or"
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20 ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20L ]
               ]
           ]
       ]
@@ -6286,8 +6337,8 @@ let test_parse_query_source_qualified_composite_clauses () =
           ; QueryFormVector
               [ QueryFormSymbol "or-join"
               ; QueryFormVector [ QueryFormSymbol "?e" ]
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
-              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20 ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
+              ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20L ]
               ]
           ]
       ]
@@ -6309,7 +6360,7 @@ let test_parse_query_source_qualified_composite_clauses () =
       ; QueryFormList
           [ QueryFormSymbol "$ages"
           ; QueryFormSymbol "not"
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
           ]
       ]
   in
@@ -6331,7 +6382,7 @@ let test_parse_query_source_qualified_composite_clauses () =
           [ QueryFormSymbol "$ages"
           ; QueryFormSymbol "not-join"
           ; QueryFormVector [ QueryFormSymbol "?e" ]
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
           ]
       ]
   in
@@ -6352,8 +6403,8 @@ let test_parse_query_source_qualified_composite_clauses () =
       ; QueryFormList
           [ QueryFormSymbol "$ages"
           ; QueryFormSymbol "or"
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20 ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20L ]
           ]
       ]
   in
@@ -6375,8 +6426,8 @@ let test_parse_query_source_qualified_composite_clauses () =
           [ QueryFormSymbol "$ages"
           ; QueryFormSymbol "or-join"
           ; QueryFormVector [ QueryFormSymbol "?e" ]
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10 ]
-          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20 ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 10L ]
+          ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 20L ]
           ]
       ]
   in
@@ -6403,15 +6454,15 @@ let test_parse_query_in_bindings () =
          [ Add (Entity_id 1, "name", String "Ivan")
          ; Add (Entity_id 1, "first", String "Ivan")
          ; Add (Entity_id 1, "last", String "Petrov")
-         ; Add (Entity_id 1, "age", Int 31)
+         ; Add (Entity_id 1, "age", Int64 31L)
          ; Add (Entity_id 2, "name", String "Petr")
          ; Add (Entity_id 2, "first", String "Petr")
          ; Add (Entity_id 2, "last", String "Ivanov")
-         ; Add (Entity_id 2, "age", Int 25)
+         ; Add (Entity_id 2, "age", Int64 25L)
          ; Add (Entity_id 3, "name", String "Oleg")
          ; Add (Entity_id 3, "first", String "Oleg")
          ; Add (Entity_id 3, "last", String "Petrov")
-         ; Add (Entity_id 3, "age", Int 44)
+         ; Add (Entity_id 3, "age", Int64 44L)
          ]
   in
   let scalar_query =
@@ -6442,7 +6493,7 @@ let test_parse_query_in_bindings () =
   in
   assert_equal_query
     "parse_query parses entity-ref :in arguments"
-    [ [ Result_value (Int 31) ] ]
+    [ [ Result_value (Int64 31L) ] ]
     (q ~inputs:[ Arg_entity_ref (Lookup_ref ("name", String "Ivan")) ] db (parse_query entity_ref_query));
   let collection_query =
     QueryFormVector
@@ -6674,18 +6725,18 @@ let test_parse_query_in_bindings () =
           ; QueryFormSymbol "..."
           ]
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">"; QueryFormSymbol "?v"; QueryFormInt 1 ] ]
+      ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">"; QueryFormSymbol "?v"; QueryFormInt 1L ] ]
       ]
   in
   assert_equal_query
     "parse_query accepts map scalar arguments for relation :in bindings"
-    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    [ [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int64 3L) ]
     ]
     (q
        ~inputs:
          [ Arg_scalar
-             (Result_value (Map [ Keyword "a", Int 1; Keyword "b", Int 2; Keyword "c", Int 3 ]))
+             (Result_value (Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L; Keyword "c", Int64 3L ]))
          ]
        db
        (parse_query map_relation_query));
@@ -6777,17 +6828,17 @@ let test_parse_query_in_bindings () =
   in
   assert_equal_query
     "parse_query accepts map scalar arguments for nested relation :in bindings"
-    [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 5); Result_value (Int 7) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 1L); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 5L); Result_value (Int64 7L) ]
     ]
     (q
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1; Int 4 ]
-                   ; Keyword "b", List [ Int 5; Int 7 ]
-                   ; Keyword "c", List [ Int 3; Int 3 ]
+                   [ Keyword "a", List [ Int64 1L; Int64 4L ]
+                   ; Keyword "b", List [ Int64 5L; Int64 7L ]
+                   ; Keyword "c", List [ Int64 3L; Int64 3L ]
                    ]))
          ]
        db
@@ -7029,18 +7080,18 @@ let test_parse_query_find_helper_parser () =
     (Return_scalar, [ Find_aggregate (MaxN 3, [ QVar "a" ]) ])
     (parse_find
        (QueryFormVector
-          [ QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3; QueryFormSymbol "?a" ]
+          [ QueryFormList [ QueryFormSymbol "max"; QueryFormInt 3L; QueryFormSymbol "?a" ]
           ; QueryFormSymbol "."
           ]));
   assert_equal_value
     "parse_find preserves structured aggregate arguments"
-    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int 1); QSource "x" ]) ])
+    (Return_scalar, [ Find_aggregate (Count, [ QVar "b"; QValue (Int64 1L); QSource "x" ]) ])
     (parse_find
        (QueryFormVector
           [ QueryFormList
               [ QueryFormSymbol "count"
               ; QueryFormSymbol "?b"
-              ; QueryFormInt 1
+              ; QueryFormInt 1L
               ; QueryFormSymbol "$x"
               ]
           ; QueryFormSymbol "."
@@ -7063,11 +7114,11 @@ let test_parse_query_or_join_required_vars () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 11) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int64 11L) ] }
          ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg") ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int 10); "name", One_value (String "Ivan") ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "age", One_value (Int 11); "name", One_value (String "Oleg") ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int64 10L); "name", One_value (String "Ivan") ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "age", One_value (Int64 11L); "name", One_value (String "Oleg") ] }
          ]
   in
   let query =
@@ -7089,7 +7140,7 @@ let test_parse_query_or_join_required_vars () =
   assert_equal_query
     "parse_query parses or-join required vars"
     [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ]; [ Result_entity 5 ] ]
-    (q ~inputs:[ Arg_scalar (Result_value (Int 10)) ] db (parse_query query));
+    (q ~inputs:[ Arg_scalar (Result_value (Int64 10L)) ] db (parse_query query));
   let list_rule_vars_query =
     QueryFormVector
       [ QueryFormKeyword "find"
@@ -7109,7 +7160,7 @@ let test_parse_query_or_join_required_vars () =
   assert_equal_query
     "parse_query parses or-join list-form required vars"
     [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ]; [ Result_entity 5 ] ]
-    (q ~inputs:[ Arg_scalar (Result_value (Int 10)) ] db (parse_query list_rule_vars_query));
+    (q ~inputs:[ Arg_scalar (Result_value (Int64 10L)) ] db (parse_query list_rule_vars_query));
   let source_query =
     QueryFormVector
       [ QueryFormKeyword "find"
@@ -7134,7 +7185,7 @@ let test_parse_query_or_join_required_vars () =
     "parse_query parses source-qualified or-join required vars"
     [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ]; [ Result_entity 5 ] ]
     (q_sources
-       ~inputs:[ Arg_scalar (Result_value (Int 10)) ]
+       ~inputs:[ Arg_scalar (Result_value (Int64 10L)) ]
        (empty_db ())
        [ "people", Db_source db ]
        (parse_query source_query));
@@ -7441,9 +7492,9 @@ let test_parse_query_with_vars () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "monster", One_value (String "Medusa"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "monster", One_value (String "Cyclops"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "monster", One_value (String "Chimera"); "heads", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "monster", One_value (String "Medusa"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "monster", One_value (String "Cyclops"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "monster", One_value (String "Chimera"); "heads", One_value (Int64 1L) ] }
          ]
   in
   let aggregate_query =
@@ -7459,7 +7510,7 @@ let test_parse_query_with_vars () =
   in
   assert_equal_query
     "parse_query applies :with vars to aggregate duplicate preservation"
-    [ [ Result_value (Int 3) ] ]
+    [ [ Result_value (Int64 3L) ] ]
     (q db (parse_query aggregate_query));
   let relation_query =
     QueryFormVector
@@ -7474,7 +7525,7 @@ let test_parse_query_with_vars () =
   in
   assert_equal_query
     "parse_query applies :with vars to non-aggregate duplicate preservation"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 1) ]; [ Result_value (Int 1) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 1L) ]; [ Result_value (Int64 1L) ] ]
     (q db (parse_query relation_query));
   assert_raises_invalid_arg
     "parse_query rejects duplicate :with variables"
@@ -7629,7 +7680,7 @@ let test_q_input_arity_matches_upstream_validation_messages () =
          (q_string
             db
             "[:find ?a :in $ :where [?a]]"
-            ~inputs:[ Arg_scalar (Result_value (Int 1)) ]));
+            ~inputs:[ Arg_scalar (Result_value (Int64 1L)) ]));
   assert_raises_invalid_arg_message
     "q reports too many supplied input args for inferred default source like upstream"
     "Extra inputs passed, expected: [$], got: 2"
@@ -7638,7 +7689,7 @@ let test_q_input_arity_matches_upstream_validation_messages () =
          (q_string
             db
             "[:find ?a :where [?a]]"
-            ~inputs:[ Arg_scalar (Result_value (Int 1)) ]))
+            ~inputs:[ Arg_scalar (Result_value (Int64 1L)) ]))
 
 let test_q_input_binding_matches_upstream_validation_messages () =
   let db = empty_db () in
@@ -7674,10 +7725,10 @@ let test_parse_query_map_sections_accept_list_sequences () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 24) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 17) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 24L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 17L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
          ]
   in
   let query =
@@ -7705,22 +7756,22 @@ let test_parse_query_map_sections_accept_list_sequences () =
                   ]
               ; QueryFormVector [ QueryFormSymbol "?entity"; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
               ; QueryFormVector [ QueryFormSymbol "?entity"; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
-              ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">="; QueryFormSymbol "?age"; QueryFormInt 18 ] ]
+              ; QueryFormVector [ QueryFormList [ QueryFormSymbol ">="; QueryFormSymbol "?age"; QueryFormInt 18L ] ]
               ]
           ]
       ]
   in
   assert_equal_query
     "parse_query accepts list sequences in map query sections"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q ~inputs:[ Arg_scalar (Result_value (String "Ivan")) ] db (parse_query query))
 
 let test_parse_query_concatenates_repeated_sections () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
          ]
   in
   let query =
@@ -7730,7 +7781,7 @@ let test_parse_query_concatenates_repeated_sections () =
       ; QueryFormKeyword "where"
       ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 31 ]
+      ; QueryFormVector [ QueryFormSymbol "?e"; QueryFormKeyword "age"; QueryFormInt 31L ]
       ]
   in
   assert_equal_query
@@ -7836,9 +7887,9 @@ let test_q_short_data_patterns_match_upstream () =
     |> db_with
          [ Entity
              { db_id = Some (Entity_id 1)
-             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ]
+             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ]
              }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 37) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int64 37L) ] }
          ]
   in
   assert_equal_query
@@ -7854,10 +7905,10 @@ let test_q_upstream_query_cljc_parity_batch () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int 15) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 37L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int64 15L) ] }
          ]
   in
   assert_equal_query
@@ -7866,8 +7917,8 @@ let test_q_upstream_query_cljc_parity_batch () =
     (q_string db "[:find ?e :where [?e :name]]");
   assert_equal_query
     "query.cljc test-joins joins constants and variables"
-    [ [ Result_entity 1; Result_value (Int 15) ]
-    ; [ Result_entity 3; Result_value (Int 37) ]
+    [ [ Result_entity 1; Result_value (Int64 15L) ]
+    ; [ Result_entity 3; Result_value (Int64 37L) ]
     ]
     (q_string
        db
@@ -7914,14 +7965,14 @@ let test_q_upstream_query_cljc_parity_batch () =
                 [?e2 :name ?n2]]");
   assert_equal_query
     "query.cljc test-built-in-get binds map inputs as relation rows"
-    [ [ Result_value (Map [ Keyword "d", Int 2 ]); Result_value (Int 2) ] ]
+    [ [ Result_value (Map [ Keyword "d", Int64 2L ]); Result_value (Int64 2L) ] ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", Map [ Keyword "b", Int 1 ]
-                   ; Keyword "c", Map [ Keyword "d", Int 2 ]
+                   [ Keyword "a", Map [ Keyword "b", Int64 1L ]
+                   ; Keyword "c", Map [ Keyword "d", Int64 2L ]
                    ]))
          ; Arg_scalar (Result_value (Keyword "d"))
          ]
@@ -7940,14 +7991,14 @@ let test_query__test_q_coll () =
   let relation =
     Relation_source
       [ [ Result_entity 1; Result_attr "name"; Result_value (String "Ivan") ]
-      ; [ Result_entity 1; Result_attr "age"; Result_value (Int 19) ]
+      ; [ Result_entity 1; Result_attr "age"; Result_value (Int64 19L) ]
       ; [ Result_entity 1; Result_attr "aka"; Result_value (String "dragon_killer_94") ]
       ; [ Result_entity 1; Result_attr "aka"; Result_value (String "-=autobot=-") ]
       ]
   in
   assert_equal_query
     "query.cljc test-q-coll queries relation source datoms"
-    [ [ Result_value (String "Ivan"); Result_value (Int 19) ] ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 19L) ] ]
     (q_sources_string
        (empty_db ())
        [ "$", relation ]
@@ -7961,13 +8012,13 @@ let test_query__test_q_coll () =
       [ [ Result_entity 1
         ; Result_attr "name"
         ; Result_value (String "Ivan")
-        ; Result_value (Int 945)
+        ; Result_value (Int64 945L)
         ; Result_value (Keyword "db/add")
         ]
       ; [ Result_entity 1
         ; Result_attr "age"
-        ; Result_value (Int 39)
-        ; Result_value (Int 999)
+        ; Result_value (Int64 39L)
+        ; Result_value (Int64 999L)
         ; Result_value (Keyword "db/retract")
         ]
       ]
@@ -7985,8 +8036,8 @@ let test_query__test_q_coll () =
     "query.cljc test-q-coll matches full long tuples"
     [ [ Result_entity 1
       ; Result_attr "age"
-      ; Result_value (Int 39)
-      ; Result_value (Int 999)
+      ; Result_value (Int64 39L)
+      ; Result_value (Int64 999L)
       ]
     ]
     (q_sources_string
@@ -8000,9 +8051,9 @@ let test_query__test_q_in () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 37L) ] }
          ]
   in
   assert_equal_query
@@ -8014,7 +8065,7 @@ let test_query__test_q_in () =
        "[:find ?e :in $ ?attr ?value :where [?e ?attr ?value]]");
   assert_equal_query
     "query.cljc test-q-in supports named db inputs"
-    [ [ Result_attr "age"; Result_value (Int 15) ]
+    [ [ Result_attr "age"; Result_value (Int64 15L) ]
     ; [ Result_attr "name"; Result_value (String "Ivan") ]
     ]
     (q_sources_string
@@ -8044,9 +8095,9 @@ let test_query__test_q_in () =
                 [$b ?n ?email]]");
   assert_equal_query
     "query.cljc test-q-in supports queries without db sources"
-    [ [ Result_value (Int 10); Result_value (Int 20) ] ]
+    [ [ Result_value (Int64 10L); Result_value (Int64 20L) ] ]
     (q_string
-       ~inputs:[ Arg_scalar (Result_value (Int 10)); Arg_scalar (Result_value (Int 20)) ]
+       ~inputs:[ Arg_scalar (Result_value (Int64 10L)); Arg_scalar (Result_value (Int64 20L)) ]
        (empty_db ())
        "[:find ?a ?b :in ?a ?b]")
 
@@ -8054,9 +8105,9 @@ let test_query__test_bindings () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 37L) ] }
          ]
   in
   assert_equal_query
@@ -8080,7 +8131,7 @@ let test_query__test_bindings () =
     "query.cljc test-bindings handles tuple bindings"
     [ [ Result_entity 3 ] ]
     (q_string
-       ~inputs:[ Arg_tuple [ Result_value (String "Ivan"); Result_value (Int 37) ] ]
+       ~inputs:[ Arg_tuple [ Result_value (String "Ivan"); Result_value (Int64 37L) ] ]
        db
        "[:find ?e
          :in $ [?name ?age]
@@ -8088,7 +8139,7 @@ let test_query__test_bindings () =
                 [?e :age ?age]]");
   assert_equal_query
     "query.cljc test-bindings handles collection bindings"
-    [ [ Result_attr "age"; Result_value (Int 15) ]
+    [ [ Result_attr "age"; Result_value (Int64 15L) ]
     ; [ Result_attr "name"; Result_value (String "Ivan") ]
     ]
     (q_string
@@ -8162,11 +8213,11 @@ let test_query__test_bindings () =
 let test_query__test_nested_bindings () =
   assert_equal_query
     "query.cljc test-nested-bindings handles map relation inputs"
-    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    [ [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int64 3L) ]
     ]
     (q_string
-       ~inputs:[ Arg_scalar (Result_value (Map [ Keyword "a", Int 1; Keyword "b", Int 2; Keyword "c", Int 3 ])) ]
+       ~inputs:[ Arg_scalar (Result_value (Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L; Keyword "c", Int64 3L ])) ]
        (empty_db ())
        "[:find ?k ?v
          :in [[?k ?v] ...]
@@ -8179,29 +8230,29 @@ let test_query__test_nested_bindings () =
          let min_value, max_value =
            List.fold_left
              (fun (min_value, max_value) -> function
-                | Int value -> min min_value value, max max_value value
+                | Int64 value -> Int64.min min_value value, Int64.max max_value value
                 | _ -> min_value, max_value)
              (match first with
-              | Int value -> value, value
-              | _ -> 0, 0)
+              | Int64 value -> value, value
+              | _ -> 0L, 0L)
              rest
          in
-         Some [ Result_value (Int min_value); Result_value (Int max_value) ])
+         Some [ Result_value (Int64 min_value); Result_value (Int64 max_value) ])
     | _ -> None
   in
   assert_equal_query
     "query.cljc test-nested-bindings handles dynamic tuple outputs"
-    [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 5); Result_value (Int 7) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 1L); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 5L); Result_value (Int64 7L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1; Int 2; Int 3; Int 4 ]
-                   ; Keyword "b", List [ Int 5; Int 6; Int 7 ]
-                   ; Keyword "c", List [ Int 3 ]
+                   [ Keyword "a", List [ Int64 1L; Int64 2L; Int64 3L; Int64 4L ]
+                   ; Keyword "b", List [ Int64 5L; Int64 6L; Int64 7L ]
+                   ; Keyword "c", List [ Int64 3L ]
                    ]))
          ; Arg_function minmax
          ]
@@ -8211,28 +8262,28 @@ let test_query__test_nested_bindings () =
          :where [(?minmax ?v) [?min ?max]]
                 [(> ?max ?min)]]");
   let range_values = function
-    | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+    | [ Result_value (Int64 min_value); Result_value (Int64 max_value) ] ->
       let rec collect value acc =
         if value >= max_value then List.rev acc
-        else collect (value + 1) (Int value :: acc)
+        else collect (Int64.add value 1L) (Int64 value :: acc)
       in
       Some [ Result_value (List (collect min_value [])) ]
     | _ -> None
   in
   assert_equal_query
     "query.cljc test-nested-bindings handles dynamic collection outputs"
-    [ [ Result_value (Keyword "a"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 6) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 6L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1; Int 7 ]
-                   ; Keyword "b", List [ Int 2; Int 4 ]
+                   [ Keyword "a", List [ Int64 1L; Int64 7L ]
+                   ; Keyword "b", List [ Int64 2L; Int64 4L ]
                    ]))
          ; Arg_function range_values
          ]
@@ -8247,7 +8298,7 @@ let test_query__test_built_in_get () =
 
 let test_query__test_join_unrelated () =
   let five = function
-    | [] -> Some [ Result_value (Int 5) ]
+    | [] -> Some [ Result_value (Int64 5L) ]
     | _ -> None
   in
   assert_equal_query
@@ -8382,12 +8433,12 @@ let test_q_predicates_filter_bound_values () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 19) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 19L) ] }
          ]
   in
   let adult = function
-    | [ Result_value (Int age) ] -> age >= 21
+    | [ Result_value (Int64 age) ] -> age >= 21L
     | _ -> false
   in
   let query =
@@ -8439,12 +8490,12 @@ let test_q_functions_bind_derived_values () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 19) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 19L) ] }
          ]
   in
   let decade = function
-    | [ Result_value (Int age) ] -> Some [ Result_value (Int (age / 10 * 10)) ]
+    | [ Result_value (Int64 age) ] -> Some [ Result_value (Int64 (Int64.mul (Int64.div age 10L) 10L)) ]
     | _ -> None
   in
   let query =
@@ -8461,8 +8512,8 @@ let test_q_functions_bind_derived_values () =
   in
   assert_equal_query
     "q functions bind derived values"
-    [ [ Result_value (String "Ivan"); Result_value (Int 30) ]
-    ; [ Result_value (String "Petr"); Result_value (Int 10) ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 30L) ]
+    ; [ Result_value (String "Petr"); Result_value (Int64 10L) ]
     ]
     (q db query)
 
@@ -8470,13 +8521,13 @@ let test_q_functions_filter_on_none () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 19) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 19L) ] }
          ]
   in
   let adult_label = function
-    | [ Result_value (Int age) ] when age >= 21 -> Some [ Result_value (String "adult") ]
-    | [ Result_value (Int _) ] -> None
+    | [ Result_value (Int64 age) ] when age >= 21L -> Some [ Result_value (String "adult") ]
+    | [ Result_value (Int64 _) ] -> None
     | _ -> None
   in
   let query =
@@ -8513,8 +8564,8 @@ let test_q_function_binding_conflicts_filter_rows () =
        ; with_vars = []
        ; rules = []
        ; where =
-           [ Function ("identity", [], [ "n" ], identity (Int 1))
-           ; Function ("identity", [], [ "n" ], identity (Int 2))
+           [ Function ("identity", [], [ "n" ], identity (Int64 1L))
+           ; Function ("identity", [], [ "n" ], identity (Int64 2L))
            ]
        });
   assert_equal_query
@@ -8527,15 +8578,15 @@ let test_q_function_binding_conflicts_filter_rows () =
        ; with_vars = []
        ; rules = []
        ; where =
-           [ Function ("identity", [], [ "n"; "x" ], tuple (Tuple [ Some (Int 3); Some (Int 4) ]))
-           ; Function ("identity", [], [ "n"; "x" ], tuple (Tuple [ Some (Int 1); Some (Int 2) ]))
+           [ Function ("identity", [], [ "n"; "x" ], tuple (Tuple [ Some (Int64 3L); Some (Int64 4L) ]))
+           ; Function ("identity", [], [ "n"; "x" ], tuple (Tuple [ Some (Int64 1L); Some (Int64 2L) ]))
            ]
        });
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "age", Int 15)
-         ; Add (Entity_id 2, "age", Int 35)
+         [ Add (Entity_id 1, "age", Int64 15L)
+         ; Add (Entity_id 2, "age", Int64 35L)
          ]
   in
   assert_equal_query
@@ -8549,7 +8600,7 @@ let test_q_function_binding_conflicts_filter_rows () =
        ; rules = []
        ; where =
            [ Pattern (QWildcard, QAttr "age", QVar "age")
-           ; Function ("identity", [], [ "age" ], identity (Int 100))
+           ; Function ("identity", [], [ "age" ], identity (Int64 100L))
            ]
        });
   assert_equal_query
@@ -8562,7 +8613,7 @@ let test_q_function_binding_conflicts_filter_rows () =
        ; with_vars = []
        ; rules = []
        ; where =
-           [ Function ("identity", [], [ "age" ], identity (Int 100))
+           [ Function ("identity", [], [ "age" ], identity (Int64 100L))
            ; Pattern (QWildcard, QAttr "age", QVar "age")
            ]
        })
@@ -8572,21 +8623,21 @@ let test_q_function_bindings_interact_with_rules () =
   let rules =
     [ { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int 1)) ]
+      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int64 1L)) ]
       }
     ; { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int 2)) ]
+      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int64 2L)) ]
       }
     ; { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int 3)) ]
+      ; rule_body = [ Function ("identity", [], [ "x" ], identity (Int64 3L)) ]
       }
     ]
   in
   assert_equal_query
     "q rule bindings are filtered by prior function bindings"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q
        (empty_db ())
        { find = [ Find_var "n" ]
@@ -8594,13 +8645,13 @@ let test_q_function_bindings_interact_with_rules () =
        ; with_vars = []
        ; rules
        ; where =
-           [ Function ("identity", [], [ "n" ], identity (Int 2))
+           [ Function ("identity", [], [ "n" ], identity (Int64 2L))
            ; Rule ("my-vals", [ QVar "n" ])
            ]
        });
   assert_equal_query
     "q function bindings are filtered by prior rule bindings"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q
        (empty_db ())
        { find = [ Find_var "n" ]
@@ -8609,7 +8660,7 @@ let test_q_function_bindings_interact_with_rules () =
        ; rules
        ; where =
            [ Rule ("my-vals", [ QVar "n" ])
-           ; Function ("identity", [], [ "n" ], identity (Int 2))
+           ; Function ("identity", [], [ "n" ], identity (Int64 2L))
            ]
        })
 
@@ -8617,21 +8668,21 @@ let test_q_parsed_rule_inputs_interact_with_function_bindings () =
   let rules =
     [ { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ IdentityValue (QValue (Int 1), "x") ]
+      ; rule_body = [ IdentityValue (QValue (Int64 1L), "x") ]
       }
     ; { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ IdentityValue (QValue (Int 2), "x") ]
+      ; rule_body = [ IdentityValue (QValue (Int64 2L), "x") ]
       }
     ; { rule_name = "my-vals"
       ; rule_params = [ "x" ]
-      ; rule_body = [ IdentityValue (QValue (Int 3), "x") ]
+      ; rule_body = [ IdentityValue (QValue (Int64 3L), "x") ]
       }
     ]
   in
   assert_equal_query
     "q_string applies rules supplied through % after prior function bindings"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q_string
        ~inputs:[ Arg_rules rules ]
        (empty_db ())
@@ -8641,7 +8692,7 @@ let test_q_parsed_rule_inputs_interact_with_function_bindings () =
                 (my-vals ?n)]");
   assert_equal_query
     "q_string applies function bindings after rules supplied through %"
-    [ [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 2L) ] ]
     (q_string
        ~inputs:[ Arg_rules rules ]
        (empty_db ())
@@ -8811,8 +8862,8 @@ let test_q_parsed_rule_inputs_interact_with_function_bindings () =
   let db =
     empty_db ()
     |> db_with
-      [ Add (Entity_id 1, "age", Int 15)
-      ; Add (Entity_id 2, "age", Int 35)
+      [ Add (Entity_id 1, "age", Int64 15L)
+      ; Add (Entity_id 2, "age", Int64 35L)
       ]
   in
   assert_equal_query
@@ -8853,7 +8904,7 @@ let test_q_predicates_and_functions_reject_unbound_inputs () =
                    , [ QVar "x" ]
                    , [ "y" ]
                    , (function
-                     | [ Result_value (Int x) ] -> Some [ Result_value (Int (x + 1)) ]
+                     | [ Result_value (Int64 x) ] -> Some [ Result_value (Int64 (Int64.add x 1L)) ]
                      | _ -> None) )
                ]
            }))
@@ -8862,9 +8913,9 @@ let test_q_builtin_get_else_get_some_and_missing () =
   let db =
     empty_db ~schema:[ "parent", ref_attr ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 22); "height", One_value (Int 240); "parent", One_value (Ref 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Slava"); "age", One_value (Int 37); "parent", One_value (Ref 2) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 22L); "height", One_value (Int64 240L); "parent", One_value (Ref 1) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Slava"); "age", One_value (Int64 37L); "parent", One_value (Ref 2) ] }
          ]
   in
   let get_else_query =
@@ -8874,15 +8925,15 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ Pattern (QVar "e", QAttr "age", QVar "age")
-        ; GetElse (QVar "e", QAttr "height", QValue (Int 300), "height")
+        ; GetElse (QVar "e", QAttr "height", QValue (Int64 300L), "height")
         ]
     }
   in
   assert_equal_query
     "q get-else returns existing values or the default"
-    [ [ Result_entity 1; Result_value (Int 15); Result_value (Int 300) ]
-    ; [ Result_entity 2; Result_value (Int 22); Result_value (Int 240) ]
-    ; [ Result_entity 3; Result_value (Int 37); Result_value (Int 300) ]
+    [ [ Result_entity 1; Result_value (Int64 15L); Result_value (Int64 300L) ]
+    ; [ Result_entity 2; Result_value (Int64 22L); Result_value (Int64 240L) ]
+    ; [ Result_entity 3; Result_value (Int64 37L); Result_value (Int64 300L) ]
     ]
     (q db get_else_query);
   assert_equal_query
@@ -8916,9 +8967,9 @@ let test_q_builtin_get_else_get_some_and_missing () =
   in
   assert_equal_query
     "q get-some returns the first present attr and value"
-    [ [ Result_entity 1; Result_attr "age"; Result_value (Int 15) ]
-    ; [ Result_entity 2; Result_attr "height"; Result_value (Int 240) ]
-    ; [ Result_entity 3; Result_attr "age"; Result_value (Int 37) ]
+    [ [ Result_entity 1; Result_attr "age"; Result_value (Int64 15L) ]
+    ; [ Result_entity 2; Result_attr "height"; Result_value (Int64 240L) ]
+    ; [ Result_entity 3; Result_attr "age"; Result_value (Int64 37L) ]
     ]
     (q db get_some_query);
   let missing_query =
@@ -8934,7 +8985,7 @@ let test_q_builtin_get_else_get_some_and_missing () =
   in
   assert_equal_query
     "q missing filters entities that have no value for attr"
-    [ [ Result_entity 1; Result_value (Int 15) ]; [ Result_entity 3; Result_value (Int 37) ] ]
+    [ [ Result_entity 1; Result_value (Int64 15L) ]; [ Result_entity 3; Result_value (Int64 37L) ] ]
     (q db missing_query);
   let reverse_missing_query =
     { find = [ Find_var "e" ]
@@ -8973,15 +9024,15 @@ let test_q_builtin_get_else_get_some_and_missing () =
     ; rules = []
     ; where =
         [ SourcePattern ("people", QVar "e", QAttr "age", QWildcard)
-        ; SourceGetElse ("people", QVar "e", QAttr "height", QValue (Int 300), "height")
+        ; SourceGetElse ("people", QVar "e", QAttr "height", QValue (Int64 300L), "height")
         ]
     }
   in
   assert_equal_query
     "q source get-else evaluates against the named source"
-    [ [ Result_entity 1; Result_value (Int 300) ]
-    ; [ Result_entity 2; Result_value (Int 240) ]
-    ; [ Result_entity 3; Result_value (Int 300) ]
+    [ [ Result_entity 1; Result_value (Int64 300L) ]
+    ; [ Result_entity 2; Result_value (Int64 240L) ]
+    ; [ Result_entity 3; Result_value (Int64 300L) ]
     ]
     (q_sources (empty_db ()) [ "people", Db_source db ] source_get_else_query);
   let source_get_some_query =
@@ -8997,9 +9048,9 @@ let test_q_builtin_get_else_get_some_and_missing () =
   in
   assert_equal_query
     "q source get-some evaluates against the named source"
-    [ [ Result_entity 1; Result_attr "age"; Result_value (Int 15) ]
-    ; [ Result_entity 2; Result_attr "height"; Result_value (Int 240) ]
-    ; [ Result_entity 3; Result_attr "age"; Result_value (Int 37) ]
+    [ [ Result_entity 1; Result_attr "age"; Result_value (Int64 15L) ]
+    ; [ Result_entity 2; Result_attr "height"; Result_value (Int64 240L) ]
+    ; [ Result_entity 3; Result_attr "age"; Result_value (Int64 37L) ]
     ]
     (q_sources (empty_db ()) [ "people", Db_source db ] source_get_some_query)
 
@@ -9009,8 +9060,8 @@ let test_q_builtin_get_map_values () =
     ; inputs =
         [ Input_relation
             ( [ "label"; "m" ]
-            , [ [ Result_value (Keyword "a"); Result_value (Map [ Keyword "b", Int 1 ]) ]
-              ; [ Result_value (Keyword "c"); Result_value (Map [ Keyword "d", Int 2 ]) ]
+            , [ [ Result_value (Keyword "a"); Result_value (Map [ Keyword "b", Int64 1L ]) ]
+              ; [ Result_value (Keyword "c"); Result_value (Map [ Keyword "d", Int64 2L ]) ]
               ]
             )
         ; Input_scalar ("key", Result_value (Keyword "d"))
@@ -9025,7 +9076,7 @@ let test_q_builtin_get_map_values () =
   in
   assert_equal_query
     "q get returns map values and default values for missing keys"
-    [ [ Result_value (Int 2); Result_value (String "fallback") ] ]
+    [ [ Result_value (Int64 2L); Result_value (String "fallback") ] ]
     (q (empty_db ()) query);
   let collection_query =
     { find = [ Find_var "label"; Find_var "value" ]
@@ -9034,7 +9085,7 @@ let test_q_builtin_get_map_values () =
             ( [ "label"; "coll"; "key"; "default" ]
             , [ [ Result_value (String "list")
                 ; Result_value (List [ String "zero"; String "one" ])
-                ; Result_value (Int 1)
+                ; Result_value (Int64 1L)
                 ; Result_value (String "missing")
                 ]
               ; [ Result_value (String "set")
@@ -9043,13 +9094,13 @@ let test_q_builtin_get_map_values () =
                 ; Result_value (String "missing")
                 ]
               ; [ Result_value (String "tuple-nil")
-                ; Result_value (Tuple [ Some (Int 10); None; Some (Int 30) ])
-                ; Result_value (Int 1)
+                ; Result_value (Tuple [ Some (Int64 10L); None; Some (Int64 30L) ])
+                ; Result_value (Int64 1L)
                 ; Result_value (String "missing")
                 ]
               ; [ Result_value (String "default")
                 ; Result_value (List [ String "zero" ])
-                ; Result_value (Int 4)
+                ; Result_value (Int64 4L)
                 ; Result_value (String "missing")
                 ]
               ]
@@ -9077,7 +9128,7 @@ let test_q_builtin_count_values () =
             ( "x"
             , [ Result_value (String "a")
               ; Result_value (String "abc")
-              ; Result_value (List [ Int 1; Int 2 ])
+              ; Result_value (List [ Int64 1L; Int64 2L ])
               ]
             )
         ]
@@ -9088,9 +9139,9 @@ let test_q_builtin_count_values () =
   in
   assert_equal_query
     "q count returns string and collection sizes"
-    [ [ Result_value (String "a"); Result_value (Int 1) ]
-    ; [ Result_value (String "abc"); Result_value (Int 3) ]
-    ; [ Result_value (List [ Int 1; Int 2 ]); Result_value (Int 2) ]
+    [ [ Result_value (String "a"); Result_value (Int64 1L) ]
+    ; [ Result_value (String "abc"); Result_value (Int64 3L) ]
+    ; [ Result_value (List [ Int64 1L; Int64 2L ]); Result_value (Int64 2L) ]
     ]
     (q (empty_db ()) query)
 
@@ -9101,11 +9152,11 @@ let test_q_builtin_empty_and_not_empty_values () =
         , [ Result_value (String "")
           ; Result_value (String "a")
           ; Result_value (List [])
-          ; Result_value (List [ Int 1 ])
+          ; Result_value (List [ Int64 1L ])
           ; Result_value (Set [])
-          ; Result_value (Set [ Int 1 ])
+          ; Result_value (Set [ Int64 1L ])
           ; Result_value (Map [])
-          ; Result_value (Map [ Keyword "a", Int 1 ])
+          ; Result_value (Map [ Keyword "a", Int64 1L ])
           ]
         )
     ]
@@ -9125,9 +9176,9 @@ let test_q_builtin_empty_and_not_empty_values () =
   assert_equal_query
     "q not-empty filters non-empty values"
     [ [ Result_value (String "a") ]
-    ; [ Result_value (List [ Int 1 ]) ]
-    ; [ Result_value (Map [ Keyword "a", Int 1 ]) ]
-    ; [ Result_value (Set [ Int 1 ]) ]
+    ; [ Result_value (List [ Int64 1L ]) ]
+    ; [ Result_value (Map [ Keyword "a", Int64 1L ]) ]
+    ; [ Result_value (Set [ Int64 1L ]) ]
     ]
     (q (empty_db ()) not_empty_query)
 
@@ -9137,12 +9188,12 @@ let test_q_builtin_contains_values () =
     ; inputs =
         [ Input_relation
             ( [ "label"; "coll"; "key" ]
-            , [ [ Result_value (String "map"); Result_value (Map [ Keyword "a", Int 1 ]); Result_value (Keyword "a") ]
-              ; [ Result_value (String "map-miss"); Result_value (Map [ Keyword "a", Int 1 ]); Result_value (Keyword "b") ]
-              ; [ Result_value (String "set"); Result_value (Set [ Int 1; Int 2 ]); Result_value (Int 2) ]
-              ; [ Result_value (String "set-miss"); Result_value (Set [ Int 1; Int 2 ]); Result_value (Int 3) ]
-              ; [ Result_value (String "list"); Result_value (List [ String "a"; String "b" ]); Result_value (Int 1) ]
-              ; [ Result_value (String "list-miss"); Result_value (List [ String "a"; String "b" ]); Result_value (Int 2) ]
+            , [ [ Result_value (String "map"); Result_value (Map [ Keyword "a", Int64 1L ]); Result_value (Keyword "a") ]
+              ; [ Result_value (String "map-miss"); Result_value (Map [ Keyword "a", Int64 1L ]); Result_value (Keyword "b") ]
+              ; [ Result_value (String "set"); Result_value (Set [ Int64 1L; Int64 2L ]); Result_value (Int64 2L) ]
+              ; [ Result_value (String "set-miss"); Result_value (Set [ Int64 1L; Int64 2L ]); Result_value (Int64 3L) ]
+              ; [ Result_value (String "list"); Result_value (List [ String "a"; String "b" ]); Result_value (Int64 1L) ]
+              ; [ Result_value (String "list-miss"); Result_value (List [ String "a"; String "b" ]); Result_value (Int64 2L) ]
               ]
             )
         ]
@@ -9162,7 +9213,7 @@ let test_q_builtin_value_type_predicates () =
         ( [ "label"; "x" ]
         , [ [ Result_value (String "bool"); Result_value (Bool true) ]
           ; [ Result_value (String "float"); Result_value (Float 2.5) ]
-          ; [ Result_value (String "int"); Result_value (Int 1) ]
+          ; [ Result_value (String "int"); Result_value (Int64 1L) ]
           ; [ Result_value (String "keyword"); Result_value (Keyword "user/name") ]
           ; [ Result_value (String "string"); Result_value (String "Ivan") ]
           ]
@@ -9199,10 +9250,10 @@ let test_q_builtin_numeric_predicates () =
         ( [ "label"; "x" ]
         , [ [ Result_value (String "float-positive"); Result_value (Float 1.5) ]
           ; [ Result_value (String "float-zero"); Result_value (Float 0.0) ]
-          ; [ Result_value (String "negative"); Result_value (Int (-2)) ]
-          ; [ Result_value (String "odd-negative"); Result_value (Int (-1)) ]
-          ; [ Result_value (String "positive"); Result_value (Int 3) ]
-          ; [ Result_value (String "zero"); Result_value (Int 0) ]
+          ; [ Result_value (String "negative"); Result_value (Int64 (-2L)) ]
+          ; [ Result_value (String "odd-negative"); Result_value (Int64 (-1L)) ]
+          ; [ Result_value (String "positive"); Result_value (Int64 3L) ]
+          ; [ Result_value (String "zero"); Result_value (Int64 0L) ]
           ; [ Result_value (String "string"); Result_value (String "0") ]
           ]
         )
@@ -9236,10 +9287,10 @@ let test_q_builtin_comparison_predicates () =
   let inputs =
     [ Input_relation
         ( [ "label"; "x"; "y" ]
-        , [ [ Result_value (String "equal"); Result_value (Int 2); Result_value (Float 2.0) ]
-          ; [ Result_value (String "greater"); Result_value (Int 3); Result_value (Int 2) ]
+        , [ [ Result_value (String "equal"); Result_value (Int64 2L); Result_value (Float 2.0) ]
+          ; [ Result_value (String "greater"); Result_value (Int64 3L); Result_value (Int64 2L) ]
           ; [ Result_value (String "keyword"); Result_value (Keyword "user/name"); Result_value (Keyword "user/score") ]
-          ; [ Result_value (String "less"); Result_value (Int 1); Result_value (Int 2) ]
+          ; [ Result_value (String "less"); Result_value (Int64 1L); Result_value (Int64 2L) ]
           ]
         )
     ]
@@ -9270,9 +9321,9 @@ let test_q_builtin_variadic_comparison_predicates () =
   let inputs =
     [ Input_relation
         ( [ "label"; "x"; "y"; "z" ]
-        , [ [ Result_value (String "ascending"); Result_value (Int 1); Result_value (Int 2); Result_value (Int 3) ]
-          ; [ Result_value (String "descending"); Result_value (Int 3); Result_value (Int 2); Result_value (Int 1) ]
-          ; [ Result_value (String "equal"); Result_value (Int 2); Result_value (Int 2); Result_value (Int 2) ]
+        , [ [ Result_value (String "ascending"); Result_value (Int64 1L); Result_value (Int64 2L); Result_value (Int64 3L) ]
+          ; [ Result_value (String "descending"); Result_value (Int64 3L); Result_value (Int64 2L); Result_value (Int64 1L) ]
+          ; [ Result_value (String "equal"); Result_value (Int64 2L); Result_value (Int64 2L); Result_value (Int64 2L) ]
           ]
         )
     ]
@@ -9308,8 +9359,8 @@ let test_q_builtin_equality_predicates () =
   let inputs =
     [ Input_relation
         ( [ "label"; "x"; "y"; "z" ]
-        , [ [ Result_value (String "all-equal"); Result_value (Int 1); Result_value (Float 1.0); Result_value (Int 1) ]
-          ; [ Result_value (String "different"); Result_value (Int 1); Result_value (Int 2); Result_value (Int 1) ]
+        , [ [ Result_value (String "all-equal"); Result_value (Int64 1L); Result_value (Float 1.0); Result_value (Int64 1L) ]
+          ; [ Result_value (String "different"); Result_value (Int64 1L); Result_value (Int64 2L); Result_value (Int64 1L) ]
           ; [ Result_value (String "keyword-equal"); Result_value (Keyword "a/b"); Result_value (Keyword "a/b"); Result_value (Keyword "a/b") ]
           ]
         )
@@ -9345,7 +9396,7 @@ let test_q_builtin_arithmetic_values () =
         ; Find_var "decremented"
         ]
     ; inputs =
-        [ Input_scalar ("x", Result_value (Int 6))
+        [ Input_scalar ("x", Result_value (Int64 6L))
         ; Input_scalar ("y", Result_value (Float 2.5))
         ]
     ; with_vars = []
@@ -9354,7 +9405,7 @@ let test_q_builtin_arithmetic_values () =
         [ ArithmeticValue (AddNumbers, [ QVar "x"; QVar "y" ], "sum")
         ; ArithmeticValue (SubtractNumbers, [ QVar "x"; QVar "y" ], "difference")
         ; ArithmeticValue (MultiplyNumbers, [ QVar "x"; QVar "y" ], "product")
-        ; ArithmeticValue (DivideNumbers, [ QVar "x"; QValue (Int 2) ], "quotient")
+        ; ArithmeticValue (DivideNumbers, [ QVar "x"; QValue (Int64 2L) ], "quotient")
         ; ArithmeticValue (IncrementNumber, [ QVar "x" ], "incremented")
         ; ArithmeticValue (DecrementNumber, [ QVar "x" ], "decremented")
         ]
@@ -9365,9 +9416,9 @@ let test_q_builtin_arithmetic_values () =
     [ [ Result_value (Float 8.5)
       ; Result_value (Float 3.5)
       ; Result_value (Float 15.0)
-      ; Result_value (Int 3)
-      ; Result_value (Int 7)
-      ; Result_value (Int 5)
+      ; Result_value (Int64 3L)
+      ; Result_value (Int64 7L)
+      ; Result_value (Int64 5L)
       ]
     ]
     (q (empty_db ()) query)
@@ -9376,8 +9427,8 @@ let test_q_builtin_integer_arithmetic_values () =
   let query =
     { find = [ Find_var "quotient"; Find_var "remainder"; Find_var "modulo" ]
     ; inputs =
-        [ Input_scalar ("x", Result_value (Int (-7)))
-        ; Input_scalar ("y", Result_value (Int 3))
+        [ Input_scalar ("x", Result_value (Int64 (-7L)))
+        ; Input_scalar ("y", Result_value (Int64 3L))
         ]
     ; with_vars = []
     ; rules = []
@@ -9390,7 +9441,7 @@ let test_q_builtin_integer_arithmetic_values () =
   in
   assert_equal_query
     "q integer arithmetic built-ins derive quot rem and mod values"
-    [ [ Result_value (Int (-2)); Result_value (Int (-1)); Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 (-2L)); Result_value (Int64 (-1L)); Result_value (Int64 2L) ] ]
     (q (empty_db ()) query)
 
 let test_q_builtin_compare_min_max_values () =
@@ -9401,17 +9452,17 @@ let test_q_builtin_compare_min_max_values () =
     ; rules = []
     ; where =
         [ CompareValue (QValue (Keyword "user/name"), QValue (Keyword "user/score"), "comparison")
-        ; ExtremumValue (MinimumValue, [ QValue (Int 3); QValue (Float 2.5); QValue (Int 4) ], "least")
-        ; ExtremumValue (MaximumValue, [ QValue (Int 3); QValue (Float 2.5); QValue (Int 4) ], "greatest")
+        ; ExtremumValue (MinimumValue, [ QValue (Int64 3L); QValue (Float 2.5); QValue (Int64 4L) ], "least")
+        ; ExtremumValue (MaximumValue, [ QValue (Int64 3L); QValue (Float 2.5); QValue (Int64 4L) ], "greatest")
         ; ExtremumValue (MinimumValue, [ QValue (Keyword "user/score"); QValue (Keyword "user/name") ], "keyword-min")
         ]
     }
   in
   assert_equal_query
     "q compare min and max use DataScript value ordering"
-    [ [ Result_value (Int (-1))
+    [ [ Result_value (Int64 (-1L))
       ; Result_value (Float 2.5)
-      ; Result_value (Int 4)
+      ; Result_value (Int64 4L)
       ; Result_value (Keyword "user/name")
       ]
     ]
@@ -9422,7 +9473,7 @@ let test_q_builtin_boolean_predicates () =
     [ Input_relation
         ( [ "label"; "x" ]
         , [ [ Result_value (String "false"); Result_value (Bool false) ]
-          ; [ Result_value (String "int"); Result_value (Int 1) ]
+          ; [ Result_value (String "int"); Result_value (Int64 1L) ]
           ; [ Result_value (String "nil"); Result_value Nil ]
           ; [ Result_value (String "true"); Result_value (Bool true) ]
           ]
@@ -9487,20 +9538,20 @@ let test_q_builtin_random_values () =
       ; inputs = []
       ; with_vars = []
       ; rules = []
-      ; where = [ RandomValue "rand"; RandomIntValue (QValue (Int 10), "rand-int") ]
+      ; where = [ RandomValue "rand"; RandomIntValue (QValue (Int64 10L), "rand-int") ]
       }
   with
-  | [ [ Result_value (Float rand); Result_value (Int rand_int) ] ] ->
+  | [ [ Result_value (Float rand); Result_value (Int64 rand_int) ] ] ->
     if rand < 0.0 || rand >= 1.0 then failwith "rand should be in [0, 1)";
-    if rand_int < 0 || rand_int >= 10 then failwith "rand-int should be in [0, n)"
+    if rand_int < 0L || rand_int >= 10L then failwith "rand-int should be in [0, n)"
   | _ -> failwith "unexpected random query result"
 
 let test_q_builtin_differ_and_identical_predicates () =
   let inputs =
     [ Input_relation
         ( [ "label"; "a"; "b"; "c"; "d" ]
-        , [ [ Result_value (String "different"); Result_value (Int 1); Result_value (Int 2); Result_value (Int 1); Result_value (Int 3) ]
-          ; [ Result_value (String "same"); Result_value (Int 1); Result_value (Int 2); Result_value (Float 1.0); Result_value (Int 2) ]
+        , [ [ Result_value (String "different"); Result_value (Int64 1L); Result_value (Int64 2L); Result_value (Int64 1L); Result_value (Int64 3L) ]
+          ; [ Result_value (String "same"); Result_value (Int64 1L); Result_value (Int64 2L); Result_value (Float 1.0); Result_value (Int64 2L) ]
           ]
         )
     ]
@@ -9535,9 +9586,9 @@ let test_q_builtin_type_values () =
         [ Input_relation
             ( [ "label"; "x" ]
             , [ [ Result_value (String "bool"); Result_value (Bool true) ]
-              ; [ Result_value (String "int"); Result_value (Int 1) ]
+              ; [ Result_value (String "int"); Result_value (Int64 1L) ]
               ; [ Result_value (String "keyword"); Result_value (Keyword "user/name") ]
-              ; [ Result_value (String "list"); Result_value (List [ Int 1 ]) ]
+              ; [ Result_value (String "list"); Result_value (List [ Int64 1L ]) ]
               ; [ Result_value (String "string"); Result_value (String "Ivan") ]
               ]
             )
@@ -9756,7 +9807,7 @@ let test_q_builtin_string_index_values () =
   in
   assert_equal_query
     "q string index built-ins derive first and last match positions"
-    [ [ Result_value (String "hit"); Result_value (Int 2); Result_value (Int 4) ] ]
+    [ [ Result_value (String "hit"); Result_value (Int64 2L); Result_value (Int64 4L) ] ]
     (q (empty_db ()) query)
 
 let test_q_builtin_string_substring_values () =
@@ -9766,8 +9817,8 @@ let test_q_builtin_string_substring_values () =
     ; with_vars = []
     ; rules = []
     ; where =
-        [ StringSubstringValue (QVar "s", QValue (Int 4), Some (QValue (Int 10)), "part")
-        ; StringSubstringValue (QVar "s", QValue (Int 4), None, "suffix")
+        [ StringSubstringValue (QVar "s", QValue (Int64 4L), Some (QValue (Int64 10L)), "part")
+        ; StringSubstringValue (QVar "s", QValue (Int64 4L), None, "suffix")
         ]
     }
   in
@@ -9785,7 +9836,7 @@ let test_q_builtin_string_substring_values () =
             ; inputs = [ Input_scalar ("s", Result_value (String "data")) ]
             ; with_vars = []
             ; rules = []
-            ; where = [ StringSubstringValue (QVar "s", QValue (Int 3), Some (QValue (Int 5)), "part") ]
+            ; where = [ StringSubstringValue (QVar "s", QValue (Int64 3L), Some (QValue (Int64 5L)), "part") ]
             }))
 
 let test_q_builtin_string_build_and_join_values () =
@@ -9794,7 +9845,7 @@ let test_q_builtin_string_build_and_join_values () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ StringBuildValue ([ QValue (String "score="); QValue (Int 42); QValue (Bool true) ], "s") ]
+    ; where = [ StringBuildValue ([ QValue (String "score="); QValue (Int64 42L); QValue (Bool true) ], "s") ]
     }
   in
   assert_equal_query
@@ -9829,10 +9880,10 @@ let test_q_builtin_print_string_values () =
     ; with_vars = []
     ; rules = []
     ; where =
-        [ PrintStringValue ([ QValue (String "hi"); QValue (Keyword "user/name"); QValue (Int 2) ], "printed")
-        ; PrStringValue ([ QValue (String "hi"); QValue (Keyword "user/name"); QValue (Int 2) ], "readable")
-        ; PrintLineStringValue ([ QValue (String "hi"); QValue (Int 2) ], "line")
-        ; PrnStringValue ([ QValue (String "hi"); QValue (Int 2) ], "readable_line")
+        [ PrintStringValue ([ QValue (String "hi"); QValue (Keyword "user/name"); QValue (Int64 2L) ], "printed")
+        ; PrStringValue ([ QValue (String "hi"); QValue (Keyword "user/name"); QValue (Int64 2L) ], "readable")
+        ; PrintLineStringValue ([ QValue (String "hi"); QValue (Int64 2L) ], "line")
+        ; PrnStringValue ([ QValue (String "hi"); QValue (Int64 2L) ], "readable_line")
         ]
     }
   in
@@ -9992,7 +10043,7 @@ let test_q_builtin_string_blank_and_split_values () =
         [ StringSplitValue (QVar "csv", QValue (String ","), "parts")
         ; RePatternValue (QValue (String "[,;]"), "separator")
         ; StringSplitValue (QVar "mixed", QVar "separator", "regex-parts")
-        ; StringSplitLimitValue (QVar "mixed", QVar "separator", QValue (Int 2), "limited-parts")
+        ; StringSplitLimitValue (QVar "mixed", QVar "separator", QValue (Int64 2L), "limited-parts")
         ; StringSplitLinesValue (QVar "text", "lines")
         ]
     }
@@ -10015,13 +10066,13 @@ let test_q_builtin_vector_values () =
     ; rules = []
     ; where =
         [ Ground (Keyword "db/add", "op")
-        ; VectorValue ([ QVar "op"; QValue (Int (-1)); QAttr "attr"; QValue (Int 12) ], "tx_data")
+        ; VectorValue ([ QVar "op"; QValue (Int64 (-1L)); QAttr "attr"; QValue (Int64 12L) ], "tx_data")
         ]
     }
   in
   assert_equal_query
     "q vector builds a vector value from bound terms"
-    [ [ Result_value (Vector [ Keyword "db/add"; Int (-1); Keyword "attr"; Int 12 ]) ] ]
+    [ [ Result_value (Vector [ Keyword "db/add"; Int64 (-1L); Keyword "attr"; Int64 12L ]) ] ]
     (q (empty_db ()) query)
 
 let test_q_builtin_vector_captures_bound_row_values () =
@@ -10054,8 +10105,8 @@ let test_q_builtin_hash_map_values () =
   let query =
     { find = [ Find_var "m" ]
     ; inputs =
-        [ Input_scalar ("left", Result_value (Int 1))
-        ; Input_scalar ("right", Result_value (Int 2))
+        [ Input_scalar ("left", Result_value (Int64 1L))
+        ; Input_scalar ("right", Result_value (Int64 2L))
         ]
     ; with_vars = []
     ; rules = []
@@ -10068,7 +10119,7 @@ let test_q_builtin_hash_map_values () =
   in
   assert_equal_query
     "q hash-map builds a map value from bound key/value terms"
-    [ [ Result_value (Map [ Keyword "left", Int 1; Keyword "right", Int 2 ]) ] ]
+    [ [ Result_value (Map [ Keyword "left", Int64 1L; Keyword "right", Int64 2L ]) ] ]
     (q (empty_db ()) query);
   let array_map_query =
     { find = [ Find_var "m" ]
@@ -10077,21 +10128,21 @@ let test_q_builtin_hash_map_values () =
     ; rules = []
     ; where =
         [ ArrayMapValue
-            ( [ QAttr "right"; QValue (Int 2); QAttr "left"; QValue (Int 1) ]
+            ( [ QAttr "right"; QValue (Int64 2L); QAttr "left"; QValue (Int64 1L) ]
             , "m" )
         ]
     }
   in
   assert_equal_query
     "q array-map builds a normalized map value from key/value terms"
-    [ [ Result_value (Map [ Keyword "left", Int 1; Keyword "right", Int 2 ]) ] ]
+    [ [ Result_value (Map [ Keyword "left", Int64 1L; Keyword "right", Int64 2L ]) ] ]
     (q (empty_db ()) array_map_query);
   let odd_query =
     { find = [ Find_var "m" ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ HashMapValue ([ QAttr "left"; QValue (Int 1); QAttr "right" ], "m") ]
+    ; where = [ HashMapValue ([ QAttr "left"; QValue (Int64 1L); QAttr "right" ], "m") ]
     }
   in
   assert_raises_invalid_arg
@@ -10104,24 +10155,24 @@ let test_q_builtin_list_and_set_values () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ ListValue ([ QValue (Int 2); QValue (Int 1); QValue (Int 1) ], "xs") ]
+    ; where = [ ListValue ([ QValue (Int64 2L); QValue (Int64 1L); QValue (Int64 1L) ], "xs") ]
     }
   in
   assert_equal_query
     "q list builds an ordered list value"
-    [ [ Result_value (List [ Int 2; Int 1; Int 1 ]) ] ]
+    [ [ Result_value (List [ Int64 2L; Int64 1L; Int64 1L ]) ] ]
     (q (empty_db ()) list_query);
   let set_query =
     { find = [ Find_var "xs" ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ SetValue ([ QValue (Int 2); QValue (Int 1); QValue (Int 1) ], "xs") ]
+    ; where = [ SetValue ([ QValue (Int64 2L); QValue (Int64 1L); QValue (Int64 1L) ], "xs") ]
     }
   in
   assert_equal_query
     "q set builds a normalized set value"
-    [ [ Result_value (Set [ Int 1; Int 2 ]) ] ]
+    [ [ Result_value (Set [ Int64 1L; Int64 2L ]) ] ]
     (q (empty_db ()) set_query)
 
 let test_q_builtin_range_values () =
@@ -10130,19 +10181,19 @@ let test_q_builtin_range_values () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeEndValue (QValue (Int 3), "x") ]
+    ; where = [ RangeEndValue (QValue (Int64 3L), "x") ]
     }
   in
   assert_equal_query
     "q range expands a single positive end bound from zero"
-    [ [ Result_value (Int 0) ]; [ Result_value (Int 1) ]; [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 0L) ]; [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ] ]
     (q (empty_db ()) end_query);
   let negative_end_query =
     { find = [ Find_var "x" ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeEndValue (QValue (Int (-2)), "x") ]
+    ; where = [ RangeEndValue (QValue (Int64 (-2L)), "x") ]
     }
   in
   assert_equal_query
@@ -10154,19 +10205,19 @@ let test_q_builtin_range_values () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeValue (QValue (Int 1), QValue (Int 4), "x") ]
+    ; where = [ RangeValue (QValue (Int64 1L), QValue (Int64 4L), "x") ]
     }
   in
   assert_equal_query
     "q range expands an integer range into result rows"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 2) ]; [ Result_value (Int 3) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ]; [ Result_value (Int64 3L) ] ]
     (q (empty_db ()) query);
   let empty_query =
     { find = [ Find_var "x" ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeValue (QValue (Int 4), QValue (Int 1), "x") ]
+    ; where = [ RangeValue (QValue (Int64 4L), QValue (Int64 1L), "x") ]
     }
   in
   assert_equal_query
@@ -10178,24 +10229,24 @@ let test_q_builtin_range_values () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeStepValue (QValue (Int 1), QValue (Int 8), QValue (Int 3), "x") ]
+    ; where = [ RangeStepValue (QValue (Int64 1L), QValue (Int64 8L), QValue (Int64 3L), "x") ]
     }
   in
   assert_equal_query
     "q range expands with a positive step"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 4) ]; [ Result_value (Int 7) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 4L) ]; [ Result_value (Int64 7L) ] ]
     (q (empty_db ()) stepped_query);
   let descending_query =
     { find = [ Find_var "x" ]
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ RangeStepValue (QValue (Int 8), QValue (Int 1), QValue (Int (-3)), "x") ]
+    ; where = [ RangeStepValue (QValue (Int64 8L), QValue (Int64 1L), QValue (Int64 (-3L)), "x") ]
     }
   in
   assert_equal_query
     "q range expands with a negative step"
-    [ [ Result_value (Int 2) ]; [ Result_value (Int 5) ]; [ Result_value (Int 8) ] ]
+    [ [ Result_value (Int64 2L) ]; [ Result_value (Int64 5L) ]; [ Result_value (Int64 8L) ] ]
     (q (empty_db ()) descending_query);
   assert_raises_invalid_arg
     "q range rejects zero step"
@@ -10207,15 +10258,15 @@ let test_q_builtin_range_values () =
             ; inputs = []
             ; with_vars = []
             ; rules = []
-            ; where = [ RangeStepValue (QValue (Int 1), QValue (Int 4), QValue (Int 0), "x") ]
+            ; where = [ RangeStepValue (QValue (Int64 1L), QValue (Int64 4L), QValue (Int64 0L), "x") ]
             }))
 
 let test_q_builtin_tuple_and_untuple () =
   let tuple_query =
     { find = [ Find_var "pair" ]
     ; inputs =
-        [ Input_scalar ("a", Result_value (Int 1))
-        ; Input_scalar ("b", Result_value (Int 2))
+        [ Input_scalar ("a", Result_value (Int64 1L))
+        ; Input_scalar ("b", Result_value (Int64 2L))
         ]
     ; with_vars = []
     ; rules = []
@@ -10224,7 +10275,7 @@ let test_q_builtin_tuple_and_untuple () =
   in
   assert_equal_query
     "q tuple builds a tuple value from bound terms"
-    [ [ Result_value (Tuple [ Some (Int 1); Some (Int 2) ]) ] ]
+    [ [ Result_value (Tuple [ Some (Int64 1L); Some (Int64 2L) ]) ] ]
     (q (empty_db ()) tuple_query);
   let untuple_query =
     { find = [ Find_var "b" ]
@@ -10399,7 +10450,7 @@ let test_q_builtin_function_insufficient_bindings_match_upstream_messages () =
     (fun () ->
        ignore
          (q_string
-            ~inputs:[ Arg_collection [ Result_value (Int 1) ] ]
+            ~inputs:[ Arg_collection [ Result_value (Int64 1L) ] ]
             db
             "[:find ?e
               :in [?e ...]
@@ -10410,7 +10461,7 @@ let test_q_builtin_function_insufficient_bindings_match_upstream_messages () =
     (fun () ->
        ignore
          (q_string
-            ~inputs:[ Arg_collection [ Result_value (Int 1) ] ]
+            ~inputs:[ Arg_collection [ Result_value (Int64 1L) ] ]
             db
             "[:find ?e ?x
               :in [?e ...]
@@ -10503,8 +10554,8 @@ let test_q_not_insufficient_bindings_match_upstream_messages () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 20) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 20L) ] }
          ]
   in
   assert_raises_invalid_arg_message
@@ -10534,9 +10585,9 @@ let test_q_not_join_projects_join_variables () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1970) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1971) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int 1971) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1970L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1971L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int64 1971L) ] }
          ]
   in
   let query =
@@ -10549,7 +10600,7 @@ let test_q_not_join_projects_join_variables () =
         ; Pattern (QVar "release", QAttr "year", QVar "year")
         ; NotJoin
             ( [ "artist" ]
-            , [ Pattern (QVar "release", QAttr "year", QValue (Int 1970))
+            , [ Pattern (QVar "release", QAttr "year", QValue (Int64 1970L))
               ; Pattern (QVar "release", QAttr "artist", QVar "artist")
               ]
             )
@@ -10590,12 +10641,12 @@ let test_q_not_matches_upstream_edge_cases () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 20) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 20) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 6); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 20) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 20L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 20L) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 20L) ] }
          ]
   in
   assert_equal_query
@@ -10735,7 +10786,7 @@ let test_q_or_allows_branch_vars_bound_by_outer_clauses () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 10L) ] }
          ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr") ] }
          ]
   in
@@ -10747,7 +10798,7 @@ let test_q_or_allows_branch_vars_bound_by_outer_clauses () =
     ; where =
         [ Pattern (QVar "e", QAttr "name", QVar "name")
         ; Or
-            [ [ Pattern (QVar "e", QAttr "age", QValue (Int 10)) ]
+            [ [ Pattern (QVar "e", QAttr "age", QValue (Int64 10L)) ]
             ; [ Pattern (QVar "e", QAttr "name", QVar "name") ]
             ]
         ]
@@ -10762,9 +10813,9 @@ let test_q_or_join_projects_join_variables () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1970) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int 1971) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int 1971) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1970L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "artist", One_value (String "A"); "year", One_value (Int64 1971L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "artist", One_value (String "B"); "year", One_value (Int64 1971L) ] }
          ]
   in
   let query =
@@ -10776,10 +10827,10 @@ let test_q_or_join_projects_join_variables () =
         [ Pattern (QVar "release", QAttr "artist", QVar "artist")
         ; OrJoin
             ( [ "artist" ]
-            , [ [ Pattern (QVar "release", QAttr "year", QValue (Int 1970))
+            , [ [ Pattern (QVar "release", QAttr "year", QValue (Int64 1970L))
                 ; Pattern (QVar "release", QAttr "artist", QVar "artist")
                 ]
-              ; [ Pattern (QVar "release", QAttr "year", QValue (Int 1972))
+              ; [ Pattern (QVar "release", QAttr "year", QValue (Int64 1972L))
                 ; Pattern (QVar "release", QAttr "artist", QVar "artist")
                 ]
               ]
@@ -10823,7 +10874,7 @@ let test_q_or_join_rejects_branches_missing_unbound_listed_vars () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 10) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 10L) ] }
          ]
   in
   assert_raises_invalid_arg
@@ -10901,16 +10952,16 @@ let test_q_or_join_required_vars_use_outer_bindings () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 11) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int64 11L) ] }
          ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg") ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int 10); "name", One_value (String "Ivan") ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "age", One_value (Int 11); "name", One_value (String "Oleg") ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "age", One_value (Int64 10L); "name", One_value (String "Ivan") ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "age", One_value (Int64 11L); "name", One_value (String "Oleg") ] }
          ]
   in
   let query =
     { find = [ Find_var "e" ]
-    ; inputs = [ Input_scalar ("a", Result_value (Int 10)) ]
+    ; inputs = [ Input_scalar ("a", Result_value (Int64 10L)) ]
     ; with_vars = []
     ; rules = []
     ; where =
@@ -10949,8 +11000,8 @@ let test_q_source_qualified_composite_clauses () =
   let ages =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 20) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int64 20L) ] }
          ]
   in
   let source_not_query =
@@ -10960,7 +11011,7 @@ let test_q_source_qualified_composite_clauses () =
     ; rules = []
     ; where =
         [ SourcePattern ("names", QVar "e", QAttr "name", QWildcard)
-        ; SourceNot ("ages", [ Pattern (QVar "e", QAttr "age", QValue (Int 10)) ])
+        ; SourceNot ("ages", [ Pattern (QVar "e", QAttr "age", QValue (Int64 10L)) ])
         ]
     }
   in
@@ -10977,8 +11028,8 @@ let test_q_source_qualified_composite_clauses () =
         [ SourcePattern ("names", QVar "e", QAttr "name", QWildcard)
         ; SourceOr
             ( "ages"
-            , [ [ Pattern (QVar "e", QAttr "age", QValue (Int 10)) ]
-              ; [ Pattern (QVar "e", QAttr "age", QValue (Int 20)) ]
+            , [ [ Pattern (QVar "e", QAttr "age", QValue (Int64 10L)) ]
+              ; [ Pattern (QVar "e", QAttr "age", QValue (Int64 20L)) ]
               ]
             )
         ]
@@ -11000,8 +11051,8 @@ let test_q_not_or_upstream_source_and_relation_batch () =
   let ages =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int 20) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "age", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "age", One_value (Int64 20L) ] }
          ]
   in
   assert_equal_query
@@ -11129,7 +11180,7 @@ let test_q_with_entity_ref_inputs () =
   let db =
     empty_db ~schema:[ "name", unique_identity; "friend", ref_attr ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
          ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "friend", One_value (Ref 1) ] }
          ]
   in
@@ -11143,7 +11194,7 @@ let test_q_with_entity_ref_inputs () =
   in
   assert_equal_query
     "q resolves lookup-ref scalar inputs for entity positions"
-    [ [ Result_value (Int 31) ] ]
+    [ [ Result_value (Int64 31L) ] ]
     (q db by_entity);
   let by_value =
     { find = [ Find_var "friend" ]
@@ -11206,8 +11257,8 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 22); "height", One_value (Int 240) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 22L); "height", One_value (Int64 240L) ] }
          ]
   in
   let get_else_query =
@@ -11244,7 +11295,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
   in
   assert_equal_query
     "q get-some resolves preserved lookup-ref scalar inputs"
-    [ [ Result_value (Ref_to (Lookup_ref ("name", String "Petr"))); Result_attr "age"; Result_value (Int 22) ] ]
+    [ [ Result_value (Ref_to (Lookup_ref ("name", String "Petr"))); Result_attr "age"; Result_value (Int64 22L) ] ]
     (q db get_some_query);
   let direct_get_some_query =
     { find = [ Find_var "person"; Find_var "attr"; Find_var "value" ]
@@ -11256,7 +11307,7 @@ let test_q_with_lookup_ref_inputs_in_entity_builtins () =
   in
   assert_equal_query
     "q get-some resolves lookup-ref entity inputs like upstream issue-445"
-    [ [ Result_entity 2; Result_attr "age"; Result_value (Int 22) ] ]
+    [ [ Result_entity 2; Result_attr "age"; Result_value (Int64 22L) ] ]
     (q db direct_get_some_query)
 
 let test_q_with_relation_inputs () =
@@ -11352,16 +11403,16 @@ let test_q_with_dynamic_callable_inputs () =
     |> db_with
          [ Entity
              { db_id = Some (Entity_id 1)
-             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ]
+             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ]
              }
          ; Entity
              { db_id = Some (Entity_id 2)
-             ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 19) ]
+             ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 19L) ]
              }
          ]
   in
   let adult = function
-    | [ Result_value (Int age) ] -> age >= 21
+    | [ Result_value (Int64 age) ] -> age >= 21L
     | _ -> false
   in
   assert_equal_query
@@ -11391,7 +11442,7 @@ let test_q_with_dynamic_callable_inputs () =
          :where [?e :name ?name]
                 [(?label-fn ?name) ?label]]");
   let five = function
-    | [] -> Some [ Result_value (Int 5) ]
+    | [] -> Some [ Result_value (Int64 5L) ]
     | _ -> None
   in
   assert_equal_query
@@ -11409,15 +11460,15 @@ let test_q_with_dynamic_callable_inputs () =
     "q_string skips dynamic predicates when their binding relation is empty like upstream issue-180"
     []
     (q_string
-       (empty_db () |> db_with [ Add (Entity_id 1, "age", Int 20) ])
+       (empty_db () |> db_with [ Add (Entity_id 1, "age", Int64 20L) ])
        "[:find ?e ?age
          :where [_ :pred ?pred]
                 [?e :age ?age]
                 [(?pred ?age)]]");
   let age_matches = function
-    | [ Result_db source_db; Result_entity entity_id; Result_value (Int expected_age) ] ->
+    | [ Result_db source_db; Result_entity entity_id; Result_value (Int64 expected_age) ] ->
       (match entity source_db (Entity_id entity_id) with
-       | Some entity -> entity_attr entity "age" = Some (One_value (Int expected_age))
+       | Some entity -> entity_attr entity "age" = Some (One_value (Int64 expected_age))
        | None -> false)
     | _ -> false
   in
@@ -11445,26 +11496,26 @@ let test_q_with_dynamic_callable_inputs () =
                 [$people ?e :age ?age]
                 [(?age-matches $people ?e ?age)]]");
   let range_values = function
-    | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+    | [ Result_value (Int64 min_value); Result_value (Int64 max_value) ] ->
       let rec collect value acc =
         if value >= max_value then List.rev acc
-        else collect (value + 1) (Int value :: acc)
+        else collect (Int64.add value 1L) (Int64 value :: acc)
       in
       Some [ Result_value (List (collect min_value [])) ]
     | _ -> None
   in
   assert_equal_query
     "q_string accepts dynamic function inputs with collection output bindings"
-    [ [ Result_value (Keyword "a"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 6) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 6L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_relation
-             [ [ Result_value (Keyword "a"); Result_value (List [ Int 1; Int 7 ]) ]
-             ; [ Result_value (Keyword "b"); Result_value (List [ Int 2; Int 4 ]) ]
+             [ [ Result_value (Keyword "a"); Result_value (List [ Int64 1L; Int64 7L ]) ]
+             ; [ Result_value (Keyword "b"); Result_value (List [ Int64 2L; Int64 4L ]) ]
              ]
          ; Arg_function range_values
          ]
@@ -11500,21 +11551,21 @@ let test_q_with_dynamic_callable_inputs () =
 let test_q_nested_relation_map_inputs () =
   assert_equal_query
     "q_string supports queries with only scalar inputs and no db source"
-    [ [ Result_value (Int 10); Result_value (Int 20) ] ]
+    [ [ Result_value (Int64 10L); Result_value (Int64 20L) ] ]
     (q_string
-       ~inputs:[ Arg_scalar (Result_value (Int 10)); Arg_scalar (Result_value (Int 20)) ]
+       ~inputs:[ Arg_scalar (Result_value (Int64 10L)); Arg_scalar (Result_value (Int64 20L)) ]
        (empty_db ())
        "[:find ?a ?b :in ?a ?b]");
   assert_equal_query
     "q_string binds plain map inputs as relation rows"
-    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    [ [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int64 3L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
-                (Map [ Keyword "a", Int 1; Keyword "b", Int 2; Keyword "c", Int 3 ]))
+                (Map [ Keyword "a", Int64 1L; Keyword "b", Int64 2L; Keyword "c", Int64 3L ]))
          ]
        (empty_db ())
        "[:find ?k ?v
@@ -11528,28 +11579,28 @@ let test_q_nested_relation_map_inputs () =
          let min_value, max_value =
            List.fold_left
              (fun (min_value, max_value) -> function
-                | Int value -> min min_value value, max max_value value
+                | Int64 value -> Int64.min min_value value, Int64.max max_value value
                 | _ -> min_value, max_value)
              (match first with
-              | Int value -> value, value
-              | _ -> 0, 0)
+              | Int64 value -> value, value
+              | _ -> 0L, 0L)
              rest
          in
-         Some [ Result_value (Int min_value); Result_value (Int max_value) ])
+         Some [ Result_value (Int64 min_value); Result_value (Int64 max_value) ])
     | _ -> None
   in
   assert_equal_query
     "q_string binds map relation rows through dynamic tuple outputs"
-    [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 5); Result_value (Int 7) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 1L); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 5L); Result_value (Int64 7L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1; Int 2; Int 4 ]
-                   ; Keyword "b", List [ Int 5; Int 7 ]
+                   [ Keyword "a", List [ Int64 1L; Int64 2L; Int64 4L ]
+                   ; Keyword "b", List [ Int64 5L; Int64 7L ]
                    ]))
          ; Arg_function minmax
          ]
@@ -11559,28 +11610,28 @@ let test_q_nested_relation_map_inputs () =
          :where [(?minmax ?v) [?min ?max]]
                 [(> ?max ?min)]]");
   let range_values = function
-    | [ Result_value (Int min_value); Result_value (Int max_value) ] ->
+    | [ Result_value (Int64 min_value); Result_value (Int64 max_value) ] ->
       let rec collect value acc =
         if value >= max_value then List.rev acc
-        else collect (value + 1) (Int value :: acc)
+        else collect (Int64.add value 1L) (Int64 value :: acc)
       in
       Some [ Result_value (List (collect min_value [])) ]
     | _ -> None
   in
   assert_equal_query
     "q_string binds nested map relation rows through dynamic collection outputs"
-    [ [ Result_value (Keyword "a"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 4) ]
-    ; [ Result_value (Keyword "a"); Result_value (Int 6) ]
-    ; [ Result_value (Keyword "b"); Result_value (Int 2) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 4L) ]
+    ; [ Result_value (Keyword "a"); Result_value (Int64 6L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1; Int 7 ]
-                   ; Keyword "b", List [ Int 2; Int 4 ]
+                   [ Keyword "a", List [ Int64 1L; Int64 7L ]
+                   ; Keyword "b", List [ Int64 2L; Int64 4L ]
                    ]))
          ; Arg_function range_values
          ]
@@ -11591,17 +11642,17 @@ let test_q_nested_relation_map_inputs () =
                 [(even? ?x)]]");
   assert_equal_query
     "q_string binds map inputs as nested relation rows"
-    [ [ Result_value (Keyword "b"); Result_value (Int 2) ]
-    ; [ Result_value (Keyword "c"); Result_value (Int 3) ]
+    [ [ Result_value (Keyword "b"); Result_value (Int64 2L) ]
+    ; [ Result_value (Keyword "c"); Result_value (Int64 3L) ]
     ]
     (q_string
        ~inputs:
          [ Arg_scalar
              (Result_value
                 (Map
-                   [ Keyword "a", List [ Int 1 ]
-                   ; Keyword "b", List [ Int 2 ]
-                   ; Keyword "c", List [ Int 3 ]
+                   [ Keyword "a", List [ Int64 1L ]
+                   ; Keyword "b", List [ Int64 2L ]
+                   ; Keyword "c", List [ Int64 3L ]
                    ]))
          ]
        (empty_db ())
@@ -11701,8 +11752,8 @@ let test_q_input_placeholders_ignore_values () =
     ; inputs =
         [ Input_relation
             ( [ "x"; "_"; "_"; "z" ]
-            , [ [ Result_value (Keyword "a"); Result_value (Int 1); Result_value (Int 2); Result_value (Keyword "b") ]
-              ; [ Result_value (Keyword "c"); Result_value (Int 3); Result_value (Int 4); Result_value (Keyword "d") ]
+            , [ [ Result_value (Keyword "a"); Result_value (Int64 1L); Result_value (Int64 2L); Result_value (Keyword "b") ]
+              ; [ Result_value (Keyword "c"); Result_value (Int64 3L); Result_value (Int64 4L); Result_value (Keyword "d") ]
               ]
             )
         ]
@@ -11722,8 +11773,8 @@ let test_q_return_shapes () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
          ]
   in
   let query =
@@ -11737,8 +11788,8 @@ let test_q_return_shapes () =
   if
     q_return db Return_relation query
     <> Query_relation
-         [ [ Result_value (String "Ivan"); Result_value (Int 31) ]
-         ; [ Result_value (String "Petr"); Result_value (Int 37) ]
+         [ [ Result_value (String "Ivan"); Result_value (Int64 31L) ]
+         ; [ Result_value (String "Petr"); Result_value (Int64 37L) ]
          ]
   then failwith "q_return relation should preserve q rows";
   if
@@ -11747,7 +11798,7 @@ let test_q_return_shapes () =
   then failwith "q_return collection should return first column values";
   if
     q_return db Return_tuple query
-    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int 31) ])
+    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int64 31L) ])
   then failwith "q_return tuple should return first row";
   if
     q_return db Return_scalar { query with find = [ Find_var "name" ] }
@@ -11758,8 +11809,8 @@ let test_parse_query_return_shapes () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
          ]
   in
   let collection_form =
@@ -11851,30 +11902,30 @@ let test_parse_query_return_shapes () =
       [ QueryFormKeyword "find"
       ; QueryFormVector [ QueryFormSymbol "?name"; QueryFormSymbol "?age" ]
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
       ]
   in
   let return, query = parse_query_return tuple_form in
   if return <> Return_tuple then failwith "parse_query_return should detect find tuple";
   if
     q_return db return query
-    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int 31) ])
+    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int64 31L) ])
   then failwith "parse_query_return tuple should produce tuple output";
   let list_tuple_form =
     QueryFormVector
       [ QueryFormKeyword "find"
       ; QueryFormList [ QueryFormSymbol "?name"; QueryFormSymbol "?age" ]
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
       ]
   in
   let return, query = parse_query_return list_tuple_form in
   if return <> Return_tuple then failwith "parse_query_return should detect list-form find tuple";
   if
     q_return db return query
-    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int 31) ])
+    <> Query_tuple (Some [ Result_value (String "Ivan"); Result_value (Int64 31L) ])
   then failwith "parse_query_return list tuple should produce tuple output";
   let scalar_form =
     QueryFormVector
@@ -11882,7 +11933,7 @@ let test_parse_query_return_shapes () =
       ; QueryFormSymbol "?name"
       ; QueryFormSymbol "."
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
       ]
   in
   let return, query = parse_query_return scalar_form in
@@ -11902,24 +11953,24 @@ let test_parse_query_return_shapes () =
   in
   let return, query = parse_query_return aggregate_collection_form in
   if return <> Return_collection then failwith "parse_query_return should detect aggregate find collection";
-  if q_return db return query <> Query_collection [ Result_value (Int 2) ] then
+  if q_return db return query <> Query_collection [ Result_value (Int64 2L) ] then
     failwith "parse_query_return aggregate collection should produce collection output";
   if
     q_return_string db "[:find [(count ?name)] :where [_ :name ?name]]"
-    <> Query_tuple (Some [ Result_value (Int 2) ])
+    <> Query_tuple (Some [ Result_value (Int64 2L) ])
   then failwith "q_return_string aggregate tuple find spec should produce tuple output";
   if
     q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
-    <> Query_scalar (Some (Result_value (Int 2)))
+    <> Query_scalar (Some (Result_value (Int64 2L)))
   then failwith "q_return_string aggregate scalar find spec should produce scalar output"
 
 let test_q_return_find_specs_match_upstream_cases () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int 11) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 25L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int64 11L) ] }
          ]
   in
   if
@@ -11931,9 +11982,9 @@ let test_q_return_find_specs_match_upstream_cases () =
          ]
   then failwith "q_return_string collection find spec should return all names";
   let expected_rows =
-    [ [ Result_value (String "Petr"); Result_value (Int 44) ]
-    ; [ Result_value (String "Ivan"); Result_value (Int 25) ]
-    ; [ Result_value (String "Sergey"); Result_value (Int 11) ]
+    [ [ Result_value (String "Petr"); Result_value (Int64 44L) ]
+    ; [ Result_value (String "Ivan"); Result_value (Int64 25L) ]
+    ; [ Result_value (String "Sergey"); Result_value (Int64 11L) ]
     ]
   in
   (match q_return_string db "[:find [?name ?age] :where [?e :name ?name] [?e :age ?age]]" with
@@ -11948,23 +11999,23 @@ let test_q_return_find_specs_match_upstream_cases () =
    | _ -> failwith "scalar find spec should return one value");
   if
     q_return_string db "[:find [(count ?name) ...] :where [_ :name ?name]]"
-    <> Query_collection [ Result_value (Int 3) ]
+    <> Query_collection [ Result_value (Int64 3L) ]
   then failwith "aggregate collection find spec should return aggregate value";
   if
     q_return_string db "[:find [(count ?name)] :where [_ :name ?name]]"
-    <> Query_tuple (Some [ Result_value (Int 3) ])
+    <> Query_tuple (Some [ Result_value (Int64 3L) ])
   then failwith "aggregate tuple find spec should return aggregate value";
   if
     q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
-    <> Query_scalar (Some (Result_value (Int 3)))
+    <> Query_scalar (Some (Result_value (Int64 3L)))
   then failwith "aggregate scalar find spec should return aggregate value"
 
 let test_q_return_map_shapes () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
          ]
   in
   let query =
@@ -11978,35 +12029,35 @@ let test_q_return_map_shapes () =
   if
     q_return_map db Return_relation (Return_keys [ "n"; "a" ]) query
     <> Query_relation_maps
-         [ [ Keyword "a", Result_value (Int 31); Keyword "n", Result_value (String "Ivan") ]
-         ; [ Keyword "a", Result_value (Int 37); Keyword "n", Result_value (String "Petr") ]
+         [ [ Keyword "a", Result_value (Int64 31L); Keyword "n", Result_value (String "Ivan") ]
+         ; [ Keyword "a", Result_value (Int64 37L); Keyword "n", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map relation should map rows by labels";
   if
     q_return_map db Return_relation (Return_syms [ "n"; "a" ]) query
     <> Query_relation_maps
-         [ [ Symbol "a", Result_value (Int 31); Symbol "n", Result_value (String "Ivan") ]
-         ; [ Symbol "a", Result_value (Int 37); Symbol "n", Result_value (String "Petr") ]
+         [ [ Symbol "a", Result_value (Int64 31L); Symbol "n", Result_value (String "Ivan") ]
+         ; [ Symbol "a", Result_value (Int64 37L); Symbol "n", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map relation should support :syms labels";
   if
     q_return_map db Return_relation (Return_strs [ "n"; "a" ]) query
     <> Query_relation_maps
-         [ [ String "a", Result_value (Int 31); String "n", Result_value (String "Ivan") ]
-         ; [ String "a", Result_value (Int 37); String "n", Result_value (String "Petr") ]
+         [ [ String "a", Result_value (Int64 31L); String "n", Result_value (String "Ivan") ]
+         ; [ String "a", Result_value (Int64 37L); String "n", Result_value (String "Petr") ]
          ]
   then failwith "q_return_map relation should support :strs labels";
   if
     q_return_map db Return_tuple (Return_strs [ "name"; "age" ]) query
-    <> Query_tuple_map (Some [ String "age", Result_value (Int 31); String "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ String "age", Result_value (Int64 31L); String "name", Result_value (String "Ivan") ])
   then failwith "q_return_map tuple should map the first row by labels";
   if
     q_return_map db Return_tuple (Return_syms [ "name"; "age" ]) query
-    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int 31); Symbol "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int64 31L); Symbol "name", Result_value (String "Ivan") ])
   then failwith "q_return_map :syms should preserve symbol labels";
   if
     q_return_map_string db "[:find [?name ?age] :syms name age :where [1 :name ?name] [1 :age ?age]]"
-    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int 31); Symbol "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ Symbol "age", Result_value (Int64 31L); Symbol "name", Result_value (String "Ivan") ])
   then failwith "q_return_map_string :syms should parse symbol labels";
   assert_raises_invalid_arg
     "q_return_map rejects mismatched label count"
@@ -12019,16 +12070,16 @@ let test_q_return_map_string_upstream_shape_batch () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int 11) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 25L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int64 11L) ] }
          ]
   in
   let expected_keys =
     Query_relation_maps
-      [ [ Keyword "a", Result_value (Int 25); Keyword "n", Result_value (String "Ivan") ]
-      ; [ Keyword "a", Result_value (Int 44); Keyword "n", Result_value (String "Petr") ]
-      ; [ Keyword "a", Result_value (Int 11); Keyword "n", Result_value (String "Sergey") ]
+      [ [ Keyword "a", Result_value (Int64 25L); Keyword "n", Result_value (String "Ivan") ]
+      ; [ Keyword "a", Result_value (Int64 44L); Keyword "n", Result_value (String "Petr") ]
+      ; [ Keyword "a", Result_value (Int64 11L); Keyword "n", Result_value (String "Sergey") ]
       ]
   in
   if
@@ -12042,9 +12093,9 @@ let test_q_return_map_string_upstream_shape_batch () =
   then failwith "q_return_map_string should execute upstream :keys relation maps";
   let expected_syms =
     Query_relation_maps
-      [ [ Symbol "a", Result_value (Int 25); Symbol "n", Result_value (String "Ivan") ]
-      ; [ Symbol "a", Result_value (Int 44); Symbol "n", Result_value (String "Petr") ]
-      ; [ Symbol "a", Result_value (Int 11); Symbol "n", Result_value (String "Sergey") ]
+      [ [ Symbol "a", Result_value (Int64 25L); Symbol "n", Result_value (String "Ivan") ]
+      ; [ Symbol "a", Result_value (Int64 44L); Symbol "n", Result_value (String "Petr") ]
+      ; [ Symbol "a", Result_value (Int64 11L); Symbol "n", Result_value (String "Sergey") ]
       ]
   in
   if
@@ -12058,9 +12109,9 @@ let test_q_return_map_string_upstream_shape_batch () =
   then failwith "q_return_map_string should execute upstream :syms relation maps";
   let expected_strs =
     Query_relation_maps
-      [ [ String "a", Result_value (Int 25); String "n", Result_value (String "Ivan") ]
-      ; [ String "a", Result_value (Int 44); String "n", Result_value (String "Petr") ]
-      ; [ String "a", Result_value (Int 11); String "n", Result_value (String "Sergey") ]
+      [ [ String "a", Result_value (Int64 25L); String "n", Result_value (String "Ivan") ]
+      ; [ String "a", Result_value (Int64 44L); String "n", Result_value (String "Petr") ]
+      ; [ String "a", Result_value (Int64 11L); String "n", Result_value (String "Sergey") ]
       ]
   in
   if
@@ -12080,15 +12131,15 @@ let test_q_return_map_string_upstream_shape_batch () =
         :where [?e :name ?name]
                [(= ?name \"Ivan\")]
                [?e :age ?age]]"
-    <> Query_tuple_map (Some [ Keyword "a", Result_value (Int 25); Keyword "n", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ Keyword "a", Result_value (Int64 25L); Keyword "n", Result_value (String "Ivan") ])
   then failwith "q_return_map_string should execute upstream tuple :keys maps"
 
 let test_parse_query_return_map_shapes () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 37) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ] }
          ]
   in
   let keys_form =
@@ -12111,8 +12162,8 @@ let test_parse_query_return_map_shapes () =
   if
     q_return_map db return (Option.get return_map) query
     <> Query_relation_maps
-         [ [ Keyword "a", Result_value (Int 31); Keyword "n", Result_value (String "Ivan") ]
-         ; [ Keyword "a", Result_value (Int 37); Keyword "n", Result_value (String "Petr") ]
+         [ [ Keyword "a", Result_value (Int64 31L); Keyword "n", Result_value (String "Ivan") ]
+         ; [ Keyword "a", Result_value (Int64 37L); Keyword "n", Result_value (String "Petr") ]
          ]
   then failwith "parsed :keys query should produce relation maps";
   let tuple_form =
@@ -12123,8 +12174,8 @@ let test_parse_query_return_map_shapes () =
       ; QueryFormSymbol "name"
       ; QueryFormSymbol "age"
       ; QueryFormKeyword "where"
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
-      ; QueryFormVector [ QueryFormInt 1; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "name"; QueryFormSymbol "?name" ]
+      ; QueryFormVector [ QueryFormInt 1L; QueryFormKeyword "age"; QueryFormSymbol "?age" ]
       ]
   in
   let return, return_map, query = parse_query_return_map tuple_form in
@@ -12133,7 +12184,7 @@ let test_parse_query_return_map_shapes () =
     failwith "parse_query_return_map should parse :strs labels";
   if
     q_return_map db return (Option.get return_map) query
-    <> Query_tuple_map (Some [ String "age", Result_value (Int 31); String "name", Result_value (String "Ivan") ])
+    <> Query_tuple_map (Some [ String "age", Result_value (Int64 31L); String "name", Result_value (String "Ivan") ])
   then failwith "parsed :strs tuple query should produce a tuple map";
   assert_raises_invalid_arg
     "parse_query_return_map rejects multiple return map clauses"
@@ -12232,7 +12283,7 @@ let test_parse_query_resolves_lookup_refs_in_patterns () =
     |> db_with
          [ Entity
              { db_id = Some (Entity_id 1)
-             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 31) ]
+             ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 31L) ]
              }
          ; Entity
              { db_id = Some (Entity_id 2)
@@ -12254,7 +12305,7 @@ let test_parse_query_resolves_lookup_refs_in_patterns () =
   in
   assert_equal_query
     "parse_query resolves lookup refs in entity position"
-    [ [ Result_value (Int 31) ] ]
+    [ [ Result_value (Int64 31L) ] ]
     (q db (parse_query entity_lookup_query));
   let ref_value_lookup_query =
     QueryFormVector
@@ -12290,7 +12341,7 @@ let test_parse_query_resolves_lookup_refs_in_patterns () =
   in
   assert_equal_query
     "parse_query resolves source-qualified lookup refs"
-    [ [ Result_value (Int 31) ] ]
+    [ [ Result_value (Int64 31L) ] ]
     (q_sources (empty_db ()) [ "people", Db_source db ] (parse_query source_lookup_query))
 
 let test_q_with_multiple_sources () =
@@ -12304,8 +12355,8 @@ let test_q_with_multiple_sources () =
   let db2 =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 10); attrs = [ "email", One_value (String "ivan@example.com"); "score", One_value (Int 7) ] }
-         ; Entity { db_id = Some (Entity_id 11); attrs = [ "email", One_value (String "olga@example.com"); "score", One_value (Int 9) ] }
+         [ Entity { db_id = Some (Entity_id 10); attrs = [ "email", One_value (String "ivan@example.com"); "score", One_value (Int64 7L) ] }
+         ; Entity { db_id = Some (Entity_id 11); attrs = [ "email", One_value (String "olga@example.com"); "score", One_value (Int64 9L) ] }
          ]
   in
   let query =
@@ -12323,7 +12374,7 @@ let test_q_with_multiple_sources () =
   in
   assert_equal_query
     "q_sources joins facts across named database sources"
-    [ [ Result_value (String "Ivan"); Result_value (Int 7) ] ]
+    [ [ Result_value (String "Ivan"); Result_value (Int64 7L) ] ]
     (q_sources db1 [ "scores", Db_source db2 ] query)
 
 let test_q_with_relation_source () =
@@ -12428,10 +12479,10 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "q_sources allows relation sources to override the default source"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ] ]
     (q_sources
        (empty_db ())
-       [ "$", Relation_source [ [ Result_value (Int 1) ]; [ Result_value (Int 2) ] ] ]
+       [ "$", Relation_source [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ] ] ]
        (parse_query relation_query));
   let unqualified_relation_query =
     QueryFormVector
@@ -12445,10 +12496,10 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "parse_query matches unqualified one-column patterns against default relation sources"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 2) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ] ]
     (q_sources
        (empty_db ())
-       [ "$", Relation_source [ [ Result_value (Int 1) ]; [ Result_value (Int 2) ] ] ]
+       [ "$", Relation_source [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 2L) ] ] ]
        (parse_query unqualified_relation_query));
   let unqualified_three_column_relation_query =
     QueryFormVector
@@ -12498,26 +12549,26 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "parse_query matches long relation tuples with constant trailing terms"
-    [ [ Result_value (Int 1)
+    [ [ Result_value (Int64 1L)
       ; Result_attr "age"
-      ; Result_value (Int 39)
-      ; Result_value (Int 999)
+      ; Result_value (Int64 39L)
+      ; Result_value (Int64 999L)
       ]
     ]
     (q_sources
        (empty_db ())
        [ ( "$"
          , Relation_source
-             [ [ Result_value (Int 1)
+             [ [ Result_value (Int64 1L)
                ; Result_attr "name"
                ; Result_value (String "Ivan")
-               ; Result_value (Int 945)
+               ; Result_value (Int64 945L)
                ; Result_value (Keyword "db/add")
                ]
-             ; [ Result_value (Int 1)
+             ; [ Result_value (Int64 1L)
                ; Result_attr "age"
-               ; Result_value (Int 39)
-               ; Result_value (Int 999)
+               ; Result_value (Int64 39L)
+               ; Result_value (Int64 999L)
                ; Result_value (Keyword "db/retract")
                ]
              ] )
@@ -12536,21 +12587,21 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "parse_query matches shorter patterns against long relation tuple prefixes"
-    [ [ Result_value (Int 1); Result_value (String "Ivan") ] ]
+    [ [ Result_value (Int64 1L); Result_value (String "Ivan") ] ]
     (q_sources
        (empty_db ())
        [ ( "$"
          , Relation_source
-             [ [ Result_value (Int 1)
+             [ [ Result_value (Int64 1L)
                ; Result_attr "name"
                ; Result_value (String "Ivan")
-               ; Result_value (Int 945)
+               ; Result_value (Int64 945L)
                ; Result_value (Keyword "db/add")
                ]
-             ; [ Result_value (Int 1)
+             ; [ Result_value (Int64 1L)
                ; Result_attr "age"
-               ; Result_value (Int 39)
-               ; Result_value (Int 999)
+               ; Result_value (Int64 39L)
+               ; Result_value (Int64 999L)
                ; Result_value (Keyword "db/retract")
                ]
              ] )
@@ -12580,7 +12631,7 @@ let test_q_sources_default_source () =
     [ [ Result_value (String "Ivan") ] ]
     (q_sources (empty_db ()) [ "$", Db_source override_db ] (parse_query tx_query));
   let lookup_db =
-    override_db |> db_with [ Add (Entity_id 1, "height", Int 180) ]
+    override_db |> db_with [ Add (Entity_id 1, "height", Int64 180L) ]
   in
   let get_else_query =
     QueryFormVector
@@ -12595,7 +12646,7 @@ let test_q_sources_default_source () =
               [ QueryFormSymbol "get-else"
               ; QueryFormSymbol "?e"
               ; QueryFormKeyword "height"
-              ; QueryFormInt 300
+              ; QueryFormInt 300L
               ]
           ; QueryFormSymbol "?height"
           ]
@@ -12603,7 +12654,7 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "parse_query unqualified get-else uses the overridden default source"
-    [ [ Result_value (Int 180) ] ]
+    [ [ Result_value (Int64 180L) ] ]
     (q_sources (empty_db ()) [ "$", Db_source lookup_db ] (parse_query get_else_query));
   let get_some_query =
     QueryFormVector
@@ -12627,7 +12678,7 @@ let test_q_sources_default_source () =
   in
   assert_equal_query
     "parse_query unqualified get-some uses the overridden default source"
-    [ [ Result_attr "height"; Result_value (Int 180) ] ]
+    [ [ Result_attr "height"; Result_value (Int64 180L) ] ]
     (q_sources (empty_db ()) [ "$", Db_source lookup_db ] (parse_query get_some_query));
   let missing_query =
     QueryFormVector
@@ -12700,7 +12751,7 @@ let test_q_sources_lookup_ref_uses_named_source () =
   let source =
     empty_db ~schema:[ "email", unique_identity ] ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 10); attrs = [ "email", One_value (String "ivan@example.com"); "score", One_value (Int 7) ] }
+         [ Entity { db_id = Some (Entity_id 10); attrs = [ "email", One_value (String "ivan@example.com"); "score", One_value (Int64 7L) ] }
          ]
   in
   let query =
@@ -12713,7 +12764,7 @@ let test_q_sources_lookup_ref_uses_named_source () =
   in
   assert_equal_query
     "q_sources resolves lookup refs against the named source"
-    [ [ Result_value (Int 7) ] ]
+    [ [ Result_value (Int64 7L) ] ]
     (q_sources db [ "scores", Db_source source ] query)
 
 let test_q_resolves_idents_in_patterns () =
@@ -12827,9 +12878,9 @@ let test_q_return_shapes_with_pull_expressions () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 44) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 25) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 11) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 44L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 25L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 11L) ] }
          ]
   in
   let pulled_ivan =
@@ -12840,7 +12891,7 @@ let test_q_return_shapes_with_pull_expressions () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int 25)) ]
+    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int64 25L)) ]
     }
   in
   if q_return db Return_scalar scalar_query <> Query_scalar (Some pulled_ivan) then
@@ -12861,7 +12912,7 @@ let test_q_return_shapes_with_pull_expressions () =
     ; inputs = []
     ; with_vars = []
     ; rules = []
-    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int 25)) ]
+    ; where = [ Pattern (QVar "e", QAttr "age", QValue (Int64 25L)) ]
     }
   in
   if q_return db Return_tuple tuple_query <> Query_tuple (Some [ Result_entity 2; pulled_ivan ]) then
@@ -12896,9 +12947,9 @@ let test_q_with_aggregates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "blue"); "heads", One_value (Int 2) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "blue"); "heads", One_value (Int64 2L) ] }
          ]
   in
   let query =
@@ -12920,8 +12971,8 @@ let test_q_with_aggregates () =
   in
   assert_equal_query
     "q aggregates group by non-aggregate find vars"
-    [ [ Result_value (String "blue"); Result_value (Int 2); Result_value (Int 2); Result_value (Int 2); Result_value (Int 1) ]
-    ; [ Result_value (String "red"); Result_value (Int 4); Result_value (Int 1); Result_value (Int 3); Result_value (Int 2) ]
+    [ [ Result_value (String "blue"); Result_value (Int64 2L); Result_value (Int64 2L); Result_value (Int64 2L); Result_value (Int64 1L) ]
+    ; [ Result_value (String "red"); Result_value (Int64 4L); Result_value (Int64 1L); Result_value (Int64 3L); Result_value (Int64 2L) ]
     ]
     (q db query)
 
@@ -12933,19 +12984,19 @@ let test_q_aggregates_with_pull_expressions () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Petr")
-                 ; "value", Many_values [ Int 10; Int 20; Int 30; Int 40 ]
+                 ; "value", Many_values [ Int64 10L; Int64 20L; Int64 30L; Int64 40L ]
                  ]
              }
          ; Entity
              { db_id = Some (Entity_id 2)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "value", Many_values [ Int 14; Int 16 ]
+                 ; "value", Many_values [ Int64 14L; Int64 16L ]
                  ]
              }
          ; Entity
              { db_id = Some (Entity_id 3)
-             ; attrs = [ "name", One_value (String "Oleg"); "value", One_value (Int 1) ]
+             ; attrs = [ "name", One_value (String "Oleg"); "value", One_value (Int64 1L) ]
              }
          ]
   in
@@ -12966,18 +13017,18 @@ let test_q_aggregates_with_pull_expressions () =
     "q aggregates can be combined with pull expressions"
     [ [ Result_entity 1
       ; Result_pull { pulled_id = 1; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ] }
-      ; Result_value (Int 10)
-      ; Result_value (Int 40)
+      ; Result_value (Int64 10L)
+      ; Result_value (Int64 40L)
       ]
     ; [ Result_entity 2
       ; Result_pull { pulled_id = 2; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ] }
-      ; Result_value (Int 14)
-      ; Result_value (Int 16)
+      ; Result_value (Int64 14L)
+      ; Result_value (Int64 16L)
       ]
     ; [ Result_entity 3
       ; Result_pull { pulled_id = 3; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Oleg") ] }
-      ; Result_value (Int 1)
-      ; Result_value (Int 1)
+      ; Result_value (Int64 1L)
+      ; Result_value (Int64 1L)
       ]
     ]
     (q db query)
@@ -12986,9 +13037,9 @@ let test_q_with_interleaved_aggregates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "blue"); "heads", One_value (Int 2) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "blue"); "heads", One_value (Int64 2L) ] }
          ]
   in
   let query =
@@ -13004,17 +13055,17 @@ let test_q_with_interleaved_aggregates () =
   in
   assert_equal_query
     "q preserves interleaved aggregate find order"
-    [ [ Result_value (Int 1); Result_value (String "blue"); Result_value (Int 2) ]
-    ; [ Result_value (Int 2); Result_value (String "red"); Result_value (Int 4) ]
+    [ [ Result_value (Int64 1L); Result_value (String "blue"); Result_value (Int64 2L) ]
+    ; [ Result_value (Int64 2L); Result_value (String "red"); Result_value (Int64 4L) ]
     ]
     (q db query)
 
 let test_q_aggregates_relation_inputs_with_with_vars () =
   let monsters =
-    [ [ Result_value (String "Cerberus"); Result_value (Int 3) ]
-    ; [ Result_value (String "Medusa"); Result_value (Int 1) ]
-    ; [ Result_value (String "Cyclops"); Result_value (Int 1) ]
-    ; [ Result_value (String "Chimera"); Result_value (Int 1) ]
+    [ [ Result_value (String "Cerberus"); Result_value (Int64 3L) ]
+    ; [ Result_value (String "Medusa"); Result_value (Int64 1L) ]
+    ; [ Result_value (String "Cyclops"); Result_value (Int64 1L) ]
+    ; [ Result_value (String "Chimera"); Result_value (Int64 1L) ]
     ]
   in
   let relation_input = Input_relation ([ "monster"; "heads" ], monsters) in
@@ -13028,7 +13079,7 @@ let test_q_aggregates_relation_inputs_with_with_vars () =
   in
   assert_equal_query
     "q aggregate relation inputs deduplicate values without with vars"
-    [ [ Result_value (Int 4) ] ]
+    [ [ Result_value (Int64 4L) ] ]
     (q_with (empty_db ()) [] sum_query);
   let multi_aggregate_query =
     { find =
@@ -13046,11 +13097,11 @@ let test_q_aggregates_relation_inputs_with_with_vars () =
   in
   assert_equal_query
     "q aggregate relation inputs preserve with-var-distinguished rows"
-    [ [ Result_value (Int 6)
-      ; Result_value (Int 1)
-      ; Result_value (Int 3)
-      ; Result_value (Int 4)
-      ; Result_value (Int 2)
+    [ [ Result_value (Int64 6L)
+      ; Result_value (Int64 1L)
+      ; Result_value (Int64 3L)
+      ; Result_value (Int64 4L)
+      ; Result_value (Int64 2L)
       ]
     ]
     (q_with (empty_db ()) [ "monster" ] multi_aggregate_query)
@@ -13059,9 +13110,9 @@ let test_q_with_preserves_non_aggregate_duplicates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "monster", One_value (String "Medusa"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "monster", One_value (String "Cyclops"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "monster", One_value (String "Chimera"); "heads", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "monster", One_value (String "Medusa"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "monster", One_value (String "Cyclops"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "monster", One_value (String "Chimera"); "heads", One_value (Int64 1L) ] }
          ]
   in
   let query =
@@ -13077,20 +13128,20 @@ let test_q_with_preserves_non_aggregate_duplicates () =
   in
   assert_equal_query
     "q without with vars deduplicates non-aggregate rows"
-    [ [ Result_value (Int 1) ] ]
+    [ [ Result_value (Int64 1L) ] ]
     (q_with db [] query);
   assert_equal_query
     "q_with preserves non-aggregate duplicates distinguished by with vars"
-    [ [ Result_value (Int 1) ]; [ Result_value (Int 1) ]; [ Result_value (Int 1) ] ]
+    [ [ Result_value (Int64 1L) ]; [ Result_value (Int64 1L) ]; [ Result_value (Int64 1L) ] ]
     (q_with db [ "monster" ] query)
 
 let test_q_count_distinct_aggregate () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
          ]
   in
   let query =
@@ -13106,16 +13157,16 @@ let test_q_count_distinct_aggregate () =
   in
   assert_equal_query
     "q count-distinct aggregates unique values within each group"
-    [ [ Result_value (String "red"); Result_value (Int 3); Result_value (Int 2) ] ]
+    [ [ Result_value (String "red"); Result_value (Int64 3L); Result_value (Int64 2L) ] ]
     (q db query)
 
 let test_q_distinct_aggregate () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
          ]
   in
   let query =
@@ -13131,7 +13182,7 @@ let test_q_distinct_aggregate () =
   in
   assert_equal_query
     "q distinct aggregate returns unique values as a set"
-    [ [ Result_value (String "red"); Result_value (Set [ Int 1; Int 3 ]) ] ]
+    [ [ Result_value (String "red"); Result_value (Set [ Int64 1L; Int64 3L ]) ] ]
     (q db query)
 
 let test_q_min_max_use_keyword_comparator () =
@@ -13167,9 +13218,9 @@ let test_q_with_vars_preserve_aggregate_duplicates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
          ]
   in
   let query =
@@ -13185,20 +13236,20 @@ let test_q_with_vars_preserve_aggregate_duplicates () =
   in
   assert_equal_query
     "q_with without with vars deduplicates aggregate input tuples"
-    [ [ Result_value (String "red"); Result_value (Int 2) ] ]
+    [ [ Result_value (String "red"); Result_value (Int64 2L) ] ]
     (q_with db [] query);
   assert_equal_query
     "q_with preserves duplicates distinguished by with vars"
-    [ [ Result_value (String "red"); Result_value (Int 3) ] ]
+    [ [ Result_value (String "red"); Result_value (Int64 3L) ] ]
     (q_with db [ "e" ] query)
 
 let test_q_avg_aggregate () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 2) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int 3) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 2L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "heads", One_value (Int64 3L) ] }
          ]
   in
   let query =
@@ -13221,7 +13272,7 @@ let test_q_sum_aggregate_accepts_float_values () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "amount", One_value (Int 1) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "amount", One_value (Int64 1L) ] }
          ; Entity { db_id = Some (Entity_id 2); attrs = [ "amount", One_value (Float 2.5) ] }
          ]
   in
@@ -13242,11 +13293,11 @@ let test_q_statistical_aggregates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "sample", One_value (Int 10) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "sample", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "sample", One_value (Int 20) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "sample", One_value (Int 35) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "sample", One_value (Int 75) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "sample", One_value (Int64 10L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "sample", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "sample", One_value (Int64 20L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "sample", One_value (Int64 35L) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "sample", One_value (Int64 75L) ] }
          ]
   in
   let query =
@@ -13274,12 +13325,12 @@ let test_q_min_n_and_max_n_aggregates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 2) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 4) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int 7) ] }
-         ; Entity { db_id = Some (Entity_id 6); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int 8) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 2L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 4L) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int64 7L) ] }
+         ; Entity { db_id = Some (Entity_id 6); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int64 8L) ] }
          ]
   in
   let query =
@@ -13296,18 +13347,18 @@ let test_q_min_n_and_max_n_aggregates () =
   assert_equal_query
     "q supports min n and max n aggregates"
     [ [ Result_value (String "blue")
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
-      ; Result_value (Tuple [ Some (Int 7); Some (Int 8) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
+      ; Result_value (Tuple [ Some (Int64 7L); Some (Int64 8L) ])
       ]
     ; [ Result_value (String "red")
-      ; Result_value (Tuple [ Some (Int 2); Some (Int 3); Some (Int 4) ])
-      ; Result_value (Tuple [ Some (Int 1); Some (Int 2); Some (Int 3) ])
+      ; Result_value (Tuple [ Some (Int64 2L); Some (Int64 3L); Some (Int64 4L) ])
+      ; Result_value (Tuple [ Some (Int64 1L); Some (Int64 2L); Some (Int64 3L) ])
       ]
     ]
     (q db query)
 
 let test_q_rand_and_sample_aggregates () =
-  let values = [ Int 1; Int 2; Int 3 ] in
+  let values = [ Int64 1L; Int64 2L; Int64 3L ] in
   let member value = List.mem value values in
   let query =
     { find =
@@ -13341,10 +13392,10 @@ let test_q_custom_aggregates () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 1) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 2) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "amount", One_value (Int 3) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int 5) ] }
+         [ Entity { db_id = Some (Entity_id 1); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id 2); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 2L) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "color", One_value (String "red"); "amount", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "color", One_value (String "blue"); "amount", One_value (Int64 5L) ] }
          ]
   in
   let reverse_tuple values =
@@ -13369,14 +13420,14 @@ let test_q_custom_aggregates () =
   in
   assert_equal_query
     "q supports custom aggregate functions"
-    [ [ Result_value (String "blue"); Result_value (Tuple [ Some (Int 5) ]) ]
-    ; [ Result_value (String "red"); Result_value (Tuple [ Some (Int 3); Some (Int 2); Some (Int 1) ]) ]
+    [ [ Result_value (String "blue"); Result_value (Tuple [ Some (Int64 5L) ]) ]
+    ; [ Result_value (String "red"); Result_value (Tuple [ Some (Int64 3L); Some (Int64 2L); Some (Int64 1L) ]) ]
     ]
     (q db query);
   assert_equal_query
     "q_string parses custom aggregate inputs"
-    [ [ Result_value (String "blue"); Result_value (Tuple [ Some (Int 5) ]) ]
-    ; [ Result_value (String "red"); Result_value (Tuple [ Some (Int 3); Some (Int 2); Some (Int 1) ]) ]
+    [ [ Result_value (String "blue"); Result_value (Tuple [ Some (Int64 5L) ]) ]
+    ; [ Result_value (String "red"); Result_value (Tuple [ Some (Int64 3L); Some (Int64 2L); Some (Int64 1L) ]) ]
     ]
     (q_string
        ~inputs:[ Arg_aggregate reverse_tuple ]
@@ -13392,23 +13443,23 @@ let test_q_custom_aggregates () =
       "[:find (aggregate ?agg ?amount) .
         :in $ ?agg
         :where [?e :amount ?amount]]"
-    <> Query_scalar (Some (Result_value (Tuple [ Some (Int 5); Some (Int 3); Some (Int 2); Some (Int 1) ])))
+    <> Query_scalar (Some (Result_value (Tuple [ Some (Int64 5L); Some (Int64 3L); Some (Int64 2L); Some (Int64 1L) ])))
   then failwith "q_return_string should parse scalar custom aggregate inputs";
   let scaled_sum = function
-    | Result_value (Int factor) :: values ->
+    | Result_value (Int64 factor) :: values ->
       values
       |> List.fold_left
            (fun total -> function
-             | Result_value (Int value) -> total + value
+             | Result_value (Int64 value) -> Int64.add total value
              | _ -> invalid_arg "expected integer aggregate values")
-           0
-      |> fun total -> Result_value (Int (factor * total))
+           0L
+      |> fun total -> Result_value (Int64 (Int64.mul factor total))
     | _ -> invalid_arg "expected integer aggregate factor"
   in
   assert_equal_query
     "q_string passes extra custom aggregate arguments before grouped values"
-    [ [ Result_value (String "blue"); Result_value (Int 50) ]
-    ; [ Result_value (String "red"); Result_value (Int 60) ]
+    [ [ Result_value (String "blue"); Result_value (Int64 50L) ]
+    ; [ Result_value (String "red"); Result_value (Int64 60L) ]
     ]
     (q_string
        ~inputs:[ Arg_aggregate scaled_sum ]
@@ -13419,12 +13470,12 @@ let test_q_custom_aggregates () =
                 [?e :amount ?amount]]");
   if
     q_return_string
-      ~inputs:[ Arg_aggregate scaled_sum; Arg_scalar (Result_value (Int 2)) ]
+      ~inputs:[ Arg_aggregate scaled_sum; Arg_scalar (Result_value (Int64 2L)) ]
       db
       "[:find (aggregate ?agg ?factor ?amount) .
         :in $ ?agg ?factor
         :where [?e :amount ?amount]]"
-    <> Query_scalar (Some (Result_value (Int 22)))
+    <> Query_scalar (Some (Result_value (Int64 22L)))
   then failwith "q_return_string should pass variable aggregate arguments"
 
 let test_q_rejects_unknown_rules () =
@@ -13769,13 +13820,13 @@ let test_q_source_qualified_rules () =
   let ages =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 10); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 15) ] }
-         ; Entity { db_id = Some (Entity_id 11); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int 66) ] }
-         ; Entity { db_id = Some (Entity_id 12); attrs = [ "name", One_value (String "Darya"); "age", One_value (Int 32) ] }
+         [ Entity { db_id = Some (Entity_id 10); attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 15L) ] }
+         ; Entity { db_id = Some (Entity_id 11); attrs = [ "name", One_value (String "Oleg"); "age", One_value (Int64 66L) ] }
+         ; Entity { db_id = Some (Entity_id 12); attrs = [ "name", One_value (String "Darya"); "age", One_value (Int64 32L) ] }
          ]
   in
   let adult = function
-    | [ Result_value (Int age) ] -> age >= 18
+    | [ Result_value (Int64 age) ] -> age >= 18L
     | _ -> false
   in
   let query =
@@ -13876,9 +13927,9 @@ let test_query_fns__test_predicates () =
 let test_query_fns__test_symbol_resolution () =
   assert_equal_query
     "query_fns.cljc test-symbol-resolution resolves a callable query function"
-    [ [ Result_value (Int 42) ] ]
+    [ [ Result_value (Int64 42L) ] ]
     (q_string
-       ~inputs:[ Arg_function (fun _ -> Some [ Result_value (Int 42) ]) ]
+       ~inputs:[ Arg_function (fun _ -> Some [ Result_value (Int64 42L) ]) ]
        (empty_db ())
        "[:find ?x
          :in ?f
@@ -13974,7 +14025,7 @@ let test_query_rules__test_rule_performance_on_larger_datasets () =
          Entity
            { db_id = Some (Entity_id eid)
            ; attrs =
-               [ "item/id", One_value (Int eid)
+               [ "item/id", One_value (Int64 (Int64.of_int eid))
                ; "item/status", One_value (String (status_for eid))
                ]
            }))
@@ -14123,13 +14174,13 @@ let test_transact__test_tempid_ref_issue_295 () =
       [ Entity { db_id = Some (Temp_id "user"); attrs = [ "name", One_value (String "Alice") ] }
       ; Entity
           { db_id = None
-          ; attrs = [ "age", One_value (Int 36); "ref", One_value (Ref_to (Temp_id "user")) ]
+          ; attrs = [ "age", One_value (Int64 36L); "ref", One_value (Ref_to (Temp_id "user")) ]
           }
       ]
   in
   assert_equal_triples
     "entity map tempid upsert remaps later ref values"
-    [ 1, "name", String "Alice"; 2, "age", Int 36; 2, "ref", Ref 1 ]
+    [ 1, "name", String "Alice"; 2, "age", Int64 36L; 2, "ref", Ref 1 ]
     (datoms report.db_after Eavt ());
   assert_equal_tempids
     "entity map tempid resolves to existing unique identity entity"
@@ -14309,17 +14360,17 @@ let test_transact__test_transient_issue_294 () =
          [ Entity
              { db_id = Some (Entity_id 1)
              ; attrs =
-                 [ "a1", One_value (Int 1)
-                 ; "a2", One_value (Int 2)
-                 ; "a3", One_value (Int 3)
+                 [ "a1", One_value (Int64 1L)
+                 ; "a2", One_value (Int64 2L)
+                 ; "a3", One_value (Int64 3L)
                  ]
              }
          ; Entity
              { db_id = Some (Entity_id 2)
              ; attrs =
-                 [ "a1", One_value (Int 1)
-                 ; "a2", One_value (Int 2)
-                 ; "a3", One_value (Int 3)
+                 [ "a1", One_value (Int64 1L)
+                 ; "a2", One_value (Int64 2L)
+                 ; "a3", One_value (Int64 3L)
                  ]
              }
          ]
@@ -14327,12 +14378,12 @@ let test_transact__test_transient_issue_294 () =
   let report = transact db [ RetractEntity (Entity_id 1); RetractEntity (Entity_id 2) ] in
   assert_equal_datoms
     "RetractEntity tx_data reports retractions in EAVT order"
-    [ datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a1" ~v:(Int 1) ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a2" ~v:(Int 2) ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a3" ~v:(Int 3) ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a1" ~v:(Int 1) ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a2" ~v:(Int 2) ()
-    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a3" ~v:(Int 3) ()
+    [ datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a1" ~v:(Int64 1L) ()
+    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a2" ~v:(Int64 2L) ()
+    ; datom ~tx:(tx0 + 2) ~added:false ~e:1 ~a:"a3" ~v:(Int64 3L) ()
+    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a1" ~v:(Int64 1L) ()
+    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a2" ~v:(Int64 2L) ()
+    ; datom ~tx:(tx0 + 2) ~added:false ~e:2 ~a:"a3" ~v:(Int64 3L) ()
     ]
     report.tx_data
 
@@ -14401,7 +14452,7 @@ let test_pull_selects_requested_attributes () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 31)
+                 ; "age", One_value (Int64 31L)
                  ; "aka", Many_values [ String "IV"; String "Terrible" ]
                  ]
              }
@@ -14458,7 +14509,7 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses wildcard selector"
-       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
+       [ kw "db/id", Pulled_scalar (Int64 2L); kw "name", Pulled_scalar (String "Petr") ]
        entity);
   let string_wildcard_pattern = parse_pull_pattern db (QueryFormVector [ QueryFormString "*" ]) in
   (match pull db string_wildcard_pattern (Entity_id 2) with
@@ -14466,7 +14517,7 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses string wildcard selector"
-       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
+       [ kw "db/id", Pulled_scalar (Int64 2L); kw "name", Pulled_scalar (String "Petr") ]
        entity);
   let keyword_wildcard_pattern = parse_pull_pattern db (QueryFormVector [ QueryFormKeyword "*" ]) in
   (match pull db keyword_wildcard_pattern (Entity_id 2) with
@@ -14474,7 +14525,7 @@ let test_parse_pull_pattern_selects_attributes_and_refs () =
    | Some entity ->
      assert_equal_pulled_attrs
        "parse_pull_pattern parses keyword wildcard selector"
-       [ kw "db/id", Pulled_scalar (Int 2); kw "name", Pulled_scalar (String "Petr") ]
+       [ kw "db/id", Pulled_scalar (Int64 2L); kw "name", Pulled_scalar (String "Petr") ]
        entity)
 
 let test_parse_pull_pattern_accepts_top_level_lists () =
@@ -14498,13 +14549,13 @@ let test_parse_pull_pattern_accepts_string_db_id () =
   assert_pull
     "parse_pull_pattern treats string :db/id as db/id"
     (parse_pull_pattern db (QueryFormVector [ QueryFormString ":db/id" ]))
-    [ kw "db/id", Pulled_scalar (Int 1) ];
+    [ kw "db/id", Pulled_scalar (Int64 1L) ];
   (match pull_string db "[\":db/id\"]" (Entity_id 1) with
    | None -> failwith "expected pull_string string :db/id to pull the entity"
    | Some entity ->
      assert_equal_pulled_attrs
        "pull_string treats string :db/id as db/id"
-       [ kw "db/id", Pulled_scalar (Int 1) ]
+       [ kw "db/id", Pulled_scalar (Int64 1L) ]
        entity);
   assert_pull
     "parse_pull_pattern aliases string :db/id"
@@ -14512,14 +14563,14 @@ let test_parse_pull_pattern_accepts_string_db_id () =
        db
        (QueryFormVector
           [ QueryFormVector [ QueryFormString ":db/id"; QueryFormKeyword "as"; QueryFormKeyword "id" ] ]))
-    [ kw "id", Pulled_scalar (Int 1) ];
+    [ kw "id", Pulled_scalar (Int64 1L) ];
   assert_pull
     "parse_pull_pattern applies vector xform to string :db/id"
     (parse_pull_pattern
        db
        (QueryFormVector
           [ QueryFormVector [ QueryFormString ":db/id"; QueryFormKeyword "xform"; QueryFormSymbol "vector" ] ]))
-    [ kw "db/id", Pulled_many [ Pulled_scalar (Int 1) ] ]
+    [ kw "db/id", Pulled_many [ Pulled_scalar (Int64 1L) ] ]
 
 let test_parse_pull_pattern_aliases_attributes () =
   let db = empty_db () |> db_with [ Add (Entity_id 1, "name", String "Ivan") ] in
@@ -14550,7 +14601,7 @@ let test_parse_pull_pattern_accepts_upstream_alias_value_forms () =
   in
   assert_alias "[(:name :as :display/name)]" (kw "display/name");
   assert_alias "[(:name :as \"display-name\")]" (str_key "display-name");
-  assert_alias "[(:name :as 123)]" (Int 123);
+  assert_alias "[(:name :as 123)]" (Int64 123L);
   assert_alias "[(:name :as nil)]" Nil
 
 let test_parse_pull_pattern_defaults_attributes () =
@@ -14583,7 +14634,7 @@ let test_parse_pull_pattern_limits_attributes () =
     parse_pull_pattern
       db
       (QueryFormVector
-         [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt 2 ] ])
+         [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt 2L ] ])
   in
   match pull db pattern (Entity_id 1) with
   | None -> failwith "expected parsed pull limit pattern to find entity"
@@ -14612,7 +14663,7 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
     parse_pull_pattern
       db
       (QueryFormVector
-         [ QueryFormVector [ QueryFormString "limit"; QueryFormKeyword "aka"; QueryFormInt 1 ]
+         [ QueryFormVector [ QueryFormString "limit"; QueryFormKeyword "aka"; QueryFormInt 1L ]
          ; QueryFormVector [ QueryFormString "default"; QueryFormKeyword "missing"; QueryFormString "fallback" ]
          ])
   in
@@ -14627,10 +14678,10 @@ let test_parse_pull_pattern_legacy_limit_and_default () =
     parse_pull_pattern
       db
       (QueryFormVector
-         [ QueryFormList [ QueryFormSymbol "limit"; QueryFormKeyword "aka"; QueryFormInt 2 ]
+         [ QueryFormList [ QueryFormSymbol "limit"; QueryFormKeyword "aka"; QueryFormInt 2L ]
          ; QueryFormList [ QueryFormSymbol "default"; QueryFormKeyword "missing"; QueryFormString "fallback" ]
          ; QueryFormMap
-             [ ( QueryFormList [ QueryFormSymbol "limit"; QueryFormKeyword "friend"; QueryFormInt 1 ]
+             [ ( QueryFormList [ QueryFormSymbol "limit"; QueryFormKeyword "friend"; QueryFormInt 1L ]
                , QueryFormVector [ QueryFormKeyword "name" ] )
              ]
          ])
@@ -14750,7 +14801,7 @@ let test_parse_pull_pattern_validates_limits () =
        ignore
          (parse_pull_pattern
             db
-            (QueryFormVector [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt 0 ] ])));
+            (QueryFormVector [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt 0L ] ])));
   assert_raises_invalid_arg
     "parse_pull_pattern rejects negative limits"
     (fun () ->
@@ -14758,14 +14809,14 @@ let test_parse_pull_pattern_validates_limits () =
          (parse_pull_pattern
             db
             (QueryFormVector
-               [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt (-1) ] ])));
+               [ QueryFormVector [ QueryFormKeyword "aka"; QueryFormKeyword "limit"; QueryFormInt (-1L) ] ])));
   assert_raises_invalid_arg
     "parse_pull_pattern rejects limits on cardinality-one attrs"
     (fun () ->
        ignore
          (parse_pull_pattern
             db
-            (QueryFormVector [ QueryFormVector [ QueryFormKeyword "name"; QueryFormKeyword "limit"; QueryFormInt 1 ] ])));
+            (QueryFormVector [ QueryFormVector [ QueryFormKeyword "name"; QueryFormKeyword "limit"; QueryFormInt 1L ] ])));
   assert_raises_invalid_arg
     "parse_pull_pattern rejects nil limits on cardinality-one refs"
     (fun () ->
@@ -14779,7 +14830,7 @@ let test_parse_pull_pattern_validates_limits () =
        ignore
          (parse_pull_pattern
             db
-            (QueryFormVector [ QueryFormVector [ QueryFormString "limit"; QueryFormKeyword "name"; QueryFormInt 1 ] ])))
+            (QueryFormVector [ QueryFormVector [ QueryFormString "limit"; QueryFormKeyword "name"; QueryFormInt 1L ] ])))
 
 let test_parse_pull_pattern_unlimited_limits () =
   let many_akas =
@@ -14843,7 +14894,7 @@ let test_parse_pull_pattern_xforms_attributes () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "kind", One_value (Keyword "user/name")
-                 ; "age", One_value (Int 42)
+                 ; "age", One_value (Int64 42L)
                  ; "aka", Many_values [ String "Ivan"; String "Vanya" ]
                  ]
              }
@@ -15076,7 +15127,7 @@ let test_parse_pull_pattern_recursive_refs () =
     parse_pull_pattern
       db
       (QueryFormVector
-         [ QueryFormKeyword "name"; QueryFormMap [ QueryFormKeyword "part", QueryFormInt 2 ] ])
+         [ QueryFormKeyword "name"; QueryFormMap [ QueryFormKeyword "part", QueryFormInt 2L ] ])
   in
   match pull db pattern (Entity_id 1) with
   | None -> failwith "expected parsed recursive pull pattern to find entity"
@@ -15124,7 +15175,7 @@ let test_parse_pull_pattern_recursive_refs_preserve_context () =
     parse_pull_pattern
       db
       (QueryFormVector
-         [ QueryFormKeyword "label"; QueryFormMap [ QueryFormKeyword "part", QueryFormInt 2 ] ])
+         [ QueryFormKeyword "label"; QueryFormMap [ QueryFormKeyword "part", QueryFormInt 2L ] ])
   in
   match pull db pattern (Entity_id 1) with
   | None -> failwith "expected parsed recursive pull pattern to find entity"
@@ -15183,7 +15234,7 @@ let test_parse_pull_pattern_recursive_string_ellipsis () =
                   { pulled_id = 1
                   ; pulled_attrs =
                       [ kw "name", Pulled_scalar (String "A")
-                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                       ]
                   }
               ]
@@ -15664,13 +15715,13 @@ let test_pull_component_attr_expands_recursively () =
         , Pulled_entity
             { pulled_id = 2
             ; pulled_attrs =
-                [ kw "db/id", Pulled_scalar (Int 2)
+                [ kw "db/id", Pulled_scalar (Int64 2L)
                 ; kw "email", Pulled_scalar (String "ivan@example.com")
                 ; ( kw "profile"
                   , Pulled_entity
                       { pulled_id = 3
                       ; pulled_attrs =
-                          [ kw "db/id", Pulled_scalar (Int 3)
+                          [ kw "db/id", Pulled_scalar (Int64 3L)
                           ; kw "email", Pulled_scalar (String "nested@example.com")
                           ]
                       } )
@@ -15702,9 +15753,9 @@ let test_pull_component_attr_returns_id_stub_for_cycles () =
         , Pulled_entity
             { pulled_id = 2
             ; pulled_attrs =
-                [ kw "db/id", Pulled_scalar (Int 2)
+                [ kw "db/id", Pulled_scalar (Int64 2L)
                 ; kw "email", Pulled_scalar (String "ivan@example.com")
-                ; kw "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1) ] }
+                ; kw "profile", Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 1L) ] }
                 ]
             } )
       ]
@@ -15786,7 +15837,7 @@ let test_pull_id_and_wildcard () =
    | Some entity ->
      assert_equal_pulled_attrs
        "Pull_id returns db/id"
-       [ kw "db/id", Pulled_scalar (Int 1) ]
+       [ kw "db/id", Pulled_scalar (Int64 1L) ]
        entity);
   (match pull db [ Pull_wildcard ] (Entity_id 1) with
    | None -> failwith "expected wildcard pull"
@@ -15795,10 +15846,10 @@ let test_pull_id_and_wildcard () =
        "Pull_wildcard returns all current attrs and shallow refs"
        [ kw "aka", Pulled_many [ Pulled_scalar (String "Devil"); Pulled_scalar (String "Tupen") ]
        ; kw "child", Pulled_many
-           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 3L) ] }
            ]
-       ; kw "db/id", Pulled_scalar (Int 1)
+       ; kw "db/id", Pulled_scalar (Int64 1L)
        ; kw "name", Pulled_scalar (String "Petr")
        ]
        entity);
@@ -15809,10 +15860,10 @@ let test_pull_id_and_wildcard () =
        "Pull_wildcard does not re-emit attrs selected with aliases"
        [ kw "alias", Pulled_many [ Pulled_scalar (String "Devil"); Pulled_scalar (String "Tupen") ]
        ; kw "child", Pulled_many
-           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
+           [ Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+           ; Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 3L) ] }
            ]
-       ; kw "db/id", Pulled_scalar (Int 1)
+       ; kw "db/id", Pulled_scalar (Int64 1L)
        ; kw "first-name", Pulled_scalar (String "Petr")
        ]
        entity);
@@ -15822,7 +15873,7 @@ let test_pull_id_and_wildcard () =
     assert_equal_pulled_attrs
       "Pull_attr returns db/id stubs for shallow reverse refs"
       [ kw "_child", Pulled_many
-          [ Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 1) ] } ]
+          [ Pulled_entity { pulled_id = 1; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 1L) ] } ]
       ]
       entity
 
@@ -15947,7 +15998,7 @@ let test_pull_recursive_ref_avoids_cycles () =
                   { pulled_id = 1
                   ; pulled_attrs =
                       [ kw "name", Pulled_scalar (String "A")
-                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                       ]
                   }
               ]
@@ -16018,17 +16069,17 @@ let test_pull_recursive_ref_depth_preserves_sibling_context () =
   | Some entity ->
     assert_equal_pulled_attrs
       "exhausting one recursive attr depth should preserve sibling recursive attrs"
-      [ kw "db/id", Pulled_scalar (Int 1)
+      [ kw "db/id", Pulled_scalar (Int64 1L)
       ; kw "friend", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ kw "db/id", Pulled_scalar (Int 2)
+              [ kw "db/id", Pulled_scalar (Int64 2L)
               ; kw "enemy", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 3)
+                      [ kw "db/id", Pulled_scalar (Int64 3L)
                       ; kw "friend", Pulled_entity
-                          { pulled_id = 4; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 4) ] }
+                          { pulled_id = 4; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 4L) ] }
                       ]
                   }
               ]
@@ -16060,8 +16111,8 @@ let test_pull_dual_recursion_respects_independent_depths () =
    | Some entity ->
      assert_equal_pulled_attrs
        "unbounded recursion follows only the selected recursive attr"
-       [ kw "db/id", Pulled_scalar (Int 1)
-       ; kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+       [ kw "db/id", Pulled_scalar (Int64 1L)
+       ; kw "friend", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
        ]
        entity);
   (match
@@ -16077,12 +16128,12 @@ let test_pull_dual_recursion_respects_independent_depths () =
    | Some entity ->
      assert_equal_pulled_attrs
        "dual recursion follows each attr at depth one"
-       [ kw "db/id", Pulled_scalar (Int 1)
+       [ kw "db/id", Pulled_scalar (Int64 1L)
        ; kw "friend", Pulled_entity
            { pulled_id = 2
            ; pulled_attrs =
-               [ kw "db/id", Pulled_scalar (Int 2)
-               ; kw "enemy", Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 3) ] }
+               [ kw "db/id", Pulled_scalar (Int64 2L)
+               ; kw "enemy", Pulled_entity { pulled_id = 3; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 3L) ] }
                ]
            }
        ]
@@ -16100,21 +16151,21 @@ let test_pull_dual_recursion_respects_independent_depths () =
   | Some entity ->
     assert_equal_pulled_attrs
       "dual recursion tracks attr depths independently"
-      [ kw "db/id", Pulled_scalar (Int 1)
+      [ kw "db/id", Pulled_scalar (Int64 1L)
       ; kw "friend", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ kw "db/id", Pulled_scalar (Int 2)
+              [ kw "db/id", Pulled_scalar (Int64 2L)
               ; kw "enemy", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 3)
+                      [ kw "db/id", Pulled_scalar (Int64 3L)
                       ; kw "friend", Pulled_entity
                           { pulled_id = 4
                           ; pulled_attrs =
-                              [ kw "db/id", Pulled_scalar (Int 4)
+                              [ kw "db/id", Pulled_scalar (Int64 4L)
                               ; kw "enemy", Pulled_entity
-                                  { pulled_id = 5; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 5) ] }
+                                  { pulled_id = 5; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 5L) ] }
                               ]
                           }
                       ]
@@ -16148,21 +16199,21 @@ let test_pull_dual_recursion_tracks_cycles_per_branch () =
   | Some entity ->
     assert_equal_pulled_attrs
       "dual recursion tracks seen ids independently for sibling branches"
-      [ kw "db/id", Pulled_scalar (Int 1)
+      [ kw "db/id", Pulled_scalar (Int64 1L)
       ; kw "part", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ kw "db/id", Pulled_scalar (Int 2)
+              [ kw "db/id", Pulled_scalar (Int64 2L)
               ; kw "part", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 3)
+                      [ kw "db/id", Pulled_scalar (Int64 3L)
                       ; kw "part", Pulled_entity
                           { pulled_id = 1
                           ; pulled_attrs =
-                              [ kw "db/id", Pulled_scalar (Int 1)
-                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                              [ kw "db/id", Pulled_scalar (Int64 1L)
+                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                               ]
                           }
                       ]
@@ -16170,9 +16221,9 @@ let test_pull_dual_recursion_tracks_cycles_per_branch () =
               ; kw "spec", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 1)
-                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "db/id", Pulled_scalar (Int64 1L)
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                       ]
                   }
               ]
@@ -16180,17 +16231,17 @@ let test_pull_dual_recursion_tracks_cycles_per_branch () =
       ; kw "spec", Pulled_entity
           { pulled_id = 2
           ; pulled_attrs =
-              [ kw "db/id", Pulled_scalar (Int 2)
+              [ kw "db/id", Pulled_scalar (Int64 2L)
               ; kw "part", Pulled_entity
                   { pulled_id = 3
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 3)
+                      [ kw "db/id", Pulled_scalar (Int64 3L)
                       ; kw "part", Pulled_entity
                           { pulled_id = 1
                           ; pulled_attrs =
-                              [ kw "db/id", Pulled_scalar (Int 1)
-                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                              [ kw "db/id", Pulled_scalar (Int64 1L)
+                              ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+                              ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                               ]
                           }
                       ]
@@ -16198,9 +16249,9 @@ let test_pull_dual_recursion_tracks_cycles_per_branch () =
               ; kw "spec", Pulled_entity
                   { pulled_id = 1
                   ; pulled_attrs =
-                      [ kw "db/id", Pulled_scalar (Int 1)
-                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
-                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 2) ] }
+                      [ kw "db/id", Pulled_scalar (Int64 1L)
+                      ; kw "part", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
+                      ; kw "spec", Pulled_entity { pulled_id = 2; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 2L) ] }
                       ]
                   }
               ]
@@ -16291,22 +16342,22 @@ let test_pull_recursive_reverse_ref () =
                                            [ kw "_friend", Pulled_many
                                                [ Pulled_entity
                                                    { pulled_id = 4
-                                                   ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 4) ]
+                                                   ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 4L) ]
                                                    }
                                                ]
-                                           ; kw "db/id", Pulled_scalar (Int 5)
+                                           ; kw "db/id", Pulled_scalar (Int64 5L)
                                            ]
                                        }
                                    ]
-                               ; kw "db/id", Pulled_scalar (Int 6)
+                               ; kw "db/id", Pulled_scalar (Int64 6L)
                                ]
                            }
                        ]
-                   ; kw "db/id", Pulled_scalar (Int 7)
+                   ; kw "db/id", Pulled_scalar (Int64 7L)
                    ]
                }
            ]
-       ; kw "db/id", Pulled_scalar (Int 8)
+       ; kw "db/id", Pulled_scalar (Int64 8L)
        ]
        entity);
   match pull db [ Pull_id; Pull_recursive_ref ("_friend", [ Pull_id ], Some 2) ] (Entity_id 8) with
@@ -16321,14 +16372,14 @@ let test_pull_recursive_reverse_ref () =
                   [ kw "_friend", Pulled_many
                       [ Pulled_entity
                           { pulled_id = 6
-                          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int 6) ]
+                          ; pulled_attrs = [ Keyword "db/id", Pulled_scalar (Int64 6L) ]
                           }
                       ]
-                  ; kw "db/id", Pulled_scalar (Int 7)
+                  ; kw "db/id", Pulled_scalar (Int64 7L)
                   ]
               }
           ]
-      ; kw "db/id", Pulled_scalar (Int 8)
+      ; kw "db/id", Pulled_scalar (Int64 8L)
       ]
       entity
 
@@ -16516,7 +16567,7 @@ let test_filter_and_entity_upstream_edge_parity_batch () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Petr")
-                 ; "age", One_value (Int 44)
+                 ; "age", One_value (Int64 44L)
                  ; "aka", Many_values [ String "I"; String "Great" ]
                  ; "password", One_value (String "<SECRET>")
                  ; "huh?", One_value (Bool false)
@@ -16526,7 +16577,7 @@ let test_filter_and_entity_upstream_edge_parity_batch () =
              { db_id = Some (Entity_id 2)
              ; attrs =
                  [ "name", One_value (String "Ivan")
-                 ; "age", One_value (Int 25)
+                 ; "age", One_value (Int64 25L)
                  ; "aka", Many_values [ String "Terrible"; String "IV" ]
                  ; "password", One_value (String "<PROTECTED>")
                  ]
@@ -16535,7 +16586,7 @@ let test_filter_and_entity_upstream_edge_parity_batch () =
              { db_id = Some (Entity_id 3)
              ; attrs =
                  [ "name", One_value (String "Nikolai")
-                 ; "age", One_value (Int 7)
+                 ; "age", One_value (Int64 7L)
                  ; "aka", Many_values [ String "II" ]
                  ; "password", One_value (String "<UNKNOWN>")
                  ]
@@ -16553,7 +16604,7 @@ let test_filter_and_entity_upstream_edge_parity_batch () =
     match entity db (Entity_id entity_id) with
     | Some entity ->
       (match entity_attr entity "age" with
-       | Some (One_value (Int age)) -> Some age
+       | Some (One_value (Int64 age)) -> Some age
        | _ -> None)
     | None -> None
   in
@@ -16569,7 +16620,7 @@ let test_filter_and_entity_upstream_edge_parity_batch () =
   let has_age unfiltered_db datom = Option.is_some (age_of unfiltered_db datom.e) in
   let adult unfiltered_db datom =
     match age_of unfiltered_db datom.e with
-    | Some age -> age >= 18
+    | Some age -> age >= 18L
     | None -> false
   in
   let long_akas unfiltered_db datom =
@@ -16720,7 +16771,7 @@ let test_schema_accepts_db_type_alias () =
                  ; "db/cardinality", One_value (Keyword "db.cardinality/one")
                  ]
              }
-         ; Entity { db_id = Some (Entity_id 1); attrs = [ "friend", One_value (Int 2) ] }
+         ; Entity { db_id = Some (Entity_id 1); attrs = [ "friend", One_value (Int64 2L) ] }
          ; Entity { db_id = Some (Entity_id 2); attrs = [ "name", One_value (String "Petr") ] }
          ]
   in
@@ -17200,7 +17251,7 @@ let test_scalar_value_type_schema_validates_values () =
     |> db_with
          [ Add (Entity_id 1, "name", String "Ivan")
          ; Add (Entity_id 1, "tag", Keyword "user/admin")
-         ; Add (Entity_id 1, "score", Int 10)
+         ; Add (Entity_id 1, "score", Int64 10L)
          ; Add (Entity_id 1, "score", Float 10.5)
          ]
   in
@@ -17259,12 +17310,12 @@ let test_uuid_and_instant_value_type_schema_validates_values () =
     empty_db ~schema:[ "uuid", uuid_attr; "created-at", instant_attr ] ()
     |> db_with
          [ Add (Entity_id 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001")
-         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456)
+         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456L)
          ]
   in
   assert_equal_triples
     "uuid and instant valueType attrs accept matching values"
-    [ 1, "created-at", Instant 1_710_000_123_456
+    [ 1, "created-at", Instant 1_710_000_123_456L
     ; 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001"
     ]
     (datoms db Eavt ());
@@ -17273,7 +17324,7 @@ let test_uuid_and_instant_value_type_schema_validates_values () =
     (fun () -> ignore (db_with [ Add (Entity_id 1, "uuid", String "65ec87fb") ] db));
   assert_raises_invalid_arg
     "InstantType rejects non-instant values"
-    (fun () -> ignore (db_with [ Add (Entity_id 1, "created-at", Int 1_710_000_123_456) ] db))
+    (fun () -> ignore (db_with [ Add (Entity_id 1, "created-at", Int64 1_710_000_123_456L) ] db))
 
 let test_schema_transactions_install_uuid_and_instant_value_types () =
   let db =
@@ -17298,7 +17349,7 @@ let test_schema_transactions_install_uuid_and_instant_value_types () =
                  ]
              }
          ; Add (Entity_id 1, "uuid", Uuid "65ec87fb-0000-0000-0000-000000000001")
-         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456)
+         ; Add (Entity_id 1, "created-at", Instant 1_710_000_123_456L)
          ]
   in
   if List.assoc_opt "uuid" (schema db) <> Some { indexed with value_type = Some UuidType } then
@@ -17343,6 +17394,7 @@ let () =
   test_entity_map_db_id_attr_is_not_stored ();
   test_transact__test_with ();
   test_transact__test_retract_fns_not_found ();
+  test_transact__test_retract_idents_not_found ();
   test_tuple_attrs_track_source_attrs ();
   test_tuple_attrs_reject_direct_writes ();
   test_tuple_attrs_ignore_direct_writes_that_match_sources ();
@@ -17369,6 +17421,7 @@ let () =
   test_tempids_are_rejected_in_non_add_ops ();
   test_value_only_tempids_are_rejected ();
   test_empty_entity_tempids_are_not_entity_usage ();
+  test_tempid_shared_between_entity_id_and_ref_values ();
   test_tempid_generates_unique_entity_refs ();
   test_transact__test_db_fn ();
   test_transact__test_db_fn_returning_entity_without_db_id_issue_474 ();

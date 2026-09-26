@@ -21,7 +21,7 @@ let schema = [ "name", indexed; "age", indexed ]
 let cell_digest = function
   | Result_entity e -> "e:" ^ string_of_int e
   | Result_value (String s) -> "s:" ^ s
-  | Result_value (Int i) -> "i:" ^ string_of_int i
+  | Result_value (Int64 i) -> "i:" ^ Int64.to_string i
   | Result_value (Keyword k) -> "k:" ^ k
   | _ -> "?"
 
@@ -46,16 +46,16 @@ let db_alice_bob () =
   empty_db ~schema ()
   |> db_with
        [ Add (Entity_id 1, "name", String "Alice")
-       ; Add (Entity_id 1, "age", Int 25)
+       ; Add (Entity_id 1, "age", Int64 25L)
        ; Add (Entity_id 2, "name", String "Bob")
-       ; Add (Entity_id 2, "age", Int 35)
+       ; Add (Entity_id 2, "age", Int64 35L)
        ]
 
 let db_carol () =
   empty_db ~schema ()
   |> db_with
        [ Add (Entity_id 1, "name", String "Carol")
-       ; Add (Entity_id 1, "age", Int 40)
+       ; Add (Entity_id 1, "age", Int64 40L)
        ]
 
 let test_cache_hit_same_db () =
@@ -86,7 +86,7 @@ let test_cache_separates_as_of () =
   with_cache_on (fun () ->
       let db0 = db_alice_bob () in
       let tx0 = basis_tx db0 in
-      let db1 = db_with [ Add (Entity_id 1, "age", Int 26) ] db0 in
+      let db1 = db_with [ Add (Entity_id 1, "age", Int64 26L) ] db0 in
       let past = as_of tx0 db1 in
       let dig_current = rows_digest (q db1 find_name_age) in
       let dig_past = rows_digest (q past find_name_age) in
@@ -108,7 +108,7 @@ let test_cache_separates_since () =
       let db1 =
         db_with
           [ Add (Entity_id 2, "name", String "Bob")
-          ; Add (Entity_id 2, "age", Int 30)
+          ; Add (Entity_id 2, "age", Int64 30L)
           ]
           db0
       in
@@ -123,8 +123,8 @@ let test_cache_separates_history () =
   with_cache_on (fun () ->
       let db =
         empty_db ~schema ()
-        |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int 20) ]
-        |> db_with [ Add (Entity_id 1, "age", Int 30) ]
+        |> db_with [ Add (Entity_id 1, "name", String "Alice"); Add (Entity_id 1, "age", Int64 20L) ]
+        |> db_with [ Add (Entity_id 1, "age", Int64 30L) ]
       in
       let hist = history db in
       let dig_current = rows_digest (q db find_name_age) in
@@ -179,8 +179,8 @@ let test_int_range_at_max_int_does_not_overflow () =
       let db =
         empty_db ~schema:[ "age", indexed ] ()
         |> db_with
-             [ Add (Entity_id 1, "age", Int max_int)
-             ; Add (Entity_id 2, "age", Int (max_int - 1))
+             [ Add (Entity_id 1, "age", Int64 (Int64.of_int max_int))
+             ; Add (Entity_id 2, "age", Int64 (Int64.of_int (max_int - 1)))
              ]
       in
       let q_gt =
@@ -189,11 +189,11 @@ let test_int_range_at_max_int_does_not_overflow () =
       in
       let dig =
         rows_digest
-          (q ~inputs:[ Arg_scalar (Result_value (Int (max_int - 1))) ] db q_gt)
+          (q ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int (max_int - 1)))) ] db q_gt)
       in
       check string "> max_int-1 finds only max_int" "e:1" dig;
       let dig_none =
-        rows_digest (q ~inputs:[ Arg_scalar (Result_value (Int max_int)) ] db q_gt)
+        rows_digest (q ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int max_int))) ] db q_gt)
       in
       check string "> max_int finds nothing" "" dig_none)
 
@@ -202,8 +202,8 @@ let test_int_range_at_min_int_does_not_overflow () =
       let db =
         empty_db ~schema:[ "age", indexed ] ()
         |> db_with
-             [ Add (Entity_id 1, "age", Int min_int)
-             ; Add (Entity_id 2, "age", Int (min_int + 1))
+             [ Add (Entity_id 1, "age", Int64 (Int64.of_int min_int))
+             ; Add (Entity_id 2, "age", Int64 (Int64.of_int (min_int + 1)))
              ]
       in
       let q_lt =
@@ -212,11 +212,11 @@ let test_int_range_at_min_int_does_not_overflow () =
       in
       let dig =
         rows_digest
-          (q ~inputs:[ Arg_scalar (Result_value (Int (min_int + 1))) ] db q_lt)
+          (q ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int (min_int + 1)))) ] db q_lt)
       in
       check string "< min_int+1 finds only min_int" "e:1" dig;
       let dig_none =
-        rows_digest (q ~inputs:[ Arg_scalar (Result_value (Int min_int)) ] db q_lt)
+        rows_digest (q ~inputs:[ Arg_scalar (Result_value (Int64 (Int64.of_int min_int))) ] db q_lt)
       in
       check string "< min_int finds nothing" "" dig_none)
 

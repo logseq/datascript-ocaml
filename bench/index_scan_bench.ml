@@ -87,8 +87,8 @@ let person rng i =
         [ "name", One_value (String (rand_nth rng names))
         ; "last-name", One_value (String (rand_nth rng last_names))
         ; "sex", One_value (Keyword (rand_sex rng))
-        ; "age", One_value (Int (next_int rng 100))
-        ; "salary", One_value (Int (next_int rng 100_000))
+        ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+        ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
         ]
     }
 
@@ -280,7 +280,7 @@ let scans ~size =
   ; { name = "range-avet-salary-50k-60k"
     ; run =
         (fun db ->
-          consume_seq (index_range db "salary" ~start:(Int 50_000) ~stop:(Int 60_000) ()))
+          consume_seq (index_range db "salary" ~start:(Int64 50_000L) ~stop:(Int64 60_000L) ()))
     }
   ; { name = "seek-eavt-mid-take-100"
     ; run =

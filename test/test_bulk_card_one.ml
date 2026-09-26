@@ -19,7 +19,7 @@ let indexed =
 let int_ages db e =
   datoms db Eavt ~e ~a:"age" ()
   |> List.of_seq
-  |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+  |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   |> List.sort compare
 
 let test_bulk_same_tx_reassert_original_after_update () =
@@ -30,23 +30,23 @@ let test_bulk_same_tx_reassert_original_after_update () =
     empty_db ~schema:[ "age", indexed; "name", indexed ] ()
     |> db_with
          [ Add (Entity_id 1, "name", String "Alice")
-         ; Add (Entity_id 1, "age", Int 20)
+         ; Add (Entity_id 1, "age", Int64 20L)
          ]
   in
   let report =
     transact db
-      [ Add (Entity_id 1, "age", Int 30); Add (Entity_id 1, "age", Int 20) ]
+      [ Add (Entity_id 1, "age", Int64 30L); Add (Entity_id 1, "age", Int64 20L) ]
   in
   check_int_list "live age is final re-assert 20" [ 20 ] (int_ages report.db_after 1);
   let asserted_ages =
     report.tx_data
     |> List.filter (fun d -> d.a = "age" && d.added)
-    |> List.map (fun d -> match d.v with Int n -> n | _ -> -1)
+    |> List.map (fun d -> match d.v with Int64 n -> Int64.to_int n | _ -> -1)
   in
   check_int_list "tx_data asserts both intermediate and final ages" [ 30; 20 ] asserted_ages;
   let final_assert_present =
     List.exists
-      (fun d -> d.a = "age" && d.added && d.v = Int 20)
+      (fun d -> d.a = "age" && d.added && d.v = Int64 20L)
       report.tx_data
   in
   check_bool "final age=20 assert present in tx_data" true final_assert_present
@@ -54,13 +54,13 @@ let test_bulk_same_tx_reassert_original_after_update () =
 let test_bulk_same_tx_multiple_updates () =
   let db =
     empty_db ~schema:[ "age", indexed ] ()
-    |> db_with [ Add (Entity_id 1, "age", Int 1) ]
+    |> db_with [ Add (Entity_id 1, "age", Int64 1L) ]
   in
   let report =
     transact db
-      [ Add (Entity_id 1, "age", Int 2)
-      ; Add (Entity_id 1, "age", Int 3)
-      ; Add (Entity_id 1, "age", Int 4)
+      [ Add (Entity_id 1, "age", Int64 2L)
+      ; Add (Entity_id 1, "age", Int64 3L)
+      ; Add (Entity_id 1, "age", Int64 4L)
       ]
   in
   check_int_list "live age is last write" [ 4 ] (int_ages report.db_after 1)
@@ -74,11 +74,11 @@ let test_bulk_new_entity_card_one_updates () =
           { db_id = Some (Temp_id "a")
           ; attrs =
               [ "name", One_value (String "Ada")
-              ; "age", One_value (Int 10)
+              ; "age", One_value (Int64 10L)
               ]
           }
-      ; Add (Temp_id "a", "age", Int 11)
-      ; Add (Temp_id "a", "age", Int 10)
+      ; Add (Temp_id "a", "age", Int64 11L)
+      ; Add (Temp_id "a", "age", Int64 10L)
       ]
   in
   match List.assoc_opt "a" report.tempids with

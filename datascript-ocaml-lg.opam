@@ -10,3 +10,6 @@ depends: [
   "lg"
 ]
 build: [["dune" "build" "-p" name "-j" jobs]]
+pin-depends: [
+  ["lg.dev" "git+https://github.com/logseq/lg.git#main"]
+]

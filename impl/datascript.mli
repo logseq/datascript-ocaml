@@ -33,6 +33,7 @@ module Built_ins : sig
   val collection_string_values : value -> string list option
   val replace_string : ?first_only:bool -> string -> string -> string -> string
   val compile_regex : string -> regex
+  val validate_regex : string -> unit
   val replace_regex : ?first_only:bool -> string -> string -> string -> string
   val string_escape_replacement : (value * value) list -> char -> string option
   val escape_string : string -> (value * value) list -> string
@@ -56,7 +57,7 @@ module Built_ins : sig
   val values_equal : value -> value -> bool
   val type_keyword_of_value : value -> string
   val value_contains : value -> value -> bool
-  val range_values : int -> int -> int -> int list
+  val range_values : int64 -> int64 -> int64 -> int64 list
 end
 
 module Data_readers : sig
@@ -92,6 +93,7 @@ module Conn : sig
 
   type transact_context =
     { store : ?storage:storage -> db -> unit
+
     ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
     }
 
@@ -168,8 +170,8 @@ module Db : sig
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
-  val squuid : ?msec:int -> unit -> value
-  val squuid_time_millis : value -> int
+  val squuid : ?msec:int64 -> unit -> value
+  val squuid_time_millis : value -> int64
 end
 
 module Entity : sig
@@ -230,6 +232,7 @@ module Schema : sig
   val schema_attr_is_tuple : schema_attr option -> bool
   val schema_attr_is_avet_accessible : schema -> attr -> bool
   val schema_has_no_history : schema -> attr -> bool
+  val folded_datoms : int ref
   val split_namespaced_attr : attr -> string option * string
   val join_namespaced_attr : string option -> string -> attr
   val is_reverse_ref : attr -> bool
@@ -256,6 +259,7 @@ val benchmark_memory_storage : unit -> storage
   val ensure_live : storage -> unit
   val kind_of : storage -> storage_kind
   val store : ?storage:storage -> db -> unit
+
   val restore_root_snapshot : storage -> serializable_db option
   val restore : restore_context -> storage -> db option
   val storage : db -> storage option
@@ -264,6 +268,10 @@ val benchmark_memory_storage : unit -> storage
 end
 
 module Util : sig
+  val int64_to_int : int64 -> int option
+  val int64_to_int_exn : string -> int64 -> int
+  val civil_from_days : int64 -> int * int * int
+  val string_of_instant_millis : int64 -> string
   val list_equal_by : ('a -> 'a -> bool) -> 'a list -> 'a list -> bool
   val entity_ref_equal : entity_ref -> entity_ref -> bool
   val value_equal : value -> value -> bool
@@ -539,8 +547,8 @@ val collect_garbage : storage -> unit
 val db_hash : db -> int
 val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
-val squuid : ?msec:int -> unit -> value
-val squuid_time_millis : value -> int
+val squuid : ?msec:int64 -> unit -> value
+val squuid_time_millis : value -> int64
 val create_conn : ?schema:schema -> ?storage:storage -> unit -> conn
 val conn_from_db : db -> conn
 val conn_from_datoms : ?schema:schema -> ?storage:storage -> datom list -> conn
@@ -574,6 +582,7 @@ val transact_conn : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_conn_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
 val transact_bang : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_bang_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
+val apply_report : conn -> tx_report -> tx_report
 val transact_async : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_async_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
 val tempid : ?part:string -> ?value:int -> unit -> entity_ref

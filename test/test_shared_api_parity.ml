@@ -29,14 +29,14 @@ let sort_rows rows =
   List.sort
     (fun left right ->
       compare
-        (List.map (fun r -> match r with Result_value v -> v | Result_entity e -> Int e | _ -> Nil) left)
-        (List.map (fun r -> match r with Result_value v -> v | Result_entity e -> Int e | _ -> Nil) right))
+        (List.map (fun r -> match r with Result_value v -> v | Result_entity e -> Int64 (Int64.of_int e) | _ -> Nil) left)
+        (List.map (fun r -> match r with Result_value v -> v | Result_entity e -> Int64 (Int64.of_int e) | _ -> Nil) right))
     rows
 
 let check_rows label expected actual =
   check
     (list (list (testable (fun fmt r -> Format.pp_print_string fmt (match r with
-       | Result_value (Int i) -> string_of_int i
+       | Result_value (Int64 i) -> Int64.to_string i
        | Result_value (Float f) -> string_of_float f
        | Result_value (String s) -> Printf.sprintf "%S" s
        | Result_value (Keyword k) -> ":" ^ k
@@ -54,7 +54,7 @@ let float_close label expected actual =
   | Result_value (Float value) ->
     if abs_float (value -. expected) > 1e-9 then
       failf "%s: expected %g, got %g" label expected value
-  | Result_value (Int value) when float_of_int value = expected -> ()
+  | Result_value (Int64 value) when Int64.to_float value = expected -> ()
   | _ -> failf "%s: expected float %g" label expected
 
 (* ---------- people fixture (queries + aggregates) ---------- *)
@@ -77,8 +77,8 @@ let people_db () =
                [ "name", One_value (String "Ivan")
                ; "last-name", One_value (String "Ivanov")
                ; "sex", One_value (Keyword "male")
-               ; "age", One_value (Int 30)
-               ; "salary", One_value (Int 60_000)
+               ; "age", One_value (Int64 30L)
+               ; "salary", One_value (Int64 60_000L)
                ]
            }
        ; Entity
@@ -87,8 +87,8 @@ let people_db () =
                [ "name", One_value (String "Petr")
                ; "last-name", One_value (String "Petrov")
                ; "sex", One_value (Keyword "male")
-               ; "age", One_value (Int 25)
-               ; "salary", One_value (Int 40_000)
+               ; "age", One_value (Int64 25L)
+               ; "salary", One_value (Int64 40_000L)
                ]
            }
        ; Entity
@@ -97,8 +97,8 @@ let people_db () =
                [ "name", One_value (String "Ivan")
                ; "last-name", One_value (String "Sidorov")
                ; "sex", One_value (Keyword "female")
-               ; "age", One_value (Int 30)
-               ; "salary", One_value (Int 80_000)
+               ; "age", One_value (Int64 30L)
+               ; "salary", One_value (Int64 80_000L)
                ]
            }
        ; Entity
@@ -107,8 +107,8 @@ let people_db () =
                [ "name", One_value (String "Oleg")
                ; "last-name", One_value (String "Kovalev")
                ; "sex", One_value (Keyword "female")
-               ; "age", One_value (Int 40)
-               ; "salary", One_value (Int 55_000)
+               ; "age", One_value (Int64 40L)
+               ; "salary", One_value (Int64 55_000L)
                ]
            }
        ]
@@ -151,60 +151,60 @@ let test_queries () =
     [ [ re 1 ]; [ re 3 ] ]
     (q_string db "[:find ?e :where [?e :name \"Ivan\"]]");
   check_rows "q2"
-    [ [ re 1; rv (Int 30) ]; [ re 3; rv (Int 30) ] ]
+    [ [ re 1; rv (Int64 30L) ]; [ re 3; rv (Int64 30L) ] ]
     (q_string db "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]");
   check_rows "q2-switch"
-    [ [ re 1; rv (Int 30) ]; [ re 3; rv (Int 30) ] ]
+    [ [ re 1; rv (Int64 30L) ]; [ re 3; rv (Int64 30L) ] ]
     (q_string db "[:find ?e ?a :where [?e :age ?a] [?e :name \"Ivan\"]]");
   check_rows "q3"
-    [ [ re 1; rv (Int 30) ] ]
+    [ [ re 1; rv (Int64 30L) ] ]
     (q_string db "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]");
   check_rows "q4"
-    [ [ re 1; rv (String "Ivanov"); rv (Int 30) ] ]
+    [ [ re 1; rv (String "Ivanov"); rv (Int64 30L) ] ]
     (q_string db
        "[:find ?e ?l ?a :where [?e :name \"Ivan\"] [?e :last-name ?l] [?e :age ?a] [?e :sex :male]]");
   (* ?l is bound from ?e1 (same-age peers), not crossed with Ivan last-names. *)
   check_rows "q5"
-    [ [ re 1; rv (String "Ivanov"); rv (Int 30) ]
-    ; [ re 3; rv (String "Sidorov"); rv (Int 30) ]
+    [ [ re 1; rv (String "Ivanov"); rv (Int64 30L) ]
+    ; [ re 3; rv (String "Sidorov"); rv (Int64 30L) ]
     ]
     (q_string db
        "[:find ?e1 ?l ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e1 :age ?a] [?e1 :last-name ?l]]");
   check_rows "qpred1"
-    [ [ re 1; rv (Int 60_000) ]; [ re 3; rv (Int 80_000) ]; [ re 4; rv (Int 55_000) ] ]
+    [ [ re 1; rv (Int64 60_000L) ]; [ re 3; rv (Int64 80_000L) ]; [ re 4; rv (Int64 55_000L) ] ]
     (q_string db "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)]]");
   check_rows "qpred2"
-    [ [ re 1; rv (Int 60_000) ]; [ re 3; rv (Int 80_000) ]; [ re 4; rv (Int 55_000) ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_value (Int 50_000)) ] db
+    [ [ re 1; rv (Int64 60_000L) ]; [ re 3; rv (Int64 80_000L) ]; [ re 4; rv (Int64 55_000L) ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_value (Int64 50_000L)) ] db
        "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]");
   check_rows "q-or"
     [ [ re 1 ]; [ re 2 ]; [ re 3 ] ]
     (q_string db "[:find ?e :where (or [?e :name \"Ivan\"] [?e :name \"Petr\"])]");
   check_rows "q-not"
-    [ [ re 3; rv (Int 30) ]; [ re 4; rv (Int 40) ] ]
+    [ [ re 3; rv (Int64 30L) ]; [ re 4; rv (Int64 40L) ] ]
     (q_string db "[:find ?e ?a :where [?e :age ?a] (not [?e :sex :male])]");
   check_rows "q-or-join"
-    [ [ re 1; rv (Int 30) ]; [ re 2; rv (Int 25) ]; [ re 3; rv (Int 30) ] ]
+    [ [ re 1; rv (Int64 30L) ]; [ re 2; rv (Int64 25L) ]; [ re 3; rv (Int64 30L) ] ]
     (q_string db
        "[:find ?e ?a :where [?e :age ?a] (or-join [?e] [?e :name \"Ivan\"] [?e :name \"Petr\"])]");
   check_rows "q-not-join"
-    [ [ re 3; rv (Int 30) ]; [ re 4; rv (Int 40) ] ]
+    [ [ re 3; rv (Int64 30L) ]; [ re 4; rv (Int64 40L) ] ]
     (q_string db "[:find ?e ?a :where [?e :age ?a] (not-join [?e] [?e :sex :male])]");
   check_rows "q-pred-range"
-    [ [ re 1; rv (Int 60_000) ]; [ re 4; rv (Int 55_000) ] ]
+    [ [ re 1; rv (Int64 60_000L) ]; [ re 4; rv (Int64 55_000L) ] ]
     (q_string db "[:find ?e ?s :where [?e :salary ?s] [(> ?s 50000)] [(< ?s 80000)]]");
   check_rows "q-5-merge"
     [ [ re 1
       ; rv (String "Ivan")
       ; rv (String "Ivanov")
-      ; rv (Int 30)
-      ; rv (Int 60_000)
+      ; rv (Int64 30L)
+      ; rv (Int64 60_000L)
       ]
     ; [ re 2
       ; rv (String "Petr")
       ; rv (String "Petrov")
-      ; rv (Int 25)
-      ; rv (Int 40_000)
+      ; rv (Int64 25L)
+      ; rv (Int64 40_000L)
       ]
     ]
     (q_string db
@@ -224,7 +224,7 @@ let test_writes_add_all () =
         { db_id = Some (Entity_id id)
         ; attrs =
             [ "name", One_value (String (Printf.sprintf "p-%d" id))
-            ; "age", One_value (Int (20 + id))
+            ; "age", One_value (Int64 (Int64.of_int (20 + id)))
             ]
         })
   in
@@ -249,7 +249,7 @@ let test_writes_add_5 () =
               { db_id = Some (Entity_id id)
               ; attrs =
                   [ "name", One_value (String (Printf.sprintf "p-%d" id))
-                  ; "age", One_value (Int (20 + id))
+                  ; "age", One_value (Int64 (Int64.of_int (20 + id)))
                   ]
               }
           ]
@@ -258,11 +258,11 @@ let test_writes_add_5 () =
       [ 1; 2; 3; 4; 5 ]
   in
   check_rows "add-5 ages"
-    [ [ re 1; rv (Int 21) ]
-    ; [ re 2; rv (Int 22) ]
-    ; [ re 3; rv (Int 23) ]
-    ; [ re 4; rv (Int 24) ]
-    ; [ re 5; rv (Int 25) ]
+    [ [ re 1; rv (Int64 21L) ]
+    ; [ re 2; rv (Int64 22L) ]
+    ; [ re 3; rv (Int64 23L) ]
+    ; [ re 4; rv (Int64 24L) ]
+    ; [ re 5; rv (Int64 25L) ]
     ]
     (q_string db "[:find ?e ?a :where [?e :age ?a]]")
 
@@ -387,14 +387,14 @@ let test_aggregates () =
    | [ [ avg ] ] -> float_close "q-agg-avg" 58750.0 avg
    | rows -> failf "q-agg-avg unexpected rows: %d" (List.length rows));
   check_rows "q-agg-group"
-    [ [ rv (Keyword "female"); rv (Float 67500.0); rv (Int 2) ]
-    ; [ rv (Keyword "male"); rv (Float 50000.0); rv (Int 2) ]
+    [ [ rv (Keyword "female"); rv (Float 67500.0); rv (Int64 2L) ]
+    ; [ rv (Keyword "male"); rv (Float 50000.0); rv (Int64 2L) ]
     ]
     (q_string db "[:find ?sex (avg ?s) (count ?e) :where [?e :sex ?sex] [?e :salary ?s]]");
   (match q_string db "[:find (avg ?s) (min ?s) (max ?s) :where [?e :salary ?s] [?e :sex :male]]" with
    | [ [ avg; min_v; max_v ] ] ->
      float_close "q-agg-filter avg" 50000.0 avg;
-     check_rows "q-agg-filter min/max" [ [ min_v; max_v ] ] [ [ rv (Int 40_000); rv (Int 60_000) ] ]
+     check_rows "q-agg-filter min/max" [ [ min_v; max_v ] ] [ [ rv (Int64 40_000L); rv (Int64 60_000L) ] ]
    | _ -> failf "q-agg-filter shape");
   check_rows "q-agg-pred"
     [ [ rv (Keyword "female"); rv (Float 67500.0) ]
@@ -434,13 +434,13 @@ let temporal_fixture () =
           { db_id = Some (Entity_id 1)
           ; attrs =
               [ "name", One_value (String "Ivan")
-              ; "age", One_value (Int 20)
+              ; "age", One_value (Int64 20L)
               ; "sex", One_value (Keyword "male")
               ]
           }
       ; Entity
           { db_id = Some (Entity_id 2)
-          ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int 30) ]
+          ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 30L) ]
           }
       ]
       (empty_db ~schema ())
@@ -448,10 +448,10 @@ let temporal_fixture () =
   let tx0 = basis_tx db in
   let current =
     db_with
-      [ Add (Entity_id 1, "age", Int 21)
+      [ Add (Entity_id 1, "age", Int64 21L)
       ; Entity
           { db_id = Some (Entity_id 3)
-          ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int 40) ]
+          ; attrs = [ "name", One_value (String "Ivan"); "age", One_value (Int64 40L) ]
           }
       ]
       db
@@ -464,16 +464,16 @@ let test_temporal () =
     [ [ re 1 ]; [ re 3 ] ]
     (q_string current "[:find ?e :where [?e :name \"Ivan\"]]");
   check_rows "t-current-q2"
-    [ [ re 1; rv (Int 21) ]; [ re 3; rv (Int 40) ] ]
+    [ [ re 1; rv (Int64 21L) ]; [ re 3; rv (Int64 40L) ] ]
     (q_string current "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]");
   check_rows "t-asof-q1"
     [ [ re 1 ] ]
     (q_string as_of_db "[:find ?e :where [?e :name \"Ivan\"]]");
   check_rows "t-asof-q2"
-    [ [ re 1; rv (Int 20) ] ]
+    [ [ re 1; rv (Int64 20L) ] ]
     (q_string as_of_db "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]");
   check_rows "t-asof-q3"
-    [ [ re 1; rv (Int 20) ] ]
+    [ [ re 1; rv (Int64 20L) ] ]
     (q_string as_of_db
        "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a] [?e :sex :male]]");
   check_int "t-hist-q1 names" 3
@@ -482,22 +482,22 @@ let test_temporal () =
     [ [ re 1 ]; [ re 2 ]; [ re 3 ] ]
     (q_string hist "[:find ?e :where [?e :name]]");
   check_rows "t-hist-q2 age+tx"
-    [ [ re 1; rv (Int 20); re (basis_tx as_of_db) ]
-    ; [ re 1; rv (Int 20); re (basis_tx current) ]
-    ; [ re 1; rv (Int 21); re (basis_tx current) ]
-    ; [ re 2; rv (Int 30); re (basis_tx as_of_db) ]
-    ; [ re 3; rv (Int 40); re (basis_tx current) ]
+    [ [ re 1; rv (Int64 20L); re (basis_tx as_of_db) ]
+    ; [ re 1; rv (Int64 20L); re (basis_tx current) ]
+    ; [ re 1; rv (Int64 21L); re (basis_tx current) ]
+    ; [ re 2; rv (Int64 30L); re (basis_tx as_of_db) ]
+    ; [ re 3; rv (Int64 40L); re (basis_tx current) ]
     ]
     (q_string hist "[:find ?e ?a ?tx :where [?e :age ?a ?tx]]");
   check_rows "t-hist-q3 name+age includes retracted age"
-    [ [ re 1; rv (String "Ivan"); rv (Int 20) ]
-    ; [ re 1; rv (String "Ivan"); rv (Int 21) ]
-    ; [ re 2; rv (String "Petr"); rv (Int 30) ]
-    ; [ re 3; rv (String "Ivan"); rv (Int 40) ]
+    [ [ re 1; rv (String "Ivan"); rv (Int64 20L) ]
+    ; [ re 1; rv (String "Ivan"); rv (Int64 21L) ]
+    ; [ re 2; rv (String "Petr"); rv (Int64 30L) ]
+    ; [ re 3; rv (String "Ivan"); rv (Int64 40L) ]
     ]
     (q_string hist "[:find ?e ?n ?a :where [?e :name ?n] [?e :age ?a]]");
   check_rows "t-hist-retract"
-    [ [ re 1; rv (Int 20) ] ]
+    [ [ re 1; rv (Int64 20L) ] ]
     (q_string hist "[:find ?e ?a :where [?e :age ?a _ false]]")
 
 
@@ -522,7 +522,7 @@ let join_db () =
            { db_id = Some (Entity_id 10)
            ; attrs =
                [ "d/name", One_value (String "dept-99")
-               ; "d/budget", One_value (Int 500_000)
+               ; "d/budget", One_value (Int64 500_000L)
                ; "d/div", One_value (Ref 1)
                ]
            }
@@ -530,7 +530,7 @@ let join_db () =
            { db_id = Some (Entity_id 11)
            ; attrs =
                [ "d/name", One_value (String "dept-01")
-               ; "d/budget", One_value (Int 420_000)
+               ; "d/budget", One_value (Int64 420_000L)
                ; "d/div", One_value (Ref 1)
                ]
            }
@@ -538,7 +538,7 @@ let join_db () =
            { db_id = Some (Entity_id 12)
            ; attrs =
                [ "d/name", One_value (String "dept-02")
-               ; "d/budget", One_value (Int 300_000)
+               ; "d/budget", One_value (Int64 300_000L)
                ; "d/div", One_value (Ref 2)
                ]
            }
@@ -547,7 +547,7 @@ let join_db () =
            ; attrs =
                [ "p/name", One_value (String "p-100")
                ; "p/dept", One_value (Ref 10)
-               ; "p/salary", One_value (Int 95_000)
+               ; "p/salary", One_value (Int64 95_000L)
                ]
            }
        ; Entity
@@ -555,7 +555,7 @@ let join_db () =
            ; attrs =
                [ "p/name", One_value (String "p-101")
                ; "p/dept", One_value (Ref 10)
-               ; "p/salary", One_value (Int 50_000)
+               ; "p/salary", One_value (Int64 50_000L)
                ]
            }
        ; Entity
@@ -563,7 +563,7 @@ let join_db () =
            ; attrs =
                [ "p/name", One_value (String "p-102")
                ; "p/dept", One_value (Ref 11)
-               ; "p/salary", One_value (Int 91_000)
+               ; "p/salary", One_value (Int64 91_000L)
                ]
            }
        ; Entity
@@ -571,7 +571,7 @@ let join_db () =
            ; attrs =
                [ "p/name", One_value (String "p-103")
                ; "p/dept", One_value (Ref 12)
-               ; "p/salary", One_value (Int 70_000)
+               ; "p/salary", One_value (Int64 70_000L)
                ]
            }
        ]

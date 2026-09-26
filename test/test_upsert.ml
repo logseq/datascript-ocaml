@@ -96,42 +96,42 @@ let assert_entity label expected db entity_id =
 
 let test_upsert__test_upsert () =
   let db = base_db () in
-  let tx = transact db [ entity [ one "name" (String "Ivan"); one "age" (Int 35) ] ] in
+  let tx = transact db [ entity [ one "name" (String "Ivan"); one "age" (Int64 35L) ] ] in
   assert_entity
     "upsert, no tempid"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "upsert, no tempid has no user tempids" [] tx.tempids;
   let tx =
-    transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@1"); one "age" (Int 35) ] ]
+    transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@1"); one "age" (Int64 35L) ] ]
   in
   assert_entity
     "upsert by 2 attrs, no tempid"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "upsert by 2 attrs, no tempid has no user tempids" [] tx.tempids;
   let tx =
-    transact db [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 35) ] ]
+    transact db [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 35L) ] ]
   in
   assert_entity
     "upsert with tempid"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "upsert with tempid resolves existing entity" [ "-1", 1 ] tx.tempids;
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "1") [ one "name" (String "Ivan"); one "age" (Int 35) ]
+      [ entity ~db_id:(Temp_id "1") [ one "name" (String "Ivan"); one "age" (Int64 35L) ]
       ; Add (Temp_id "2", "name", String "Oleg")
       ; Add (Temp_id "2", "email", String "@2")
       ]
   in
   assert_entity
     "upsert with string tempid updates first entity"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_entity
@@ -143,41 +143,41 @@ let test_upsert__test_upsert () =
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "email" (String "@1"); one "age" (Int 35) ] ]
+      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "email" (String "@1"); one "age" (Int64 35L) ] ]
   in
   assert_entity
     "upsert by 2 attrs with tempid"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "upsert by 2 attrs with tempid resolves existing entity" [ "-1", 1 ] tx.tempids;
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 35) ]
-      ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 36) ]
+      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 35L) ]
+      ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 36L) ]
       ]
   in
   assert_entity
     "upsert to two entities, resolve to same tempid"
-    [ 1, "age", Int 36; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 36L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "same tempid remains resolved to one entity" [ "-1", 1 ] tx.tempids;
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 35) ]
-      ; entity ~db_id:(Temp_id "-2") [ one "name" (String "Ivan"); one "age" (Int 36) ]
+      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 35L) ]
+      ; entity ~db_id:(Temp_id "-2") [ one "name" (String "Ivan"); one "age" (Int64 36L) ]
       ]
   in
   assert_entity
     "upsert to two entities, two tempids"
-    [ 1, "age", Int 36; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 36L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "two tempids resolve to the same existing entity" [ "-1", 1; "-2", 1 ] tx.tempids;
-  ignore (transact db [ entity ~db_id:(Entity_id 1) [ one "name" (String "Ivan"); one "age" (Int 35) ] ]);
+  ignore (transact db [ entity ~db_id:(Entity_id 1) [ one "name" (String "Ivan"); one "age" (Int64 35L) ] ]);
   ignore
     (transact
        db
@@ -185,25 +185,25 @@ let test_upsert__test_upsert () =
            ~db_id:(Lookup_ref ("name", String "Ivan"))
            [ one "name" (String "Ivan")
            ; one "email" (String "@1")
-           ; one "age" (Int 35)
+           ; one "age" (Int64 35L)
            ]
        ]);
   assert_raises_invalid_arg_message
     "upsert conflicts with existing id"
     "Conflicting upsert: [:name \"Ivan\"] resolves to 1, but entity already has :db/id 2"
     (fun () ->
-      ignore (transact db [ entity ~db_id:(Entity_id 2) [ one "name" (String "Ivan"); one "age" (Int 36) ] ]));
+      ignore (transact db [ entity ~db_id:(Entity_id 2) [ one "name" (String "Ivan"); one "age" (Int64 36L) ] ]));
   assert_raises_invalid_arg_message
     "upsert conflicts with non-existing id"
     "Conflicting upsert: [:name \"Ivan\"] resolves to 1, but entity already has :db/id 5"
     (fun () ->
-      ignore (transact db [ entity ~db_id:(Entity_id 5) [ one "name" (String "Ivan"); one "age" (Int 36) ] ]));
+      ignore (transact db [ entity ~db_id:(Entity_id 5) [ one "name" (String "Ivan"); one "age" (Int64 36L) ] ]));
   let tx =
-    transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@5"); one "age" (Int 35) ] ]
+    transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@5"); one "age" (Int64 35L) ] ]
   in
   assert_entity
     "upsert by non-existing value resolves as update"
-    [ 1, "age", Int 35; 1, "email", String "@5"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@5"; 1, "name", String "Ivan" ]
     tx.db_after
     1;
   assert_equal_tempids "upsert by non-existing value has no user tempids" [] tx.tempids;
@@ -211,24 +211,24 @@ let test_upsert__test_upsert () =
     "upsert by 2 conflicting fields"
     "Conflicting upserts: [:name \"Ivan\"] resolves to 1, but [:email \"@2\"] resolves to 2"
     (fun () ->
-      ignore (transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@2"); one "age" (Int 35) ] ]));
+      ignore (transact db [ entity [ one "name" (String "Ivan"); one "email" (String "@2"); one "age" (Int64 35L) ] ]));
   let tx =
-    transact db [ entity [ one "name" (String "Igor"); one "age" (Int 35) ]; entity [ one "name" (String "Igor"); one "age" (Int 36) ] ]
+    transact db [ entity [ one "name" (String "Igor"); one "age" (Int64 35L) ]; entity [ one "name" (String "Igor"); one "age" (Int64 36L) ] ]
   in
-  assert_entity "upsert over intermediate db" [ 5, "age", Int 36; 5, "name", String "Igor" ] tx.db_after 5;
+  assert_entity "upsert over intermediate db" [ 5, "age", Int64 36L; 5, "name", String "Igor" ] tx.db_after 5;
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Igor"); one "age" (Int 35) ]
-      ; entity ~db_id:(Temp_id "-2") [ one "name" (String "Igor"); one "age" (Int 36) ]
+      [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Igor"); one "age" (Int64 35L) ]
+      ; entity ~db_id:(Temp_id "-2") [ one "name" (String "Igor"); one "age" (Int64 36L) ]
       ]
   in
-  assert_entity "upsert over intermediate db, different tempids" [ 5, "age", Int 36; 5, "name", String "Igor" ] tx.db_after 5;
+  assert_entity "upsert over intermediate db, different tempids" [ 5, "age", Int64 36L; 5, "name", String "Igor" ] tx.db_after 5;
   assert_equal_tempids "intermediate upsert tempids resolve together" [ "-1", 5; "-2", 5 ] tx.tempids;
   assert_raises_invalid_arg
     "upsert and current-tx conflict"
     (fun () ->
-      ignore (transact db [ entity ~db_id:CurrentTx [ one "name" (String "Ivan"); one "age" (Int 35) ] ]));
+      ignore (transact db [ entity ~db_id:CurrentTx [ one "name" (String "Ivan"); one "age" (Int64 35L) ] ]));
   let tx =
     transact
       db
@@ -255,10 +255,10 @@ let test_upsert__test_upsert () =
       ignore (transact tx.db_after [ entity [ many "slugs" [ String "ivan1"; String "petr1" ] ] ]));
   [ 3, 2, 36; 4, 3, 37; 1, 4, 38 ]
   |> List.iter (fun (ref_e, target_e, age) ->
-    let tx = transact db [ entity [ one "ref" (Ref ref_e); one "age" (Int age) ] ] in
+    let tx = transact db [ entity [ one "ref" (Ref ref_e); one "age" (Int64 (Int64.of_int age)) ] ] in
     assert_entity
       "upsert by ref"
-      [ target_e, "age", Int age
+      [ target_e, "age", Int64 (Int64.of_int age)
       ; target_e, "email", String (if target_e = 2 then "@2" else if target_e = 3 then "@3" else "@4")
       ; target_e, "name", String (if target_e = 2 then "Petr" else if target_e = 3 then "Dima" else "Olga")
       ; target_e, "ref", Ref ref_e
@@ -268,11 +268,11 @@ let test_upsert__test_upsert () =
   [ "Dima", 2, 3, 36; "Olga", 3, 4, 37; "Ivan", 4, 1, 38 ]
   |> List.iter (fun (lookup_name, target_e, ref_e, age) ->
     let tx =
-      transact db [ entity [ one "ref" (Ref_to (Lookup_ref ("name", String lookup_name))); one "age" (Int age) ] ]
+      transact db [ entity [ one "ref" (Ref_to (Lookup_ref ("name", String lookup_name))); one "age" (Int64 (Int64.of_int age)) ] ]
     in
     assert_entity
       "upsert by lookup ref"
-      [ target_e, "age", Int age
+      [ target_e, "age", Int64 (Int64.of_int age)
       ; target_e, "email", String (if target_e = 2 then "@2" else if target_e = 3 then "@3" else "@4")
       ; target_e, "name", String (if target_e = 2 then "Petr" else if target_e = 3 then "Dima" else "Olga")
       ; target_e, "ref", Ref ref_e
@@ -297,13 +297,13 @@ let test_upsert__test_redefining_ids () =
   let tx =
     transact
       db
-      [ entity ~db_id:(Temp_id "-1") [ one "age" (Int 35) ]
-      ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 36) ]
+      [ entity ~db_id:(Temp_id "-1") [ one "age" (Int64 35L) ]
+      ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 36L) ]
       ]
   in
   assert_equal_triples
     "redefining ids keeps the upsert target"
-    [ 1, "age", Int 36; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 36L; 1, "name", String "Ivan" ]
     (datoms tx.db_after Eavt ());
   assert_equal_tempids "redefined tempid resolves to existing entity" [ "-1", 1 ] tx.tempids;
   let db =
@@ -320,15 +320,15 @@ let test_upsert__test_redefining_ids () =
       ignore
         (transact
            db
-           [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int 35) ]
-           ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Oleg"); one "age" (Int 36) ]
+           [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan"); one "age" (Int64 35L) ]
+           ; entity ~db_id:(Temp_id "-1") [ one "name" (String "Oleg"); one "age" (Int64 36L) ]
            ]))
 
 let test_upsert__test_retries_order () =
   let first =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
-         [ Add (Temp_id "-1", "age", Int 42)
+         [ Add (Temp_id "-1", "age", Int64 42L)
          ; Add (Temp_id "-2", "likes", String "Pizza")
          ; Add (Temp_id "-1", "name", String "Bob")
          ; Add (Temp_id "-2", "name", String "Bob")
@@ -336,12 +336,12 @@ let test_upsert__test_retries_order () =
   in
   assert_equal_triples
     "retry order merges later tempid into the first upsert target"
-    [ 1, "age", Int 42; 1, "likes", String "Pizza"; 1, "name", String "Bob" ]
+    [ 1, "age", Int64 42L; 1, "likes", String "Pizza"; 1, "name", String "Bob" ]
     (datoms first Eavt ());
   let second =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with
-         [ Add (Temp_id "-1", "age", Int 42)
+         [ Add (Temp_id "-1", "age", Int64 42L)
          ; Add (Temp_id "-2", "likes", String "Pizza")
          ; Add (Temp_id "-2", "name", String "Bob")
          ; Add (Temp_id "-1", "name", String "Bob")
@@ -349,7 +349,7 @@ let test_upsert__test_retries_order () =
   in
   assert_equal_triples
     "retry order preserves the first unique identity owner"
-    [ 2, "age", Int 42; 2, "likes", String "Pizza"; 2, "name", String "Bob" ]
+    [ 2, "age", Int64 42L; 2, "likes", String "Pizza"; 2, "name", String "Bob" ]
     (datoms second Eavt ())
 
 let test_upsert__test_upsert_string_tempid_ref () =
@@ -357,18 +357,18 @@ let test_upsert__test_upsert_string_tempid_ref () =
     empty_db ~schema:[ "name", unique_identity; "ref", ref_attr ] ()
     |> db_with [ entity [ one "name" (String "Alice") ] ]
   in
-  let expected = [ 1, "name", String "Alice"; 2, "age", Int 36; 2, "ref", Ref 1 ] in
+  let expected = [ 1, "name", String "Alice"; 2, "age", Int64 36L; 2, "ref", Ref 1 ] in
   [ [ entity ~db_id:(Temp_id "user") [ one "name" (String "Alice") ]
-    ; entity [ one "age" (Int 36); one "ref" (Ref_to (Temp_id "user")) ]
+    ; entity [ one "age" (Int64 36L); one "ref" (Ref_to (Temp_id "user")) ]
     ]
   ; [ Add (Temp_id "user", "name", String "Alice")
-    ; entity [ one "age" (Int 36); one "ref" (Ref_to (Temp_id "user")) ]
+    ; entity [ one "age" (Int64 36L); one "ref" (Ref_to (Temp_id "user")) ]
     ]
   ; [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Alice") ]
-    ; entity [ one "age" (Int 36); one "ref" (Ref_to (Temp_id "-1")) ]
+    ; entity [ one "age" (Int64 36L); one "ref" (Ref_to (Temp_id "-1")) ]
     ]
   ; [ Add (Temp_id "-1", "name", String "Alice")
-    ; entity [ one "age" (Int 36); one "ref" (Ref_to (Temp_id "-1")) ]
+    ; entity [ one "age" (Int64 36L); one "ref" (Ref_to (Temp_id "-1")) ]
     ]
   ]
   |> List.iter (fun tx ->
@@ -399,13 +399,13 @@ let test_upsert__test_vector_upsert () =
     empty_db ~schema:[ "name", unique_identity ] ()
     |> db_with [ entity ~db_id:(Temp_id "-1") [ one "name" (String "Ivan") ] ]
   in
-  [ [ Add (Temp_id "-1", "name", String "Ivan"); Add (Temp_id "-1", "age", Int 12) ]
-  ; [ Add (Temp_id "-1", "age", Int 12); Add (Temp_id "-1", "name", String "Ivan") ]
+  [ [ Add (Temp_id "-1", "name", String "Ivan"); Add (Temp_id "-1", "age", Int64 12L) ]
+  ; [ Add (Temp_id "-1", "age", Int64 12L); Add (Temp_id "-1", "name", String "Ivan") ]
   ]
   |> List.iter (fun tx ->
     assert_equal_triples
       "vector add upsert resolves tempid into existing unique identity entity"
-      [ 1, "age", Int 12; 1, "name", String "Ivan" ]
+      [ 1, "age", Int64 12L; 1, "name", String "Ivan" ]
       (datoms (db_with tx db) Eavt ()));
   let db =
     empty_db ~schema:[ "name", unique_identity ] ()
@@ -422,9 +422,9 @@ let test_upsert__test_vector_upsert () =
         (transact
            db
            [ Add (Temp_id "-1", "name", String "Ivan")
-           ; Add (Temp_id "-1", "age", Int 35)
+           ; Add (Temp_id "-1", "age", Int64 35L)
            ; Add (Temp_id "-1", "name", String "Oleg")
-           ; Add (Temp_id "-1", "age", Int 36)
+           ; Add (Temp_id "-1", "age", Int64 36L)
            ]))
 
 let () =

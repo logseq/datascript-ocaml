@@ -68,8 +68,8 @@ let build_db size =
               [ "name", One_value (String (rand_nth rng names))
               ; "last-name", One_value (String (rand_nth rng last_names))
               ; "sex", One_value (Keyword (rand_sex rng))
-              ; "age", One_value (Int (next_int rng 100))
-              ; "salary", One_value (Int (next_int rng 100_000))
+              ; "age", One_value (Int64 (Int64.of_int (next_int rng 100)))
+              ; "salary", One_value (Int64 (Int64.of_int (next_int rng 100_000)))
               ]
           })
   in
@@ -101,7 +101,7 @@ let sort_rows rows =
         (List.map
            (function
              | Result_value v -> v
-             | Result_entity e -> Int e
+             | Result_entity e -> Int64 (Int64.of_int e)
              | Result_attr a -> Keyword a
              | Result_db _ -> Nil
              | Result_pull _ -> Nil)
@@ -109,7 +109,7 @@ let sort_rows rows =
         (List.map
            (function
              | Result_value v -> v
-             | Result_entity e -> Int e
+             | Result_entity e -> Int64 (Int64.of_int e)
              | Result_attr a -> Keyword a
              | Result_db _ -> Nil
              | Result_pull _ -> Nil)
@@ -119,7 +119,7 @@ let sort_rows rows =
 let cell_digest = function
   | Result_entity e -> "e:" ^ string_of_int e
   | Result_attr a -> "a:" ^ a
-  | Result_value (Int i) -> "i:" ^ string_of_int i
+  | Result_value (Int64 i) -> "i:" ^ Int64.to_string i
   | Result_value (Float f) -> "f:" ^ string_of_float f
   | Result_value (String s) -> "s:" ^ s
   | Result_value (Keyword k) -> "k:" ^ k
@@ -240,7 +240,7 @@ let fallback_cases =
     }
   ; { name = "qpred2-input"
     ; query = "[:find ?e ?s :in $ ?min_s :where [?e :salary ?s] [(> ?s ?min_s)]]"
-    ; inputs = [ Arg_scalar (Result_value (Int 50_000)) ]
+    ; inputs = [ Arg_scalar (Result_value (Int64 50_000L)) ]
     ; expect_path = Relation_fallback
     ; expect_fused_plan = false
     }

@@ -173,11 +173,11 @@ let build_graph ~size ~pages =
       [ "block/uuid", One_value (String (uuid_of e))
       ; "block/title", One_value (String (Printf.sprintf "Page %d" e))
       ; "block/name", One_value (String (Printf.sprintf "page-%d" e))
-      ; "block/updated-at", One_value (Int updated)
-      ; "block/created-at", One_value (Int (updated - day_ms))
+      ; "block/updated-at", One_value (Int64 (Int64.of_int updated))
+      ; "block/created-at", One_value (Int64 (Int64.of_int (updated - day_ms)))
       ; "block/content", One_value (String (Printf.sprintf "page body %d" e))
       ]
-      @ (if is_journal then [ "block/journal-day", One_value (Int (journal_day_of e)) ] else [])
+      @ (if is_journal then [ "block/journal-day", One_value (Int64 (Int64.of_int (journal_day_of e))) ] else [])
       @
       if e mod 7 = 0 then [ "block/tags", Many_values [ Ref ((e mod tag_count) + 1) ] ] else []
     in
@@ -191,8 +191,8 @@ let build_graph ~size ~pages =
     let attrs =
       [ "block/uuid", One_value (String (uuid_of e))
       ; "block/title", One_value (String (Printf.sprintf "Block %d" e))
-      ; "block/updated-at", One_value (Int updated)
-      ; "block/created-at", One_value (Int (updated - 60_000))
+      ; "block/updated-at", One_value (Int64 (Int64.of_int updated))
+      ; "block/created-at", One_value (Int64 (Int64.of_int (updated - 60_000)))
       ; "block/parent", One_value (Ref parent)
       ; "block/page", One_value (Ref page)
       ; "block/content", One_value (String (Printf.sprintf "block body %d" e))
@@ -299,14 +299,14 @@ let recent_page_datoms p =
   keep_take 15 (is_page p.db) (avet_attr_rseq p.db "block/updated-at")
 
 let journal_day_value = function
-  | Int day -> Some day
-  | Float f when float_of_int (int_of_float f) = f -> Some (int_of_float f)
+  | Int64 day -> Some day
+  | Float f when Int64.to_float (Int64.of_float f) = f -> Some (Int64.of_float f)
   | _ -> None
 
 let latest_journal_datoms p =
   let today = journal_day_of p.pages in
   keep_take 10
-    (fun d -> match journal_day_value d.v with Some day -> day <= today | None -> false)
+    (fun d -> match journal_day_value d.v with Some day -> Int64.compare day (Int64.of_int today) <= 0 | None -> false)
     (avet_attr_rseq p.db "block/journal-day")
 
 (* Canonical EDN strings for cross-runtime result equality (match Clojure pr-str). *)
@@ -314,7 +314,7 @@ let edn_of_value = function
   | Nil -> "nil"
   | Bool true -> "true"
   | Bool false -> "false"
-  | Int i -> string_of_int i
+  | Int64 i -> Int64.to_string i
   | Float f when float_of_int (int_of_float f) = f -> string_of_int (int_of_float f)
   | Float f ->
     (* Match JS/Clojure number print for this workload (ints + small floats). *)
@@ -325,7 +325,7 @@ let edn_of_value = function
   | Keyword k -> ":" ^ k
   | Symbol s -> s
   | Uuid u -> "#uuid \"" ^ u ^ "\""
-  | Instant i -> string_of_int i
+  | Instant i -> Int64.to_string i
   | Ref e -> string_of_int e
   | other ->
     (* Fallback: keep type visible without inventing EDN readers. *)
@@ -432,7 +432,7 @@ let result_edn p name =
     edn_of_q_rows
       (q
          ~inputs:
-           [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
+           [ Arg_scalar (Result_value (Int64 (Int64.of_int lo))); Arg_scalar (Result_value (Int64 (Int64.of_int hi))) ]
          p.db q_updated_at_between_query)
   | "q-journal-pages" ->
     edn_of_q_rows (q p.db q_journal_pages_query)
@@ -483,7 +483,7 @@ let q_updated_at_between p =
   consume_rows
     (q
        ~inputs:
-         [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
+         [ Arg_scalar (Result_value (Int64 (Int64.of_int lo))); Arg_scalar (Result_value (Int64 (Int64.of_int hi))) ]
        p.db q_updated_at_between_query)
 
 let q_journal_pages p =

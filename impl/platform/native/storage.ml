@@ -93,7 +93,7 @@ let restore context storage =
 let storage (db : db) = db.storage_ref
 
 let settings (_db : db) =
-  [ "branching-factor", Int 32
+  [ "branching-factor", Int64 32L
   ; "ref-type", Keyword "weak"
   ; "storage", Bool (Option.is_some _db.storage_ref)
   ]

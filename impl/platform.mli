@@ -6,6 +6,11 @@ val now_seconds : unit -> float
 (** Compile a platform-specific regular expression from a pattern string. *)
 val compile_regex : string -> regex
 
+(** Raise [Invalid_argument] when the pattern is not valid JavaScript
+    regular-expression syntax, mirroring the eager check [re-pattern]
+    performs on the JS platform. *)
+val validate_regex : string -> unit
+
 (** Replace regex matches in a string.
 
     When [first_only] is [true], only the first match is replaced. Otherwise,

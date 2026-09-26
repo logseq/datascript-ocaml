@@ -12,6 +12,7 @@ type context =
   ; is_reverse_ref : attr -> bool
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
+  ; is_unique_identity : db -> attr -> bool
   ; max_eid_with_entity_id : int -> entity_id -> entity_id
   ; max_eid_in_value : int -> value -> int
   }
@@ -28,7 +29,7 @@ val entity_ref_of_ref_attr_value : value -> entity_ref option
 val ref_attr_for_value_resolution : context -> db -> attr -> attr option
 val resolve_value_for_attr : context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> value -> value * entity_id * (string * entity_id) list
 val attr_expands_collection : context -> db -> attr -> bool
-val ref_lookup_collection_value : value -> bool
+val ref_lookup_collection_value : context -> db -> value -> bool
 val resolve_existing_entity_ref : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> entity_ref -> entity_id * entity_id * (string * entity_id) list
 val resolve_optional_existing_entity_ref : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> entity_ref -> entity_id option * entity_id * (string * entity_id) list
 val resolve_tx_value_for_attr : context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> tx_value -> tx_value * entity_id * (string * entity_id) list
@@ -42,7 +43,7 @@ val remap_tempid_entity : entity_id -> entity_id -> (string * entity_id) list ->
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
-  ; schema_from_transaction_datoms : strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
+  ; schema_from_transaction_datoms : ?validate:bool -> ?removed_field_attrs:attr list -> strict:bool -> removed_attrs:attr list -> removed_fields:(attr * attr) list -> ignored_schema_entities:entity_id list -> schema -> datom list -> schema
   ; schema_datoms : db -> datom list -> datom list
   ; schema_fields : attr list
   ; current_attr_value : db -> entity_id -> attr -> value option

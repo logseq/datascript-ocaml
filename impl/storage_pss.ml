@@ -62,7 +62,18 @@ let buffered_node_storage pending_entries =
 let normalize_stored_datom schema datom =
   let schema_attr = Schema.schema_attr_by_name schema datom.a in
   match schema_attr, datom.v with
-  | Some { value_type = Some RefType; _ }, Int entity_id -> { datom with v = Ref entity_id }
+  | Some { value_type = Some RefType; _ }, Int64 entity_id ->
+    (match Util.int64_to_int entity_id with
+     | Some entity_id -> { datom with v = Ref entity_id }
+     | None -> datom)
+  | Some { value_type = Some InstantType; _ }, Int64 millis ->
+    (* older databases stored plain ints under instant attrs as Instant *)
+    { datom with v = Instant millis }
+  | Some { value_type = Some InstantType; _ }, Instant _ -> datom
+  | _, Instant millis ->
+    (* older databases stored plain ints as Instant; only db.type/instant
+       attrs are real dates *)
+    { datom with v = Int64 millis }
   | Some { value_type = Some TupleType; _ }, Vector values ->
     { datom with v = Tuple (List.map (fun value -> Some value) values) }
   | Some { value_type = Some TupleType; _ }, List values ->
@@ -99,7 +110,38 @@ let restoring_node_storage ?schema storage =
   ; accessed = (fun _address -> ())
   }
 
-let root_of_stored_indexes db eavt_address aevt_address avet_address =
+(* cljs datascript's storage root carries :eavt-metadata/:aevt-metadata/
+   :avet-metadata ({:count n :shift n}) so that restore-by can rebuild a
+   lazy BTSet without reading nodes. shift is the index tree's depth in
+   branch levels: a root leaf is 0, a root branch over leaves is 1. *)
+let index_metadata pending_entries storage index_set root_address =
+  let rec depth address =
+    let node =
+      match
+        List.find_map
+          (fun (addr, payload) ->
+             match payload with
+             | Storage_node node when String.equal addr address -> Some node
+             | _ -> None)
+          pending_entries
+      with
+      | Some node -> Some node
+      | None ->
+          (match storage.storage_restore address with
+           | Some (Storage_node node) -> Some node
+           | _ -> None)
+    in
+    match node with
+    | Some (PSet.Branch (_, children)) ->
+        1 + List.fold_left (fun max_depth child -> max max_depth (depth child)) 0 children
+    | _ -> 0
+  in
+  { storage_index_count = PSet.count index_set
+  ; storage_index_shift = depth root_address
+  }
+
+let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_address aevt_address
+    avet_address =
   let settings = PSet.settings db.eavt_index in
   { storage_schema = db.schema
   ; storage_max_eid = db.max_eid
@@ -107,6 +149,9 @@ let root_of_stored_indexes db eavt_address aevt_address avet_address =
   ; storage_eavt = eavt_address
   ; storage_aevt = aevt_address
   ; storage_avet = avet_address
+  ; storage_eavt_metadata = Some eavt_metadata
+  ; storage_aevt_metadata = Some aevt_metadata
+  ; storage_avet_metadata = Some avet_metadata
   ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
   ; storage_branching_factor = settings.branching_factor
@@ -137,7 +182,13 @@ let store_to_storage db storage =
   let eavt_address = store_index node_storage Eavt db.eavt_index in
   let aevt_address = store_index node_storage Aevt db.aevt_index in
   let avet_address = store_index node_storage Avet db.avet_index in
-  let root = root_of_stored_indexes db eavt_address aevt_address avet_address in
+  let eavt_metadata = index_metadata !pending_entries storage db.eavt_index eavt_address in
+  let aevt_metadata = index_metadata !pending_entries storage db.aevt_index aevt_address in
+  let avet_metadata = index_metadata !pending_entries storage db.avet_index avet_address in
+  let root =
+    root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_address aevt_address
+      avet_address
+  in
   storage.storage_store
     (List.rev !pending_entries
      @ [ root_address, Storage_root root
@@ -153,7 +204,11 @@ let store ?storage db =
 let store_tail storage tail =
   storage.storage_store [ tail_address, Storage_tail tail ]
 
-let tail_compaction_threshold = 32
+(* cljs store-after-transact! compacts the tail once its datom count
+   exceeds (:branching-factor (set/settings (:eavt db))) — read the
+   branching factor off the db's eavt index, never a constant. *)
+let tail_compaction_threshold (db : db) =
+  (PSet.settings db.eavt_index).branching_factor
 
 let tail_datom_count tail =
   tail |> List.concat |> List.length
@@ -314,7 +369,7 @@ let ref_type_keyword = function
 
 let settings (db : db) =
   let index_settings = PSet.settings db.eavt_index in
-  [ "branching-factor", Int index_settings.branching_factor
+  [ "branching-factor", Int64 (Int64.of_int index_settings.branching_factor)
   ; "ref-type", Keyword (ref_type_keyword index_settings.ref_type)
   ; "storage", Bool (Option.is_some db.storage_ref)
   ]

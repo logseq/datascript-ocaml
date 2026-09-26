@@ -24,7 +24,7 @@ let assert_equal_triples label expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
   if expected <> actual then
     let value = function
-      | Int value -> string_of_int value
+      | Int64 value -> Int64.to_string value
       | String value -> Printf.sprintf "%S" value
       | Ref value -> "Ref " ^ string_of_int value
       | other -> Printf.sprintf "%d" (Hashtbl.hash other)
@@ -76,13 +76,13 @@ let lookup_base () =
            ~db_id:(Entity_id 1)
            [ one "name" (String "Ivan")
            ; one "email" (String "@1")
-           ; one "age" (Int 35)
+           ; one "age" (Int64 35L)
            ]
        ; tx_entity
            ~db_id:(Entity_id 2)
            [ one "name" (String "Petr")
            ; one "email" (String "@2")
-           ; one "age" (Int 22)
+           ; one "age" (Int64 22L)
            ]
        ]
 
@@ -97,12 +97,12 @@ let test_lookup_refs__test_lookup_refs () =
   let db = lookup_base () in
   assert_entity
     "lookup ref resolves unique identity attr"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     db
     (Lookup_ref ("name", String "Ivan"));
   assert_entity
     "lookup ref resolves unique value attr"
-    [ 1, "age", Int 35; 1, "email", String "@1"; 1, "name", String "Ivan" ]
+    [ 1, "age", Int64 35L; 1, "email", String "@1"; 1, "name", String "Ivan" ]
     db
     (Lookup_ref ("email", String "@1"));
   assert_entity "missing lookup ref returns no entity" [] db (Lookup_ref ("name", String "Sergey"));
@@ -110,7 +110,7 @@ let test_lookup_refs__test_lookup_refs () =
   assert_raises_invalid_arg_message
     "lookup ref rejects non-unique attrs"
     "Lookup ref attribute should be marked as :db/unique: [:age 10]"
-    (fun () -> ignore (entity db (Lookup_ref ("age", Int 10))))
+    (fun () -> ignore (entity db (Lookup_ref ("age", Int64 10L))))
 
 let transact_base () =
   empty_db ~schema:[ "name", unique_identity; "friend", ref_attr; "friends", ref_many; "age", indexed ] ()
@@ -128,15 +128,15 @@ let test_lookup_refs__test_lookup_refs_transact () =
   let oleg = Lookup_ref ("name", String "Oleg") in
   let db =
     db
-    |> db_with [ Add (ivan, "age", Int 35) ]
-    |> db_with [ tx_entity ~db_id:ivan [ one "age" (Int 36) ] ]
+    |> db_with [ Add (ivan, "age", Int64 35L) ]
+    |> db_with [ tx_entity ~db_id:ivan [ one "age" (Int64 36L) ] ]
     |> db_with [ Add (Entity_id 1, "friend", Ref_to petr) ]
     |> db_with [ tx_entity ~db_id:(Entity_id 1) [ one "friend" (Ref_to oleg) ] ]
     |> db_with [ tx_entity ~db_id:(Entity_id 2) [ one "_friend" (Ref_to ivan) ] ]
   in
   assert_equal_triples
     "lookup refs transact through add and entity maps"
-    [ 1, "age", Int 36
+    [ 1, "age", Int64 36L
     ; 1, "friend", Ref 2
     ; 1, "name", String "Ivan"
     ; 2, "name", String "Petr"
@@ -150,7 +150,7 @@ let test_lookup_refs__test_lookup_refs_transact () =
     |> db_with [ Add (Entity_id 1, "friend", Ref_to oleg) ]
     |> db_with [ CompareAndSet (ivan, "name", Some (String "Ivan"), String "Vanya") ]
     |> db_with [ CompareAndSet (Entity_id 1, "friend", Some (Ref_to oleg), Ref_to (Lookup_ref ("name", String "Sergey"))) ]
-    |> db_with [ Retract (Lookup_ref ("name", String "Vanya"), "age", Some (Int 36)) ]
+    |> db_with [ Retract (Lookup_ref ("name", String "Vanya"), "age", Some (Int64 36L)) ]
     |> db_with [ RetractAttr (Lookup_ref ("name", String "Vanya"), "friend") ]
   in
   assert_equal_triples
@@ -166,12 +166,12 @@ let test_lookup_refs__test_lookup_refs_transact () =
   assert_raises_invalid_arg_message
     "lookup refs in add entity position must resolve"
     "Nothing found for entity id [:name \"Missing\"]"
-    (fun () -> ignore (db_with [ Add (Lookup_ref ("name", String "Missing"), "age", Int 10) ] (transact_base ())));
+    (fun () -> ignore (db_with [ Add (Lookup_ref ("name", String "Missing"), "age", Int64 10L) ] (transact_base ())));
   assert_raises_invalid_arg_message
     "lookup refs in entity-map db/id must resolve"
     "Nothing found for entity id [:name \"Missing\"]"
     (fun () ->
-      ignore (db_with [ tx_entity ~db_id:(Lookup_ref ("name", String "Missing")) [ one "age" (Int 10) ] ] (transact_base ())))
+      ignore (db_with [ tx_entity ~db_id:(Lookup_ref ("name", String "Missing")) [ one "age" (Int64 10L) ] ] (transact_base ())))
 
 let test_lookup_refs__test_lookup_refs_transact_multi () =
   let db = transact_base () in
@@ -251,9 +251,9 @@ let test_lookup_refs__lookup_refs_index_access () =
 let query_base () =
   empty_db ~schema:[ "name", unique_identity; "friend", ref_attr ] ()
   |> db_with
-       [ tx_entity ~db_id:(Entity_id 1) [ one "id" (Int 1); one "name" (String "Ivan"); one "age" (Int 11); one "friend" (Ref 2) ]
-       ; tx_entity ~db_id:(Entity_id 2) [ one "id" (Int 2); one "name" (String "Petr"); one "age" (Int 22); one "friend" (Ref 3) ]
-       ; tx_entity ~db_id:(Entity_id 3) [ one "id" (Int 3); one "name" (String "Oleg"); one "age" (Int 33) ]
+       [ tx_entity ~db_id:(Entity_id 1) [ one "id" (Int64 1L); one "name" (String "Ivan"); one "age" (Int64 11L); one "friend" (Ref 2) ]
+       ; tx_entity ~db_id:(Entity_id 2) [ one "id" (Int64 2L); one "name" (String "Petr"); one "age" (Int64 22L); one "friend" (Ref 3) ]
+       ; tx_entity ~db_id:(Entity_id 3) [ one "id" (Int64 3L); one "name" (String "Oleg"); one "age" (Int64 33L) ]
        ]
 
 let test_lookup_refs__test_lookup_refs_query () =
@@ -268,14 +268,14 @@ let test_lookup_refs__test_lookup_refs_query () =
   in
   assert_equal_query_set
     "q accepts lookup refs as scalar entity inputs and preserves the returned input value"
-    [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan"))); Result_value (Int 11) ] ]
+    [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan"))); Result_value (Int64 11L) ] ]
     (q ~inputs:[ Arg_scalar (Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))) ] db entity_input_query);
   let collection_query =
     { entity_input_query with inputs = [ Input_collection_decl "e" ]; find = [ Find_var "v" ] }
   in
   assert_equal_query_set
     "q resolves lookup refs inside collection inputs"
-    [ [ Result_value (Int 11) ]; [ Result_value (Int 22) ] ]
+    [ [ Result_value (Int64 11L) ]; [ Result_value (Int64 22L) ] ]
     (q
        ~inputs:
          [ Arg_collection

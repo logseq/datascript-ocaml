@@ -41,7 +41,54 @@ let str_pattern_of_pattern pattern =
   loop 0 false false;
   Buffer.contents buffer
 
-let compile_regex pattern = Str.regexp (str_pattern_of_pattern pattern)
+(* [Str] treats bare parentheses and other grouping syntax as literals, so
+   patterns JavaScript rejects compile fine after translation. Validate the
+   JavaScript syntax first, reporting the same message shape V8 produces so
+   callers see "Invalid regular expression: /<pattern>/: <reason>". *)
+let validate_regex pattern =
+  let invalid reason =
+    invalid_arg
+      (Printf.sprintf "Invalid regular expression: /%s/: %s" pattern reason)
+  in
+  let rec loop index in_char_class depth repeatable was_quantifier escaped =
+    if index >= String.length pattern then begin
+      if escaped then invalid "\\ at end of pattern"
+      else if in_char_class then invalid "Unterminated character class"
+      else if depth > 0 then invalid "Unterminated group"
+    end
+    else
+      match pattern.[index] with
+      | _ when escaped ->
+        loop (index + 1) in_char_class depth true false false
+      | '\\' ->
+        loop (index + 1) in_char_class depth repeatable was_quantifier true
+      | ']' when in_char_class ->
+        loop (index + 1) false depth true was_quantifier false
+      | _ when in_char_class ->
+        loop (index + 1) in_char_class depth repeatable was_quantifier false
+      | '[' -> loop (index + 1) true depth false false false
+      | '(' -> loop (index + 1) in_char_class (depth + 1) false false false
+      | ')' ->
+        if depth = 0 then invalid "Unmatched ')'";
+        loop (index + 1) in_char_class (depth - 1) true false false
+      | '|' -> loop (index + 1) in_char_class depth false false false
+      | '*' | '+' ->
+        if not repeatable then invalid "Nothing to repeat";
+        loop (index + 1) in_char_class depth false true false
+      | '?' ->
+        if repeatable || was_quantifier then
+          loop (index + 1) in_char_class depth false true false
+        (* "(?:" / "(?=" / "(?!" / "(?<" introduce group kinds, not repeats *)
+        else if index > 0 && pattern.[index - 1] = '(' then
+          loop (index + 1) in_char_class depth false false false
+        else invalid "Nothing to repeat"
+      | _ -> loop (index + 1) in_char_class depth true false false
+  in
+  loop 0 false 0 false false false
+
+let compile_regex pattern =
+  validate_regex pattern;
+  Str.regexp (str_pattern_of_pattern pattern)
 
 let replace_regex ~first_only regex value replacement =
   if first_only then Str.replace_first regex replacement value

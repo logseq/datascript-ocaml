@@ -235,11 +235,11 @@ let build_logseq_graph ~size ~pages =
       [ "block/uuid", One_value (String (uuid_of e))
       ; "block/title", One_value (String (Printf.sprintf "Page %d" e))
       ; "block/name", One_value (String (Printf.sprintf "page-%d" e))
-      ; "block/updated-at", One_value (Int updated)
-      ; "block/created-at", One_value (Int (updated - day_ms))
+      ; "block/updated-at", One_value (Int64 (Int64.of_int updated))
+      ; "block/created-at", One_value (Int64 (Int64.of_int (updated - day_ms)))
       ; "block/content", One_value (String (Printf.sprintf "page body %d" e))
       ]
-      @ (if is_journal then [ "block/journal-day", One_value (Int (journal_day_of e)) ] else [])
+      @ (if is_journal then [ "block/journal-day", One_value (Int64 (Int64.of_int (journal_day_of e))) ] else [])
       @
       if e mod 7 = 0 then
         [ "block/tags", Many_values [ Ref ((e mod tag_count) + 1) ] ]
@@ -256,8 +256,8 @@ let build_logseq_graph ~size ~pages =
     let attrs =
       [ "block/uuid", One_value (String (uuid_of e))
       ; "block/title", One_value (String (Printf.sprintf "Block %d" e))
-      ; "block/updated-at", One_value (Int updated)
-      ; "block/created-at", One_value (Int (updated - 60_000))
+      ; "block/updated-at", One_value (Int64 (Int64.of_int updated))
+      ; "block/created-at", One_value (Int64 (Int64.of_int (updated - 60_000)))
       ; "block/parent", One_value (Ref parent)
       ; "block/page", One_value (Ref page)
       ; "block/content", One_value (String (Printf.sprintf "block body %d" e))
@@ -323,7 +323,7 @@ let build_db ~storage ~persist ~size ~pages =
       let hi = min (Array.length ops) (i + batch) in
       let chunk = Array.to_list (Array.sub ops i (hi - i)) in
       let instant = base_ms + (i * 1_000) in
-      let r = transact ~tx_meta:[ "db/txInstant", Instant instant ] db chunk in
+      let r = transact ~tx_meta:[ "db/txInstant", Instant (Int64.of_int instant) ] db chunk in
       loop r.db_after hi
   in
   let db = loop (empty_db ~schema ~storage ()) 0 in
@@ -464,7 +464,7 @@ let latest_journals prepared =
   let today = journal_day_of prepared.pages in
   let kept =
     keep_take 10
-      (fun d -> match d.v with Int day -> day <= today | _ -> false)
+      (fun d -> match d.v with Int64 day -> Int64.compare day (Int64.of_int today) <= 0 | _ -> false)
       (avet_attr_rseq prepared.db "block/journal-day")
   in
   List.iter
@@ -517,7 +517,7 @@ let q_updated_at_between prepared =
   consume_rows
     (q_string
        ~inputs:
-         [ Arg_scalar (Result_value (Int lo)); Arg_scalar (Result_value (Int hi)) ]
+         [ Arg_scalar (Result_value (Int64 (Int64.of_int lo))); Arg_scalar (Result_value (Int64 (Int64.of_int hi))) ]
        prepared.db query)
 
 let q_journal_pages prepared =

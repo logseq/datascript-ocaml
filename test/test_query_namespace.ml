@@ -165,7 +165,7 @@ let test_query_namespace__test_query_result_helpers () =
   assert_equal_int_option
     "entity_id_of_resolved_query_result validates integer results"
     (Some 43)
-    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 43))));
+    (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int64 43L))));
   assert_equal_int_option
     "entity_id_of_resolved_query_result accepts ref values"
     (Some 44)
@@ -179,7 +179,7 @@ let test_query_namespace__test_query_result_helpers () =
     None
     (Query.entity_id_of_resolved_query_result ~validate_entity_id None);
   assert_raises_invalid_arg "entity_id_of_resolved_query_result validates integer ids" (fun () ->
-    ignore (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int 0)))));
+    ignore (Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (Result_value (Int64 0L)))));
   assert_equal_query_option
     "resolved_query_result resolves value results through the context"
     (Some (Result_entity 42))
@@ -493,12 +493,12 @@ let test_query_namespace__test_source_matching_helpers () =
     (fun () -> ignore (Query.source_db root_db [ "rows", Relation_source [] ] "rows"));
   assert_equal_query_option
     "match_relation_row binds each relation column"
-    (Some [ "age", Result_value (Int 42); "name", Result_value (String "Ivan") ])
+    (Some [ "age", Result_value (Int64 42L); "name", Result_value (String "Ivan") ])
     (Query.match_relation_row
        source_context
        []
        [ QVar "name"; QVar "age" ]
-       [ Result_value (String "Ivan"); Result_value (Int 42) ]);
+       [ Result_value (String "Ivan"); Result_value (Int64 42L) ]);
   assert_raises_invalid_arg_message
     "match_relation_row rejects short rows"
     "source relation row arity mismatch"
@@ -573,9 +573,9 @@ let test_query_namespace__test_aggregate_helpers () =
     (MinN 2)
     (Query.resolve_dynamic_aggregate
        (MinNVar "n")
-       [ [ "n", Result_value (Int 2); "amount", Result_value (Int 10) ] ]);
+       [ [ "n", Result_value (Int64 2L); "amount", Result_value (Int64 10L) ] ]);
   assert_raises_invalid_arg "dynamic aggregate amount must be non-negative" (fun () ->
-    ignore (Query.resolve_dynamic_aggregate (SampleVar "n") [ [ "n", Result_value (Int (-1)) ] ]));
+    ignore (Query.resolve_dynamic_aggregate (SampleVar "n") [ [ "n", Result_value (Int64 (-1L)) ] ]));
   assert_raises_invalid_arg "dynamic aggregate amount must be bound" (fun () ->
     ignore (Query.resolve_dynamic_aggregate (MaxNVar "n") []));
   assert_equal_string_list
@@ -594,18 +594,18 @@ let test_query_namespace__test_aggregate_helpers () =
     ignore (Query.split_aggregate_terms []));
   assert_equal_query_row
     "custom aggregate receives extra args before values"
-    [ Result_value (Int 9); Result_value (Int 1); Result_value (Int 2) ]
+    [ Result_value (Int64 9L); Result_value (Int64 1L); Result_value (Int64 2L) ]
     (Query.aggregate_input_values
-       (Custom (fun values -> Result_value (Int (List.length values))))
-       [ Result_value (Int 9) ]
-       [ Result_value (Int 1); Result_value (Int 2) ]);
+       (Custom (fun values -> Result_value (Int64 (Int64.of_int (List.length values)))))
+       [ Result_value (Int64 9L) ]
+       [ Result_value (Int64 1L); Result_value (Int64 2L) ]);
   assert_equal_query_row
     "built-in aggregate ignores extra args after parse-time resolution"
-    [ Result_value (Int 1); Result_value (Int 2) ]
+    [ Result_value (Int64 1L); Result_value (Int64 2L) ]
     (Query.aggregate_input_values
        Sum
-       [ Result_value (Int 9) ]
-       [ Result_value (Int 1); Result_value (Int 2) ]);
+       [ Result_value (Int64 9L) ]
+       [ Result_value (Int64 1L); Result_value (Int64 2L) ]);
   let match_context =
     { Query.result_resolution_context =
         { validate_entity_id = (fun entity_id -> entity_id)
@@ -661,30 +661,30 @@ let test_query_namespace__test_aggregate_helpers () =
        match_context
        default_db
        sources
-       [ [ "n", Result_value (Int 2); "amount", Result_value (Int 10) ]
-       ; [ "n", Result_value (Int 3); "amount", Result_value (Int 20) ]
+       [ [ "n", Result_value (Int64 2L); "amount", Result_value (Int64 10L) ]
+       ; [ "n", Result_value (Int64 3L); "amount", Result_value (Int64 20L) ]
        ]
        [ QVar "n"; QSource "other"; QVar "amount" ]
    with
-   | [ Result_value (Int 2); Result_db db ] when db == other_db -> ()
+   | [ Result_value (Int64 2L); Result_db db ] when db == other_db -> ()
    | _ -> failwith "aggregate_extra_args should use first group binding and resolve source args");
   assert_equal_query_row
     "aggregate_values evaluates the aggregate value term for every group binding"
-    [ Result_value (Int 10); Result_value (Int 20) ]
+    [ Result_value (Int64 10L); Result_value (Int64 20L) ]
     (Query.aggregate_values
        match_context
        default_db
        sources
-       [ [ "amount", Result_value (Int 10) ]; [ "amount", Result_value (Int 20) ] ]
+       [ [ "amount", Result_value (Int64 10L) ]; [ "amount", Result_value (Int64 20L) ] ]
        [ QVar "amount" ]);
   assert_equal_query_row
     "aggregate_values drops bindings where the value term is unbound"
-    [ Result_value (Int 10) ]
+    [ Result_value (Int64 10L) ]
     (Query.aggregate_values
        match_context
        default_db
        sources
-       [ [ "amount", Result_value (Int 10) ]; [ "name", Result_value (String "missing") ] ]
+       [ [ "amount", Result_value (Int64 10L) ]; [ "name", Result_value (String "missing") ] ]
        [ QVar "amount" ]);
   assert_raises_invalid_arg_message
     "aggregate_extra_args rejects unbound extra args"
@@ -695,19 +695,19 @@ let test_query_namespace__test_aggregate_helpers () =
             match_context
             default_db
             sources
-            [ [ "amount", Result_value (Int 10) ] ]
+            [ [ "amount", Result_value (Int64 10L) ] ]
             [ QVar "missing"; QVar "amount" ]))
 
 let test_query_namespace__test_find_grouping_helpers () =
   let binding =
     [ "name", Result_value (String "Ivan")
-    ; "age", Result_value (Int 30)
+    ; "age", Result_value (Int64 30L)
     ; "city", Result_value (String "Berlin")
     ]
   in
   assert_equal_query_option
     "collect_find_vars preserves requested order"
-    (Some [ Result_value (Int 30); Result_value (String "Ivan") ])
+    (Some [ Result_value (Int64 30L); Result_value (String "Ivan") ])
     (Query.collect_find_vars binding [ "age"; "name" ]);
   assert_equal_query_option
     "collect_find_vars returns None when a requested var is missing"
@@ -716,14 +716,14 @@ let test_query_namespace__test_find_grouping_helpers () =
   assert_equal_grouped_bindings
     "group_by_key prepends later rows in the same group"
     [ ( [ Result_value (String "Ivan") ]
-      , [ [ "age", Result_value (Int 31) ]; [ "age", Result_value (Int 30) ] ] )
+      , [ [ "age", Result_value (Int64 31L) ]; [ "age", Result_value (Int64 30L) ] ] )
     ; ( [ Result_value (String "Oleg") ]
-      , [ [ "age", Result_value (Int 40) ] ] )
+      , [ [ "age", Result_value (Int64 40L) ] ] )
     ]
     (Query.group_by_key
-       [ [ Result_value (String "Ivan") ], [ "age", Result_value (Int 30) ]
-       ; [ Result_value (String "Oleg") ], [ "age", Result_value (Int 40) ]
-       ; [ Result_value (String "Ivan") ], [ "age", Result_value (Int 31) ]
+       [ [ Result_value (String "Ivan") ], [ "age", Result_value (Int64 30L) ]
+       ; [ Result_value (String "Oleg") ], [ "age", Result_value (Int64 40L) ]
+       ; [ Result_value (String "Ivan") ], [ "age", Result_value (Int64 31L) ]
        ]);
   assert_equal_string_list
     "grouping_vars_of_find includes non-aggregate find vars"
@@ -778,16 +778,16 @@ let test_query_namespace__test_input_shape_helpers () =
     (Query.values_of_collection_result (Result_value (Vector [ String "a"; String "b" ])));
   assert_equal_query_option
     "values_of_collection_result drops tuple nil slots"
-    (Some [ Result_value (Int 1); Result_value (Int 3) ])
-    (Query.values_of_collection_result (Result_value (Tuple [ Some (Int 1); None; Some (Int 3) ])));
+    (Some [ Result_value (Int64 1L); Result_value (Int64 3L) ])
+    (Query.values_of_collection_result (Result_value (Tuple [ Some (Int64 1L); None; Some (Int64 3L) ])));
   assert_equal_query_option
     "values_of_collection_result rejects scalar values"
     None
     (Query.values_of_collection_result (Result_value (String "not-a-collection")));
   assert_equal_query_row
     "row_of_collection_result preserves tuple nil slots"
-    [ Result_value (Int 1); Result_value Nil; Result_value (Int 3) ]
-    (Query.row_of_collection_result (Result_value (Tuple [ Some (Int 1); None; Some (Int 3) ])));
+    [ Result_value (Int64 1L); Result_value Nil; Result_value (Int64 3L) ]
+    (Query.row_of_collection_result (Result_value (Tuple [ Some (Int64 1L); None; Some (Int64 3L) ])));
   assert_equal_query_row
     "row_of_collection_result wraps scalar values"
     [ Result_value (String "scalar") ]
@@ -800,11 +800,11 @@ let test_query_namespace__test_input_shape_helpers () =
     ignore (Query.row_of_scalar_sequence (Result_value (Keyword "value"))));
   assert_equal_query_rows
     "rows_of_map_entries converts map entries to relation rows"
-    [ [ Result_value (Keyword "a"); Result_value (Int 1) ]
-    ; [ Result_value (Keyword "b"); Result_value (Vector [ Int 2; Int 3 ]) ]
+    [ [ Result_value (Keyword "a"); Result_value (Int64 1L) ]
+    ; [ Result_value (Keyword "b"); Result_value (Vector [ Int64 2L; Int64 3L ]) ]
     ]
     (Query.rows_of_map_entries
-       [ Keyword "a", Int 1; Keyword "b", Vector [ Int 2; Int 3 ] ])
+       [ Keyword "a", Int64 1L; Keyword "b", Vector [ Int64 2L; Int64 3L ] ])
 
 let test_query_namespace__test_input_binding_helpers () =
   let input_context =
@@ -830,12 +830,12 @@ let test_query_namespace__test_input_binding_helpers () =
   in
   assert_equal_query_option
     "bind_relation_row binds relation columns"
-    (Some [ "age", Result_value (Int 30); "name", Result_value (String "Ivan") ])
+    (Some [ "age", Result_value (Int64 30L); "name", Result_value (String "Ivan") ])
     (Query.bind_relation_row
        input_context
        []
        [ "name"; "age" ]
-       [ Result_value (String "Ivan"); Result_value (Int 30) ]);
+       [ Result_value (String "Ivan"); Result_value (Int64 30L) ]);
   assert_raises_invalid_arg_message
     "bind_relation_row rejects row arity mismatch"
     "relation input row arity mismatch"
@@ -850,16 +850,16 @@ let test_query_namespace__test_input_binding_helpers () =
     (Query.apply_query_input input_context [ [] ] (Input_entity_ref ("e", Ident "known")));
   assert_equal_query_rows
     "apply_query_input expands relation inputs"
-    [ [ "age", Result_value (Int 30); "name", Result_value (String "Ivan") ]
-    ; [ "age", Result_value (Int 40); "name", Result_value (String "Oleg") ]
+    [ [ "age", Result_value (Int64 30L); "name", Result_value (String "Ivan") ]
+    ; [ "age", Result_value (Int64 40L); "name", Result_value (String "Oleg") ]
     ]
     (Query.apply_query_input
        input_context
        [ [] ]
        (Input_relation
           ( [ "name"; "age" ]
-          , [ [ Result_value (String "Ivan"); Result_value (Int 30) ]
-            ; [ Result_value (String "Oleg"); Result_value (Int 40) ]
+          , [ [ Result_value (String "Ivan"); Result_value (Int64 30L) ]
+            ; [ Result_value (String "Oleg"); Result_value (Int64 40L) ]
             ] )));
   let query_input_of_arg decl arg =
     match decl, arg with
@@ -879,11 +879,11 @@ let test_query_namespace__test_input_binding_helpers () =
        [ Arg_scalar (Result_value (String "Ivan")) ]);
   assert_equal_inputs
     "bind_query_inputs preserves already bound inputs"
-    [ Input_collection_ignore [ Result_value (Int 1) ]; Input_ignore ]
+    [ Input_collection_ignore [ Result_value (Int64 1L) ]; Input_ignore ]
     (Query.bind_query_inputs
        ~query_input_of_arg
        ~consume_rules:false
-       [ Input_collection_ignore [ Result_value (Int 1) ]; Input_ignore_decl ]
+       [ Input_collection_ignore [ Result_value (Int64 1L) ]; Input_ignore_decl ]
        [ Arg_scalar (Result_value (String "ignored")) ]);
   assert_equal_inputs
     "bind_query_inputs skips rules declarations when rules are implicit"
@@ -918,15 +918,15 @@ let test_query_namespace__test_input_binding_helpers () =
 
 let test_query_namespace__test_callable_helpers () =
   let predicate = function
-    | [ Result_value (Int value) ] -> value > 10
+    | [ Result_value (Int64 value) ] -> value > 10L
     | _ -> false
   in
   let query_function = function
-    | [ Result_value (Int value) ] -> Some [ Result_value (Int (value + 1)) ]
+    | [ Result_value (Int64 value) ] -> Some [ Result_value (Int64 (Int64.add value 1L)) ]
     | _ -> None
   in
   let aggregate = function
-    | values -> Result_value (Int (List.length values))
+    | values -> Result_value (Int64 (Int64.of_int (List.length values)))
   in
   let callables =
     Query.empty_query_callables
@@ -937,16 +937,16 @@ let test_query_namespace__test_callable_helpers () =
   in
   (match Query.callable_predicate callables "bigger?" with
    | Some f ->
-     if not (f [ Result_value (Int 11) ]) then failwith "callable_predicate should resolve aliases"
+     if not (f [ Result_value (Int64 11L) ]) then failwith "callable_predicate should resolve aliases"
    | None -> failwith "callable_predicate should find aliased predicates");
   (match Query.callable_function callables "inc" with
    | Some f ->
-     if f [ Result_value (Int 1) ] <> Some [ Result_value (Int 2) ] then
+     if f [ Result_value (Int64 1L) ] <> Some [ Result_value (Int64 2L) ] then
        failwith "callable_function should return stored functions"
    | None -> failwith "callable_function should find stored functions");
   (match Query.resolve_callable_aggregate callables (CustomVar "count-values") with
    | Custom f ->
-     if f [ Result_value (Int 1); Result_value (Int 2) ] <> Result_value (Int 2) then
+     if f [ Result_value (Int64 1L); Result_value (Int64 2L) ] <> Result_value (Int64 2L) then
        failwith "resolve_callable_aggregate should return stored aggregate functions"
    | _ -> failwith "resolve_callable_aggregate should resolve custom aggregate variables");
   if not (Query.has_callable callables "bigger?") then failwith "has_callable should resolve aliases";
@@ -988,16 +988,16 @@ let test_query_namespace__test_rule_helpers () =
     ignore (Query.matching_rules_exn [ parent_1 ] "missing" 1));
   assert_equal_grouped_bindings
     "project_binding keeps only requested vars"
-    [ [ "name", Result_value (String "Ivan"); "age", Result_value (Int 30) ] ]
+    [ [ "name", Result_value (String "Ivan"); "age", Result_value (Int64 30L) ] ]
     [ Query.project_binding
         [ "name"; "age" ]
         [ "name", Result_value (String "Ivan")
         ; "city", Result_value (String "Berlin")
-        ; "age", Result_value (Int 30)
+        ; "age", Result_value (Int64 30L)
         ]
     ];
   let predicate = function
-    | [ Result_value (Int value) ] -> value > 10
+    | [ Result_value (Int64 value) ] -> value > 10L
     | _ -> false
   in
   let callables =
@@ -1406,7 +1406,7 @@ let test_query_namespace__test_query_string_helpers () =
     | String value -> "\"" ^ value ^ "\""
     | Keyword value -> ":" ^ value
     | Bool value -> if value then "true" else "false"
-    | Int value -> string_of_int value
+    | Int64 value -> Int64.to_string value
     | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
   in
   assert_equal_string
@@ -1452,7 +1452,7 @@ let test_query_namespace__test_query_clause_string_helpers () =
     | String value -> "\"" ^ value ^ "\""
     | Keyword value -> ":" ^ value
     | Bool value -> if value then "true" else "false"
-    | Int value -> string_of_int value
+    | Int64 value -> Int64.to_string value
     | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
   in
   assert_equal_string
@@ -1518,7 +1518,7 @@ let test_query_namespace__test_binding_validation_helpers () =
     | String value -> "\"" ^ value ^ "\""
     | Keyword value -> ":" ^ value
     | Bool value -> if value then "true" else "false"
-    | Int value -> string_of_int value
+    | Int64 value -> Int64.to_string value
     | value -> failf "unexpected value in test printer: %s" (string_of_int (Hashtbl.hash value))
   in
   let binding = [ "e", Result_entity 1 ] in

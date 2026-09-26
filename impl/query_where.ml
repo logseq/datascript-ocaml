@@ -513,7 +513,11 @@ end) = struct
       (match query_result_entity_id db result with
        | Some entity_id -> Result_entity entity_id
        | None -> relation_join_key_value result)
-    | Result_value (Int entity_id | Ref entity_id) -> Result_entity entity_id
+    | Result_value (Ref entity_id) -> Result_entity entity_id
+    | Result_value (Int64 entity_id) ->
+      (match Util.int64_to_int entity_id with
+       | Some entity_id -> Result_entity entity_id
+       | None -> relation_join_key_value result)
     | _ -> relation_join_key_value result
 
   let relation_attr_index attrs attr =
@@ -1063,13 +1067,13 @@ end) = struct
 
   let avet_index_start predicate threshold =
     match predicate, threshold with
-    | GreaterThan, Int n when n < max_int -> Some (Int (n + 1))
+    | GreaterThan, Int64 n when Int64.compare n Int64.max_int < 0 -> Some (Int64 (Int64.succ n))
     | GreaterOrEqual, value | GreaterThan, value -> Some value
     | _ -> None
 
   let avet_index_stop predicate threshold =
     match predicate, threshold with
-    | LessThan, Int n when n > min_int -> Some (Int (n - 1))
+    | LessThan, Int64 n when Int64.compare n Int64.min_int > 0 -> Some (Int64 (Int64.pred n))
     | LessOrEqual, value | LessThan, value -> Some value
     | _ -> None
 
@@ -1079,8 +1083,8 @@ end) = struct
         | ComparisonPredicate (predicate, left, right) -> (
           match range_predicate_for_var value_var predicate left right with
           (* Tightened Int bounds (n±1) are exact only when they do not overflow. *)
-          | Some (GreaterThan, Int n) when n < max_int -> false
-          | Some (LessThan, Int n) when n > min_int -> false
+          | Some (GreaterThan, Int64 n) when Int64.compare n Int64.max_int < 0 -> false
+          | Some (LessThan, Int64 n) when Int64.compare n Int64.min_int > 0 -> false
           | Some _ -> true
           | None -> true)
         | _ -> false)
@@ -1797,7 +1801,7 @@ end) = struct
     | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
     | term -> term
 
-  let bound_relation_clause binding = function
+  let rec bound_relation_clause binding = function
     | Pattern (e_term, a_term, v_term) ->
       Pattern
         ( bound_pattern_term binding e_term
@@ -1842,6 +1846,31 @@ end) = struct
     | ComparisonPredicate (predicate, left_term, right_term) ->
       ComparisonPredicate
         (predicate, bound_pattern_term binding left_term, bound_pattern_term binding right_term)
+    | ComparisonPredicateN (predicate, terms) ->
+      ComparisonPredicateN (predicate, List.map (bound_pattern_term binding) terms)
+    | EqualityPredicate (predicate, terms) ->
+      EqualityPredicate (predicate, List.map (bound_pattern_term binding) terms)
+    | ArithmeticValue (op, terms, output_var) ->
+      ArithmeticValue (op, List.map (bound_pattern_term binding) terms, output_var)
+    | NameValue (term, output_var) ->
+      NameValue (bound_pattern_term binding term, output_var)
+    | NamespaceValue (term, output_var) ->
+      NamespaceValue (bound_pattern_term binding term, output_var)
+    | KeywordFromName (term, output_var) ->
+      KeywordFromName (bound_pattern_term binding term, output_var)
+    | KeywordFromNamespaceName (namespace_term, name_term, output_var) ->
+      KeywordFromNamespaceName
+        (bound_pattern_term binding namespace_term, bound_pattern_term binding name_term, output_var)
+    | SourceClause (source_name, clause) ->
+      SourceClause (source_name, bound_relation_clause binding clause)
+    | Not clauses ->
+      Not (List.map (bound_relation_clause binding) clauses)
+    | SourceNot (source_name, clauses) ->
+      SourceNot (source_name, List.map (bound_relation_clause binding) clauses)
+    | NotJoin (vars, clauses) ->
+      NotJoin (vars, List.map (bound_relation_clause binding) clauses)
+    | SourceNotJoin (source_name, vars, clauses) ->
+      SourceNotJoin (source_name, vars, List.map (bound_relation_clause binding) clauses)
     | clause -> clause
 
   let relation_prefix_clause = function

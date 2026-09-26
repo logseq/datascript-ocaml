@@ -59,7 +59,7 @@ let test_analyze_benchmark_shapes () =
     ; rules = []
     ; where =
         [ Pattern (QVar "?e", QAttr "age", QVar "?a")
-        ; ComparisonPredicate (GreaterThan, QVar "?a", QValue (Int 18))
+        ; ComparisonPredicate (GreaterThan, QVar "?a", QValue (Int64 18L))
         ]
     }
   in
@@ -89,7 +89,7 @@ let test_logical_entity_join () =
   let clauses =
     [ Pattern (QVar "?e", QAttr "name", QValue (String "Ivan"))
     ; Pattern (QVar "?e", QAttr "age", QVar "?a")
-    ; ComparisonPredicate (GreaterThan, QVar "?a", QValue (Int 18))
+    ; ComparisonPredicate (GreaterThan, QVar "?a", QValue (Int64 18L))
     ]
   in
   match Query_plan.build_logical_plan clauses with

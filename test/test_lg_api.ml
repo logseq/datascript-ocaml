@@ -25,9 +25,9 @@ let test_edn_boundary () =
   check
     (ok (A.of_edn input) = form "{:shape/id \"one\" :points [1 2.0]}")
     "nested EDN";
-  check (ok (A.of_edn (E.Int 42L)) = D.QueryFormInt 42) "integer conversion";
-  error (A.of_edn (E.Int Int64.max_int));
-  error (A.of_edn (E.Int Int64.min_int));
+  check (ok (A.of_edn (E.Int 42L)) = D.QueryFormInt 42L) "integer conversion";
+  check (ok (A.of_edn (E.Int Int64.max_int)) = D.QueryFormInt Int64.max_int) "int64 max";
+  check (ok (A.of_edn (E.Int Int64.min_int)) = D.QueryFormInt Int64.min_int) "int64 min";
   error (A.of_edn (E.Int4_array ([| 1 |], [||], [||], [||])));
   check
     (ok (A.of_edn (E.Tagged ("uuid", E.String "value")))
@@ -134,7 +134,7 @@ let test_typed_application () =
     "retract";
   error (A.Codec.decode A.Codec.int (D.Float 1.5));
   check
-    (ok (A.Codec.decode A.Codec.float (D.Int 2)) = 2.)
+    (ok (A.Codec.decode A.Codec.float (D.Int64 2L)) = 2.)
     "legacy integer coordinates"
 
 let test_cardinality_and_pull_errors () =

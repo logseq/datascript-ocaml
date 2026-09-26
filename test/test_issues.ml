@@ -62,7 +62,7 @@ let test_issues__issue_330 () =
              { db_id = Some (Entity_id 1)
              ; attrs =
                  [ "name", One_value (String "Maksim")
-                 ; "age", One_value (Int 45)
+                 ; "age", One_value (Int64 45L)
                  ; "aka", One_value (Vector [ String "Max Otto von Stierlitz"; String "Jack Ryan" ])
                  ]
              }
