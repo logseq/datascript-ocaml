@@ -1736,8 +1736,8 @@ let test_tempid_shared_between_entity_id_and_ref_values () =
   assert_equal_triples
     "value-position tempids share the entity-id tempid's allocation"
     [ e1, "name", String "Ivan"
-    ; e2, "name", String "Petr"
     ; e2, "friend", Ref e1
+    ; e2, "name", String "Petr"
     ; e2, "parent", Ref e1
     ]
     (datoms report.db_after Eavt ())
