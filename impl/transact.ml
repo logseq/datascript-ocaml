@@ -361,6 +361,10 @@ type apply_context =
   ; retract_user_attr_with_report : db -> tx -> db -> entity_id -> attr -> value option -> db * datom list
   ; retract_active_datom_with_report : tx -> db -> entity_id -> attr -> value option -> db * datom list
   ; retract_entity_with_report : db -> tx -> db -> entity_id -> db * datom list
+  ; purge_datom_with_report : tx -> db -> entity_id -> attr -> value -> db * datom list
+  ; purge_attr_with_report : tx -> db -> entity_id -> attr -> db * datom list
+  ; purge_entity_with_report : db -> tx -> db -> entity_id -> db * datom list
+  ; resolve_entity_for_purge : db -> entity_ref -> entity_id
   ; compare_and_set_matches : db -> entity_id -> attr -> value option -> bool
   ; compare_and_set_failure_message : db -> entity_id -> attr -> value option -> string
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
@@ -378,11 +382,13 @@ type apply_context =
   ; refresh_tuple_attrs_for_source : db -> tx -> db -> entity_id -> attr -> datom list -> db * datom list
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_indexes_with_tx_data : db -> datom list -> db
+  ; refresh_db_indexes_with_removed_datoms : db -> datom list -> db
   ; refresh_db_identity : db -> db
   }
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
+  let input_db = db in
   (* Mid-tx schema refresh is incremental: schema datoms appended to tx_data
      are recorded here and each refresh folds only the entities touched by
      the datoms seen since the previous refresh, instead of rescanning all
@@ -408,7 +414,8 @@ let apply_tx context tx_ops db =
       datom_tx_data;
     List.rev_append datom_tx_data tx_data_rev
   in
-  let tx = db.max_tx + 1 in
+  let tx = input_db.max_tx + 1 in
+  let db = { input_db with max_tx = tx } in
   let current_schema = ref db.schema in
   let current_tx_fns = ref db.tx_fns in
   let removed_schema_attrs = ref [] in
@@ -550,6 +557,8 @@ let apply_tx context tx_ops db =
     | Add (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
     | Retract (entity_ref, _, _) -> max_explicit_entity_ref max_eid entity_ref
     | RetractEntity entity_ref | RetractAttr (entity_ref, _) -> max_explicit_entity_ref max_eid entity_ref
+    | Purge (entity_ref, _, _) | PurgeAttr (entity_ref, _) | PurgeEntity entity_ref ->
+      max_explicit_entity_ref max_eid entity_ref
     | CompareAndSet (entity_ref, _, _, _) -> max_explicit_entity_ref max_eid entity_ref
     | Entity entity -> max_explicit_tx_entity max_eid entity
     | Raw_datom d -> context.resolve_context.max_eid_with_entity_id max_eid d.e
@@ -560,6 +569,7 @@ let apply_tx context tx_ops db =
   let initial_max_eid = List.fold_left max_explicit_tx_op db.max_eid tx_ops in
   let max_tx_seen = ref tx in
   let deferred_ops = ref [] in
+  let purged_datoms = ref [] in
   let mark_entity_tempid entity_tempids = function
     | Temp_id tempid -> tempid :: entity_tempids
     | Entity_id e when e < 0 -> string_of_int e :: entity_tempids
@@ -762,6 +772,7 @@ let apply_tx context tx_ops db =
       attr = "db/ident" || List.mem attr context.schema_fields
     | Entity entity -> tx_entity_has_schema_fields entity
     | Retract _ | RetractEntity _ | RetractAttr _ -> true
+    | Purge _ | PurgeAttr _ | PurgeEntity _ -> true
     | CompareAndSet (_, attr, _, _) -> attr = "db/ident" || List.mem attr context.schema_fields
     | InstallTxFn _ | CallIdent _ | Call _ -> false
   in
@@ -832,6 +843,22 @@ let apply_tx context tx_ops db =
          note_schema_field_retraction datoms e a;
          let datoms, datom_tx_data = context.retract_user_attr_with_report db tx datoms e a None in
          datoms, max_eid, tempids, entity_tempids, append_tx_data tx_data datom_tx_data)
+    | Purge (e, a, v) ->
+      let e = context.resolve_entity_for_purge (current_db ()) e in
+      let v, max_eid, tempids = resolve_value_for_attr context.resolve_context db a datoms tx max_eid tempids v in
+      let datoms, removed = context.purge_datom_with_report tx datoms e a v in
+      purged_datoms := !purged_datoms @ removed;
+      datoms, max_eid, tempids, entity_tempids, tx_data
+    | PurgeAttr (e, a) ->
+      let e = context.resolve_entity_for_purge (current_db ()) e in
+      let datoms, removed = context.purge_attr_with_report tx datoms e a in
+      purged_datoms := !purged_datoms @ removed;
+      datoms, max_eid, tempids, entity_tempids, tx_data
+    | PurgeEntity e ->
+      let e = context.resolve_entity_for_purge (current_db ()) e in
+      let datoms, removed = context.purge_entity_with_report (current_db ()) tx datoms e in
+      purged_datoms := !purged_datoms @ removed;
+      datoms, max_eid, tempids, entity_tempids, tx_data
     | CompareAndSet (e, a, expected, new_value) ->
       let e, max_eid, tempids = resolve_existing_entity_ref context.resolve_context db datoms tx max_eid tempids e in
       let expected, max_eid, tempids = resolve_optional_value_for_attr context.resolve_context db a datoms tx max_eid tempids expected in
@@ -1284,22 +1311,6 @@ let apply_tx context tx_ops db =
             false)
         facts
     in
-    let duplicate_cardinality_one_fact facts =
-      let seen = Hashtbl.create (List.length facts) in
-      List.exists
-        (fun d ->
-          context.resolve_context.cardinality db d.a = One
-          &&
-          let key = d.e, d.a in
-          if Hashtbl.mem seen key then true
-          else (
-            Hashtbl.add seen key ();
-            false ))
-        facts
-    in
-    let entity_is_new d =
-      d.e > db.max_datom_e
-    in
     let existing_unique_conflict d =
       unique_attr d.a
       &&
@@ -1318,30 +1329,13 @@ let apply_tx context tx_ops db =
         (left.e, left.a, left.v, left.tx)
         (right.e, right.a, right.v, right.tx)
     in
-    let existing_attr_datoms d =
-      if entity_is_new d then [] else context.existing_entity_attr_datoms db d.e d.a
-    in
-    let tx_data_for_fact d =
-      let d = { d with v = context.resolve_context.normalize_value d.v } in
-      let existing = existing_attr_datoms d in
-      let same_fact_exists = List.exists (context.same_fact d) existing in
-      match context.resolve_context.cardinality db d.a with
-      | Many -> if same_fact_exists then [] else [ d ]
-      | One ->
-        if same_fact_exists then
-          []
-        else
-          (existing
-           |> List.sort compare_eavt_datom
-           |> List.map retraction_datom)
-          @ [ d ]
-    in
     (* upstream transacts share one tempids table across the whole tx:
        value-position tempids resolve against (and extend) the same table
        as :db/id tempids, so `{:db/id -1 :block/page -1}` yields one entity.
        resolve_value_for_attr already does that when given the table — the
        fast path must thread it through instead of resolving against []. *)
     let resolve_fast_value_for_attr attr value max_eid tempids =
+
       match value with
       | Ref_to (Lookup_ref (lookup_attr, lookup_value)) when context.resolve_context.is_ref_attr db attr ->
         let lookup_value, max_eid, tempids =
@@ -1529,6 +1523,14 @@ let apply_tx context tx_ops db =
           , entity_tempids
           , tx_data )
     in
+    let writes_tuple_source = function
+      | Entity { attrs; _ } ->
+        List.exists (fun (attr, _) -> context.tuple_attrs_for_source db attr <> []) attrs
+      | Add (_, attr, _) -> context.tuple_attrs_for_source db attr <> []
+      | _ -> false
+    in
+    if List.exists writes_tuple_source tx_ops then None
+    else
     match try_new_tempid_entities () with
     | Some result -> Some result
     | None when not (List.for_all supported_tx_op tx_ops) -> None
@@ -1689,10 +1691,68 @@ let apply_tx context tx_ops db =
        | None -> None
        | Some (facts_rev, max_eid, tempids, entity_tempids) ->
          let facts = List.rev facts_rev in
-         if duplicate_fact facts || duplicate_unique facts || duplicate_cardinality_one_fact facts || conflicts_with_existing facts then
+         if duplicate_fact facts || duplicate_unique facts || conflicts_with_existing facts then
            None
          else
-           let tx_data = List.concat_map tx_data_for_fact facts in
+           (* Build tx_data in O(n): [acc @ pieces] was O(n²) and dominated Share
+              SQLite bulk loads (20k entities ≈ 100k facts). Index same-tx (e,a)
+              pieces (newest-first) and mirror [existing_attr_datoms] semantics:
+              from_db excludes in-tx retracts; from_acc is live added facts only. *)
+           let tx_data =
+             let by_ea = Hashtbl.create (List.length facts) in
+             let acc_rev =
+               List.fold_left
+                 (fun acc_rev fact ->
+                   let d =
+                     { fact with v = context.resolve_context.normalize_value fact.v }
+                   in
+                   let same_tx_pieces =
+                     Option.value (Hashtbl.find_opt by_ea (d.e, d.a)) ~default:[]
+                   in
+                   let retracted_in_tx ex =
+                     List.exists
+                       (fun pd -> not pd.added && context.same_fact pd ex)
+                       same_tx_pieces
+                   in
+                   let from_db =
+                     if d.e > input_db.max_eid then
+                       []
+                     else
+                       context.existing_entity_attr_datoms db d.e d.a
+                       |> List.filter (fun ex -> not (retracted_in_tx ex))
+                   in
+                   let from_acc =
+                     same_tx_pieces
+                     |> List.filter (fun pd -> pd.added && not (retracted_in_tx pd))
+                     |> List.rev
+                   in
+                   let existing = from_db @ from_acc in
+                   let same_fact_exists = List.exists (context.same_fact d) existing in
+                   let pieces =
+                     match context.resolve_context.cardinality db d.a with
+                     | Many -> if same_fact_exists then [] else [ d ]
+                     | One ->
+                       if same_fact_exists then
+                         []
+                       else
+                         (existing
+                          |> List.sort compare_eavt_datom
+                          |> List.map retraction_datom)
+                         @ [ d ]
+                   in
+                   List.iter
+                     (fun pd ->
+                       let prev =
+                         Option.value (Hashtbl.find_opt by_ea (pd.e, pd.a)) ~default:[]
+                       in
+                       Hashtbl.replace by_ea (pd.e, pd.a) (pd :: prev))
+                     pieces;
+                   List.rev_append pieces acc_rev)
+                 []
+                 facts
+             in
+             List.rev acc_rev
+           in
            let max_eid =
              List.fold_left
                (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
@@ -1759,7 +1819,7 @@ let apply_tx context tx_ops db =
       let datoms, max_eid, tempids, entity_tempids, tx_data = drain_deferred_ops state in
       datoms, max_eid, tempids, entity_tempids, tx_data, None
   in
-  let tx_data =
+  let base_tx_data =
     match fast_tx_data with
     | Some tx_data -> tx_data
     | None -> List.rev tx_data
@@ -1770,7 +1830,7 @@ let apply_tx context tx_ops db =
     match fast_tx_data with
     | Some _ -> db.schema
     | None ->
-      let schema_datoms = context.schema_datoms (db_with_current_metadata datoms) tx_data in
+      let schema_datoms = context.schema_datoms (db_with_current_metadata datoms) base_tx_data in
       context.schema_from_transaction_datoms
         ~strict:true
         ~removed_attrs:!removed_schema_attrs
@@ -1780,17 +1840,18 @@ let apply_tx context tx_ops db =
         schema_datoms
   in
   let db_after =
-    { db with
+    { input_db with
       schema
     ; max_eid
     ; max_tx = !max_tx_seen
+    ; store_max_tx = !max_tx_seen
     ; tx_fns = !current_tx_fns
     }
   in
   ( (match fast_tx_data with
      | Some _ ->
        db_after
-       |> (fun db -> context.refresh_db_indexes_with_tx_data db tx_data)
+       |> (fun db -> context.refresh_db_indexes_with_tx_data db base_tx_data)
        |> context.refresh_db_identity
      | None ->
        db_after
@@ -1800,11 +1861,13 @@ let apply_tx context tx_ops db =
              schema = db.schema
            ; max_eid = db.max_eid
            ; max_tx = db.max_tx
+           ; store_max_tx = db.store_max_tx
            ; tx_fns = db.tx_fns
            }
          else
-           context.refresh_db_indexes_with_tx_data db tx_data)
+           context.refresh_db_indexes_with_tx_data db base_tx_data)
        |> context.refresh_db_identity)
   , tempids
-  , tx_data
+  , base_tx_data
+  , !purged_datoms
   )

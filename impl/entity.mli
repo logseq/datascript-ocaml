@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_entity_attr : db -> entity_id -> attr -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; all_datoms : db -> datom Seq.t
   ; compare_value : value -> value -> int

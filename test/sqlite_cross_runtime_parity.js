@@ -22,9 +22,8 @@ function findRepoRoot(startDir) {
 }
 
 const nativeExe = path.resolve(process.argv[2]);
-const jsOfOcamlPath = path.resolve(process.argv[3]);
 const defaultUpstreamInput = path.join(findRepoRoot(process.cwd()), "_deps/datascript/release-js/datascript.js");
-const upstreamInput = process.env.UPSTREAM_DATASCRIPT_JS || process.argv[4] || defaultUpstreamInput;
+const upstreamInput = process.env.UPSTREAM_DATASCRIPT_JS || process.argv[3] || defaultUpstreamInput;
 
 if (!fs.existsSync(upstreamInput)) {
   console.error(
@@ -343,7 +342,6 @@ function main() {
     });
 
     const runtimes = [
-      { label: "js_of_ocaml", module: require(jsOfOcamlPath) },
       { label: "upstream-cljs", module: require(upstreamPath) },
     ];
     const results = [

@@ -57,7 +57,7 @@ Index order, bounded access, AVET accessibility, filtered DB slicing, and lazy
 public `datoms` behavior are covered by tests and documented in `docs/design.md`.
 
 Persistent-sorted-set OCaml passes the upstream test-name coverage check and its
-native/js_of_ocaml test suite. Covered areas include sorted order, uniqueness,
+native/Melange test suite. Covered areas include sorted order, uniqueness,
 slice/rslice boundaries, seekable sequences, stress cases, restored storage
 laziness, stable address reuse, and walk-addresses behavior.
 
@@ -173,7 +173,7 @@ for upstream's arbitrary Clojure value serialization hooks.
 
 Upstream has `src/datascript/js.cljs`, exporting JavaScript functions such as
 `empty_db`, `init_db`, `q`, `pull`, `db_with`, `transact`, `datoms`, and
-`index_range` with JS data conversion. This repo supports `js_of_ocaml`, but it
+`index_range` with JS data conversion. This repo has a Melange backend, but it
 does not provide an equivalent `datascript.js` facade with the same argument and
 conversion behavior.
 

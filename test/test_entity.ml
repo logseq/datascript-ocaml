@@ -312,6 +312,8 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
   in
   let context : Entity.context =
     { datoms_by_entity = (fun db entity_id -> datoms_seq db Eavt ~e:entity_id ())
+    ; datoms_by_entity_attr =
+        (fun db entity_id attr -> datoms_seq db Eavt ~e:entity_id ~a:attr ())
     ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_seq db Avet ~a:attr ~v:(Ref entity_id) ())
     ; all_datoms =
         (fun db ->

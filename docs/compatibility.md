@@ -15,14 +15,3 @@ shape:
 
 The storage API remains typed for OCaml callers, and stores use the upstream
 root/tail/index-node layout.
-
-## JS Facade Compatibility
-
-The js_of_ocaml facade exports the same JavaScript-oriented entry points as
-upstream `datascript/js.cljs`, including `empty_db`, `init_db`, `q`, `pull`,
-`pull_many`, `db_with`, `create_conn`, `transact`, `datoms`, `seek_datoms`, and
-`index_range`.
-
-The facade accepts JavaScript schema objects and transaction entity maps, keeps
-DB and connection values as opaque handles between calls, and converts query,
-pull, datom, and transaction report results back to JavaScript values.

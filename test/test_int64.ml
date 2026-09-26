@@ -112,30 +112,6 @@ let test_int64_query () =
    | rows when List.length rows = 3 -> ()
    | rows -> failf "number? query on int64 returned unexpected result (%d rows)" (List.length rows))
 
-let test_int64_transit_codec () =
-  let module T = Transit_native.Transit.Json in
-  (match Datascript_sqlite_codec.value_to_transit (Int64 epoch_ms) with
-   | T.Int64 value -> expect "Int64 encodes to Transit.Int64" epoch_ms value
-   | _ -> failwith "Int64 must encode to Transit.Int64 unconditionally");
-  (match Datascript_sqlite_codec.value_to_transit (Instant epoch_ms) with
-   | T.Date value -> expect "Instant encodes to Transit.Date" epoch_ms value
-   | _ -> failwith "Instant must encode to Transit.Date");
-  expect_value "Transit.Int64 decodes to Int64" (Int64 epoch_ms) (Datascript_sqlite_codec.value_of_transit (T.Int64 epoch_ms));
-  expect_value "legacy Transit.Int decodes to Int64" (Int64 42L) (Datascript_sqlite_codec.value_of_transit (T.Int 42));
-  expect_value
-    "legacy Transit.Big_int decodes to Int64"
-    (Int64 epoch_ms)
-    (Datascript_sqlite_codec.value_of_transit (T.Big_int "1700000000000"));
-  expect_value "Transit.Date decodes to Instant" (Instant epoch_ms) (Datascript_sqlite_codec.value_of_transit (T.Date epoch_ms));
-  expect_value
-    "legacy ~m int64 tag decodes to Instant"
-    (Instant epoch_ms)
-    (Datascript_sqlite_codec.value_of_transit (T.Tagged ("m", T.Int64 epoch_ms)));
-  expect_value
-    "legacy ~m int tag decodes to Instant"
-    (Instant 42L)
-    (Datascript_sqlite_codec.value_of_transit (T.Tagged ("m", T.Int 42)))
-
 let test_int64_storage_migration () =
   (* legacy builds stored plain integers as Instant; on restore only
      db.type/instant attrs may keep Instant *)
@@ -187,7 +163,6 @@ let () =
   test_int64_predicates ();
   test_int64_edn ();
   test_int64_query ();
-  test_int64_transit_codec ();
   test_int64_storage_migration ();
   test_int64_lookup_ref_and_entity ();
   print_endline "test_int64 ok"

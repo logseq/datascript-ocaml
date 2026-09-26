@@ -1,9 +1,8 @@
 (library
  (name datascript_melange_storage)
- (public_name datascript-ocaml-melange.storage)
+ (public_name datascript-ocaml-melange.logseq-storage-codec)
  (modes melange)
  (enabled_if (= %{context_name} default))
  (libraries
   datascript-ocaml-melange
-  melange-transit-melange
-  persistent_sorted_set_ocaml.melange))
+  melange-transit-melange))

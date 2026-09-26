@@ -1,0 +1,9 @@
+{
+  "name": "DataScript OCaml (OCaml 5.5)",
+  "user": "ubuntu",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": ".cursor/cloud-agent-install.sh"
+}
