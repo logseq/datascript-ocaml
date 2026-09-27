@@ -59,15 +59,6 @@ let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
   |> List.sort (fun (left, _) (right, _) -> compare left right)
 
-let forward_entity_attr context db entity_id attr =
-  context.datoms_by_entity db entity_id
-  |> Seq.filter_map (fun d -> if d.a = attr then Some d.v else None)
-  |> List.of_seq
-  |> entity_visible_attr_values context db attr
-  |> function
-  | [] -> None
-  | values -> Some (tx_value_of_attr_values context db attr values)
-
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
   let values =
@@ -83,15 +74,27 @@ let reverse_entity_attr context db entity_id attr =
 
 let lazy_entity context db entity_id =
   let materialized = lazy (sorted_forward_entity_attrs context db entity_id) in
+  (* upstream caches each queried attr on the entity; without a cache every
+     lookup re-scans all of the entity's datoms. *)
+  let lookup_cache : (attr, tx_value option) Hashtbl.t = Hashtbl.create 8 in
+  let lookup attr =
+    match Hashtbl.find_opt lookup_cache attr with
+    | Some cached -> cached
+    | None ->
+        let result =
+          if context.is_reverse_ref attr then
+            reverse_entity_attr context db entity_id attr
+          else
+            (* force the single full scan once, then assoc lookups *)
+            List.assoc_opt attr (Lazy.force materialized)
+        in
+        Hashtbl.replace lookup_cache attr result;
+        result
+  in
   { id = entity_id
   ; db
   ; attrs = []
-  ; lookup_attr =
-      (fun attr ->
-        if context.is_reverse_ref attr then
-          reverse_entity_attr context db entity_id attr
-        else
-          forward_entity_attr context db entity_id attr)
+  ; lookup_attr = lookup
   ; materialize_attrs = (fun () -> Lazy.force materialized)
   }
 
