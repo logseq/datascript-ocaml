@@ -70,10 +70,6 @@ let normalize_stored_datom schema datom =
     (* older databases stored plain ints under instant attrs as Instant *)
     { datom with v = Instant millis }
   | Some { value_type = Some InstantType; _ }, Instant _ -> datom
-  | _, Instant millis ->
-    (* older databases stored plain ints as Instant; only db.type/instant
-       attrs are real dates *)
-    { datom with v = Int64 millis }
   | Some { value_type = Some TupleType; _ }, Vector values ->
     { datom with v = Tuple (List.map (fun value -> Some value) values) }
   | Some { value_type = Some TupleType; _ }, List values ->
