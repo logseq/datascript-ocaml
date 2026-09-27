@@ -61,6 +61,7 @@ Milliseconds, lower is better.
 | q2pred | 0.00557 | 0.01416 | 0.07445 |
 | pull-one | 0.00130 | 0.00277 | 0.00666 |
 | storage-roundtrip | 3.45 | 9.49 | n/a |
+| get-page-data | 0.30675 | 0.89606 | 1.17 |
 
 ### Size 1000
 
@@ -80,6 +81,7 @@ Milliseconds, lower is better.
 | q2pred | 0.02273 | 0.06615 | 0.21568 |
 | pull-one | 0.00130 | 0.00316 | 0.00700 |
 | storage-roundtrip | 33.71 | 84.50 | n/a |
+| get-page-data | 0.35314 | 0.84459 | 1.19 |
 
 ### Size 10000
 
@@ -99,6 +101,7 @@ Milliseconds, lower is better.
 | q2pred | 0.29155 | 0.62344 | 1.71 |
 | pull-one | 0.00129 | 0.00294 | 0.00639 |
 | storage-roundtrip | 1321.55 | 4051.00 | n/a |
+| get-page-data | 0.40625 | 0.93110 | 1.22 |
 
 Current status:
 
@@ -113,9 +116,19 @@ Current status:
   js_of_ocaml recursion limitation, not a benchmark artifact.
 - `storage-roundtrip` has no upstream equivalent (upstream bundle is in-memory
   only), so it is reported without a comparison.
+- `get-page-data` models Logseq's `logseq.api.db-based.tools/get-page-data`:
+  look up a page by `avet :block/name`, list its ~100 blocks via
+  `avet :block/page`, materialize each entity (`entity_attrs` /
+  `(into {} (d/entity ...))`), then nest them by `:block/parent` sorted on
+  `:block/order` (`otree/blocks->vec-tree`). The fixture DB has ~100 blocks per
+  page so `size` scales page count, not per-page cost — which is why timings
+  are nearly flat. It exercises indexed-ref datoms slicing plus entity
+  materialization; pure string work in the real path
+  (`recur-replace-uuid-in-block-title`, `remove-hidden-properties`) is not
+  datascript work and is not modeled.
 - Since the 2026-06-19 run the benchmark set was expanded (now `add-1`,
   `add-5`, `q1`–`q5-shortcircuit`, `qpred1`, `qpred2`, `q2pred`,
-  `storage-roundtrip`). The earlier gaps — upstream being faster on
+  `storage-roundtrip`, `get-page-data`). The earlier gaps — upstream being faster on
   `datoms-name` and the size-10000 one-by-one add — are now closed: native
   `datoms-name` at size 10000 improved from 0.77 ms to 0.06 ms, and
   one-by-one add (`add-5`) from 727.86 ms to 218.88 ms.
