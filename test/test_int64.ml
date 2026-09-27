@@ -137,8 +137,9 @@ let test_int64_transit_codec () =
     (Datascript_sqlite_codec.value_of_transit (T.Tagged ("m", T.Int 42)))
 
 let test_int64_storage_migration () =
-  (* legacy builds stored plain integers as Instant; on restore only
-     db.type/instant attrs may keep Instant *)
+  (* ~m datoms restore as Instant regardless of schema valueType —
+     attribute-aware migration to numeric values is the caller's job
+     (upstream cljs keeps js/Date on restore the same way). *)
   let storage = memory_storage () in
   let schema = [ "count", number_attr; "created-at", instant_attr ] in
   let db =
@@ -158,9 +159,9 @@ let test_int64_storage_migration () =
        | [ d ] -> d.v
        | _ -> failwith ("missing datom for " ^ a)
      in
-     expect_value "legacy Instant under numeric attr migrates to Int64" (Int64 epoch_ms) (value_for 1 "count");
+     expect_value "Instant under numeric attr stays Instant on restore" (Instant epoch_ms) (value_for 1 "count");
      expect_value "Instant under instant attr stays Instant" (Instant epoch_ms) (value_for 1 "created-at");
-     expect_value "Instant under untyped attr migrates to Int64" (Int64 epoch_ms) (value_for 1 "untyped-time");
+     expect_value "Instant under untyped attr stays Instant on restore" (Instant epoch_ms) (value_for 1 "untyped-time");
      expect_value "big Int64 survives kvs restore" (Int64 9_223_372_036_854_775_000L) (value_for 2 "count"))
 
 let test_int64_lookup_ref_and_entity () =
