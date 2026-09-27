@@ -155,7 +155,11 @@ let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_
   ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
   ; storage_branching_factor = settings.branching_factor
-  ; storage_ref_type = settings.ref_type
+  (* ref-type is an in-memory node-cache policy. Native forces Strong at
+     restore (see settings_of_root); don't let that leak into stored
+     metadata — keep writing what a JS restore expects. *)
+  ; storage_ref_type =
+      (if Platform.strong_index_node_cache then PSet.Weak else settings.ref_type)
   }
 
 let stored_settings_of_root root =
