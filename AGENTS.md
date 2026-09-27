@@ -9,3 +9,4 @@
 - MUST not use magic methods to cast types. If a type cast is unavoidable, explain the reason in a code comment.
 - MUST not disable compiler warnings
 
+- Avoid O(n²) `List` patterns such as `List.concat` and repeated `List.append` on large sequences; when the project already depends on the `rrbvec` package, use `Rrbvec` vectors instead.
