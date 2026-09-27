@@ -37,3 +37,9 @@ val split_regex : regex -> string -> string list
 (** Split a string around regex matches, producing at most the requested number
     of parts. *)
 val split_regex_limited : regex -> string -> int -> string list
+
+(** Whether storage-backed index nodes should be cached with strong
+    references. True on native, where the OCaml GC clears weak slots on
+    every major collection and would thrash the node cache; false on JS
+    runtimes where WeakRef behaves like upstream DataScript. *)
+val strong_index_node_cache : bool
