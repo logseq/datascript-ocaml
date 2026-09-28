@@ -212,7 +212,7 @@ let rec value_of_transit = function
   | Big_decimal value -> Float (float_of_string value)
   | Big_int value -> Int64 (Int64.of_string value)
   | Date value -> Instant value
-  | Uuid value -> Uuid value
+  | Uuid value -> Uuid (Util.uuid_canonicalize value)
   | Uri value -> String value
   | Keyword value -> Keyword value
   | Symbol value -> Symbol value
@@ -220,7 +220,7 @@ let rec value_of_transit = function
   | Map entries -> Map (List.map (fun (key, value) -> (value_of_transit key, value_of_transit value)) entries)
   | Set values -> Set (List.map value_of_transit values)
   | List values -> List (List.map value_of_transit values)
-  | Tagged ("u", Transit.String value) -> Uuid value
+  | Tagged ("u", Transit.String value) -> Uuid (Util.uuid_canonicalize value)
   | Tagged ("m", Transit.Int value) -> Instant (Int64.of_int value)
   | Tagged ("m", Transit.Int64 value) -> Instant value
   | Tagged ("regex", Transit.String value) -> Regex value

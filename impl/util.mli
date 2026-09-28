@@ -12,6 +12,12 @@ val first_nonzero : int list -> int
 val compare_datom : index -> datom -> datom -> int
 val normalize_value : value -> value
 val normalize_datom_value : datom -> datom
+val uuid_canonicalize : string -> string
+(** transit-js UUIDfromString semantics applied to the string form:
+    strip dashes, parse 16 hex pairs leniently (non-hex pairs become
+    0), emit lowercase 8-4-4-4-12. Identity on already-canonical
+    uuid strings. *)
+
 val int64_to_int : int64 -> int option
 val int64_to_int_exn : string -> int64 -> int
 val civil_from_days : int64 -> int * int * int
