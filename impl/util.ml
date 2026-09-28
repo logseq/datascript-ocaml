@@ -100,13 +100,24 @@ and value_equal left right =
   | Ref_to left, Ref_to right -> entity_ref_equal left right
   | _ -> false
 
+(* ClojureScript namespace/name split happens at the last '/', so
+   (:ns a.b/c) = "a.b" and (:name a.b/c) = "c". *)
 let split_keyword keyword =
-  match String.index_opt keyword '/' with
+  match String.rindex_opt keyword '/' with
   | None -> "", keyword
   | Some index ->
     let namespace = String.sub keyword 0 index in
     let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
     namespace, name
+
+(* Upstream compares attr keywords with compare-keywords: no-namespace
+   attrs sort first, otherwise (ns, name) pairwise.  Compare with a
+   plain string sort here would order "logseq.property.class/extends"
+   before "logseq.property/built-in?" ('.' < '/'), which both diverges
+   from the runtime index order upstream and writes a leaf order the
+   CLJS storage reader cannot binary-search. *)
+let compare_attr left right =
+  compare (split_keyword left) (split_keyword right)
 
 let rec compare_list_items_with compare_item left right =
   match left, right with
@@ -389,13 +400,13 @@ let compare_datom index left right =
     let cmp = compare left.e right.e in
     if cmp <> 0 then cmp
     else
-      let cmp = compare left.a right.a in
+      let cmp = compare_attr left.a right.a in
       if cmp <> 0 then cmp
       else
         let cmp = compare_value left.v right.v in
         if cmp <> 0 then cmp else compare left.tx right.tx
   | Aevt ->
-    let cmp = compare left.a right.a in
+    let cmp = compare_attr left.a right.a in
     if cmp <> 0 then cmp
     else
       let cmp = compare left.e right.e in
@@ -404,7 +415,7 @@ let compare_datom index left right =
         let cmp = compare_value left.v right.v in
         if cmp <> 0 then cmp else compare left.tx right.tx
   | Avet ->
-    let cmp = compare left.a right.a in
+    let cmp = compare_attr left.a right.a in
     if cmp <> 0 then cmp
     else
       let cmp = compare_value left.v right.v in

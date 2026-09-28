@@ -1862,9 +1862,9 @@ let test_transact__test_db_ident_fn () =
   assert_equal_triples
     "CallIdent invokes db/fn metadata by ident"
     [ 1, "age", Int64 32L
-    ; 1, "db/ident", Keyword "Petr"
     ; 1, "had-birthday", Bool true
     ; 1, "name", String "Petr"
+    ; 1, "db/ident", Keyword "Petr"
     ; 2, "db/ident", Keyword "inc-age"
     ]
     (datoms db Eavt ())
@@ -2048,8 +2048,8 @@ let test_db_ident_is_builtin_and_resolves_refs () =
   in
   assert_equal_triples
     "db/ident is a built-in identity attr and idents resolve as entity refs"
-    [ 1, "db/ident", Keyword "ent1"
-    ; 1, "ref", Ref 2
+    [ 1, "ref", Ref 2
+    ; 1, "db/ident", Keyword "ent1"
     ; 2, "db/ident", Keyword "ent2"
     ]
     (datoms db Eavt ());
@@ -2093,8 +2093,8 @@ let test_upstream_ident_parity_batch () =
           (One_entity
              { db_id = Some (Entity_id 2)
              ; attrs =
-                 [ "db/ident", One_value (Keyword "ent2")
-                 ; "ref", One_value (Ref 1)
+                 [ "ref", One_value (Ref 1)
+                 ; "db/ident", One_value (Keyword "ent2")
                  ]
              }))
        (entity_attr entity "ref")

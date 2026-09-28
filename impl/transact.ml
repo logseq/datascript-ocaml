@@ -1086,7 +1086,13 @@ let apply_tx context tx_ops db =
       let datoms, max_eid, tempids, entity_tempids, tx_data, tuple_sources, direct_tuple_writes =
         List.fold_left apply_attr (datoms, max_eid, tempids, entity_tempids, tx_data, [], []) entity.attrs
       in
-      let tuple_sources = List.sort_uniq compare tuple_sources in
+      let tuple_sources =
+        List.sort_uniq
+          (fun (left_e, left_a) (right_e, right_a) ->
+            let cmp = compare left_e right_e in
+            if cmp <> 0 then cmp else Util.compare_attr left_a right_a)
+          tuple_sources
+      in
       let datoms, tx_data =
         List.fold_left
           (fun (datoms, tx_data) (entity_id, source_attr) ->
@@ -1313,11 +1319,7 @@ let apply_tx context tx_ops db =
     let retraction_datom d =
       { d with tx; added = false }
     in
-    let compare_eavt_datom left right =
-      compare
-        (left.e, left.a, left.v, left.tx)
-        (right.e, right.a, right.v, right.tx)
-    in
+    let compare_eavt_datom = Util.compare_datom Eavt in
     let existing_attr_datoms d =
       if entity_is_new d then [] else context.existing_entity_attr_datoms db d.e d.a
     in

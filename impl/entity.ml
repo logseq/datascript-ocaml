@@ -57,7 +57,7 @@ let group_forward_entity_attrs context db entity_id =
 
 let sorted_forward_entity_attrs context db entity_id =
   group_forward_entity_attrs context db entity_id
-  |> List.sort (fun (left, _) (right, _) -> compare left right)
+  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
 
 let forward_entity_attr context db entity_id attr =
   context.datoms_by_entity db entity_id
