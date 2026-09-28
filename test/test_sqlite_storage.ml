@@ -2535,6 +2535,7 @@ let logseq_json_of_value = function
   | Int64 value -> Int64.to_string value
   | Bool value -> if value then "true" else "false"
   | Keyword value -> json_quote ("~:" ^ value)
+  | Uuid value -> json_quote ("~u" ^ value)
   | Ref entity_id -> string_of_int entity_id
   | value -> failf "unsupported Logseq test value: %s" (string_of_value value)
 
@@ -2659,6 +2660,111 @@ let test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks 
          with
          | Query_relation rows -> rows
          | _ -> failwith "generated Logseq block query should return relation rows"))
+
+(* cljs orders keyword attrs by (ns, name) — independent comparator used to
+   build leaves exactly the way the cljs writer lays them out on disk. *)
+let cljs_ns_name_attr_compare left right =
+  let split attr =
+    match String.rindex_opt attr '/' with
+    | Some i -> String.sub attr 0 i, String.sub attr (i + 1) (String.length attr - i - 1)
+    | None -> "", attr
+  in
+  compare (split left) (split right)
+
+let cljs_datom_compare index (left : Datascript.datom) (right : Datascript.datom) =
+  let tie a b = if a <> 0 then a else b in
+  match index with
+  | Eavt ->
+      tie
+        (compare left.e right.e)
+        (tie
+           (cljs_ns_name_attr_compare left.a right.a)
+           (tie (Util.compare_value left.v right.v) (compare left.tx right.tx)))
+  | Aevt ->
+      tie
+        (cljs_ns_name_attr_compare left.a right.a)
+        (tie (compare left.e right.e) (tie (Util.compare_value left.v right.v) (compare left.tx right.tx)))
+  | Avet ->
+      tie
+        (cljs_ns_name_attr_compare left.a right.a)
+        (tie (Util.compare_value left.v right.v) (tie (compare left.e right.e) (compare left.tx right.tx)))
+
+let test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs () =
+  if not (sqlite3_available ()) then
+    prerr_endline "Skipping cljs-ordered leaf lookup test: sqlite3 is not available"
+  else
+    with_temp_db (fun db_path ->
+      (* sync download-import copies server kvs rows verbatim: leaf payloads
+         arrive in cljs (ns, name) attr order. "block.x" sorts after "block"
+         under (ns, name) but before it under fqn order, so a reader using
+         fqn order binary-searches past every "block/uuid" datom in this
+         leaf — the lookup-ref miss that dropped remote ops and deadlocked
+         cli-sync-stress (Tempids used only as value). *)
+      let uuid i = Printf.sprintf "0000000%d-000e-0000-0000-000000000000" i in
+      let tx = 536870913 in
+      let datom e a v : Datascript.datom = { e; a; v; tx; added = true } in
+      let datoms : Datascript.datom list =
+        List.init 5 (fun i -> datom (100 + i) "block/aaa" (Int64 (Int64.of_int i)))
+        @ List.init 5 (fun i -> datom (100 + i) "block/uuid" (Uuid (uuid i)))
+        @ List.init 40 (fun i -> datom (100 + (i mod 5)) "block.x/zzz" (Int64 (Int64.of_int i)))
+      in
+      let leaf index = logseq_row_content (List.sort (cljs_datom_compare index) datoms) in
+      let schema =
+        [ "block/aaa", indexed
+        ; "block/uuid", unique_identity
+        ; "block.x/zzz", indexed
+        ]
+      in
+      let root_content =
+        "["
+        ^ String.concat
+            ","
+            [ json_quote "^ "
+            ; json_quote "~:schema"
+            ; "["
+              ^ String.concat
+                  ","
+                  (json_quote "^ "
+                   :: List.concat_map (fun (attr, schema) -> logseq_schema_attr_json attr schema) schema)
+              ^ "]"
+            ; json_quote "~:max-eid"; "1000"
+            ; json_quote "~:max-tx"; "536870913"
+            ; json_quote "~:eavt"; "2"
+            ; json_quote "~:aevt"; "3"
+            ; json_quote "~:avet"; "4"
+            ; json_quote "~:max-addr"; "4"
+            ; json_quote "~:branching-factor"; "32"
+            ; json_quote "~:ref-type"; json_quote "~:weak"
+            ]
+        ^ "]"
+      in
+      insert_logseq_rows
+        db_path
+        [ 0, root_content
+        ; 1, "[]"
+        ; 2, leaf Eavt
+        ; 3, leaf Aevt
+        ; 4, leaf Avet
+        ];
+      let storage = Sqlite_storage.storage db_path in
+      (match restore_conn storage with
+       | None -> failwith "cljs-ordered sqlite store should restore conn"
+       | Some conn ->
+           let db = conn_db conn in
+           List.iter
+             (fun i ->
+                match entity db (Lookup_ref ("block/uuid", Uuid (uuid i))) with
+                | Some _ -> ()
+                | None ->
+                    failf
+                      "lookup ref [:block/uuid %s] should resolve inside a cljs-ordered avet leaf"
+                      (uuid i))
+             [ 0; 1; 2; 3; 4 ];
+           let avet_datoms = List.of_seq (datoms_seq db Avet ~a:"block/uuid" ()) in
+           if List.length avet_datoms <> 5 then
+             failf
+               "avet slice on :block/uuid should return 5 datoms, got %d"
+               (List.length avet_datoms)))
 
 let rec find_repo_root dir =
   if Sys.file_exists (Filename.concat dir "dune-project") then dir
@@ -2953,6 +3059,7 @@ let () =
   test_logseq_sqlite_schema_decodes_cached_schema_keys ();
   test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks_refs ();
   test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks ();
+  test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs ();
   test_default_logseq_graph_db_uses_portable_default ();
   test_logseq_graph_dbs_uses_portable_default ();
   test_existing_logseq_graph_is_recognized_read_only ();

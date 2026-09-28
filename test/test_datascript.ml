@@ -596,6 +596,45 @@ let test_indexes_compare_keywords_like_datascript () =
     [ 3, "tag", Keyword "a/c"; 2, "tag", Keyword "a/b" ]
     (rseek_datoms db Avet ~a:"tag" ~v:(Keyword "a/c") ())
 
+let test_indexes_order_attrs_by_namespace_then_name () =
+  (* cljs cmp-attr-quick orders keyword attrs by (ns, name): "logseq.property"
+     sorts before "logseq.property.class", so "logseq.property/zzz" precedes
+     "logseq.property.class/aaa" — plain fully-qualified string order reverses
+     them ('.' < '/'). kvs leaves written by cljs (including rows copied
+     verbatim by sync download-import) depend on this order; a reader using
+     fqn order binary-searches the wrong positions and misses datoms. *)
+  let db =
+    empty_db ()
+    |> db_with
+         [ Add (Entity_id 1, "logseq.property/zzz", Int64 1L)
+         ; Add (Entity_id 1, "logseq.property.class/aaa", Int64 2L)
+         ; Add (Entity_id 1, "db/ident", Keyword "some-ident")
+         ; Add (Entity_id 1, "db.cardinality/one", Int64 3L)
+         ; Add (Entity_id 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000")
+         ; Add (Entity_id 1, "block.x/aaa", Int64 4L)
+         ]
+  in
+  assert_equal_triples
+    "AEVT orders attrs by (ns, name): block/*, block.x/*, db/*, db.cardinality/*, logseq.property/*, logseq.property.class/*"
+    [ 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000"
+    ; 1, "block.x/aaa", Int64 4L
+    ; 1, "db/ident", Keyword "some-ident"
+    ; 1, "db.cardinality/one", Int64 3L
+    ; 1, "logseq.property/zzz", Int64 1L
+    ; 1, "logseq.property.class/aaa", Int64 2L
+    ]
+    (datoms db Aevt ~e:1 ());
+  assert_equal_triples
+    "EAVT orders an entity's attrs by (ns, name) as well"
+    [ 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000"
+    ; 1, "block.x/aaa", Int64 4L
+    ; 1, "db/ident", Keyword "some-ident"
+    ; 1, "db.cardinality/one", Int64 3L
+    ; 1, "logseq.property/zzz", Int64 1L
+    ; 1, "logseq.property.class/aaa", Int64 2L
+    ]
+    (datoms db Eavt ~e:1 ())
+
 let test_indexes_compare_numbers_across_value_constructors () =
   let db =
     empty_db ~schema:[ "score", indexed ] ()
@@ -17378,6 +17417,7 @@ let () =
   test_incremental_writes_keep_public_datoms_indexes_correct ();
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
+  test_indexes_order_attrs_by_namespace_then_name ();
   test_indexes_compare_numbers_across_value_constructors ();
   test_transact__test_compare_numbers_js_issue_404 ();
   test_avet_exact_lookup_compares_entire_sequences ();
