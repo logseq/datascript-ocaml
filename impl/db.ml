@@ -190,11 +190,11 @@ let refresh_indexes_with_added_datoms db added_datoms =
 let find_active_datom_by_fact db datom =
   let bound = { datom with tx = tx0; added = true } in
   let compare_to_fact left right =
-    Util.first_nonzero
-      [ compare left.e right.e
-      ; Util.compare_attr left.a right.a
-      ; Util.compare_value left.v right.v
-      ]
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = Util.compare_attr left.a right.a in
+      if cmp <> 0 then cmp else Util.compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then
@@ -936,26 +936,23 @@ let compare_optional_with compare_item actual = function
 let compare_datom_to_bound context index d e a v tx =
   match index with
   | Eavt ->
-    context.first_nonzero
-      [ compare_optional d.e e
-      ; compare_optional_with Util.compare_attr d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional d.e e)
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Aevt ->
-    context.first_nonzero
-      [ compare_optional_with Util.compare_attr d.a a
-      ; compare_optional d.e e
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional d.e e)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Avet ->
-    context.first_nonzero
-      [ compare_optional_with Util.compare_attr d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.e e)
+      (compare_optional d.tx tx)
 
 let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;

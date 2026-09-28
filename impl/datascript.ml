@@ -238,7 +238,8 @@ let unresolved_entity_ref_message = function
 let find_avet_exact db attr value =
   let bound = datom ~e:0 ~a:attr ~v:value () in
   let compare_prefix left right =
-    first_nonzero [ Util.compare_attr left.a right.a; compare_value left.v right.v ]
+    let cmp = Util.compare_attr left.a right.a in
+    if cmp <> 0 then cmp else compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then compare_prefix left right
@@ -258,11 +259,11 @@ let find_avet_exact db attr value =
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
-    first_nonzero
-      [ compare left.e right.e
-      ; Util.compare_attr left.a right.a
-      ; compare_value left.v right.v
-      ]
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = Util.compare_attr left.a right.a in
+      if cmp <> 0 then cmp else compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then compare_prefix left right
