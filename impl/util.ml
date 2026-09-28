@@ -380,32 +380,38 @@ let first_nonzero comparisons =
   List.find_opt (( <> ) 0) comparisons
   |> Option.value ~default:0
 
-let first_nonzero4 first second third fourth =
-  if first <> 0 then first
-  else if second <> 0 then second
-  else if third <> 0 then third
-  else fourth
-
+(* Upstream combine-cmp short-circuits per component; keep the same
+   early-exit so most comparisons only run the components needed to
+   disambiguate (typically just e or a). *)
 let compare_datom index left right =
   match index with
   | Eavt ->
-    first_nonzero4
-      (compare left.e right.e)
-      (compare left.a right.a)
-      (compare_value left.v right.v)
-      (compare left.tx right.tx)
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare left.a right.a in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare_value left.v right.v in
+        if cmp <> 0 then cmp else compare left.tx right.tx
   | Aevt ->
-    first_nonzero4
-      (compare left.a right.a)
-      (compare left.e right.e)
-      (compare_value left.v right.v)
-      (compare left.tx right.tx)
+    let cmp = compare left.a right.a in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare left.e right.e in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare_value left.v right.v in
+        if cmp <> 0 then cmp else compare left.tx right.tx
   | Avet ->
-    first_nonzero4
-      (compare left.a right.a)
-      (compare_value left.v right.v)
-      (compare left.e right.e)
-      (compare left.tx right.tx)
+    let cmp = compare left.a right.a in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare_value left.v right.v in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare left.e right.e in
+        if cmp <> 0 then cmp else compare left.tx right.tx
 
 let rec normalize_value = function
   | List values -> List (List.map normalize_value values)

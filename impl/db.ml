@@ -586,25 +586,7 @@ let single_field_prefix_cmp index bound left right =
   else if left == bound then
     -compare_bound right left
   else
-    match index with
-    | Eavt ->
-      first_nonzero4
-        (compare left.e right.e)
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Aevt ->
-      first_nonzero4
-        (compare left.a right.a)
-        (compare left.e right.e)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Avet ->
-      first_nonzero4
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.e right.e)
-        (compare left.tx right.tx)
+    Util.compare_datom index left right
 
 let exact_prefix_slice_cmp context index bound bound_fields =
   match index, bound_fields with
