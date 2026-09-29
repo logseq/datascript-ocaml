@@ -97,6 +97,7 @@ type storage_root =
   ; storage_max_addr : int
   ; storage_branching_factor : int
   ; storage_ref_type : Persistent_sorted_set.ref_type
+  ; storage_index_order_version : int
   }
 
 type storage_payload =
