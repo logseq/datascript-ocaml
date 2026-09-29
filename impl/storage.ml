@@ -160,14 +160,29 @@ let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_
   ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
   ; storage_branching_factor = settings.branching_factor
-  ; storage_ref_type = settings.ref_type
+  (* ref-type is an in-memory node-cache policy. Native forces Strong at
+     restore (see settings_of_root); don't let that leak into stored
+     metadata — keep writing what a JS restore expects. *)
+  ; storage_ref_type =
+      (if Platform.strong_index_node_cache then PSet.Weak else settings.ref_type)
   ; storage_index_order_version = index_order_version
   }
 
-let settings_of_root root =
+let stored_settings_of_root root =
   { PSet.branching_factor = root.storage_branching_factor
   ; ref_type = root.storage_ref_type
   }
+
+(* Upstream caches restored index nodes behind js/WeakRef, which survives
+   V8 minor GCs; the OCaml GC clears weak slots on every major collection,
+   so hot slices keep paying a sqlite reload + transit decode on native.
+   Strong refs reproduce the effective upstream cache lifetime there. The
+   stored metadata is untouched — this only affects the in-memory cache. *)
+let settings_of_root root =
+  if Platform.strong_index_node_cache then
+    { (stored_settings_of_root root) with PSet.ref_type = PSet.Strong }
+  else
+    stored_settings_of_root root
 
 let storage_backed_index node_storage index index_set =
   let cmp = Util.compare_datom index in

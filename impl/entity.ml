@@ -42,7 +42,10 @@ let entity_visible_attr_values context db attr values =
   else
     values
 
-let group_forward_entity_attrs context db entity_id =
+(* Raw forward groups without ref wrapping / visibility filtering — a
+   single index scan. Conversion happens per attr so that reading one
+   attribute never pays (or raises on) another attribute's values. *)
+let raw_forward_entity_attrs context db entity_id =
   let add_attr groups d =
     match List.assoc_opt d.a groups with
     | None -> (d.a, [ d.v ]) :: groups
@@ -50,23 +53,17 @@ let group_forward_entity_attrs context db entity_id =
   in
   context.datoms_by_entity db entity_id
   |> Seq.fold_left add_attr []
-  |> List.filter_map (fun (attr, values) ->
-    match entity_visible_attr_values context db attr values with
-    | [] -> None
-    | values -> Some (attr, tx_value_of_attr_values context db attr values))
 
-let sorted_forward_entity_attrs context db entity_id =
-  group_forward_entity_attrs context db entity_id
-  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
-
-let forward_entity_attr context db entity_id attr =
-  context.datoms_by_entity db entity_id
-  |> Seq.filter_map (fun d -> if d.a = attr then Some d.v else None)
-  |> List.of_seq
-  |> entity_visible_attr_values context db attr
-  |> function
+let tx_value_of_raw_attr context db attr values =
+  match entity_visible_attr_values context db attr values with
   | [] -> None
   | values -> Some (tx_value_of_attr_values context db attr values)
+
+let sorted_forward_entity_attrs context db entity_id =
+  raw_forward_entity_attrs context db entity_id
+  |> List.filter_map (fun (attr, values) ->
+    Option.map (fun v -> attr, v) (tx_value_of_raw_attr context db attr values))
+  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
 
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
@@ -82,17 +79,30 @@ let reverse_entity_attr context db entity_id attr =
   | values -> Some (Many_values values)
 
 let lazy_entity context db entity_id =
-  let materialized = lazy (sorted_forward_entity_attrs context db entity_id) in
+  let raw_attrs = lazy (raw_forward_entity_attrs context db entity_id) in
+  (* upstream caches each queried attr on the entity; without a cache every
+     lookup re-scans all of the entity's datoms. *)
+  let lookup_cache : (attr, tx_value option) Hashtbl.t = Hashtbl.create 8 in
+  let lookup attr =
+    match Hashtbl.find_opt lookup_cache attr with
+    | Some cached -> cached
+    | None ->
+        let result =
+          if context.is_reverse_ref attr then
+            reverse_entity_attr context db entity_id attr
+          else
+            Option.bind
+              (List.assoc_opt attr (Lazy.force raw_attrs))
+              (tx_value_of_raw_attr context db attr)
+        in
+        Hashtbl.replace lookup_cache attr result;
+        result
+  in
   { id = entity_id
   ; db
   ; attrs = []
-  ; lookup_attr =
-      (fun attr ->
-        if context.is_reverse_ref attr then
-          reverse_entity_attr context db entity_id attr
-        else
-          forward_entity_attr context db entity_id attr)
-  ; materialize_attrs = (fun () -> Lazy.force materialized)
+  ; lookup_attr = lookup
+  ; materialize_attrs = (fun () -> sorted_forward_entity_attrs context db entity_id)
   }
 
 let materialized_entity context db entity_id attrs =

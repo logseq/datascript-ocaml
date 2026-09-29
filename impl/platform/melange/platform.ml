@@ -75,3 +75,4 @@ let split_regex_limited pattern value limit =
 
 let split_regex pattern value =
   split_regex_limited pattern value 0
+let strong_index_node_cache = false
