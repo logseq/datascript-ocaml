@@ -1586,9 +1586,9 @@ end) = struct
     match bindings with
     | [] -> Some { attrs = []; rows = []; lookup_vars = []; unique_rows = true }
     | first :: _ ->
-      let attrs = first |> List.map fst |> List.sort_uniq compare in
+      let attrs = first |> List.map fst |> List.sort_uniq Util.compare_attr in
       let row_of_binding binding =
-        let binding_attrs = binding |> List.map fst |> List.sort_uniq compare in
+        let binding_attrs = binding |> List.map fst |> List.sort_uniq Util.compare_attr in
         if binding_attrs <> attrs then
           None
         else

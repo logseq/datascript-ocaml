@@ -43,35 +43,28 @@ let entity_visible_attr_values context db attr values =
   else
     values
 
-(* Cache forward attrs by (db_uid, max_tx, eid) so Share/LMDB entity hydrate
-   and repeated EAVT e-prefix reads stay in RAM within a basis. *)
-let forward_attr_cache : (int * tx * entity_id, (attr * tx_value) list) Hashtbl.t =
-  Hashtbl.create 256
+(* Raw forward groups without ref wrapping / visibility filtering — a
+   single index scan. Conversion happens per attr so that reading one
+   attribute never pays (or raises on) another attribute's values. *)
+let raw_forward_entity_attrs context db entity_id =
+  let add_attr groups d =
+    match List.assoc_opt d.a groups with
+    | None -> (d.a, [ d.v ]) :: groups
+    | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
+  in
+  context.datoms_by_entity db entity_id
+  |> Seq.fold_left add_attr []
 
-let group_forward_entity_attrs context db entity_id =
-  let key = (db.db_uid, db.max_tx, entity_id) in
-  match Hashtbl.find_opt forward_attr_cache key with
-  | Some attrs -> attrs
-  | None ->
-    let add_attr groups d =
-      match List.assoc_opt d.a groups with
-      | None -> (d.a, [ d.v ]) :: groups
-      | Some values -> (d.a, d.v :: values) :: List.remove_assoc d.a groups
-    in
-    let attrs =
-      context.datoms_by_entity db entity_id
-      |> Seq.fold_left add_attr []
-      |> List.filter_map (fun (attr, values) ->
-        match entity_visible_attr_values context db attr values with
-        | [] -> None
-        | values -> Some (attr, tx_value_of_attr_values context db attr values))
-    in
-    Hashtbl.replace forward_attr_cache key attrs;
-    attrs
+let tx_value_of_raw_attr context db attr values =
+  match entity_visible_attr_values context db attr values with
+  | [] -> None
+  | values -> Some (tx_value_of_attr_values context db attr values)
 
 let sorted_forward_entity_attrs context db entity_id =
-  group_forward_entity_attrs context db entity_id
-  |> List.sort (fun (left, _) (right, _) -> compare left right)
+  raw_forward_entity_attrs context db entity_id
+  |> List.filter_map (fun (attr, values) ->
+    Option.map (fun v -> attr, v) (tx_value_of_raw_attr context db attr values))
+  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
 
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
@@ -87,25 +80,30 @@ let reverse_entity_attr context db entity_id attr =
   | values -> Some (Many_values values)
 
 let lazy_entity context db entity_id =
-  (* One EAVT e-prefix scan (cached) serves all forward attr lookups. *)
-  let forward_by_attr =
-    lazy
-      (group_forward_entity_attrs context db entity_id
-       |> List.to_seq
-       |> Hashtbl.of_seq)
+  let raw_attrs = lazy (raw_forward_entity_attrs context db entity_id) in
+  (* upstream caches each queried attr on the entity; without a cache every
+     lookup re-scans all of the entity's datoms. *)
+  let lookup_cache : (attr, tx_value option) Hashtbl.t = Hashtbl.create 8 in
+  let lookup attr =
+    match Hashtbl.find_opt lookup_cache attr with
+    | Some cached -> cached
+    | None ->
+        let result =
+          if context.is_reverse_ref attr then
+            reverse_entity_attr context db entity_id attr
+          else
+            Option.bind
+              (List.assoc_opt attr (Lazy.force raw_attrs))
+              (tx_value_of_raw_attr context db attr)
+        in
+        Hashtbl.replace lookup_cache attr result;
+        result
   in
-  let materialized = lazy (sorted_forward_entity_attrs context db entity_id) in
-
   { id = entity_id
   ; db
   ; attrs = []
-  ; lookup_attr =
-      (fun attr ->
-        if context.is_reverse_ref attr then
-          reverse_entity_attr context db entity_id attr
-        else
-          Hashtbl.find_opt (Lazy.force forward_by_attr) attr)
-  ; materialize_attrs = (fun () -> Lazy.force materialized)
+  ; lookup_attr = lookup
+  ; materialize_attrs = (fun () -> sorted_forward_entity_attrs context db entity_id)
   }
 
 let materialized_entity context db entity_id attrs =
@@ -130,7 +128,7 @@ let entity context db entity_ref =
   | Some entity_id ->
     (* Prefer cached/full forward scan over a separate existence seek so hydrate
        paths pay one EAVT e-prefix read. *)
-    match group_forward_entity_attrs context db entity_id with
+    match raw_forward_entity_attrs context db entity_id with
     | [] -> None
     | _ -> Some (lazy_entity context db entity_id)
 

@@ -103,6 +103,7 @@ and value_equal left right =
 let compare_list_with = Datascript_types.Compare.compare_list_with
 let compare_option_with = Datascript_types.Compare.compare_option_with
 let split_keyword = Datascript_types.Compare.split_keyword
+let compare_attr = Datascript_types.Compare.compare_attr
 let compare_value = Datascript_types.Compare.compare_value
 let compare_datom = Datascript_types.Compare.compare_datom
 let compare_map_entry = Datascript_types.Compare.compare_map_entry
@@ -113,6 +114,65 @@ let first_nonzero comparisons =
   |> Option.value ~default:0
 
 let first_nonzero4 = Datascript_types.Compare.first_nonzero4
+
+(* transit-js UUIDfromString semantics: strip '-', take the first 32
+   chars as 16 hex pairs, and parseInt each pair at radix 16 (leading
+   hex prefix of the pair, else 0). cljs ~u decode produces this
+   canonical form for any input, so a uuid value read back from storage
+   is always canonical; applying the same transform at construction
+   keeps in-memory and materialized values identical. *)
+let uuid_canonicalize uuid =
+  let hex_opt ch =
+    match ch with
+    | '0' .. '9' -> Some (Char.code ch - Char.code '0')
+    | 'a' .. 'f' -> Some (10 + Char.code ch - Char.code 'a')
+    | 'A' .. 'F' -> Some (10 + Char.code ch - Char.code 'A')
+    | _ -> None
+  in
+  let pair_value first second =
+    match hex_opt first, second with
+    | Some h1, Some c2 -> (
+        match hex_opt c2 with
+        | Some h2 -> (h1 * 16) + h2
+        | None -> h1)
+    | Some h1, None -> h1
+    | None, _ -> 0
+  in
+  let digits =
+    uuid
+    |> String.to_seq
+    |> Seq.filter (fun ch -> ch <> '-')
+    |> List.of_seq
+  in
+  let bytes = Array.make 16 0 in
+  let rec loop index ds =
+    if index >= 16 then ()
+    else
+      match ds with
+      | first :: second :: rest ->
+          bytes.(index) <- pair_value first (Some second);
+          loop (index + 1) rest
+      | [ first ] -> bytes.(index) <- pair_value first None
+      | [] -> ()
+  in
+  loop 0 digits;
+  let b = Bytes.make 36 '-' in
+  for i = 0 to 15 do
+    let offset =
+      i * 2
+      + (if i >= 10 then 4
+         else if i >= 8 then 3
+         else if i >= 6 then 2
+         else if i >= 4 then 1
+         else 0)
+    in
+    let hi = bytes.(i) lsr 4 and lo = bytes.(i) land 0xf in
+    Bytes.set b offset
+      (Char.chr (hi + (if hi < 10 then Char.code '0' else Char.code 'a' - 10)));
+    Bytes.set b (offset + 1)
+      (Char.chr (lo + (if lo < 10 then Char.code '0' else Char.code 'a' - 10)))
+  done;
+  Bytes.unsafe_to_string b
 
 let rec normalize_value = function
   | List values -> List (List.map normalize_value values)

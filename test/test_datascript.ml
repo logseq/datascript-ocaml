@@ -596,6 +596,45 @@ let test_indexes_compare_keywords_like_datascript () =
     [ 3, "tag", Keyword "a/c"; 2, "tag", Keyword "a/b" ]
     (rseek_datoms db Avet ~a:"tag" ~v:(Keyword "a/c") ())
 
+let test_indexes_order_attrs_by_namespace_then_name () =
+  (* cljs cmp-attr-quick orders keyword attrs by (ns, name): "logseq.property"
+     sorts before "logseq.property.class", so "logseq.property/zzz" precedes
+     "logseq.property.class/aaa" — plain fully-qualified string order reverses
+     them ('.' < '/'). kvs leaves written by cljs (including rows copied
+     verbatim by sync download-import) depend on this order; a reader using
+     fqn order binary-searches the wrong positions and misses datoms. *)
+  let db =
+    empty_db ()
+    |> db_with
+         [ Add (Entity_id 1, "logseq.property/zzz", Int64 1L)
+         ; Add (Entity_id 1, "logseq.property.class/aaa", Int64 2L)
+         ; Add (Entity_id 1, "db/ident", Keyword "some-ident")
+         ; Add (Entity_id 1, "db.cardinality/one", Int64 3L)
+         ; Add (Entity_id 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000")
+         ; Add (Entity_id 1, "block.x/aaa", Int64 4L)
+         ]
+  in
+  assert_equal_triples
+    "AEVT orders attrs by (ns, name): block/*, block.x/*, db/*, db.cardinality/*, logseq.property/*, logseq.property.class/*"
+    [ 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000"
+    ; 1, "block.x/aaa", Int64 4L
+    ; 1, "db/ident", Keyword "some-ident"
+    ; 1, "db.cardinality/one", Int64 3L
+    ; 1, "logseq.property/zzz", Int64 1L
+    ; 1, "logseq.property.class/aaa", Int64 2L
+    ]
+    (datoms db Aevt ~e:1 ());
+  assert_equal_triples
+    "EAVT orders an entity's attrs by (ns, name) as well"
+    [ 1, "block/uuid", Uuid "0c00000c-000e-0000-0000-000000000000"
+    ; 1, "block.x/aaa", Int64 4L
+    ; 1, "db/ident", Keyword "some-ident"
+    ; 1, "db.cardinality/one", Int64 3L
+    ; 1, "logseq.property/zzz", Int64 1L
+    ; 1, "logseq.property.class/aaa", Int64 2L
+    ]
+    (datoms db Eavt ~e:1 ())
+
 let test_indexes_compare_numbers_across_value_constructors () =
   let db =
     empty_db ~schema:[ "score", indexed ] ()
@@ -1681,6 +1720,74 @@ let test_value_only_tempids_are_rejected () =
     [ "db/current-tx", tx0 + 1; "friend", 2 ]
     report.tempids
 
+let test_value_tempid_cleared_by_upsert_redundant () =
+  (* upstream check-value-tempids is eid-based: a unique-identity upsert onto
+     an existing entity emits a ::tx-redundant datom for it, clearing a
+     value-position tempid bound to the same eid *)
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "friend", ref_attr ] ()
+    |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
+    |> db_with
+         [ Add (Temp_id "t", "name", String "Ivan")
+         ; Add (Entity_id 5, "friend", Ref_to (Temp_id "t"))
+         ]
+  in
+  assert_equal_triples
+    "upsert-redundant entity use clears the value tempid bound to its eid"
+    [ 1, "name", String "Ivan"; 5, "friend", Ref 1 ]
+    (datoms db Eavt ())
+
+let test_value_tempid_cleared_by_lookup_ref_e_form () =
+  (* the allocated eid of a value tempid may materialize through a lookup-ref
+     e-position — not only a bare tempid e-form *)
+  let db =
+    empty_db ~schema:[ "name", unique_identity; "friend", ref_attr; "aka", many ] ()
+    |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
+    |> db_with
+         [ Add (Temp_id "t", "name", String "Ivan")
+         ; Add (Entity_id 5, "friend", Ref_to (Temp_id "t"))
+         ; Add (Lookup_ref ("name", String "Ivan"), "aka", String "Vanya")
+         ]
+  in
+  assert_equal_triples
+    "lookup-ref e-position clears the value tempid bound to its eid"
+    [ 1, "aka", String "Vanya"; 1, "name", String "Ivan"; 5, "friend", Ref 1 ]
+    (datoms db Eavt ())
+
+let test_value_tempid_cleared_by_entity_map_materialization () =
+  (* an entity map with a tempid :db/id materializes the bound eid, clearing
+     the same tempid used as a ref value. "t" allocates 6: tempid allocation
+     starts above the tx's max explicit eid *)
+  let db =
+    empty_db ~schema:[ "friend", ref_attr ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Temp_id "t")
+             ; attrs = [ "name", One_value (String "Ivan") ]
+             }
+         ; Add (Entity_id 5, "friend", Ref_to (Temp_id "t"))
+         ]
+  in
+  assert_equal_triples
+    "entity map materialization clears the value tempid bound to its eid"
+    [ 5, "friend", Ref 6; 6, "name", String "Ivan" ]
+    (datoms db Eavt ())
+
+let test_value_tempid_materializing_other_eid_still_rejected () =
+  (* a value tempid whose allocated eid never materializes is still rejected
+     even when other entities appear in e-position *)
+  assert_raises_invalid_arg_message
+    "value tempid bound to an unmaterialized eid is rejected"
+    "Tempids used only as value in transaction: (t)"
+    (fun () ->
+      ignore
+        (empty_db ~schema:[ "name", unique_identity; "friend", ref_attr ] ()
+         |> db_with [ Add (Entity_id 1, "name", String "Ivan") ]
+         |> db_with
+              [ Add (Entity_id 5, "friend", Ref_to (Temp_id "t"))
+              ; Add (Lookup_ref ("name", String "Ivan"), "name", String "Ivan")
+              ]))
+
 let test_empty_entity_tempids_are_not_entity_usage () =
   let db = empty_db ~schema:[ "friend", ref_attr; "multi", many ] () in
   assert_raises_invalid_arg
@@ -1862,9 +1969,9 @@ let test_transact__test_db_ident_fn () =
   assert_equal_triples
     "CallIdent invokes db/fn metadata by ident"
     [ 1, "age", Int64 32L
-    ; 1, "db/ident", Keyword "Petr"
     ; 1, "had-birthday", Bool true
     ; 1, "name", String "Petr"
+    ; 1, "db/ident", Keyword "Petr"
     ; 2, "db/ident", Keyword "inc-age"
     ]
     (datoms db Eavt ())
@@ -2048,8 +2155,8 @@ let test_db_ident_is_builtin_and_resolves_refs () =
   in
   assert_equal_triples
     "db/ident is a built-in identity attr and idents resolve as entity refs"
-    [ 1, "db/ident", Keyword "ent1"
-    ; 1, "ref", Ref 2
+    [ 1, "ref", Ref 2
+    ; 1, "db/ident", Keyword "ent1"
     ; 2, "db/ident", Keyword "ent2"
     ]
     (datoms db Eavt ());
@@ -2093,8 +2200,8 @@ let test_upstream_ident_parity_batch () =
           (One_entity
              { db_id = Some (Entity_id 2)
              ; attrs =
-                 [ "db/ident", One_value (Keyword "ent2")
-                 ; "ref", One_value (Ref 1)
+                 [ "ref", One_value (Ref 1)
+                 ; "db/ident", One_value (Keyword "ent2")
                  ]
              }))
        (entity_attr entity "ref")
@@ -2461,18 +2568,26 @@ let test_entity_maps_expand_reverse_attrs () =
     []
     (datoms db Aevt ~a:"person/_child" ())
 
-let test_entity_maps_reject_non_ref_reverse_attr_values () =
-  assert_raises_invalid_arg
-    "entity map reverse attrs require ref values"
-    (fun () ->
-      ignore
-        (empty_db ~schema:[ "friend", ref_attr ] ()
-         |> db_with
-              [ Entity
-                  { db_id = Some (Entity_id 1)
-                  ; attrs = [ "_friend", One_value (String "not-a-ref") ]
-                  }
-              ]))
+let test_entity_maps_reverse_attr_string_value_is_tempid () =
+  (* upstream explode puts a reverse-attr value in e-position, where a string
+     is a tempid that materializes a fresh entity. cljs allocates eid 1 here
+     (the explicit :db/id 1 never sits in e-position), while the eager
+     max_eid bump on the entity map's db_id allocates 2 — a narrow
+     allocation-order divergence; observable behavior (fresh entity with
+     [:friend 1]) matches *)
+  let db =
+    empty_db ~schema:[ "friend", ref_attr ] ()
+    |> db_with
+         [ Entity
+             { db_id = Some (Entity_id 1)
+             ; attrs = [ "_friend", One_value (String "not-a-ref") ]
+             }
+         ]
+  in
+  assert_equal_triples
+    "entity map reverse attr string value resolves as a tempid"
+    [ 2, "friend", Ref 1 ]
+    (datoms db Eavt ())
 
 let test_entity_maps_reject_reverse_attrs_without_ref_schema () =
   assert_raises_invalid_arg
@@ -17378,6 +17493,7 @@ let () =
   test_incremental_writes_keep_public_datoms_indexes_correct ();
   test_index_range_returns_avet_values_between_bounds ();
   test_indexes_compare_keywords_like_datascript ();
+  test_indexes_order_attrs_by_namespace_then_name ();
   test_indexes_compare_numbers_across_value_constructors ();
   test_transact__test_compare_numbers_js_issue_404 ();
   test_avet_exact_lookup_compares_entire_sequences ();
@@ -17420,6 +17536,10 @@ let () =
   test_transact__test_transitive_type_compare_issue_386 ();
   test_tempids_are_rejected_in_non_add_ops ();
   test_value_only_tempids_are_rejected ();
+  test_value_tempid_cleared_by_upsert_redundant ();
+  test_value_tempid_cleared_by_lookup_ref_e_form ();
+  test_value_tempid_cleared_by_entity_map_materialization ();
+  test_value_tempid_materializing_other_eid_still_rejected ();
   test_empty_entity_tempids_are_not_entity_usage ();
   test_tempid_shared_between_entity_id_and_ref_values ();
   test_tempid_generates_unique_entity_refs ();
@@ -17450,7 +17570,7 @@ let () =
   test_datoms_filter_by_tx_component ();
   test_reverse_ref_helpers ();
   test_entity_maps_expand_reverse_attrs ();
-  test_entity_maps_reject_non_ref_reverse_attr_values ();
+  test_entity_maps_reverse_attr_string_value_is_tempid ();
   test_entity_maps_reject_reverse_attrs_without_ref_schema ();
   test_entity_maps_expand_nested_entity_values ();
   test_entity_map_with_only_nested_ref_allocates_nested_first ();

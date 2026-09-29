@@ -891,7 +891,7 @@ let compare_bound_e fields left right =
   if fields.bound_e then compare left.e right.e else 0
 
 let compare_bound_a fields left right =
-  if fields.bound_a then compare left.a right.a else 0
+  if fields.bound_a then Util.compare_attr left.a right.a else 0
 
 let compare_bound_v context fields left right =
   if fields.bound_v then context.compare_value left.v right.v else 0
@@ -1059,12 +1059,7 @@ let rehydrate_value_from_schema schema attr = function
      | Some { value_type = Some RefType; _ } ->
        (match Util.int64_to_int millis with Some entity_id -> Ref entity_id | None -> original)
      | _ -> original)
-  | Instant millis as original ->
-    (* older databases stored plain ints as Instant; only db.type/instant
-       attrs are real dates *)
-    (match Schema.schema_attr_by_name schema attr with
-     | Some { value_type = Some InstantType; _ } -> original
-     | _ -> Int64 millis)
+  | Instant _ as original -> original
   | Vector values as original ->
     (match Schema.schema_attr_by_name schema attr with
      | Some { value_type = Some TupleType; _ } ->
@@ -1133,7 +1128,7 @@ let single_field_prefix_cmp index bound left right =
   let compare_bound left right =
     match index with
     | Eavt -> compare left.e right.e
-    | Aevt | Avet -> compare left.a right.a
+    | Aevt | Avet -> Util.compare_attr left.a right.a
     | Tave -> compare left.tx right.tx
   in
   if right == bound then
@@ -1141,31 +1136,7 @@ let single_field_prefix_cmp index bound left right =
   else if left == bound then
     -compare_bound right left
   else
-    match index with
-    | Eavt ->
-      first_nonzero4
-        (compare left.e right.e)
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Aevt ->
-      first_nonzero4
-        (compare left.a right.a)
-        (compare left.e right.e)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Avet ->
-      first_nonzero4
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.e right.e)
-        (compare left.tx right.tx)
-    | Tave ->
-      first_nonzero4
-        (compare left.tx right.tx)
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.e right.e)
+    Util.compare_datom index left right
 
 let exact_prefix_slice_cmp context index bound bound_fields =
   match index, bound_fields with
@@ -1797,33 +1768,29 @@ let compare_optional_with compare_item actual = function
 let compare_datom_to_bound context index d e a v tx =
   match index with
   | Eavt ->
-    context.first_nonzero
-      [ compare_optional d.e e
-      ; compare_optional d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional d.e e)
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Aevt ->
-    context.first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional d.e e
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional d.e e)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Avet ->
-    context.first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.e e)
+      (compare_optional d.tx tx)
   | Tave ->
-    context.first_nonzero
-      [ compare_optional d.tx tx
-      ; compare_optional d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.e e
-      ]
+    first_nonzero4
+      (compare_optional d.tx tx)
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.e e)
 
 let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;

@@ -14,6 +14,15 @@ type restore_context =
 let root_address = "0"
 let tail_address = "1"
 
+(* Version of the index node ordering this writer produces. Version 1
+   orders datoms with (ns, name) attr comparison, matching cljs
+   compare-keywords. Roots without the marker (or with a different
+   version) are verified at restore: a full materialization pass checks
+   the stored sequence is non-decreasing under the current comparator,
+   and dirty indexes are rebuilt in memory instead of trusting the
+   stored tree. *)
+let index_order_version = 1
+
 let max_storage_addr = ref 1_000_000
 
 let next_storage_address () =
@@ -70,10 +79,6 @@ let normalize_stored_datom schema datom =
     (* older databases stored plain ints under instant attrs as Instant *)
     { datom with v = Instant millis }
   | Some { value_type = Some InstantType; _ }, Instant _ -> datom
-  | _, Instant millis ->
-    (* older databases stored plain ints as Instant; only db.type/instant
-       attrs are real dates *)
-    { datom with v = Int64 millis }
   | Some { value_type = Some TupleType; _ }, Vector values ->
     { datom with v = Tuple (List.map (fun value -> Some value) values) }
   | Some { value_type = Some TupleType; _ }, List values ->
@@ -155,13 +160,29 @@ let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_
   ; storage_duplicate_datoms = db.duplicate_datoms
   ; storage_max_addr = !max_storage_addr
   ; storage_branching_factor = settings.branching_factor
-  ; storage_ref_type = settings.ref_type
+  (* ref-type is an in-memory node-cache policy. Native forces Strong at
+     restore (see settings_of_root); don't let that leak into stored
+     metadata — keep writing what a JS restore expects. *)
+  ; storage_ref_type =
+      (if Platform.strong_index_node_cache then PSet.Weak else settings.ref_type)
+  ; storage_index_order_version = index_order_version
   }
 
-let settings_of_root root =
+let stored_settings_of_root root =
   { PSet.branching_factor = root.storage_branching_factor
   ; ref_type = root.storage_ref_type
   }
+
+(* Upstream caches restored index nodes behind js/WeakRef, which survives
+   V8 minor GCs; the OCaml GC clears weak slots on every major collection,
+   so hot slices keep paying a sqlite reload + transit decode on native.
+   Strong refs reproduce the effective upstream cache lifetime there. The
+   stored metadata is untouched — this only affects the in-memory cache. *)
+let settings_of_root root =
+  if Platform.strong_index_node_cache then
+    { (stored_settings_of_root root) with PSet.ref_type = PSet.Strong }
+  else
+    stored_settings_of_root root
 
 let storage_backed_index node_storage index index_set =
   let cmp = Util.compare_datom index in
@@ -258,6 +279,39 @@ let db_with_tail context db tail =
     db
     tail
 
+(* Folds a stored index tree in physical (storage) order, ignoring
+   branch separators. Sees normalized datoms in stored order. *)
+let fold_stored_index node_storage address f acc =
+  let rec walk address acc =
+    match node_storage.PSet.restore_node address with
+    | Some (PSet.Leaf datoms) -> List.fold_left f acc datoms
+    | Some (PSet.Branch (_, children)) ->
+        List.fold_left (fun acc child -> walk child acc) acc children
+    | None -> invalid_arg ("storage index points at a missing node: " ^ address)
+  in
+  walk address acc
+
+(* Materializes a stored index once and checks the stored sequence is
+   non-decreasing under the current comparator. `Dirty carries the
+   sorted datoms so the caller can rebuild without a second pass. *)
+let verify_stored_index node_storage cmp address =
+  let datoms = ref [] in
+  let last = ref None in
+  let ordered = ref true in
+  fold_stored_index node_storage address
+    (fun () datom ->
+      datoms := datom :: !datoms;
+      (match !ordered, !last with
+       | true, Some prev when cmp prev datom > 0 -> ordered := false
+       | _ -> ());
+      last := Some datom)
+    ();
+  if !ordered then `Clean
+  else
+    let datoms = Array.of_list (List.rev !datoms) in
+    Array.sort cmp datoms;
+    `Dirty datoms
+
 let restore context storage =
   match storage.storage_restore root_address with
   | None -> None
@@ -267,9 +321,21 @@ let restore context storage =
     let settings = settings_of_root root in
     let node_storage = restoring_node_storage ~schema storage in
     let restore_index index address =
-      match PSet.restore ~cmp:(Util.compare_datom index) ~settings node_storage address with
-      | Some index -> index
-      | None -> invalid_arg ("storage root points at a missing index: " ^ address)
+      let cmp = Util.compare_datom index in
+      match
+        if root.storage_index_order_version <> index_order_version
+        then verify_stored_index node_storage cmp address
+        else `Clean
+      with
+      | `Dirty datoms ->
+          (* The stored tree routes seeks by the old ordering: rebuild
+             the index in memory in the correct order. The next store
+             rewrites its nodes, healing storage. *)
+          PSet.of_sorted_array_by ~settings ~cmp datoms
+      | `Clean ->
+          (match PSet.restore ~cmp ~settings node_storage address with
+           | Some index -> index
+           | None -> invalid_arg ("storage root points at a missing index: " ^ address))
     in
     let duplicate_datoms = normalize_stored_datoms schema root.storage_duplicate_datoms in
     let duplicate_eavt_by_entity =

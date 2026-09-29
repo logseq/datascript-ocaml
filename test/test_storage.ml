@@ -126,7 +126,6 @@ let test_storage__test_multi_tx_incremental_store () =
   in
   Test_alcotest_support.check_int_list "restored history should expose both age assertions" [ 30; 31 ] hist_ages
 
-
 let () =
   run "storage"
     [

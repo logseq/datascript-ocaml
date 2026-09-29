@@ -523,13 +523,24 @@ type tx_report =
   ; purged_datoms : datom list
   }
 module Compare = struct
+  (* ClojureScript namespace/name split happens at the last '/', so
+     (:ns a.b/c) = "a.b" and (:name a.b/c) = "c". *)
   let split_keyword keyword =
-    match String.index_opt keyword '/' with
+    match String.rindex_opt keyword '/' with
     | None -> "", keyword
     | Some index ->
       let namespace = String.sub keyword 0 index in
       let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
       namespace, name
+  
+  (* Upstream compares attr keywords with compare-keywords: no-namespace
+     attrs sort first, otherwise (ns, name) pairwise.  Compare with a
+     plain string sort here would order "logseq.property.class/extends"
+     before "logseq.property/built-in?" ('.' < '/'), which both diverges
+     from the runtime index order upstream and writes a leaf order the
+     CLJS storage reader cannot binary-search. *)
+  let compare_attr left right =
+    compare (split_keyword left) (split_keyword right)
   
   let rec compare_list_items_with compare_item left right =
     match left, right with
@@ -808,6 +819,9 @@ module Compare = struct
   let compare_added left right =
     compare (if left.added then 0 else 1) (if right.added then 0 else 1)
 
+  (* Upstream combine-cmp short-circuits per component; keep the same
+     early-exit so most comparisons only run the components needed to
+     disambiguate (typically just e or a). *)
   let compare_datom index left right =
     let tiebreak_added comparison =
       if comparison <> 0 then comparison else compare_added left right
@@ -815,32 +829,44 @@ module Compare = struct
     match index with
     | Eavt ->
       tiebreak_added
-        (first_nonzero4
-           (compare left.e right.e)
-           (compare left.a right.a)
-           (compare_value left.v right.v)
-           (compare left.tx right.tx))
+        (let cmp = compare left.e right.e in
+         if cmp <> 0 then cmp
+         else
+           let cmp = compare_attr left.a right.a in
+           if cmp <> 0 then cmp
+           else
+             let cmp = compare_value left.v right.v in
+             if cmp <> 0 then cmp else compare left.tx right.tx)
     | Aevt ->
       tiebreak_added
-        (first_nonzero4
-           (compare left.a right.a)
-           (compare left.e right.e)
-           (compare_value left.v right.v)
-           (compare left.tx right.tx))
+        (let cmp = compare_attr left.a right.a in
+         if cmp <> 0 then cmp
+         else
+           let cmp = compare left.e right.e in
+           if cmp <> 0 then cmp
+           else
+             let cmp = compare_value left.v right.v in
+             if cmp <> 0 then cmp else compare left.tx right.tx)
     | Avet ->
       tiebreak_added
-        (first_nonzero4
-           (compare left.a right.a)
-           (compare_value left.v right.v)
-           (compare left.e right.e)
-           (compare left.tx right.tx))
+        (let cmp = compare_attr left.a right.a in
+         if cmp <> 0 then cmp
+         else
+           let cmp = compare_value left.v right.v in
+           if cmp <> 0 then cmp
+           else
+             let cmp = compare left.e right.e in
+             if cmp <> 0 then cmp else compare left.tx right.tx)
     | Tave ->
       tiebreak_added
-        (first_nonzero4
-           (compare left.tx right.tx)
-           (compare left.a right.a)
-           (compare_value left.v right.v)
-           (compare left.e right.e))
+        (let cmp = compare left.tx right.tx in
+         if cmp <> 0 then cmp
+         else
+           let cmp = compare_attr left.a right.a in
+           if cmp <> 0 then cmp
+           else
+             let cmp = compare_value left.v right.v in
+             if cmp <> 0 then cmp else compare left.e right.e)
 end
 
 (* The Melange stdlib compiles List.concat_map/concat/flatten into recursive

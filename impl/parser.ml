@@ -295,9 +295,9 @@ let read_edn input =
       Buffer.add_char buffer char;
       parse_string (index + 1) buffer
   in
-  let form, index = parse_form 0 in
-  if skip index <> length then invalid_arg "trailing EDN input";
-  form
+  (* cljs tools.reader/read-string semantics: parse the first form and
+     ignore trailing input — upstream never checks EOF. *)
+  fst (parse_form 0)
 
 let rec query_value_of_form = function
   | QueryFormNil -> Nil

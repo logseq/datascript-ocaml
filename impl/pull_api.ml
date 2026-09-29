@@ -91,7 +91,7 @@ let rec pull_selector_forward_attr context = function
 let wildcard_shadowed_attrs context selectors =
   selectors
   |> List.filter_map (pull_selector_forward_attr context)
-  |> List.sort_uniq String.compare
+  |> List.sort_uniq Util.compare_attr
 
 let rec pull_selector_needs_full_entity context = function
   | Pull_attr attr
@@ -149,7 +149,7 @@ let forward_attrs_for_selectors context selectors =
   else
     selectors
     |> List.filter_map (pull_selector_forward_attr context)
-    |> List.sort_uniq String.compare
+    |> List.sort_uniq Util.compare_attr
 
 let tx_value_of_attr_values context db attr values =
   match context.cardinality db attr, values with

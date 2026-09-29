@@ -41,10 +41,7 @@ end) = struct
   
   let retraction_datom tx d = { d with tx; added = false }
   
-  let compare_eavt_datom left right =
-    compare
-      (left.e, left.a, left.v, left.tx)
-      (right.e, right.a, right.v, right.tx)
+  let compare_eavt_datom = Util.compare_datom Eavt
   
   let sorted_retractions tx datoms =
     datoms
