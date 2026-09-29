@@ -90,6 +90,7 @@ type storage_kind = string
 let storage_kind_memory = "memory"
 let storage_kind_lmdb = "lmdb"
 let storage_kind_sqlite = "sqlite"
+let storage_kind_postgres = "postgres"
 
 type storage = Storage_handle of int
 
