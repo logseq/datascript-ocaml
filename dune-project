@@ -36,11 +36,3 @@
 
 (package
  (name datascript-ocaml-melange-sqlite))
-
-(package
- (name datascript-ocaml-lg)
- (synopsis "Typed LG application APIs for DataScript")
- (depends
-  (ocaml (>= 5.1.1))
-  datascript_ocaml
-  lg))
