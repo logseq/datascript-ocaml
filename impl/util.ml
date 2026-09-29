@@ -100,13 +100,24 @@ and value_equal left right =
   | Ref_to left, Ref_to right -> entity_ref_equal left right
   | _ -> false
 
+(* ClojureScript namespace/name split happens at the last '/', so
+   (:ns a.b/c) = "a.b" and (:name a.b/c) = "c". *)
 let split_keyword keyword =
-  match String.index_opt keyword '/' with
+  match String.rindex_opt keyword '/' with
   | None -> "", keyword
   | Some index ->
     let namespace = String.sub keyword 0 index in
     let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
     namespace, name
+
+(* Upstream compares attr keywords with compare-keywords: no-namespace
+   attrs sort first, otherwise (ns, name) pairwise.  Compare with a
+   plain string sort here would order "logseq.property.class/extends"
+   before "logseq.property/built-in?" ('.' < '/'), which both diverges
+   from the runtime index order upstream and writes a leaf order the
+   CLJS storage reader cannot binary-search. *)
+let compare_attr left right =
+  compare (split_keyword left) (split_keyword right)
 
 let rec compare_list_items_with compare_item left right =
   match left, right with
@@ -233,6 +244,65 @@ let uuid_halves uuid =
   let most, rest = take_hex 16 digits in
   let least, _ = take_hex 16 rest in
   most, least
+
+(* transit-js UUIDfromString semantics: strip '-', take the first 32
+   chars as 16 hex pairs, and parseInt each pair at radix 16 (leading
+   hex prefix of the pair, else 0). cljs ~u decode produces this
+   canonical form for any input, so a uuid value read back from storage
+   is always canonical; applying the same transform at construction
+   keeps in-memory and materialized values identical. *)
+let uuid_canonicalize uuid =
+  let hex_opt ch =
+    match ch with
+    | '0' .. '9' -> Some (Char.code ch - Char.code '0')
+    | 'a' .. 'f' -> Some (10 + Char.code ch - Char.code 'a')
+    | 'A' .. 'F' -> Some (10 + Char.code ch - Char.code 'A')
+    | _ -> None
+  in
+  let pair_value first second =
+    match hex_opt first, second with
+    | Some h1, Some c2 -> (
+        match hex_opt c2 with
+        | Some h2 -> (h1 * 16) + h2
+        | None -> h1)
+    | Some h1, None -> h1
+    | None, _ -> 0
+  in
+  let digits =
+    uuid
+    |> String.to_seq
+    |> Seq.filter (fun ch -> ch <> '-')
+    |> List.of_seq
+  in
+  let bytes = Array.make 16 0 in
+  let rec loop index ds =
+    if index >= 16 then ()
+    else
+      match ds with
+      | first :: second :: rest ->
+          bytes.(index) <- pair_value first (Some second);
+          loop (index + 1) rest
+      | [ first ] -> bytes.(index) <- pair_value first None
+      | [] -> ()
+  in
+  loop 0 digits;
+  let b = Bytes.make 36 '-' in
+  for i = 0 to 15 do
+    let offset =
+      i * 2
+      + (if i >= 10 then 4
+         else if i >= 8 then 3
+         else if i >= 6 then 2
+         else if i >= 4 then 1
+         else 0)
+    in
+    let hi = bytes.(i) lsr 4 and lo = bytes.(i) land 0xf in
+    Bytes.set b offset
+      (Char.chr (hi + (if hi < 10 then Char.code '0' else Char.code 'a' - 10)));
+    Bytes.set b (offset + 1)
+      (Char.chr (lo + (if lo < 10 then Char.code '0' else Char.code 'a' - 10)))
+  done;
+  Bytes.unsafe_to_string b
 
 let int64_low_i32 value =
   Int64.logand value 0xffffffffL |> Int64.to_int |> i32
@@ -380,32 +450,38 @@ let first_nonzero comparisons =
   List.find_opt (( <> ) 0) comparisons
   |> Option.value ~default:0
 
-let first_nonzero4 first second third fourth =
-  if first <> 0 then first
-  else if second <> 0 then second
-  else if third <> 0 then third
-  else fourth
-
+(* Upstream combine-cmp short-circuits per component; keep the same
+   early-exit so most comparisons only run the components needed to
+   disambiguate (typically just e or a). *)
 let compare_datom index left right =
   match index with
   | Eavt ->
-    first_nonzero4
-      (compare left.e right.e)
-      (compare left.a right.a)
-      (compare_value left.v right.v)
-      (compare left.tx right.tx)
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare_attr left.a right.a in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare_value left.v right.v in
+        if cmp <> 0 then cmp else compare left.tx right.tx
   | Aevt ->
-    first_nonzero4
-      (compare left.a right.a)
-      (compare left.e right.e)
-      (compare_value left.v right.v)
-      (compare left.tx right.tx)
+    let cmp = compare_attr left.a right.a in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare left.e right.e in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare_value left.v right.v in
+        if cmp <> 0 then cmp else compare left.tx right.tx
   | Avet ->
-    first_nonzero4
-      (compare left.a right.a)
-      (compare_value left.v right.v)
-      (compare left.e right.e)
-      (compare left.tx right.tx)
+    let cmp = compare_attr left.a right.a in
+    if cmp <> 0 then cmp
+    else
+      let cmp = compare_value left.v right.v in
+      if cmp <> 0 then cmp
+      else
+        let cmp = compare left.e right.e in
+        if cmp <> 0 then cmp else compare left.tx right.tx
 
 let rec normalize_value = function
   | List values -> List (List.map normalize_value values)

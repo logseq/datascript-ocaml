@@ -63,7 +63,7 @@ let sorted_forward_entity_attrs context db entity_id =
   raw_forward_entity_attrs context db entity_id
   |> List.filter_map (fun (attr, values) ->
     Option.map (fun v -> attr, v) (tx_value_of_raw_attr context db attr values))
-  |> List.sort (fun (left, _) (right, _) -> compare left right)
+  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
 
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in

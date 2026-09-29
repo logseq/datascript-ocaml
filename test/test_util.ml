@@ -120,7 +120,28 @@ let test_util__vector_values_in_db () =
     []
     (datoms db Avet ~a:"shape" ~v:(List [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ]) ())
 
+let test_util__uuid_canonicalize () =
+  let check expected input =
+    if Util.uuid_canonicalize input <> expected then
+      failf "uuid_canonicalize %S -> %S, want %S" input
+        (Util.uuid_canonicalize input) expected
+  in
+  (* transit-js UUIDfromString("cli-sync-stress-user") — the case that
+     produced ghost block/uuid duplicates *)
+  check "0c00000c-000e-0000-0000-000000000000" "cli-sync-stress-user";
+  (* identity on canonical uuid strings *)
+  check "3b8e1234-5678-4a9b-8c1d-2e3f4a5b6c7d" "3b8e1234-5678-4a9b-8c1d-2e3f4a5b6c7d";
+  (* uppercase hex parses the same as lowercase *)
+  check "0c00000c-000e-0000-0000-000000000000" "CLI-SYNC-STRESS-USER";
+  (* dashes are stripped before pairing, not positional *)
+  check "0c00000c-000e-0000-0000-000000000000" "cli-syn-cstress-user";
+  (* short input zero-pads the tail *)
+  check "ab000000-0000-0000-0000-000000000000" "ab";
+  (* extra leading chars shift the parse, matching substring windows *)
+  check "aabbccdd-eeff-0011-2233-445566778899" "aabbccddeeff00112233445566778899aabb"
+
 let () =
   test_util__value_semantics ();
   test_util__keyword_order_matches_upstream ();
-  test_util__vector_values_in_db ()
+  test_util__vector_values_in_db ();
+  test_util__uuid_canonicalize ()

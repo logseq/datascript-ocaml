@@ -190,11 +190,11 @@ let refresh_indexes_with_added_datoms db added_datoms =
 let find_active_datom_by_fact db datom =
   let bound = { datom with tx = tx0; added = true } in
   let compare_to_fact left right =
-    Util.first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; Util.compare_value left.v right.v
-      ]
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = Util.compare_attr left.a right.a in
+      if cmp <> 0 then cmp else Util.compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then
@@ -417,7 +417,7 @@ let duplicate_attr_datoms db index attr =
 let primary_attr_datoms db index attr =
   let attr_prefix_datoms index index_set =
     let bound = datom ~e:0 ~a:attr ~v:Nil () in
-    let compare_prefix left right = compare left.a right.a in
+    let compare_prefix left right = Util.compare_attr left.a right.a in
     let cmp left right =
       if right == bound then compare_prefix left right
       else if left == bound then -compare_prefix right left
@@ -535,7 +535,7 @@ let compare_bound_e fields left right =
   if fields.bound_e then compare left.e right.e else 0
 
 let compare_bound_a fields left right =
-  if fields.bound_a then compare left.a right.a else 0
+  if fields.bound_a then Util.compare_attr left.a right.a else 0
 
 let compare_bound_v context fields left right =
   if fields.bound_v then context.compare_value left.v right.v else 0
@@ -579,32 +579,14 @@ let single_field_prefix_cmp index bound left right =
   let compare_bound left right =
     match index with
     | Eavt -> compare left.e right.e
-    | Aevt | Avet -> compare left.a right.a
+    | Aevt | Avet -> Util.compare_attr left.a right.a
   in
   if right == bound then
     compare_bound left right
   else if left == bound then
     -compare_bound right left
   else
-    match index with
-    | Eavt ->
-      first_nonzero4
-        (compare left.e right.e)
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Aevt ->
-      first_nonzero4
-        (compare left.a right.a)
-        (compare left.e right.e)
-        (Util.compare_value left.v right.v)
-        (compare left.tx right.tx)
-    | Avet ->
-      first_nonzero4
-        (compare left.a right.a)
-        (Util.compare_value left.v right.v)
-        (compare left.e right.e)
-        (compare left.tx right.tx)
+    Util.compare_datom index left right
 
 let exact_prefix_slice_cmp context index bound bound_fields =
   match index, bound_fields with
@@ -954,26 +936,23 @@ let compare_optional_with compare_item actual = function
 let compare_datom_to_bound context index d e a v tx =
   match index with
   | Eavt ->
-    context.first_nonzero
-      [ compare_optional d.e e
-      ; compare_optional d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional d.e e)
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Aevt ->
-    context.first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional d.e e
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional d.e e)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.tx tx)
   | Avet ->
-    context.first_nonzero
-      [ compare_optional d.a a
-      ; compare_optional_with context.compare_value d.v v
-      ; compare_optional d.e e
-      ; compare_optional d.tx tx
-      ]
+    first_nonzero4
+      (compare_optional_with Util.compare_attr d.a a)
+      (compare_optional_with context.compare_value d.v v)
+      (compare_optional d.e e)
+      (compare_optional d.tx tx)
 
 let seek_datoms context db index ?e ?a ?v ?tx () =
   validate_index_access context db index a;

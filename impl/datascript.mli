@@ -277,6 +277,7 @@ module Util : sig
   val compare_datom : index -> datom -> datom -> int
   val normalize_value : value -> value
   val normalize_datom_value : datom -> datom
+  val uuid_canonicalize : string -> string
 end
 
 module Parser : sig

@@ -238,7 +238,8 @@ let unresolved_entity_ref_message = function
 let find_avet_exact db attr value =
   let bound = datom ~e:0 ~a:attr ~v:value () in
   let compare_prefix left right =
-    first_nonzero [ compare left.a right.a; compare_value left.v right.v ]
+    let cmp = Util.compare_attr left.a right.a in
+    if cmp <> 0 then cmp else compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then compare_prefix left right
@@ -258,11 +259,11 @@ let find_avet_exact db attr value =
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
-    first_nonzero
-      [ compare left.e right.e
-      ; compare left.a right.a
-      ; compare_value left.v right.v
-      ]
+    let cmp = compare left.e right.e in
+    if cmp <> 0 then cmp
+    else
+      let cmp = Util.compare_attr left.a right.a in
+      if cmp <> 0 then cmp else compare_value left.v right.v
   in
   let cmp left right =
     if right == bound then compare_prefix left right
@@ -467,8 +468,7 @@ let validate_datom_value db d =
 
 let retraction_datom tx datom = { datom with tx; added = false }
 
-let compare_eavt_datom left right =
-  compare (left.e, left.a, left.v, left.tx) (right.e, right.a, right.v, right.tx)
+let compare_eavt_datom = Util.compare_datom Eavt
 
 let sorted_retractions tx datoms =
   datoms |> List.sort compare_eavt_datom |> List.map (retraction_datom tx)
@@ -1058,7 +1058,11 @@ let data_readers_context : Data_readers_impl.context =
   ; resolve_value_for_attr =
       (fun db attr datoms tx max_eid tempids value ->
         let datom_db = init_db ~schema:db.schema datoms in
-        resolve_value_for_attr db attr datom_db tx max_eid tempids value)
+        let value, max_eid, tempids =
+          resolve_value_for_attr db attr datom_db tx max_eid
+            (Transact_impl.tempid_map_of_list tempids) value
+        in
+        value, max_eid, Transact_impl.tempid_map_order tempids)
   ; init_db = (fun ?(schema = []) datoms -> init_db ~schema datoms)
   }
 
@@ -1251,7 +1255,7 @@ let pattern_value_needs_attr_resolution db attr value =
 let primary_attr_datoms db index attr =
   let attr_prefix_datoms index index_set =
     let bound = datom ~e:0 ~a:attr ~v:Nil () in
-    let compare_prefix left right = compare left.a right.a in
+    let compare_prefix left right = Util.compare_attr left.a right.a in
     let cmp left right =
       if right == bound then compare_prefix left right
       else if left == bound then -compare_prefix right left

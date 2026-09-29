@@ -1,6 +1,20 @@
 open Datascript_types
 
-  let schema_attr db attr = List.assoc_opt attr db.schema
+(* Schema assoc lists are immutable, so physical equality on the list is a
+   valid staleness check: any schema update produces a new list. *)
+let last_schema : schema ref = ref []
+let last_tbl = ref (Hashtbl.create 0)
+
+let schema_attr db attr =
+  if not (db.schema == !last_schema) then (
+    let tbl = Hashtbl.create (List.length db.schema) in
+    List.iter
+      (fun (attr, schema_attr) ->
+        if not (Hashtbl.mem tbl attr) then Hashtbl.add tbl attr schema_attr)
+      db.schema;
+    last_tbl := tbl;
+    last_schema := db.schema);
+  Hashtbl.find_opt !last_tbl attr
   
   let ident_attr = "db/ident"
   
