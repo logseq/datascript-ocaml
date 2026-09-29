@@ -381,6 +381,87 @@ let test_storage__test_db_with_tail () =
     (datoms restored Eavt ~e:3 ());
   assert_equal_int "db_with_tail advances max tx" (tx0 + 6) restored.max_tx
 
+(* Indexes written before the (ns, name) attr-ordering fix store leaves
+   in raw qualified-string order ("a.x/b" sorts before "a/c" since '.'
+   < '/'), which is misordered under the current comparator: seeks then
+   binary-search wrongly inside leaves and route wrongly past branch
+   separators, silently dropping datoms. Restore verifies the stored
+   order and rebuilds dirty indexes in memory; the next store rewrites
+   their nodes and marks the root. *)
+let legacy_storage_root ~version ~eavt ~aevt ~avet =
+  { storage_schema = []
+  ; storage_max_eid = 1_000
+  ; storage_max_tx = tx0
+  ; storage_eavt = eavt
+  ; storage_aevt = aevt
+  ; storage_avet = avet
+  ; storage_eavt_metadata = None
+  ; storage_aevt_metadata = None
+  ; storage_avet_metadata = None
+  ; storage_duplicate_datoms = []
+  ; storage_max_addr = 1_000_000
+  ; storage_branching_factor = 64
+  ; storage_ref_type = Persistent_sorted_set.Strong
+  ; storage_index_order_version = version
+  }
+
+let test_storage__test_restored_misordered_index () =
+  let storage = memory_storage () in
+  (* raw-string order: "a.x/b" < "a/c"; (ns, name) order: "a/c" < "a.x/b" *)
+  let d1 = datom ~e:1 ~a:"a.x/b" ~v:(String "one") () in
+  let d2 = datom ~e:1 ~a:"a/c" ~v:(String "two") () in
+  storage.storage_store
+    [ "10", Storage_node (Persistent_sorted_set.Leaf [ d1 ])
+    ; "11", Storage_node (Persistent_sorted_set.Leaf [ d2 ])
+    ; (* eavt: branch-boundary violation — "a/c" routes to child 10's
+         leaf under the stale separators *)
+      "12", Storage_node (Persistent_sorted_set.Branch ([ d1; d2 ], [ "10"; "11" ]))
+    ; (* aevt/avet: leaf-internal inversion *)
+      "13", Storage_node (Persistent_sorted_set.Leaf [ d1; d2 ])
+    ; "14", Storage_node (Persistent_sorted_set.Leaf [ d1; d2 ])
+    ; "0", Storage_root (legacy_storage_root ~version:0 ~eavt:"12" ~aevt:"13" ~avet:"14")
+    ; "1", Storage_tail []
+    ];
+  (match restore storage with
+   | None -> failwith "restore should read stored db"
+   | Some restored ->
+     assert_equal_triples
+       "restore rebuilds a misordered stored index"
+       [ 1, "a/c", String "two"; 1, "a.x/b", String "one" ]
+       (datoms restored Eavt ~e:1 ());
+     assert_equal_triples
+       "restored index finds datoms past stale separators"
+       [ 1, "a/c", String "two" ]
+       (datoms restored Aevt ~a:"a/c" ());
+     store ~storage restored |> ignore;
+     (match storage.storage_restore "0" with
+      | Some (Storage_root root) ->
+        assert_equal_int "store marks verified index order" 1 root.storage_index_order_version
+      | _ -> failwith "store should write a storage root");
+     (match restore storage with
+      | None -> failwith "re-restore should read stored db"
+      | Some restored' ->
+        assert_equal_triples
+          "marked storage restores the same order lazily"
+          [ 1, "a/c", String "two"; 1, "a.x/b", String "one" ]
+          (datoms restored' Eavt ~e:1 ())));
+  (* a clean unmarked tree verifies without rebuild and reads lazily *)
+  let clean_storage = memory_storage () in
+  let c1 = datom ~e:1 ~a:"a/b" ~v:(String "one") () in
+  let c2 = datom ~e:1 ~a:"a/c" ~v:(String "two") () in
+  clean_storage.storage_store
+    [ "20", Storage_node (Persistent_sorted_set.Leaf [ c1; c2 ])
+    ; "0", Storage_root (legacy_storage_root ~version:0 ~eavt:"20" ~aevt:"20" ~avet:"20")
+    ; "1", Storage_tail []
+    ];
+  (match restore clean_storage with
+   | None -> failwith "restore should read clean unmarked db"
+   | Some restored ->
+     assert_equal_triples
+       "clean unmarked index restores"
+       [ 1, "a/b", String "one"; 1, "a/c", String "two" ]
+       (datoms restored Eavt ~e:1 ()))
+
 let () =
   test_storage__test_basics ();
   test_storage__test_upstream_wire_addresses ();
@@ -392,4 +473,5 @@ let () =
   test_storage__test_restore_with_tail_is_lazy ();
   test_storage__test_transact_after_restore_uses_index_slices ();
   test_storage__test_conn ();
-  test_storage__test_db_with_tail ()
+  test_storage__test_db_with_tail ();
+  test_storage__test_restored_misordered_index ()

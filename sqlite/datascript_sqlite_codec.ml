@@ -277,6 +277,7 @@ let storage_root_to_transit root =
        (Transit.Keyword "max-addr", Transit.Int root.storage_max_addr);
        (Transit.Keyword "branching-factor", Transit.Int root.storage_branching_factor);
        (Transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type);
+       (Transit.Keyword "index-order-version", Transit.Int root.storage_index_order_version);
      ]
     @ optional_metadata_entry "eavt-metadata" root.storage_eavt_metadata
     @ optional_metadata_entry "aevt-metadata" root.storage_aevt_metadata
@@ -340,6 +341,10 @@ let storage_root_of_transit entries =
     storage_branching_factor =
       int_of_transit "storage root :branching-factor" (require_key "branching-factor" entries);
     storage_ref_type = ref_type_of_transit (require_key "ref-type" entries);
+    storage_index_order_version =
+      (match lookup_transit_key "index-order-version" entries with
+       | Some value -> int_of_transit "storage root :index-order-version" value
+       | None -> 0);
   }
 
 let child_addresses_of_transit = function
