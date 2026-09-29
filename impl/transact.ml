@@ -1608,7 +1608,7 @@ let apply_tx context tx_ops db =
              | _ -> ());
         List.map
           (fun tempid -> tempid, List.rev !(Hashtbl.find groups_tbl tempid))
-          !order_rev
+          (List.rev !order_rev)
       in
       let resolve_tempid_add_attrs max_eid tempids attrs =
         attrs
