@@ -17,28 +17,36 @@ type context =
   ; max_eid_in_value : int -> value -> int
   }
 
-val remember_tempid : (string * entity_id) list -> string -> entity_id -> (string * entity_id) list
-val remember_current_tx : (string * entity_id) list -> tx -> (string * entity_id) list
-val ensure_current_tx_tempid : (string * entity_id) list -> tx -> (string * entity_id) list
+(* tempids: persistent lookup map plus reversed insertion list; the
+   :tempids report keeps insertion order. Immutable so ops discarded on
+   Unresolved_lookup_ref drop their bindings with the rest of the state. *)
+type tempid_map
+
+val empty_tempid_map : tempid_map
+val tempid_map_of_list : (string * entity_id) list -> tempid_map
+val tempid_map_order : tempid_map -> (string * entity_id) list
+val remember_tempid : tempid_map -> string -> entity_id -> tempid_map
+val remember_current_tx : tempid_map -> tx -> tempid_map
+val ensure_current_tx_tempid : tempid_map -> tx -> tempid_map
 val is_current_tx_alias : string -> bool
-val remember_current_tx_alias : (string * entity_id) list -> tx -> string -> (string * entity_id) list
-val resolve_entity_ref : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> entity_ref -> entity_id * entity_id * (string * entity_id) list
-val resolve_value : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> value -> value * entity_id * (string * entity_id) list
+val remember_current_tx_alias : tempid_map -> tx -> string -> tempid_map
+val resolve_entity_ref : context -> db -> db -> tx -> entity_id -> tempid_map -> entity_ref -> entity_id * entity_id * tempid_map
+val resolve_value : context -> db -> db -> tx -> entity_id -> tempid_map -> value -> value * entity_id * tempid_map
 val attr_name_of_value : value -> attr option
 val entity_ref_of_ref_attr_value : value -> entity_ref option
 val ref_attr_for_value_resolution : context -> db -> attr -> attr option
-val resolve_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> value -> value * entity_id * (string * entity_id) list
+val resolve_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> tempid_map -> value -> value * entity_id * tempid_map
 val attr_expands_collection : context -> db -> attr -> bool
 val ref_lookup_collection_value : context -> db -> value -> bool
-val resolve_existing_entity_ref : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> entity_ref -> entity_id * entity_id * (string * entity_id) list
-val resolve_optional_existing_entity_ref : context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> entity_ref -> entity_id option * entity_id * (string * entity_id) list
-val resolve_tx_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> tx_value -> tx_value * entity_id * (string * entity_id) list
-val resolve_optional_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> (string * entity_id) list -> value option -> value option * entity_id * (string * entity_id) list
-val resolve_entity_attrs : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> db -> tx -> entity_id -> (string * entity_id) list -> (attr * tx_value) list -> (attr * tx_value) list * entity_id * (string * entity_id) list
+val resolve_existing_entity_ref : context -> db -> db -> tx -> entity_id -> tempid_map -> entity_ref -> entity_id * entity_id * tempid_map
+val resolve_optional_existing_entity_ref : context -> db -> db -> tx -> entity_id -> tempid_map -> entity_ref -> entity_id option * entity_id * tempid_map
+val resolve_tx_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> tempid_map -> tx_value -> tx_value * entity_id * tempid_map
+val resolve_optional_value_for_attr : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> attr -> db -> tx -> entity_id -> tempid_map -> value option -> value option * entity_id * tempid_map
+val resolve_entity_attrs : ?value_tempids:(entity_id, string) Hashtbl.t -> context -> db -> db -> tx -> entity_id -> tempid_map -> (attr * tx_value) list -> (attr * tx_value) list * entity_id * tempid_map
 val remap_value_ref : context -> entity_id -> entity_id -> value -> value
 val remap_datom_entity : context -> entity_id -> entity_id -> datom -> datom
 val remap_resolved_tx_value : context -> entity_id -> entity_id -> tx_value -> tx_value
-val remap_tempid_entity : entity_id -> entity_id -> (string * entity_id) list -> (string * entity_id) list
+val remap_tempid_entity : entity_id -> entity_id -> tempid_map -> tempid_map
 
 type apply_context =
   { resolve_context : context

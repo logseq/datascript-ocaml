@@ -1058,7 +1058,11 @@ let data_readers_context : Data_readers_impl.context =
   ; resolve_value_for_attr =
       (fun db attr datoms tx max_eid tempids value ->
         let datom_db = init_db ~schema:db.schema datoms in
-        resolve_value_for_attr db attr datom_db tx max_eid tempids value)
+        let value, max_eid, tempids =
+          resolve_value_for_attr db attr datom_db tx max_eid
+            (Transact_impl.tempid_map_of_list tempids) value
+        in
+        value, max_eid, Transact_impl.tempid_map_order tempids)
   ; init_db = (fun ?(schema = []) datoms -> init_db ~schema datoms)
   }
 

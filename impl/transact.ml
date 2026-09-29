@@ -17,17 +17,54 @@ type context =
   ; max_eid_in_value : int -> value -> int
   }
 
+module String_map = Map.Make (String)
+
+(* tempids: upstream keeps a map for lookup plus deterministic insertion
+   order for the :tempids report. An assoc list made both lookup and
+   append O(n) — quadratic on bulk transactions — so keep a persistent
+   map for lookup and a reversed insertion list for order. The structure
+   stays immutable: ops discarded on Unresolved_lookup_ref must drop
+   their tempid bindings together with the rest of their state. *)
+type tempid_map =
+  { tbl : entity_id String_map.t
+  ; rev_order : (string * entity_id) list
+  }
+
+let empty_tempid_map = { tbl = String_map.empty; rev_order = [] }
+
+let tempid_map_of_list entries =
+  { tbl =
+      List.fold_left
+        (fun tbl (tempid, entity_id) ->
+          if String_map.mem tempid tbl then tbl else String_map.add tempid entity_id tbl)
+        String_map.empty
+        entries
+  ; rev_order = List.rev entries
+  }
+
+let tempid_map_find tempids tempid = String_map.find_opt tempid tempids.tbl
+
+let tempid_map_order tempids = List.rev tempids.rev_order
+
 let remember_tempid tempids tempid eid =
-  match List.assoc_opt tempid tempids with
+  match tempid_map_find tempids tempid with
   | Some existing when existing = eid -> tempids
   | Some _ -> invalid_arg ("conflicting tempid: " ^ tempid)
-  | None -> tempids @ [ tempid, eid ]
+  | None ->
+    { tbl = String_map.add tempid eid tempids.tbl
+    ; rev_order = (tempid, eid) :: tempids.rev_order
+    }
 
 let remember_current_tx tempids tx =
   remember_tempid tempids "db/current-tx" tx
 
 let ensure_current_tx_tempid tempids tx =
-  ("db/current-tx", tx) :: List.remove_assoc "db/current-tx" tempids
+  { tbl = String_map.add "db/current-tx" tx tempids.tbl
+  ; rev_order =
+      List.rev
+        (("db/current-tx", tx)
+         :: List.remove_assoc "db/current-tx" (tempid_map_order tempids))
+  }
 
 let is_current_tx_alias = function
   | ":db/current-tx" | "datomic.tx" | "datascript.tx" -> true
@@ -35,7 +72,7 @@ let is_current_tx_alias = function
 
 let remember_current_tx_alias tempids tx alias =
   let tempids = ensure_current_tx_tempid tempids tx in
-  match List.assoc_opt alias tempids with
+  match tempid_map_find tempids alias with
   | Some existing when existing = tx -> tempids
   | Some _ -> invalid_arg ("conflicting tempid: " ^ alias)
   | None ->
@@ -44,7 +81,10 @@ let remember_current_tx_alias tempids tx alias =
         insert_after_current_tx_aliases (entry :: prefix) rest
       | rest -> List.rev prefix @ ((alias, tx) :: rest)
     in
-    insert_after_current_tx_aliases [] tempids
+    let order = insert_after_current_tx_aliases [] (tempid_map_order tempids) in
+    { tbl = String_map.add alias tx tempids.tbl
+    ; rev_order = List.rev order
+    }
 
 (* Raised when a lookup ref cannot be resolved yet: the target may be defined
    by a later op in the same transaction. apply_ops defers such ops and retries
@@ -70,7 +110,7 @@ let rec resolve_entity_ref context db datoms tx max_eid tempids = function
     if is_current_tx_alias tempid then
       tx, max_eid, remember_current_tx_alias tempids tx tempid
     else
-      (match List.assoc_opt tempid tempids with
+      (match tempid_map_find tempids tempid with
        | Some e -> e, max_eid, tempids
        | None ->
          let e = context.allocate_entity_id max_eid in
@@ -344,13 +384,16 @@ let remap_resolved_tx_value context old_e new_e = function
   | nested -> nested
 
 let remap_tempid_entity old_e new_e tempids =
-  List.map
-    (fun (tempid, entity_id) ->
-      if entity_id = old_e then
-        tempid, new_e
-      else
-        tempid, entity_id)
-    tempids
+  { tbl =
+      String_map.map
+        (fun entity_id -> if entity_id = old_e then new_e else entity_id)
+        tempids.tbl
+  ; rev_order =
+      List.map
+        (fun (tempid, entity_id) ->
+          if entity_id = old_e then tempid, new_e else tempid, entity_id)
+        tempids.rev_order
+  }
 
 
 type apply_context =
@@ -747,7 +790,7 @@ let apply_tx context tx_ops db =
   let resolve_add_tempid datoms max_eid tempids tx_data tempid attr value =
     let db = current_db () in
     if context.is_unique_identity db attr then
-      match context.resolve_context.entid datoms attr value, List.assoc_opt tempid tempids with
+      match context.resolve_context.entid datoms attr value, tempid_map_find tempids tempid with
       | Some target_e, Some old_e when old_e <> target_e ->
         let datoms, tempids, tx_data = merge_tempid_entity tempid old_e target_e datoms tempids tx_data in
         target_e, datoms, context.resolve_context.max_eid_with_entity_id max_eid target_e, remember_tempid tempids tempid target_e, tx_data
@@ -960,7 +1003,7 @@ let apply_tx context tx_ops db =
           (match context.entity_unique_identity db datoms probe_attrs with
            | Some target_e ->
              let datoms, tempids, tx_data =
-               match List.assoc_opt tempid tempids with
+               match tempid_map_find tempids tempid with
                | Some old_e when old_e <> target_e ->
                  merge_tempid_entity tempid old_e target_e datoms tempids tx_data
                | Some _ -> datoms, tempids, tx_data
@@ -1448,12 +1491,7 @@ let apply_tx context tx_ops db =
           | _ -> false)
         attrs
     in
-    let remember_fast_tempid tempids tempid eid =
-      match List.assoc_opt tempid tempids with
-      | Some existing when existing = eid -> tempids
-      | Some _ -> invalid_arg ("conflicting tempid: " ^ tempid)
-      | None -> (tempid, eid) :: tempids
-    in
+    let remember_fast_tempid = remember_tempid in
     let ambiguous_tempid_entity_without_unique =
       let counts = Hashtbl.create (List.length tx_ops) in
       tx_ops
@@ -1534,21 +1572,21 @@ let apply_tx context tx_ops db =
                    (* a value-position mention may have bound the tempid
                       already (forward ref) — reuse it like upstream *)
                    let entity_id, max_eid, tempids_rev =
-                     match List.assoc_opt tempid tempids_rev with
+                     match tempid_map_find tempids_rev tempid with
                      | Some entity_id -> entity_id, max_eid, tempids_rev
                      | None ->
                        let entity_id = context.resolve_context.allocate_entity_id max_eid in
                        ( entity_id
                        , context.resolve_context.max_eid_with_entity_id max_eid entity_id
-                       , (tempid, entity_id) :: tempids_rev )
+                       , remember_tempid tempids_rev tempid entity_id )
                    in
                    let resolved_attrs, max_eid, tempids_rev = resolve_fast_attrs max_eid tempids_rev attrs in
                    prepend_entity_facts entity_id resolved_attrs facts_rev, max_eid, tempids_rev
                  | _ -> invalid_arg "new tempid entity fast path expects entity maps")
-               ([], initial_max_eid, [])
+               ([], initial_max_eid, empty_tempid_map)
         in
         let tx_data = List.rev facts_rev in
-        Some (db, max_eid, List.rev tempids_rev, tx_data)
+        Some (db, max_eid, tempids_rev, tx_data)
     in
     match try_new_tempid_entities () with
     | Some result -> Some result
@@ -1556,22 +1594,21 @@ let apply_tx context tx_ops db =
     | None when ambiguous_tempid_entity_without_unique -> None
     | None when bulk_tempid_entities_without_unique -> None
     | None ->
-      let add_tempid_attr groups tempid attr value =
-        let rec loop = function
-          | [] -> [ tempid, [ attr, value ] ]
-          | (existing_tempid, attrs) :: rest when existing_tempid = tempid ->
-            (existing_tempid, attrs @ [ attr, value ]) :: rest
-          | group :: rest -> group :: loop rest
-        in
-        loop groups
-      in
       let tempid_add_groups =
+        let groups_tbl = Hashtbl.create 16 in
+        let order_rev = ref [] in
         tx_ops
-        |> List.fold_left
-             (fun groups -> function
-               | Add (Temp_id tempid, attr, value) -> add_tempid_attr groups tempid attr value
-               | _ -> groups)
-             []
+        |> List.iter (function
+             | Add (Temp_id tempid, attr, value) ->
+               (match Hashtbl.find_opt groups_tbl tempid with
+                | Some attrs -> attrs := (attr, value) :: !attrs
+                | None ->
+                  Hashtbl.replace groups_tbl tempid (ref [ attr, value ]);
+                  order_rev := tempid :: !order_rev)
+             | _ -> ());
+        List.map
+          (fun tempid -> tempid, List.rev !(Hashtbl.find groups_tbl tempid))
+          !order_rev
       in
       let resolve_tempid_add_attrs max_eid tempids attrs =
         attrs
@@ -1589,7 +1626,7 @@ let apply_tx context tx_ops db =
               (match unique_identity_target resolved_attrs with
                | None -> None
                | Some target ->
-                 let existing_tempid = List.assoc_opt tempid tempids in
+                 let existing_tempid = tempid_map_find tempids tempid in
                  let entity_id, max_eid =
                    match target, existing_tempid with
                    | Some target_e, Some old_e when old_e <> target_e ->
@@ -1615,7 +1652,7 @@ let apply_tx context tx_ops db =
                    (remember_fast_tempid tempids tempid entity_id)
                    rest)
         in
-        loop max_eid [] tempid_add_groups
+        loop max_eid empty_tempid_map tempid_add_groups
       in
       let build_entity (facts_rev, max_eid, tempids) = function
         | Entity { db_id = Some (Entity_id entity_id); attrs } ->
@@ -1638,7 +1675,7 @@ let apply_tx context tx_ops db =
             (match unique_identity_target resolved_attrs with
              | None -> None
              | Some target ->
-               let existing_tempid = List.assoc_opt tempid tempids in
+               let existing_tempid = tempid_map_find tempids tempid in
                let entity_id, max_eid =
                  match target, existing_tempid with
                  | Some target_e, Some old_e when old_e <> target_e ->
@@ -1684,7 +1721,7 @@ let apply_tx context tx_ops db =
              let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
              Some (fact :: facts_rev, max_eid, tempids))
         | Add (Temp_id tempid, attr, value) ->
-          (match List.assoc_opt tempid tempids with
+          (match tempid_map_find tempids tempid with
            | None -> None
            | Some entity_id ->
              let value, max_eid, tempids = resolve_fast_value_for_attr attr value max_eid tempids in
@@ -1725,7 +1762,7 @@ let apply_tx context tx_ops db =
            Some
              ( db
              , max_eid
-             , List.rev tempids
+             , tempids
              
              , tx_data )))
   and apply_ops state tx_ops =
@@ -1782,7 +1819,7 @@ let apply_tx context tx_ops db =
          materialized eids; the slow path re-derives them *)
       Hashtbl.clear value_tempids;
       Hashtbl.clear materialized_eids;
-      let state = apply_ops (db, initial_max_eid, [], []) tx_ops in
+      let state = apply_ops (db, initial_max_eid, empty_tempid_map, []) tx_ops in
       let datoms, max_eid, tempids, tx_data = drain_deferred_ops state in
       datoms, max_eid, tempids, tx_data, None
   in
@@ -1832,6 +1869,6 @@ let apply_tx context tx_ops db =
          else
            context.refresh_db_indexes_with_tx_data db tx_data)
        |> context.refresh_db_identity)
-  , tempids
+  , tempid_map_order tempids
   , tx_data
   )
