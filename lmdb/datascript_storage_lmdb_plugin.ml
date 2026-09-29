@@ -15,12 +15,9 @@ let backend_of_lmdb lmdb =
     remove Avet;
     remove Tave
   in
-  let load_indexes_from_storage target =
-    match target with
-    | Datascript_storage_protocol.Lmdb target_lmdb when lmdb != target_lmdb ->
-        Datascript_storage_lmdb.sync_indexes lmdb target_lmdb
-    | Datascript_storage_protocol.Lmdb _ | Datascript_storage_protocol.Sqlite _ -> ()
-  in
+  (* The callback target is always this backend's own index db, so indexes are
+     already loaded. *)
+  let load_indexes_from_storage _target = () in
   {
     Datascript_storage_protocol.kind = storage_kind_lmdb
   ; restore_meta
@@ -28,7 +25,9 @@ let backend_of_lmdb lmdb =
   ; sync_indexes_to_storage
   ; sync_removals_to_storage
   ; load_indexes_from_storage
-  ; index_db = Share_index_db (Lmdb lmdb)
+  ; index_db =
+      Share_index_db
+        (Datascript_storage_protocol.pack_index_db (module Datascript_lmdb_backend) lmdb)
   }
 
 let wrap_lmdb ?check_live db =

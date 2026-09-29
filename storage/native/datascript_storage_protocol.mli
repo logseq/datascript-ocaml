@@ -1,14 +1,32 @@
 open Datascript_types
 
-(** Shared index database handle for a storage backend. *)
+(** Shared index database handle for a storage backend: a backend module
+    packed as a first-class module together with its store handle and a unique
+    identity token (see {!same_storage_db}). *)
 type index_db =
-  | Lmdb of Datascript_lmdb_db.t
-  | Sqlite of Datascript_sqlite_db.t
+  | Index_db : 'db 'idx 'sq.
+      int
+      * 'db
+      * (module Datascript_index_backend.S
+           with type db = 'db
+            and type t = 'idx
+            and type seq = 'sq)
+      -> index_db
+
+(** Pack a backend store handle into an {!index_db} value. The minted identity
+    token is what {!same_storage_db} compares. *)
+val pack_index_db :
+  (module Datascript_index_backend.S
+     with type db = 'db
+      and type t = 'idx
+      and type seq = 'sq)
+  -> 'db
+  -> index_db
 
 (** How a storage backend relates to the live index layer.
 
     - [Share_index_db handle]: index datoms live in the same store as storage
-      (memory/file LMDB and SQLite backends).
+      (memory/file LMDB, SQLite and PostgreSQL backends).
     - [Separate_index_db]: storage keeps its own tables and copies into a
       temporary index on restore (legacy mirror backends). *)
 type storage_index_db =

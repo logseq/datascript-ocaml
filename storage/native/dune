@@ -14,4 +14,5 @@
   lmdb_db_native
   lmdb_index_native
   sqlite_db_native
-  datascript_types))
+  datascript_ocaml.index-backend
+ datascript_types))

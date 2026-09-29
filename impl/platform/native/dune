@@ -10,4 +10,6 @@
   lmdb_index_native
   sqlite_db_native
   sqlite_index_native
-  storage_native))
+  storage_native
+  datascript_ocaml.index-backend
+ datascript_ocaml.types))
