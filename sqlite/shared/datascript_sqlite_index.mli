@@ -7,10 +7,10 @@ val db_of : t -> Datascript_sqlite_db.t
 val empty : index -> Datascript_sqlite_db.t -> t
 val of_sorted_list : index -> datom list -> Datascript_sqlite_db.t -> t
 val of_sorted_lists : (index * datom list) list -> Datascript_sqlite_db.t -> unit
-val of_eavt_datoms : avet:(string -> bool) -> datom list -> Datascript_sqlite_db.t -> unit
+val of_eavt_datoms : avet:(string -> bool) -> tave:bool -> datom list -> Datascript_sqlite_db.t -> unit
 val of_bulk : index -> datom list -> Datascript_sqlite_db.t -> t
 val append_datoms : datom list -> t -> t
-val append_tx_data : avet:(string -> bool) -> datom list -> t -> t -> t -> t * t * t
+val append_tx_data : avet:(string -> bool) -> tave:bool -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t
 val remove : datom -> t -> t
 val remove_datoms : datom list -> t -> t

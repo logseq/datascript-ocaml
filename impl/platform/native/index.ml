@@ -88,15 +88,15 @@ let of_sorted_lists index_datoms = function
   | Datascript_storage_protocol.Index_db (_, db, (module B)) ->
       B.of_sorted_lists index_datoms db
 
-let of_eavt_datoms ~avet datoms = function
+let of_eavt_datoms ~avet ~tave datoms = function
   | Datascript_storage_protocol.Index_db (_, db, (module B)) ->
-      B.of_eavt_datoms ~avet datoms db
+      B.of_eavt_datoms ~avet ~tave datoms db
 
 let of_bulk index datoms = function
   | Datascript_storage_protocol.Index_db (tok, db, (module B)) ->
       pack (B.of_bulk index datoms db) tok (module B)
 
-let append_tx_data ~avet:is_avet datoms eavt aevt avet =
+let append_tx_data ~avet:is_avet ~tave datoms eavt aevt avet =
   let (Concrete (e, tok, (module B))) = project eavt in
   let check_same = function
     | Concrete (_, tok', _) when tok' = tok -> ()
@@ -104,7 +104,7 @@ let append_tx_data ~avet:is_avet datoms eavt aevt avet =
   in
   check_same (project aevt);
   check_same (project avet);
-  B.append_tx_data ~avet:is_avet datoms (B.db_of e);
+  B.append_tx_data ~avet:is_avet ~tave datoms (B.db_of e);
   eavt, aevt, avet
 
 let append_datoms datoms t =

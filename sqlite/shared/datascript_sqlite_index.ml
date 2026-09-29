@@ -57,13 +57,13 @@ let of_sorted_lists index_datoms db =
         Datascript_sqlite_db.put_index_entries_txn index db entries)
       index_datoms)
 
-let of_eavt_datoms ~avet eavt_datoms db =
+let of_eavt_datoms ~avet ~tave eavt_datoms db =
   if eavt_datoms = [] then ()
   else (
     let eavt = make Eavt db in
     let aevt = make Aevt db in
     let avet_index = make Avet db in
-    let tave = make Tave db in
+    let tave_index = make Tave db in
     let eavt_entries =
       eavt_datoms
       |> List.map (fun datom ->
@@ -79,11 +79,13 @@ let of_eavt_datoms ~avet eavt_datoms db =
       |> List.sort (fun (a, _) (b, _) -> String.compare a b)
     in
     let tave_entries =
-      eavt_datoms
-      |> List.map (fun datom ->
-        ( datom_key tave datom
-        , Datascript_index_codec.encode_index_value Tave datom ))
-      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+      if tave then
+        eavt_datoms
+        |> List.map (fun datom ->
+          ( datom_key tave_index datom
+          , Datascript_index_codec.encode_index_value Tave datom ))
+        |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+      else []
     in
     let avet_entries =
       eavt_datoms
@@ -101,10 +103,10 @@ let of_eavt_datoms ~avet eavt_datoms db =
 
 let of_bulk index datoms db = of_sorted_list index datoms db
 
-let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
+let append_tx_data ~avet:is_avet ~tave datoms eavt aevt avet_index =
   if datoms = [] then (eavt, aevt, avet_index)
   else (
-    let tave = make Tave eavt.db in
+    let tave_index = make Tave eavt.db in
     let eavt_entries =
       datoms
       |> List.map (fun datom ->
@@ -120,11 +122,13 @@ let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
       |> List.sort (fun (a, _) (b, _) -> String.compare a b)
     in
     let tave_entries =
-      datoms
-      |> List.map (fun datom ->
-        ( datom_key tave datom
-        , Datascript_index_codec.encode_index_value Tave datom ))
-      |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+      if tave then
+        datoms
+        |> List.map (fun datom ->
+          ( datom_key tave_index datom
+          , Datascript_index_codec.encode_index_value Tave datom ))
+        |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+      else []
     in
     let avet_entries =
       datoms

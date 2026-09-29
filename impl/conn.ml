@@ -8,8 +8,8 @@ type t =
   }
 
 type creation_context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
   }
 
@@ -32,8 +32,8 @@ type reset_context =
   }
 
 type context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
   ; restore : storage -> db option
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
@@ -62,8 +62,8 @@ let make ?storage db =
   in
   { db; listeners = []; next_listener_id = 0; storage }
 
-let create (context : creation_context) ?schema ?storage () =
-  let db = context.empty_db ?schema ?storage () in
+let create (context : creation_context) ?schema ?storage ?no_history () =
+  let db = context.empty_db ?schema ?storage ?no_history () in
   let db =
     match storage with
     | None -> db
@@ -80,8 +80,8 @@ let from_db (context : creation_context) db =
     context.store ~storage db;
     make ~storage db
 
-let from_datoms (context : creation_context) ?schema ?storage datoms =
-  from_db context (context.init_db ?schema ?storage datoms)
+let from_datoms (context : creation_context) ?schema ?storage ?no_history datoms =
+  from_db context (context.init_db ?schema ?storage ?no_history datoms)
 
 let db conn = conn.db
 

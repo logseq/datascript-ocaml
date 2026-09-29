@@ -389,6 +389,7 @@ let restore context storage =
       ; as_of_tx = None
       ; since_tx = None
       ; history = false
+      ; no_history = false
       ; filter_pred = None
       ; pending_datoms = []
       ; storage_ref = Some storage

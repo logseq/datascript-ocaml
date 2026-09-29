@@ -16,9 +16,9 @@ let of_eavt_datoms = Datascript_sqlite_index.of_eavt_datoms
 let of_bulk = Datascript_sqlite_index.of_bulk
 let append_datoms = Datascript_sqlite_index.append_datoms
 
-let append_tx_data ~avet datoms db =
+let append_tx_data ~avet ~tave datoms db =
   ignore
-    (Datascript_sqlite_index.append_tx_data ~avet datoms
+    (Datascript_sqlite_index.append_tx_data ~avet ~tave datoms
        (Datascript_sqlite_index.empty Eavt db)
        (Datascript_sqlite_index.empty Aevt db)
        (Datascript_sqlite_index.empty Avet db))

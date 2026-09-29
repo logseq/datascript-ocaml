@@ -31,7 +31,7 @@ type storage_index_db =
 (** Callback bundle for a pluggable storage backend (LMDB file, SQLite, PostgreSQL, ...). *)
 type storage_backend = {
   kind : storage_kind
-  ; restore_meta : unit -> schema * entity_id * tx * datom list
+  ; restore_meta : unit -> schema * entity_id * tx * datom list * bool
   ; store_meta : db -> unit
   ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit

@@ -199,7 +199,8 @@ let flush_pending_datoms db =
     let started = Platform.now_seconds () in
     let avet attr = Schema.schema_attr_is_avet_accessible db.schema attr in
     let eavt_index, aevt_index, avet_index =
-      Index.append_tx_data ~avet pending db.eavt_index db.aevt_index db.avet_index
+      Index.append_tx_data ~avet ~tave:(not db.no_history) pending
+        db.eavt_index db.aevt_index db.avet_index
     in
     let elapsed_ms = (Platform.now_seconds () -. started) *. 1000.0 in
     if elapsed_ms >= 4.0 then
@@ -261,6 +262,7 @@ let set_indexes_from_datoms db datoms =
   in
   Index.of_eavt_datoms
     ~avet:(Schema.schema_attr_is_avet_accessible db.schema)
+    ~tave:(not db.no_history)
     eavt_datoms
     lmdb;
   let eavt_index = Index.empty Eavt lmdb
@@ -321,7 +323,8 @@ let refresh_indexes_with_added_datoms db added_datoms =
           (fun d -> Schema.schema_attr_is_avet_accessible db.schema d.a)
           added_datoms
           db.avet_index
-    ; tave_index = add_datoms_to_index (fun _ -> true) added_datoms db.tave_index
+    ; tave_index =
+        add_datoms_to_index (fun _ -> not db.no_history) added_datoms db.tave_index
     ; duplicate_datoms = db.duplicate_datoms
     ; duplicate_aevt_datoms = db.duplicate_aevt_datoms
     ; duplicate_avet_datoms = db.duplicate_avet_datoms
@@ -370,7 +373,8 @@ let refresh_indexes_with_tx_data db tx_data =
     if indexes_on_storage db then
       let avet attr = Schema.schema_attr_is_avet_accessible db.schema attr in
       let eavt_index, aevt_index, avet_index =
-        Index.append_tx_data ~avet tx_data db.eavt_index db.aevt_index db.avet_index
+        Index.append_tx_data ~avet ~tave:(not db.no_history) tx_data
+          db.eavt_index db.aevt_index db.avet_index
       in
       { db with eavt_index; aevt_index; avet_index; max_datom_e }
       |> invalidate_attr_tables_for_datoms tx_data
@@ -468,7 +472,7 @@ let storage_ref_of ?storage auto_storage_ref =
   | Some attached_storage -> Some attached_storage
   | None -> auto_storage_ref
 
-let empty_db context ?(schema = []) ?storage () =
+let empty_db context ?(schema = []) ?storage ?(no_history = false) () =
   let schema = Schema.validate_schema schema in
   let index_db, auto_storage_ref = Index.create_index_db storage in
   { db_uid = context.next_db_uid ()
@@ -493,15 +497,17 @@ let empty_db context ?(schema = []) ?storage () =
   ; as_of_tx = None
   ; since_tx = None
   ; history = false
+  ; no_history
   ; filter_pred = None
   ; pending_datoms = []
   ; storage_ref = storage_ref_of ?storage auto_storage_ref
   ; tx_fns = []
   }
 
-let empty context db = empty_db context ~schema:db.schema ?storage:db.storage_ref ()
+let empty context db =
+  empty_db context ~schema:db.schema ?storage:db.storage_ref ~no_history:db.no_history ()
 
-let init_db context ?(schema = []) ?storage datoms =
+let init_db context ?(schema = []) ?storage ?(no_history = false) datoms =
   let schema = Schema.validate_schema schema in
   let datoms = List.map (normalize_datom_for_schema schema) datoms in
   let max_eid =
@@ -531,6 +537,7 @@ let init_db context ?(schema = []) ?storage datoms =
   ; as_of_tx = None
   ; since_tx = None
   ; history = false
+  ; no_history
   ; filter_pred = None
   ; pending_datoms = []
   ; storage_ref = storage_ref_of ?storage auto_storage_ref

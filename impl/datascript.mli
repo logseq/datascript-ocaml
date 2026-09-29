@@ -79,8 +79,8 @@ module Conn : sig
   type t
 
   type creation_context =
-    { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-    ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+    { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+    ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
     ; store : ?storage:storage -> db -> unit
     }
 
@@ -103,9 +103,9 @@ module Conn : sig
     ; snapshot_db : db -> db
     }
 
-  val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t
+  val create : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> t
   val from_db : creation_context -> db -> t
-  val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> datom list -> t
+  val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> t
   val db : t -> db
   val is_conn : t -> bool
   val listen : t -> string -> (tx_report -> unit) -> string
@@ -406,10 +406,10 @@ end
 val tx0 : tx
 val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
 val is_datom : datom -> bool
-val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
+val empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
 val empty : db -> db
 val is_db : db -> bool
-val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+val init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
 val refresh_db_indexes : db -> db
 val filter : db -> (db -> datom -> bool) -> db
 val is_filtered : db -> bool
@@ -550,9 +550,9 @@ val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
 val squuid : ?msec:int64 -> unit -> value
 val squuid_time_millis : value -> int64
-val create_conn : ?schema:schema -> ?storage:storage -> unit -> conn
+val create_conn : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> conn
 val conn_from_db : db -> conn
-val conn_from_datoms : ?schema:schema -> ?storage:storage -> datom list -> conn
+val conn_from_datoms : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> conn
 val restore_conn : storage -> conn option
 val conn_db : conn -> db
 val db : conn -> db

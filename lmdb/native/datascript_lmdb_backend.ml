@@ -16,9 +16,9 @@ let of_eavt_datoms = Datascript_lmdb_index.of_eavt_datoms
 let of_bulk = Datascript_lmdb_index.of_bulk
 let append_datoms = Datascript_lmdb_index.append_datoms
 
-let append_tx_data ~avet datoms db =
+let append_tx_data ~avet ~tave datoms db =
   ignore
-    (Datascript_lmdb_index.append_tx_data ~avet datoms
+    (Datascript_lmdb_index.append_tx_data ~avet ~tave datoms
        (Datascript_lmdb_index.empty Eavt db)
        (Datascript_lmdb_index.empty Aevt db)
        (Datascript_lmdb_index.empty Avet db))

@@ -3,8 +3,8 @@ open Datascript_types
 type t
 
 type creation_context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
   }
 
@@ -27,8 +27,8 @@ type reset_context =
   }
 
 type context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
   ; restore : storage -> db option
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
@@ -36,9 +36,9 @@ type context =
   ; with_schema : db -> schema -> db
   }
 
-val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t
+val create : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> t
 val from_db : creation_context -> db -> t
-val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> datom list -> t
+val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> t
 val db : t -> db
 val is_conn : t -> bool
 val listen : t -> string -> (tx_report -> unit) -> string

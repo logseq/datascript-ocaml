@@ -56,15 +56,15 @@ let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
 let refresh_db_indexes_with_removed_datoms = Db_impl.refresh_indexes_with_removed_datoms
 let snapshot_db = Db_impl.snapshot_db
 
-let empty_db ?(schema = []) ?storage () =
-  Db_impl.empty_db db_core_context ~schema ?storage ()
+let empty_db ?(schema = []) ?storage ?no_history () =
+  Db_impl.empty_db db_core_context ~schema ?storage ?no_history ()
 
 let empty db = Db_impl.empty db_core_context db
 
 let warm_query_parser = ref (fun _db -> ())
 
-let init_db ?(schema = []) ?storage datoms =
-  let db = Db_impl.init_db db_core_context ~schema ?storage datoms in
+let init_db ?(schema = []) ?storage ?no_history datoms =
+  let db = Db_impl.init_db db_core_context ~schema ?storage ?no_history datoms in
   !warm_query_parser db;
   db
 
@@ -129,14 +129,14 @@ let collect_garbage = Storage.collect_garbage
 let conn_creation_context : Conn.creation_context =
   { empty_db; init_db; store }
 
-let create_conn ?schema ?storage () =
-  Conn.create conn_creation_context ?schema ?storage ()
+let create_conn ?schema ?storage ?no_history () =
+  Conn.create conn_creation_context ?schema ?storage ?no_history ()
 
 let conn_from_db db =
   Conn.from_db conn_creation_context db
 
-let conn_from_datoms ?schema ?storage datoms =
-  Conn.from_datoms conn_creation_context ?schema ?storage datoms
+let conn_from_datoms ?schema ?storage ?no_history datoms =
+  Conn.from_datoms conn_creation_context ?schema ?storage ?no_history datoms
 
 let conn_db = Conn.db
 

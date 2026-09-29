@@ -4,6 +4,7 @@ let meta_schema_key = "schema"
 let meta_max_eid_key = "max_eid"
 let meta_max_tx_key = "max_tx"
 let meta_duplicates_key = "duplicate_datoms"
+let meta_no_history_key = "no_history"
 
 let encode_int value =
   Datascript_index_codec.encode_datoms
@@ -21,7 +22,8 @@ let store_meta meta_set db =
   meta_set meta_schema_key (Datascript_index_codec.encode_schema db.schema);
   meta_set meta_max_eid_key (encode_int db.max_eid);
   meta_set meta_max_tx_key (encode_int db.max_tx);
-  meta_set meta_duplicates_key (Datascript_index_codec.encode_datoms db.duplicate_datoms)
+  meta_set meta_duplicates_key (Datascript_index_codec.encode_datoms db.duplicate_datoms);
+  meta_set meta_no_history_key (encode_int (if db.no_history then 1 else 0))
 
 let restore_meta meta_get =
   let schema =
@@ -44,4 +46,9 @@ let restore_meta meta_get =
     | None -> []
     | Some bytes -> Datascript_index_codec.decode_datoms bytes
   in
-  schema, max_eid, max_tx, duplicate_datoms
+  let no_history =
+    match meta_get meta_no_history_key with
+    | None -> false
+    | Some bytes -> decode_int bytes <> 0
+  in
+  schema, max_eid, max_tx, duplicate_datoms, no_history

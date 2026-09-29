@@ -28,10 +28,10 @@ module type S = sig
   val db_of : t -> db
   val of_sorted_list : index -> datom list -> db -> t
   val of_sorted_lists : (index * datom list) list -> db -> unit
-  val of_eavt_datoms : avet:(attr -> bool) -> datom list -> db -> unit
+  val of_eavt_datoms : avet:(attr -> bool) -> tave:bool -> datom list -> db -> unit
   val of_bulk : index -> datom list -> db -> t
   val append_datoms : datom list -> t -> t
-  val append_tx_data : avet:(attr -> bool) -> datom list -> db -> unit
+  val append_tx_data : avet:(attr -> bool) -> tave:bool -> datom list -> db -> unit
   val add : datom -> t -> t
   val remove : datom -> t -> t
   val remove_datoms : datom list -> t -> t

@@ -38,9 +38,9 @@ val set_tave_retention_days : int -> unit
 val get_tave_retention_days : unit -> int
 val prune_tave_to_retention : db -> unit
 val with_datoms : db -> datom list -> db
-val empty_db : core_context -> ?schema:schema -> ?storage:storage -> unit -> db
+val empty_db : core_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
 val empty : core_context -> db -> db
-val init_db : core_context -> ?schema:schema -> ?storage:storage -> datom list -> db
+val init_db : core_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
 val visible_datoms : db -> datom list
 val is_filtered : db -> bool
 val unfiltered : core_context -> db -> db

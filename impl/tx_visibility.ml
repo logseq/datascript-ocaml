@@ -50,7 +50,7 @@ let datoms_filter datoms =
   flush_previous ();
   List.rev !result
 
-let schema_has_no_history schema attr =
+let schema_has_no_history (schema : schema) attr =
   match List.assoc_opt attr schema with
   | Some { no_history = true; _ } -> true
   | _ -> false

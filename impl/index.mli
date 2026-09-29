@@ -20,10 +20,10 @@ val load_indexes_from_storage : storage -> index_db -> unit
 val empty : index -> index_db -> t
 val of_sorted_list : index -> datom list -> index_db -> t
 val of_sorted_lists : (index * datom list) list -> index_db -> unit
-val of_eavt_datoms : avet:(string -> bool) -> datom list -> index_db -> unit
+val of_eavt_datoms : avet:(string -> bool) -> tave:bool -> datom list -> index_db -> unit
 val of_bulk : index -> datom list -> index_db -> t
 val append_datoms : datom list -> t -> t
-val append_tx_data : avet:(attr -> bool) -> datom list -> t -> t -> t -> t * t * t
+val append_tx_data : avet:(attr -> bool) -> tave:bool -> datom list -> t -> t -> t -> t * t * t
 val add : datom -> t -> t
 val remove : datom -> t -> t
 val lookup : t -> datom -> datom option

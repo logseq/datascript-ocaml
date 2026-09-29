@@ -144,6 +144,7 @@ and db =
   ; as_of_tx : tx option
   ; since_tx : tx option
   ; history : bool
+  ; no_history : bool
   ; filter_pred : (datom -> bool) option
   ; pending_datoms : datom list
   ; storage_ref : storage option

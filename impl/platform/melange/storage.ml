@@ -13,14 +13,14 @@ let store ?storage db =
   match storage, db.storage_ref with
   | Some target_storage, _ | None, Some target_storage ->
       if not (Index.same_storage_db target_storage (Index.db_of db.eavt_index)) then (
-        let _, _, stored_max_tx, _ = Datascript_storage_protocol.restore_meta target_storage in
+        let _, _, stored_max_tx, _, _ = Datascript_storage_protocol.restore_meta target_storage in
         Index.sync_indexes_to_storage ~since_tx:stored_max_tx db.eavt_index db.aevt_index db.avet_index
           target_storage);
       Datascript_storage_protocol.store_db target_storage db
   | None, None -> invalid_arg "db has no attached storage"
 
 let restore_root_snapshot storage =
-  let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
+  let schema, max_eid, max_tx, duplicate_datoms, _ = Datascript_storage_protocol.restore_meta storage in
   let index_db, _ = Index.create_index_db (Some storage) in
   Index.load_indexes_from_storage storage index_db;
   Some
@@ -31,7 +31,9 @@ let restore_root_snapshot storage =
     }
 
 let restore context storage =
-  let schema, max_eid, max_tx, duplicate_datoms = Datascript_storage_protocol.restore_meta storage in
+  let schema, max_eid, max_tx, duplicate_datoms, no_history =
+    Datascript_storage_protocol.restore_meta storage
+  in
   let schema = Schema.validate_schema schema in
   let index_db, _ = Index.create_index_db (Some storage) in
   Index.load_indexes_from_storage storage index_db;
@@ -84,6 +86,7 @@ let restore context storage =
     ; as_of_tx = None
     ; since_tx = None
     ; history = false
+    ; no_history
     ; filter_pred = None
     ; pending_datoms = []
     ; storage_ref = Some storage

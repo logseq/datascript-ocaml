@@ -110,9 +110,9 @@ let of_sorted_lists index_datoms = function
   | Datascript_storage_protocol.Lmdb db -> Datascript_lmdb_index.of_sorted_lists index_datoms db
   | Datascript_storage_protocol.Sqlite db -> Datascript_sqlite_index.of_sorted_lists index_datoms db
 
-let of_eavt_datoms ~avet datoms = function
-  | Datascript_storage_protocol.Lmdb db -> Datascript_lmdb_index.of_eavt_datoms ~avet datoms db
-  | Datascript_storage_protocol.Sqlite db -> Datascript_sqlite_index.of_eavt_datoms ~avet datoms db
+let of_eavt_datoms ~avet ~tave datoms = function
+  | Datascript_storage_protocol.Lmdb db -> Datascript_lmdb_index.of_eavt_datoms ~avet ~tave datoms db
+  | Datascript_storage_protocol.Sqlite db -> Datascript_sqlite_index.of_eavt_datoms ~avet ~tave datoms db
 
 let of_bulk index datoms = function
   | Datascript_storage_protocol.Lmdb db ->
@@ -120,16 +120,16 @@ let of_bulk index datoms = function
   | Datascript_storage_protocol.Sqlite db ->
       Datascript_sqlite_index.of_bulk index datoms db |> fun i -> inject (Sqlite i)
 
-let append_tx_data ~avet:is_avet datoms eavt_index aevt_index avet_index =
+let append_tx_data ~avet:is_avet ~tave datoms eavt_index aevt_index avet_index =
   match project eavt_index, project aevt_index, project avet_index with
   | Lmdb eavt, Lmdb aevt, Lmdb avet_index' ->
       let eavt, aevt, avet_index' =
-        Datascript_lmdb_index.append_tx_data ~avet:is_avet datoms eavt aevt avet_index'
+        Datascript_lmdb_index.append_tx_data ~avet:is_avet ~tave datoms eavt aevt avet_index'
       in
       inject (Lmdb eavt), inject (Lmdb aevt), inject (Lmdb avet_index')
   | Sqlite eavt, Sqlite aevt, Sqlite avet_index' ->
       let eavt, aevt, avet_index' =
-        Datascript_sqlite_index.append_tx_data ~avet:is_avet datoms eavt aevt avet_index'
+        Datascript_sqlite_index.append_tx_data ~avet:is_avet ~tave datoms eavt aevt avet_index'
       in
       inject (Sqlite eavt), inject (Sqlite aevt), inject (Sqlite avet_index')
   | _ -> invalid_arg "Index.append_tx_data: mixed LMDB/SQLite index backends"

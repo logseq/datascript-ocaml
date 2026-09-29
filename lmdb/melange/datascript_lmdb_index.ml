@@ -41,34 +41,34 @@ let of_sorted_lists index_datoms db =
         List.iter (put_datom_txn txn t) datoms)
       index_datoms)
 
-let of_eavt_datoms ~avet eavt_datoms db =
+let of_eavt_datoms ~avet ~tave eavt_datoms db =
   if eavt_datoms = [] then ()
   else (
     let eavt = make Eavt db in
     let aevt = make Aevt db in
     let avet_index = make Avet db in
-    let tave = make Tave db in
+    let tave_index = make Tave db in
     Datascript_lmdb_db.with_write_txn db (fun txn ->
       List.iter
         (fun datom ->
           put_datom_txn txn eavt datom;
           put_datom_txn txn aevt datom;
-          put_datom_txn txn tave datom;
+          if tave then put_datom_txn txn tave_index datom;
           if avet datom.a then put_datom_txn txn avet_index datom)
         eavt_datoms))
 
 let of_bulk index datoms db = of_sorted_list index datoms db
 
-let append_tx_data ~avet:is_avet datoms eavt aevt avet_index =
+let append_tx_data ~avet:is_avet ~tave datoms eavt aevt avet_index =
   if datoms = [] then (eavt, aevt, avet_index)
   else (
-    let tave = make Tave eavt.db in
+    let tave_index = make Tave eavt.db in
     Datascript_lmdb_db.with_write_txn eavt.db (fun txn ->
       List.iter
         (fun datom ->
           put_datom_txn txn eavt datom;
           put_datom_txn txn aevt datom;
-          put_datom_txn txn tave datom;
+          if tave then put_datom_txn txn tave_index datom;
           if is_avet datom.a then put_datom_txn txn avet_index datom)
         datoms);
     (eavt, aevt, avet_index))

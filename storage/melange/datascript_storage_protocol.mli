@@ -17,7 +17,7 @@ type storage_index_db =
 
 type storage_backend = {
   kind : storage_kind
-  ; restore_meta : unit -> schema * entity_id * tx * datom list
+  ; restore_meta : unit -> schema * entity_id * tx * datom list * bool
   ; store_meta : db -> unit
   ; sync_indexes_to_storage : since_tx:tx -> unit
   ; sync_removals_to_storage : datom list -> unit
@@ -30,7 +30,7 @@ val ensure_live : storage -> unit
 val memory_storage : unit -> storage
 val benchmark_memory_storage : unit -> storage
 val register_backend : storage_backend -> ?check_live:(unit -> unit) -> unit -> storage
-val restore_meta : storage -> schema * entity_id * tx * datom list
+val restore_meta : storage -> schema * entity_id * tx * datom list * bool
 val store_db : storage -> db -> unit
 val sync_indexes_to_storage : since_tx:tx -> storage -> unit
 val sync_removals_to_storage : datom list -> storage -> unit
