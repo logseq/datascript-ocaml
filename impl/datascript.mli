@@ -111,6 +111,8 @@ module Conn : sig
   val from_db : creation_context -> db -> t
   val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> datom list -> t
   val db : t -> db
+  val update_db : t -> (db -> db) -> unit
+  val storage_tail : t -> datom list list
   val is_conn : t -> bool
   val listen : t -> string -> (tx_report -> unit) -> string
   val listen_auto : t -> (tx_report -> unit) -> string

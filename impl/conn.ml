@@ -95,6 +95,12 @@ let from_datoms (context : creation_context) ?schema ?storage datoms =
 
 let db conn = conn.db
 
+(* cljs (swap! conn assoc <key> <v>) — in-place db update with no
+   store/notify side effects, for bookkeeping fields like :max-tx. *)
+let update_db conn f = conn.db <- f conn.db
+
+let storage_tail conn = conn.storage_tail
+
 let is_conn (_ : t) = true
 
 let listen conn key callback =
