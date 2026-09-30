@@ -122,7 +122,7 @@ let run_size size =
       Datascript_sqlite.close session;
       remove_if_exists db_path)
     (fun () ->
-      let storage = Datascript_sqlite.storage session in
+      let storage = storage_of_handle (Datascript_sqlite.storage session) in
       let persistent_build, persistent_db =
         time "snapshot-build-and-store" (fun () ->
             let db = db_with tx (empty_db ~schema ~storage ()) in
@@ -188,7 +188,7 @@ let run_size size =
       Datascript_sqlite.close session;
       remove_if_exists conn_db_path)
     (fun () ->
-      let storage = Datascript_sqlite.storage session in
+      let storage = storage_of_handle (Datascript_sqlite.storage session) in
       let conn_build, conn =
         time "conn-build" (fun () ->
             let conn = create_conn ~schema ~storage () in

@@ -7,7 +7,6 @@
  (name datascript_ocaml)
  (depends
   (ocaml (>= 5.1.1))
-  (persistent_sorted_set_ocaml (= dev))
   melange))
 
 (package
@@ -15,31 +14,25 @@
  (depends
   (ocaml (>= 5.1.1))
   (datascript_ocaml (= :version))
-  (persistent_sorted_set_ocaml (= dev))
+  lmdb
   sqlite3
+  alcotest
   (melange-transit-native (= 0.1.2))
   yojson))
 
 (package
- (name datascript-ocaml-jsoo)
- (depends
-  (ocaml (>= 5.1.1))
-  (datascript_ocaml (= :version))
-  js_of_ocaml))
+ (name datascript-ocaml-native-lmdb))
+
+(package
+ (name datascript-ocaml-native-sqlite))
 
 (package
  (name datascript-ocaml-melange)
  (depends
   (ocaml (>= 5.1.1))
   (datascript_ocaml (= :version))
-  (persistent_sorted_set_ocaml (= dev))
   melange
   (melange-transit-melange (= 0.1.2))))
 
 (package
- (name datascript-ocaml-lg)
- (synopsis "Typed LG application APIs for DataScript")
- (depends
-  (ocaml (>= 5.1.1))
-  datascript_ocaml
-  lg))
+ (name datascript-ocaml-melange-sqlite))

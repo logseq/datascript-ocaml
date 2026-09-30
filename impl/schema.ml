@@ -57,7 +57,7 @@ let schema_attr_is_avet_accessible schema attr =
   | Some { indexed = true; _ } -> true
   | _ -> false
 
-let schema_has_no_history schema attr =
+let schema_has_no_history (schema : schema) attr =
   match List.assoc_opt attr schema with
   | Some { no_history = true; _ } -> true
   | _ -> false

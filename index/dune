@@ -1,0 +1,7 @@
+(library
+ (name datascript_index_backend)
+ (public_name datascript_ocaml.index-backend)
+ (wrapped false)
+ (modes native melange)
+ (modules_without_implementation datascript_index_backend)
+ (libraries datascript_types))

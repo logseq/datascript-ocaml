@@ -406,9 +406,9 @@ opam exec -- dune runtest
 Required benchmark checks for query work:
 
 ```sh
-opam exec -- dune build bench/bench_ocaml.exe bench/bench_ocaml.bc.js
+opam exec -- dune build bench/bench_ocaml.exe bench/bench_ocaml_js.bc.js
 _build/default/bench/bench_ocaml.exe --size 5000 --warmup-ms 200 --sample-ms 400 --samples 5
-node _build/default/bench/bench_ocaml.bc.js --size 5000 --warmup-ms 200 --sample-ms 400 --samples 5
+node _build/default/bench/bench_ocaml_js.bc.js --size 5000 --warmup-ms 200 --sample-ms 400 --samples 5
 UPSTREAM_DATASCRIPT_JS=_deps/datascript/release-js/datascript.js \
   node bench/bench_upstream.js --size 5000 --warmup-ms 200 --sample-ms 400 --samples 5
 ```

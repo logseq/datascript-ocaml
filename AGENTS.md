@@ -1,5 +1,6 @@
 - Code and comments should be written in English.
 - Solve root causes, not workarounds.
+- When debugging a problem, do not guess and patch blindly. Add targeted debug logging (or other runtime evidence), identify the root cause, then implement the fix.
 - Prefer simple implementations over complex ones.
 - All observable behavior should match upstream DataScript.
 - Implementation details should match upstream DataScript unless a divergence is explicitly requested and documented.

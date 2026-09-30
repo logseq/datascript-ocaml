@@ -3,8 +3,8 @@ open Datascript_types
 type t
 
 type creation_context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
   }
 
@@ -13,41 +13,32 @@ type schema_context =
   ; with_schema : db -> schema -> db
   }
 
-type restore_context =
-  { restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  }
+type restore_context = { restore : storage -> db option }
 
 type transact_context =
   { store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : db -> int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
 type reset_context =
   { store : ?storage:storage -> db -> unit
   ; datoms : db -> datom list
+  ; snapshot_db : db -> db
   }
 
 type context =
-  { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-  ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
+  { empty_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> db
+  ; init_db : ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> db
   ; store : ?storage:storage -> db -> unit
-  ; store_tail : storage -> datom list list -> unit
   ; restore : storage -> db option
-  ; restore_tail_groups : storage -> datom list list
-  ; storage_tail_datom_count : datom list list -> int
-  ; storage_tail_compaction_threshold : db -> int
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db
   }
 
-val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t
+val create : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> unit -> t
 val from_db : creation_context -> db -> t
-val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> datom list -> t
+val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> ?no_history:bool -> datom list -> t
 val db : t -> db
 val update_db : t -> (db -> db) -> unit
 val storage_tail : t -> datom list list

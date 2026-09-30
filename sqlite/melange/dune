@@ -1,0 +1,42 @@
+(include_subdirs no)
+
+(copy_files# "../shared/datascript_sqlite_index.ml")
+(copy_files# "../shared/datascript_sqlite_index.mli")
+(copy_files# "../shared/datascript_storage_sqlite.ml")
+(copy_files# "../shared/datascript_storage_sqlite_plugin.ml")
+(copy_files# "../shared/datascript_storage_sqlite_plugin.mli")
+(copy_files# "../shared/datascript_sqlite.ml")
+
+(library
+ (name sqlite_db_melange)
+ (public_name datascript-ocaml-melange.sqlite-db)
+ (wrapped false)
+ (modes melange)
+ (modules datascript_sqlite_db)
+ (libraries datascript_types))
+
+(library
+ (name sqlite_index_melange)
+ (public_name datascript-ocaml-melange.sqlite-index)
+ (wrapped false)
+ (modes melange)
+ (modules datascript_sqlite_index)
+ (libraries datascript_ocaml.index-codec sqlite_db_melange datascript_types))
+
+(library
+ (name datascript_sqlite_melange)
+ (public_name datascript-ocaml-melange-sqlite)
+ (wrapped false)
+ (modes melange)
+ (preprocess
+  (pps melange.ppx))
+ (modules
+  datascript_sqlite
+  datascript_storage_sqlite
+  datascript_storage_sqlite_plugin
+  datascript_sqlite_js)
+ (libraries
+  datascript-ocaml-melange
+  datascript-ocaml-melange.storage
+  datascript-ocaml-melange.sqlite-db
+  melange.js))

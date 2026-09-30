@@ -7,11 +7,7 @@ license: "MIT"
 depends: [
   "ocaml" {>= "5.1.1"}
   "dune" {>= "3.17"}
-  "persistent_sorted_set_ocaml" {= "dev"}
   "melange"
-]
-pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]

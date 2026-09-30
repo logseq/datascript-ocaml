@@ -2,6 +2,7 @@ open Datascript_types
 
 type context =
   { datoms_by_entity : db -> entity_id -> datom Seq.t
+  ; datoms_by_entity_attr : db -> entity_id -> attr -> datom Seq.t
   ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
   ; all_datoms : db -> datom Seq.t
   ; compare_value : value -> value -> int
@@ -125,10 +126,11 @@ let entity context db entity_ref =
   match context.entity_id_of_ref db entity_ref with
   | None -> None
   | Some entity_id ->
-    if entity_has_forward_attrs context db entity_id then
-      Some (lazy_entity context db entity_id)
-    else
-      None
+    (* Prefer cached/full forward scan over a separate existence seek so hydrate
+       paths pay one EAVT e-prefix read. *)
+    match raw_forward_entity_attrs context db entity_id with
+    | [] -> None
+    | _ -> Some (lazy_entity context db entity_id)
 
 let entity_attr_raw (entity : entity) = function
   | "db/id" -> Some (One_value (Int64 (Int64.of_int entity.id)))
