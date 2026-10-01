@@ -47,6 +47,21 @@ jobs:
           cli: latest
           lein: latest
 
+      # `lein cljsbuild` (upstream bundle build) and `clojure -M:cljs`
+      # (cross-runtime fuzz runner inside `dune runtest`) otherwise
+      # re-download their Maven/git dependencies on every cold run.
+      - name: Cache Clojure dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2
+            ~/.gitlibs
+            ~/.clojure
+            ~/.lein
+          key: clojure-deps-${{ runner.os }}-${{ env.DATASCRIPT_UPSTREAM_COMMIT }}
+          restore-keys: |
+            clojure-deps-${{ runner.os }}-
+
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev pkg-config
 
