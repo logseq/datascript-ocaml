@@ -24,11 +24,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # pin-depends float on `#main`: resolve their current commits so the
+      # opam cache key changes when a pinned repo moves. Without this the
+      # restored switch is always stale (its pins predate upstream HEAD),
+      # `opam install` rebuilds them on every run, and the rebuilt result is
+      # never cached because the save step is skipped on cache hits.
+      - name: Resolve pinned dependency commits
+        id: pins
+        run: |
+          export GIT_TERMINAL_PROMPT=0
+          sha=$(
+            grep -hoE 'git\+[^"]+#[^"]+' ./*.opam | sort -u | while IFS= read -r pin; do
+              repo="${pin%%#*}"; ref="${pin##*#}"
+              git ls-remote "${repo#git+}" "$ref" || echo "unresolved $pin"
+            done | shasum | awk '{print $1}'
+          )
+          echo "resolved pins sha: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore opam switch cache
+        id: opam-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.opam
+          key: ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-
+
+      # Any restore (exact or restore-keys fallback) yields a complete opam
+      # root + switch; only the opam binary is needed. This skips
+      # ocaml/setup-ocaml, whose unconditional `opam update` costs ~1m30s on
+      # cache hits.
+      - name: Check for restored opam environment
+        id: opam-env
+        run: |
+          if [ -f "$HOME/.opam/config" ]; then
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install opam binary
+        if: steps.opam-env.outputs.restored == 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL https://github.com/ocaml/opam/releases/download/2.6.0/opam-2.6.0-x86_64-linux -o ~/.local/bin/opam
+          chmod +x ~/.local/bin/opam
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          switch="$(opam switch list --short | head -n1)"
+          echo "OPAMSWITCH=$switch" >> "$GITHUB_ENV"
+          eval "$(opam env --switch="$switch")"
+          opam --version && ocaml -version
+
       - name: Set up OCaml
+        if: steps.opam-env.outputs.restored != 'true'
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
-          dune-cache: true
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -65,17 +117,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev pkg-config
 
-      - name: Restore opam switch cache
-        id: opam-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.opam
-          key: ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-${{ hashFiles('*.opam') }}
-          restore-keys: |
-            ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-
-
+      # On an exact switch-cache hit this only verifies and re-fetches the
+      # (already matching) pins; on a partial restore it rebuilds just the
+      # moved pins; on a miss it installs everything. The retry covers a
+      # stale opam-repository snapshot in a restored root failing to resolve
+      # newly released versions.
       - name: Install OCaml dependencies
-        run: opam install . --deps-only --with-test -y
+        run: |
+          opam install . --deps-only --with-test -y || {
+            opam update -y
+            opam install . --deps-only --with-test -y
+          }
 
       - name: Save opam switch cache
         if: steps.opam-cache.outputs.cache-hit != 'true'
@@ -83,6 +135,20 @@ jobs:
         with:
           path: ~/.opam
           key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+
+      - name: Restore dune build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/dune
+          key: dune-cache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            dune-cache-${{ github.ref_name }}-
+            dune-cache-main-
+
+      - name: Enable dune shared cache
+        run: |
+          mkdir -p ~/.config/dune
+          printf '(lang dune 3.0)\n(cache enabled)\n' > ~/.config/dune/config
 
       - name: Cache upstream DataScript
         id: cache-upstream-datascript
@@ -122,3 +188,10 @@ jobs:
         env:
           UPSTREAM_DATASCRIPT_JS: ${{ github.workspace }}/_ci/datascript/release-js/datascript.js
         run: opam exec -- script/benchmark_vs_cljs.sh
+
+      - name: Save dune build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/dune
+          key: dune-cache-${{ github.ref_name }}-${{ github.sha }}
