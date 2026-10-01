@@ -462,7 +462,131 @@ let test_storage__test_restored_misordered_index () =
        [ 1, "a/b", String "one"; 1, "a/c", String "two" ]
        (datoms restored Eavt ~e:1 ()))
 
+module PSet = Persistent_sorted_set
+
+let count_fixture () =
+  let storage = memory_storage () in
+  let schema = [ "probe/indexed", indexed; "probe/plain", { indexed with indexed = false } ] in
+  let datoms = List.init 4096 (fun i ->
+    datom ~e:(i / 2 + 1)
+      ~a:(if i mod 2 = 0 then "probe/indexed" else "probe/plain")
+      ~v:(String (Printf.sprintf "v%04d" i)) ()) in
+  store ~storage (init_db ~schema datoms);
+  storage
+
+let index_counts db =
+  List.map PSet.count [ db.eavt_index; db.aevt_index; db.avet_index ]
+
+let assert_index_counts label expected db =
+  let actual = index_counts db in
+  if actual <> expected then
+    failf "%s: expected [%s], got [%s]" label
+      (String.concat ";" (List.map string_of_int expected))
+      (String.concat ";" (List.map string_of_int actual))
+
+let check_cached_counts label expected db reads =
+  reads := [];
+  assert_index_counts label expected db;
+  assert_index_counts (label ^ " repeated") expected db;
+  assert_equal_int (label ^ " does not read storage") 0 (List.length !reads)
+
+let map_storage_root storage f =
+  match storage.storage_restore "0" with
+  | Some (Storage_root root) -> storage.storage_store [ "0", Storage_root (f root) ]
+  | _ -> failwith "expected stored root"
+
+let test_storage__test_restore_keeps_snapshot_counts () =
+  let storage = count_fixture () in
+  (match storage.storage_restore "0" with
+   | Some (Storage_root root) ->
+     let counts = List.map (fun metadata -> (Option.get metadata).storage_index_count)
+       [ root.storage_eavt_metadata; root.storage_aevt_metadata; root.storage_avet_metadata ] in
+     if counts <> [4096;4096;2048] then failwith "root metadata count differs"
+   | _ -> failwith "expected root metadata");
+  let measured, reads = restore_counting_storage storage in
+  let restored = Option.get (restore measured) in
+  assert_equal_int "restore reads only root and tail" 2 (List.length !reads);
+  check_cached_counts "cold snapshot counts" [4096;4096;2048] restored reads;
+  let changed = db_with [ Add (Entity_id 2049, "probe/indexed", String "new") ] restored in
+  check_cached_counts "successful add count" [4097;4097;2049] changed reads;
+  let unchanged = db_with
+    [ Add (Entity_id 2049, "probe/indexed", String "new")
+    ; Retract (Entity_id 9999, "probe/indexed", Some (String "missing")) ] changed in
+  check_cached_counts "no-op counts" [4097;4097;2049] unchanged reads;
+  let removed = db_with
+    [ Retract (Entity_id 1, "probe/indexed", Some (String "v0000")) ] unchanged in
+  check_cached_counts "successful removal count" [4096;4096;2048] removed reads;
+  check_cached_counts "persistent original count" [4096;4096;2048] restored reads
+
+let test_storage__test_restore_counts_after_tail () =
+  let storage = count_fixture () in
+  store_tail storage
+    [ [ datom ~e:2049 ~a:"probe/indexed" ~v:(String "new") ~tx:(tx0 + 1) () ]
+    ; [ datom ~e:1 ~a:"probe/indexed" ~v:(String "v0000") ~added:false ~tx:(tx0 + 2) () ]
+    ];
+  let measured, reads = restore_counting_storage storage in
+  let restored = Option.get (restore measured) in
+  assert_int_at_most "tail replay does not scan all index nodes" 60 (List.length !reads);
+  check_cached_counts "tail applies to snapshot count exactly once" [4096;4096;2048] restored reads;
+  List.iter2 (fun index count ->
+    assert_equal_int "tail cached count agrees with datoms" count
+      (List.length (datoms restored index ())))
+    [Eavt;Aevt;Avet] [4096;4096;2048];
+  let conn = Option.get (restore_conn measured) in
+  check_cached_counts "restore_conn counts after tail" [4096;4096;2048] (conn_db conn) reads;
+  let tx = transact_conn conn [ Add (Entity_id 2050, "probe/indexed", String "later") ] in
+  check_cached_counts "incremental conn transaction count" [4097;4097;2049] tx.db_after reads;
+  store tx.db_after;
+  let restored_again = Option.get (restore measured) in
+  check_cached_counts "new snapshot count excludes cleared tail" [4097;4097;2049] restored_again reads
+
+let test_storage__test_empty_and_missing_count_metadata () =
+  let storage = memory_storage () in
+  store ~storage (empty_db ());
+  let measured, reads = restore_counting_storage storage in
+  let empty = Option.get (restore measured) in
+  check_cached_counts "empty snapshot count" [0;0;0] empty reads;
+  let changed = db_with [ Add (Entity_id 1, "plain", String "v") ] empty in
+  check_cached_counts "empty snapshot edited count" [1;1;0] changed reads;
+  let storage = count_fixture () in
+  map_storage_root storage (fun root -> {root with
+    storage_eavt_metadata = None; storage_aevt_metadata = None; storage_avet_metadata = None});
+  let measured, reads = restore_counting_storage storage in
+  let restored = Option.get (restore measured) in
+  assert_equal_int "missing metadata restore stays lazy" 2 (List.length !reads);
+  reads := [];
+  assert_index_counts "missing metadata falls back to actual count" [4096;4096;2048] restored;
+  if !reads = [] then failwith "missing metadata should load nodes for count";
+  let storage = count_fixture () in
+  map_storage_root storage (fun root -> {root with
+    storage_eavt_metadata = Some {storage_index_count = -1; storage_index_shift = 2}});
+  (match restore storage with
+   | exception Invalid_argument _ -> ()
+   | _ -> failwith "negative current snapshot count must be rejected")
+
+let test_storage__test_legacy_verification_ignores_stale_counts () =
+  let storage = memory_storage () in
+  let d1 = datom ~e:1 ~a:"name" ~v:(String "one") () in
+  let d2 = datom ~e:2 ~a:"name" ~v:(String "two") () in
+  let stale = Some { storage_index_count = 999; storage_index_shift = 0 } in
+  let root = { (legacy_storage_root ~version:0 ~eavt:"20" ~aevt:"20" ~avet:"20") with
+    storage_eavt_metadata = stale; storage_aevt_metadata = stale; storage_avet_metadata = stale } in
+  storage.storage_store ["20", Storage_node (PSet.Leaf [d1;d2]); "0", Storage_root root];
+  let measured, reads = restore_counting_storage storage in
+  let restored = Option.get (restore measured) in
+  check_cached_counts "verified legacy count replaces stale metadata" [2;2;2] restored reads;
+  let d3 = datom ~e:1 ~a:"a.x/b" ~v:(String "B") () in
+  let d4 = datom ~e:1 ~a:"a/c" ~v:(String "C") () in
+  storage.storage_store ["20", Storage_node (PSet.Leaf [d3;d4])];
+  let rebuilt = Option.get (restore measured) in
+  check_cached_counts "rebuilt index uses actual count" [2;2;2] rebuilt reads;
+  assert_equal_int "rebuilt count matches actual contents" 2 (List.length (datoms rebuilt Eavt ()))
+
 let () =
+  test_storage__test_restore_keeps_snapshot_counts ();
+  test_storage__test_restore_counts_after_tail ();
+  test_storage__test_empty_and_missing_count_metadata ();
+  test_storage__test_legacy_verification_ignores_stale_counts ();
   test_storage__test_basics ();
   test_storage__test_upstream_wire_addresses ();
   test_storage__test_file_storage ();

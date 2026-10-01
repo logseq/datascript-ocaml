@@ -32,3 +32,19 @@ let () =
   match datoms db Eavt ~e:1 ~a:"touched" () with
   | [ { v = Bool true; _ } ] -> ()
   | _ -> failwith "JavaScript smoke transaction function returned an unexpected result"
+
+let () =
+  let base = memory_storage () in
+  let reads = ref 0 in
+  let storage = { base with storage_restore = (fun address ->
+    incr reads; base.storage_restore address) } in
+  let schema = schema_of_edn_string "{:name {:db/index true}}" in
+  let db = init_db ~schema [datom ~e:1 ~a:"name" ~v:(String "v") ()] in
+  store ~storage db;
+  let restored = Option.get (restore storage) in
+  reads := 0;
+  List.iter (fun set ->
+    if Persistent_sorted_set.count set <> 1 || Persistent_sorted_set.count set <> 1 then
+      failwith "restored smoke count differs")
+    [restored.eavt_index;restored.aevt_index;restored.avet_index];
+  if !reads <> 0 then failwith "restored smoke count loaded storage"
