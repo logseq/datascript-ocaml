@@ -110,37 +110,39 @@ let split_keyword keyword =
     let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
     namespace, name
 
-(* compare [off..off+len) slices of two strings without allocation *)
-let compare_slice (s : string) (soff : int) (slen : int) (t : string)
-    (toff : int) (tlen : int) : int =
-  let rec loop i =
-    if i >= slen && i >= tlen then 0
-    else if i >= slen then -1
-    else if i >= tlen then 1
-    else
-      let c = Char.compare s.[soff + i] t.[toff + i] in
-      if c <> 0 then c else loop (i + 1)
-  in
-  loop 0
-
 (* Upstream compares attr keywords with compare-keywords: no-namespace
    attrs sort first, otherwise (ns, name) pairwise.  Compare with a
    plain string sort here would order "logseq.property.class/extends"
    before "logseq.property/built-in?" ('.' < '/'), which both diverges
    from the runtime index order upstream and writes a leaf order the
    CLJS storage reader cannot binary-search.
-   Slice-wise comparison keeps the same order without allocating the
-   (ns, name) pair for every index compare. *)
+
+   The (ns, name) pairwise order equals a byte compare on a normalized
+   key: replace the last '/' by '\x00' (or prepend '\x00' when the attr
+   has no '/').  '\x00' sorts below every byte in an attr and below '/',
+   so a shorter ns that is a prefix of the other always loses to it, and
+   a missing ns sorts first — exactly the pairwise order.  Keys are
+   memoized by attr content since index comparators see the same small
+   set of attrs over and over. *)
+let attr_key_tbl : (attr, attr) Hashtbl.t = Hashtbl.create 256
+
+let attr_key attr =
+  match Hashtbl.find_opt attr_key_tbl attr with
+  | Some key -> key
+  | None ->
+    let key =
+      match String.rindex_opt attr '/' with
+      | None -> "\x00" ^ attr
+      | Some i ->
+        String.init (String.length attr) (fun j ->
+          if j = i then '\x00' else attr.[j])
+    in
+    Hashtbl.replace attr_key_tbl attr key;
+    key
+
 let compare_attr left right =
-  let li = match String.rindex_opt left '/' with Some i -> i | None -> -1 in
-  let ri = match String.rindex_opt right '/' with Some i -> i | None -> -1 in
-  (* ns = [0, li) for li >= 0 else ""; name = [li+1, len) *)
-  let c = compare_slice left 0 (max li 0) right 0 (max ri 0) in
-  if c <> 0 then c
-  else
-    let loff, roff = li + 1, ri + 1 in
-    compare_slice left loff (String.length left - loff) right roff
-      (String.length right - roff)
+  if left == right || String.equal left right then 0
+  else String.compare (attr_key left) (attr_key right)
 
 let rec compare_list_items_with compare_item left right =
   match left, right with
