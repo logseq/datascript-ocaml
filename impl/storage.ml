@@ -287,24 +287,6 @@ let restore context storage =
       match PSet.restore ?count ~cmp ~settings node_storage address with
       | Some index -> index
       | None -> invalid_arg ("storage root points at a missing index: " ^ address)
-let restore context storage =
-  match storage.storage_restore root_address with
-  | None -> None
-  | Some (Storage_root root) ->
-    note_storage_root root;
-    let schema = Schema.validate_schema root.storage_schema in
-    let settings = settings_of_root root in
-    let node_storage = restoring_node_storage ~schema storage in
-    let restore_index index address metadata =
-      let cmp = Util.compare_datom index in
-      (* Counts and index addresses come from the same stored root
-         snapshot. Seed before replaying its separate tail, whose edits
-         update counts. Older roots without metadata retain PSS's lazy
-         counting fallback. *)
-      let count = Option.map (fun metadata -> metadata.storage_index_count) metadata in
-      match PSet.restore ?count ~cmp ~settings node_storage address with
-      | Some index -> index
-      | None -> invalid_arg ("storage root points at a missing index: " ^ address)
     in
     let duplicate_datoms = normalize_stored_datoms schema root.storage_duplicate_datoms in
     let duplicate_eavt_by_entity =
