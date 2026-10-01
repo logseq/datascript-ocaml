@@ -52,7 +52,35 @@ let normalize_datom_for_schema = Db_impl.normalize_datom_for_schema
 
 let refresh_db_indexes = Db_impl.refresh_indexes
 let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_datoms
-let refresh_db_indexes_with_tx_data = Db_impl.refresh_indexes_with_tx_data
+
+(* Shared per-transaction memo (see Transact.tx_memo); populated through the
+   memo-aware refresh_db_indexes_with_tx_data below and consulted by
+   add_active_datom_with_report_db.  Only read while apply_tx has it active. *)
+let transact_tx_memo : Transact.tx_memo =
+  { active = false; base_max_eid = 0; datoms = Hashtbl.create 8 }
+
+let tx_memo_apply tx_data =
+  if transact_tx_memo.active then
+    List.iter
+      (fun d ->
+        if d.e > transact_tx_memo.base_max_eid then
+          let key = d.e, d.a in
+          let bucket =
+            Option.value (Hashtbl.find_opt transact_tx_memo.datoms key)
+              ~default:[]
+          in
+          let bucket =
+            if d.added then d :: bucket
+            else
+              List.filter (fun x -> Util.compare_value x.v d.v <> 0) bucket
+          in
+          Hashtbl.replace transact_tx_memo.datoms key bucket)
+      tx_data
+
+let refresh_db_indexes_with_tx_data db tx_data =
+  let db = Db_impl.refresh_indexes_with_tx_data db tx_data in
+  tx_memo_apply tx_data;
+  db
 
 let empty_db ?(schema = []) ?storage () =
   Db_impl.empty_db db_core_context ~schema ?storage ()
@@ -485,8 +513,22 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
        | Some existing when existing.e <> d.e ->
          invalid_arg "unique constraint"
        | Some _ | None -> ());
+    (* tx-fresh entities (e allocated inside this transaction) cannot exist
+       in the pre-tx index, so their same-fact and entity/attr lookups are
+       answered from the tx memo instead of descending the index trees. *)
+    let tx_fresh_bucket =
+      if transact_tx_memo.active && d.e > transact_tx_memo.base_max_eid then
+        Some
+          (Option.value
+             (Hashtbl.find_opt transact_tx_memo.datoms (d.e, d.a))
+             ~default:[])
+      else None
+    in
     let same_fact_exists =
-      find_eavt_exact db d.e d.a d.v |> Option.is_some
+      match tx_fresh_bucket with
+      | Some bucket ->
+        List.exists (fun existing -> compare_value existing.v d.v = 0) bucket
+      | None -> find_eavt_exact db d.e d.a d.v |> Option.is_some
     in
     if same_fact_exists then
       db, []
@@ -494,7 +536,13 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
       let tx_data =
         match cardinality schema_db d.a with
         | Many -> [ d ]
-        | One -> sorted_retractions tx (entity_attr_datoms_db db d.e d.a) @ [ d ]
+        | One ->
+          let existing =
+            match tx_fresh_bucket with
+            | Some bucket -> bucket
+            | None -> entity_attr_datoms_db db d.e d.a
+          in
+          sorted_retractions tx existing @ [ d ]
       in
       (* Index decisions use schema_db (the current schema, which may have been
          updated by schema datoms earlier in this transaction); the working db
@@ -755,6 +803,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; refresh_db_indexes_with_added_datoms
   ; refresh_db_indexes_with_tx_data
   ; refresh_db_identity
+  ; tx_memo = transact_tx_memo
   }
 
 let apply_tx tx_ops db =

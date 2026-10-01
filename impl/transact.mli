@@ -48,6 +48,16 @@ val remap_datom_entity : context -> entity_id -> entity_id -> datom -> datom
 val remap_resolved_tx_value : context -> entity_id -> entity_id -> tx_value -> tx_value
 val remap_tempid_entity : entity_id -> entity_id -> tempid_map -> tempid_map
 
+(* Per-transaction memo of datoms added to entities allocated inside this
+   transaction (e > base_max_eid): they cannot exist in the pre-tx index, so
+   same-fact and entity/attr lookups for them can be answered from this table
+   instead of descending the index trees. *)
+type tx_memo =
+  { mutable active : bool
+  ; mutable base_max_eid : entity_id
+  ; datoms : (entity_id * attr, datom list) Hashtbl.t
+  }
+
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
@@ -82,6 +92,7 @@ type apply_context =
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_indexes_with_tx_data : db -> datom list -> db
   ; refresh_db_identity : db -> db
+  ; tx_memo : tx_memo
   }
 
 val apply_tx : apply_context -> tx_op list -> db -> db * (string * entity_id) list * datom list

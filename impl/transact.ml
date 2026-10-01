@@ -396,6 +396,17 @@ let remap_tempid_entity old_e new_e tempids =
   }
 
 
+(* Per-transaction memo of datoms added to entities allocated inside this
+   transaction (e > base_max_eid): they cannot exist in the pre-tx index, so
+   same-fact and entity/attr lookups for them can be answered from this table
+   instead of descending the index trees.  Bulk seed transactions (imports)
+   consist almost entirely of such datoms. *)
+type tx_memo =
+  { mutable active : bool
+  ; mutable base_max_eid : entity_id
+  ; datoms : (entity_id * attr, datom list) Hashtbl.t
+  }
+
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
@@ -430,10 +441,15 @@ type apply_context =
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_indexes_with_tx_data : db -> datom list -> db
   ; refresh_db_identity : db -> db
+  ; tx_memo : tx_memo
   }
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
+  let tx_memo = context.tx_memo in
+  tx_memo.base_max_eid <- db.max_eid;
+  Hashtbl.reset tx_memo.datoms;
+  tx_memo.active <- true;
   (* Mid-tx schema refresh is incremental: schema datoms appended to tx_data
      are recorded here and each refresh folds only the entities touched by
      the datoms seen since the previous refresh, instead of rescanning all
@@ -1851,24 +1867,28 @@ let apply_tx context tx_ops db =
     ; tx_fns = !current_tx_fns
     }
   in
-  ( (match fast_tx_data with
-     | Some _ ->
-       db_after
-       |> (fun db -> context.refresh_db_indexes_with_tx_data db tx_data)
-       |> context.refresh_db_identity
-     | None ->
-       db_after
-       |> (fun db ->
-         if List.exists tx_op_affects_schema tx_ops then
-           { datoms with
-             schema = db.schema
-           ; max_eid = db.max_eid
-           ; max_tx = db.max_tx
-           ; tx_fns = db.tx_fns
-           }
-         else
-           context.refresh_db_indexes_with_tx_data db tx_data)
-       |> context.refresh_db_identity)
-  , tempid_map_order tempids
-  , tx_data
-  )
+  let result =
+    ( (match fast_tx_data with
+       | Some _ ->
+         db_after
+         |> (fun db -> context.refresh_db_indexes_with_tx_data db tx_data)
+         |> context.refresh_db_identity
+       | None ->
+         db_after
+         |> (fun db ->
+           if List.exists tx_op_affects_schema tx_ops then
+             { datoms with
+               schema = db.schema
+             ; max_eid = db.max_eid
+             ; max_tx = db.max_tx
+             ; tx_fns = db.tx_fns
+             }
+           else
+             context.refresh_db_indexes_with_tx_data db tx_data)
+         |> context.refresh_db_identity)
+    , tempid_map_order tempids
+    , tx_data
+    )
+  in
+  tx_memo.active <- false;
+  result
