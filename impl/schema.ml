@@ -47,15 +47,35 @@ let schema_attr_is_tuple = function
   | Some { tuple_attrs = Some _; _ } -> true
   | _ -> false
 
+(* Schema assoc lists are immutable, so physical equality on the list is a
+   valid staleness check: any schema update produces a new list (same trick
+   as Schema_access.schema_attr).  This runs once per index datom insert, so
+   the per-schema result is precomputed for every attr instead of scanned. *)
+let avet_tbl_schema : schema ref = ref []
+let avet_tbl : (attr, bool) Hashtbl.t ref = ref (Hashtbl.create 0)
+
 let schema_attr_is_avet_accessible schema attr =
-  attr = "db/ident"
-  || schema_attr_is_tuple (schema_attr_by_name schema attr)
-  ||
-  match schema_attr_by_name schema attr with
-  | Some { value_type = Some RefType; _ }
-  | Some { unique = Some _; _ }
-  | Some { indexed = true; _ } -> true
-  | _ -> false
+  if attr = "db/ident" then true
+  else begin
+    if not (schema == !avet_tbl_schema) then begin
+      let tbl = Hashtbl.create (List.length schema) in
+      List.iter
+        (fun (attr, spec) ->
+          if not (Hashtbl.mem tbl attr) then
+            Hashtbl.add tbl attr
+              (schema_attr_is_tuple (Some spec)
+               ||
+               match spec with
+               | { value_type = Some RefType; _ }
+               | { unique = Some _; _ }
+               | { indexed = true; _ } -> true
+               | _ -> false))
+        schema;
+      avet_tbl := tbl;
+      avet_tbl_schema := schema
+    end;
+    Option.value (Hashtbl.find_opt !avet_tbl attr) ~default:false
+  end
 
 let schema_has_no_history schema attr =
   match List.assoc_opt attr schema with

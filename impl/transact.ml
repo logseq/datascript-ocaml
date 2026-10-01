@@ -396,6 +396,20 @@ let remap_tempid_entity old_e new_e tempids =
   }
 
 
+(* Per-transaction memo of datoms added to entities allocated inside this
+   transaction (base_max_eid < e <= max_allocatable_entity_id): they cannot
+   exist in the pre-tx index, so same-fact and entity/attr lookups for them
+   can be answered from this table instead of descending the index trees.
+   Bulk seed transactions (imports) consist almost entirely of such datoms.
+   Transaction entities (e >= tx0) are excluded: they are ids, not freshly
+   allocated entities, and may already carry index datoms from earlier
+   transactions. *)
+type tx_memo =
+  { mutable active : bool
+  ; mutable base_max_eid : entity_id
+  ; datoms : (entity_id * attr, datom list) Hashtbl.t
+  }
+
 type apply_context =
   { resolve_context : context
   ; is_filtered : db -> bool
@@ -430,10 +444,38 @@ type apply_context =
   ; refresh_db_indexes_with_added_datoms : db -> datom list -> db
   ; refresh_db_indexes_with_tx_data : db -> datom list -> db
   ; refresh_db_identity : db -> db
+  ; tx_memo : tx_memo
   }
 
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
+  let tx_memo = context.tx_memo in
+  (* The memo record is shared by every transaction, so a nested transaction
+     (a Call fn that transacts) or an exception raised mid-tx must not leak
+     this transaction's state into the outer one: save any enclosing state
+     and restore it when this transaction ends or aborts. *)
+  let saved_memo =
+    if tx_memo.active then
+      Some (tx_memo.base_max_eid, Hashtbl.copy tx_memo.datoms)
+    else None
+  in
+  let restore_memo () =
+    match saved_memo with
+    | Some (base_max_eid, datoms) ->
+      Hashtbl.reset tx_memo.datoms;
+      Hashtbl.iter (Hashtbl.replace tx_memo.datoms) datoms;
+      tx_memo.base_max_eid <- base_max_eid
+    | None ->
+      (* The outermost transaction is over: the memo table is dead state
+         until the next transaction and would otherwise retain every datom
+         of the transaction that just ran. *)
+      tx_memo.active <- false;
+      Hashtbl.reset tx_memo.datoms
+  in
+  Fun.protect ~finally:restore_memo @@ fun () ->
+  tx_memo.base_max_eid <- db.max_eid;
+  Hashtbl.reset tx_memo.datoms;
+  tx_memo.active <- true;
   (* Mid-tx schema refresh is incremental: schema datoms appended to tx_data
      are recorded here and each refresh folds only the entities touched by
      the datoms seen since the previous refresh, instead of rescanning all
@@ -1851,24 +1893,27 @@ let apply_tx context tx_ops db =
     ; tx_fns = !current_tx_fns
     }
   in
-  ( (match fast_tx_data with
-     | Some _ ->
-       db_after
-       |> (fun db -> context.refresh_db_indexes_with_tx_data db tx_data)
-       |> context.refresh_db_identity
-     | None ->
-       db_after
-       |> (fun db ->
-         if List.exists tx_op_affects_schema tx_ops then
-           { datoms with
-             schema = db.schema
-           ; max_eid = db.max_eid
-           ; max_tx = db.max_tx
-           ; tx_fns = db.tx_fns
-           }
-         else
-           context.refresh_db_indexes_with_tx_data db tx_data)
-       |> context.refresh_db_identity)
-  , tempid_map_order tempids
-  , tx_data
-  )
+  let result =
+    ( (match fast_tx_data with
+       | Some _ ->
+         db_after
+         |> (fun db -> context.refresh_db_indexes_with_tx_data db tx_data)
+         |> context.refresh_db_identity
+       | None ->
+         db_after
+         |> (fun db ->
+           if List.exists tx_op_affects_schema tx_ops then
+             { datoms with
+               schema = db.schema
+             ; max_eid = db.max_eid
+             ; max_tx = db.max_tx
+             ; tx_fns = db.tx_fns
+             }
+           else
+             context.refresh_db_indexes_with_tx_data db tx_data)
+         |> context.refresh_db_identity)
+    , tempid_map_order tempids
+    , tx_data
+    )
+  in
+  result

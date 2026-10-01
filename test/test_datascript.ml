@@ -2314,6 +2314,24 @@ let test_transact__test_resolve_current_tx () =
     [ "db/current-tx", tx0 + 1; "entity", 1 ]
     report.tempids
 
+let test_transact__test_tx_entity_cardinality () =
+  (* Datoms on a transaction entity created by an earlier transaction
+     already live in the index: a cardinality-one update on it in a later
+     transaction must retract the previous value — tx ids are above
+     max_allocatable_entity_id, not transaction-fresh entities. *)
+  let schema = [ "note", indexed ] in
+  let report1 =
+    transact (empty_db ~schema ()) [ Add (CurrentTx, "note", String "v1") ]
+  in
+  let tx_eid = Option.get (resolve_tempid report1.tempids "db/current-tx") in
+  let report2 =
+    transact report1.db_after [ Add (Entity_id tx_eid, "note", String "v2") ]
+  in
+  assert_equal_triples
+    "cardinality-one update on a past tx entity retracts the old value"
+    [ tx_eid, "note", String "v2" ]
+    (datoms report2.db_after Eavt ~e:tx_eid ~a:"note" ())
+
 let test_current_tx_string_aliases_resolve_in_transactions () =
   let report =
     transact
@@ -17560,6 +17578,7 @@ let () =
   test_transact_report_exposes_tempids ();
   test_resolve_tempid_reads_tx_report_tempids ();
   test_transact__test_resolve_current_tx ();
+  test_transact__test_tx_entity_cardinality ();
   test_current_tx_string_aliases_resolve_in_transactions ();
   test_current_tx_string_aliases_can_be_value_only ();
   test_current_tx_colon_string_alias_resolves_in_transactions ();
