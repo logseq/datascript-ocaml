@@ -49,9 +49,11 @@ val remap_resolved_tx_value : context -> entity_id -> entity_id -> tx_value -> t
 val remap_tempid_entity : entity_id -> entity_id -> tempid_map -> tempid_map
 
 (* Per-transaction memo of datoms added to entities allocated inside this
-   transaction (e > base_max_eid): they cannot exist in the pre-tx index, so
-   same-fact and entity/attr lookups for them can be answered from this table
-   instead of descending the index trees. *)
+   transaction (base_max_eid < e <= max_allocatable_entity_id): they cannot
+   exist in the pre-tx index, so same-fact and entity/attr lookups for them
+   can be answered from this table instead of descending the index trees.
+   Transaction entities (e >= tx0) are excluded: they may already carry
+   index datoms from earlier transactions. *)
 type tx_memo =
   { mutable active : bool
   ; mutable base_max_eid : entity_id

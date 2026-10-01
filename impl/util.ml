@@ -124,6 +124,10 @@ let split_keyword keyword =
    a missing ns sorts first — exactly the pairwise order.  Keys are
    memoized by attr content since index comparators see the same small
    set of attrs over and over. *)
+(* Bounded: keyword values also flow through compare_attr, so an unlimited
+   vocabulary would grow this table without bound; past the cap, keys are
+   recomputed per call. *)
+let attr_key_tbl_cap = 65536
 let attr_key_tbl : (attr, attr) Hashtbl.t = Hashtbl.create 256
 
 let attr_key attr =
@@ -137,7 +141,8 @@ let attr_key attr =
         String.init (String.length attr) (fun j ->
           if j = i then '\x00' else attr.[j])
     in
-    Hashtbl.replace attr_key_tbl attr key;
+    if Hashtbl.length attr_key_tbl < attr_key_tbl_cap then
+      Hashtbl.replace attr_key_tbl attr key;
     key
 
 let compare_attr left right =

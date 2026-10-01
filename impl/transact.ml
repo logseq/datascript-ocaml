@@ -397,10 +397,13 @@ let remap_tempid_entity old_e new_e tempids =
 
 
 (* Per-transaction memo of datoms added to entities allocated inside this
-   transaction (e > base_max_eid): they cannot exist in the pre-tx index, so
-   same-fact and entity/attr lookups for them can be answered from this table
-   instead of descending the index trees.  Bulk seed transactions (imports)
-   consist almost entirely of such datoms. *)
+   transaction (base_max_eid < e <= max_allocatable_entity_id): they cannot
+   exist in the pre-tx index, so same-fact and entity/attr lookups for them
+   can be answered from this table instead of descending the index trees.
+   Bulk seed transactions (imports) consist almost entirely of such datoms.
+   Transaction entities (e >= tx0) are excluded: they are ids, not freshly
+   allocated entities, and may already carry index datoms from earlier
+   transactions. *)
 type tx_memo =
   { mutable active : bool
   ; mutable base_max_eid : entity_id
@@ -447,6 +450,24 @@ type apply_context =
 let apply_tx context tx_ops db =
   if context.is_filtered db then invalid_arg "filtered db is read-only";
   let tx_memo = context.tx_memo in
+  (* The memo record is shared by every transaction, so a nested transaction
+     (a Call fn that transacts) or an exception raised mid-tx must not leak
+     this transaction's state into the outer one: save any enclosing state
+     and restore it when this transaction ends or aborts. *)
+  let saved_memo =
+    if tx_memo.active then
+      Some (tx_memo.base_max_eid, Hashtbl.copy tx_memo.datoms)
+    else None
+  in
+  let restore_memo () =
+    match saved_memo with
+    | Some (base_max_eid, datoms) ->
+      Hashtbl.reset tx_memo.datoms;
+      Hashtbl.iter (Hashtbl.replace tx_memo.datoms) datoms;
+      tx_memo.base_max_eid <- base_max_eid
+    | None -> tx_memo.active <- false
+  in
+  Fun.protect ~finally:restore_memo @@ fun () ->
   tx_memo.base_max_eid <- db.max_eid;
   Hashtbl.reset tx_memo.datoms;
   tx_memo.active <- true;
@@ -1890,5 +1911,4 @@ let apply_tx context tx_ops db =
     , tx_data
     )
   in
-  tx_memo.active <- false;
   result

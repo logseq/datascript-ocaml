@@ -63,7 +63,9 @@ let tx_memo_apply tx_data =
   if transact_tx_memo.active then
     List.iter
       (fun d ->
-        if d.e > transact_tx_memo.base_max_eid then
+        if d.e > transact_tx_memo.base_max_eid
+           && d.e <= Db_impl.max_allocatable_entity_id
+        then
           let key = d.e, d.a in
           let bucket =
             Option.value (Hashtbl.find_opt transact_tx_memo.datoms key)
@@ -516,8 +518,13 @@ let add_active_datom_with_report_db ?(allow_tuple = false) ?(validate_value = tr
     (* tx-fresh entities (e allocated inside this transaction) cannot exist
        in the pre-tx index, so their same-fact and entity/attr lookups are
        answered from the tx memo instead of descending the index trees. *)
+    (* Transaction entities live above max_allocatable_entity_id and can
+       already carry index datoms from earlier transactions, so they are
+       never memo-fresh. *)
     let tx_fresh_bucket =
-      if transact_tx_memo.active && d.e > transact_tx_memo.base_max_eid then
+      if transact_tx_memo.active && d.e > transact_tx_memo.base_max_eid
+         && d.e <= Db_impl.max_allocatable_entity_id
+      then
         Some
           (Option.value
              (Hashtbl.find_opt transact_tx_memo.datoms (d.e, d.a))
