@@ -298,15 +298,17 @@ let verify_stored_index node_storage cmp address =
   let datoms = ref [] in
   let last = ref None in
   let ordered = ref true in
+  let count = ref 0 in
   fold_stored_index node_storage address
     (fun () datom ->
+      incr count;
       datoms := datom :: !datoms;
       (match !ordered, !last with
        | true, Some prev when cmp prev datom > 0 -> ordered := false
        | _ -> ());
       last := Some datom)
     ();
-  if !ordered then `Clean
+  if !ordered then `Clean !count
   else
     let datoms = Array.of_list (List.rev !datoms) in
     Array.sort cmp datoms;
@@ -320,22 +322,30 @@ let restore context storage =
     let schema = Schema.validate_schema root.storage_schema in
     let settings = settings_of_root root in
     let node_storage = restoring_node_storage ~schema storage in
-    let restore_index index address =
+    let restore_index index address metadata =
       let cmp = Util.compare_datom index in
-      match
-        if root.storage_index_order_version <> index_order_version
-        then verify_stored_index node_storage cmp address
-        else `Clean
-      with
-      | `Dirty datoms ->
-          (* The stored tree routes seeks by the old ordering: rebuild
-             the index in memory in the correct order. The next store
-             rewrites its nodes, healing storage. *)
-          PSet.of_sorted_array_by ~settings ~cmp datoms
-      | `Clean ->
-          (match PSet.restore ~cmp ~settings node_storage address with
-           | Some index -> index
-           | None -> invalid_arg ("storage root points at a missing index: " ^ address))
+      let restore_lazy ?count () =
+        match PSet.restore ?count ~cmp ~settings node_storage address with
+        | Some index -> index
+        | None -> invalid_arg ("storage root points at a missing index: " ^ address)
+      in
+      if root.storage_index_order_version = index_order_version then
+        (* Counts and index addresses come from the same stored root snapshot.
+           Seed before replaying its separate tail, whose edits update counts.
+           Older roots without metadata retain PSS's lazy counting fallback. *)
+        let count = Option.map (fun metadata -> metadata.storage_index_count) metadata in
+        restore_lazy ?count ()
+      else
+        match verify_stored_index node_storage cmp address with
+        | `Clean count ->
+            (* Verification already visited every datom. Use that measured
+               count rather than trusting metadata from an older format. *)
+            restore_lazy ~count ()
+        | `Dirty datoms ->
+            (* The stored tree routes seeks by the old ordering: rebuild
+               the index in memory in the correct order. The next store
+               rewrites its nodes, healing storage. *)
+            PSet.of_sorted_array_by ~settings ~cmp datoms
     in
     let duplicate_datoms = normalize_stored_datoms schema root.storage_duplicate_datoms in
     let duplicate_eavt_by_entity =
@@ -364,12 +374,12 @@ let restore context storage =
       |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible schema datom.a)
       |> List.sort (Util.compare_datom Avet)
     in
-    let aevt_index = restore_index Aevt root.storage_aevt in
-    let avet_index = restore_index Avet root.storage_avet in
+    let aevt_index = restore_index Aevt root.storage_aevt root.storage_aevt_metadata in
+    let avet_index = restore_index Avet root.storage_avet root.storage_avet_metadata in
     let db =
       { db_uid = context.next_db_uid ()
       ; schema
-      ; eavt_index = restore_index Eavt root.storage_eavt
+      ; eavt_index = restore_index Eavt root.storage_eavt root.storage_eavt_metadata
       ; aevt_index
       ; avet_index
       ; aevt_by_attr = Hashtbl.create 0

@@ -11,7 +11,7 @@ depends: [
   "melange"
 ]
 pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#main"]
+  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#9c99ee9760978654540d0482cbbc3d8ed97aa9c2"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
