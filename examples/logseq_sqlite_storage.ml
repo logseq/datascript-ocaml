@@ -1322,7 +1322,10 @@ let storage db_path =
   create_kvs_table db_path;
   let store entries =
     let sql = String.concat "" (List.map upsert_sql entries) in
-    if sql <> "" then exec_sql db_path sql
+    (* Without an explicit transaction sqlite3_exec commits every
+       statement separately — thousands of fsyncs on a bulk store.
+       One transaction costs one commit's worth of syncs. *)
+    if sql <> "" then exec_sql db_path ("begin immediate;" ^ sql ^ "commit;")
   in
   let restore address =
     let addr = sqlite_addr_of_storage_address address in
