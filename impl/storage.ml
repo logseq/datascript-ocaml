@@ -128,8 +128,9 @@ let index_metadata pending_entries storage index_set root_address =
            | _ -> None)
     in
     match node with
-    | Some (PSet.Branch (_, children)) ->
-        1 + List.fold_left (fun max_depth child -> max max_depth (depth child)) 0 children
+    (* the tree is balanced, so every root-to-leaf path has the same depth:
+       descending a single path is enough *)
+    | Some (PSet.Branch (_, child :: _)) -> 1 + depth child
     | _ -> 0
   in
   { storage_index_count = PSet.count index_set

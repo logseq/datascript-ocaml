@@ -1122,8 +1122,16 @@ end) = struct
                     mark datom);
               entities)
           in
+          (* candidate_entities, when there are no constants or value vars,
+             walks the first required attr's datoms — entities drawn from that
+             walk provably satisfy the attr, so skip re-probing it *)
+          let unprobed_required =
+            match constant_datoms, value_var_patterns, required_patterns with
+            | [], [], _ :: rest -> rest
+            | _ -> required_patterns
+          in
           let matches_required =
-            match required_patterns with
+            match unprobed_required with
             | [] -> fun _ -> true
             | [ attr ] -> fun entity_id -> has_pattern entity_id attr QWildcard
             | patterns ->
