@@ -110,14 +110,37 @@ let split_keyword keyword =
     let name = String.sub keyword (index + 1) (String.length keyword - index - 1) in
     namespace, name
 
+(* compare [off..off+len) slices of two strings without allocation *)
+let compare_slice (s : string) (soff : int) (slen : int) (t : string)
+    (toff : int) (tlen : int) : int =
+  let rec loop i =
+    if i >= slen && i >= tlen then 0
+    else if i >= slen then -1
+    else if i >= tlen then 1
+    else
+      let c = Char.compare s.[soff + i] t.[toff + i] in
+      if c <> 0 then c else loop (i + 1)
+  in
+  loop 0
+
 (* Upstream compares attr keywords with compare-keywords: no-namespace
    attrs sort first, otherwise (ns, name) pairwise.  Compare with a
    plain string sort here would order "logseq.property.class/extends"
    before "logseq.property/built-in?" ('.' < '/'), which both diverges
    from the runtime index order upstream and writes a leaf order the
-   CLJS storage reader cannot binary-search. *)
+   CLJS storage reader cannot binary-search.
+   Slice-wise comparison keeps the same order without allocating the
+   (ns, name) pair for every index compare. *)
 let compare_attr left right =
-  compare (split_keyword left) (split_keyword right)
+  let li = match String.rindex_opt left '/' with Some i -> i | None -> -1 in
+  let ri = match String.rindex_opt right '/' with Some i -> i | None -> -1 in
+  (* ns = [0, li) for li >= 0 else ""; name = [li+1, len) *)
+  let c = compare_slice left 0 (max li 0) right 0 (max ri 0) in
+  if c <> 0 then c
+  else
+    let loff, roff = li + 1, ri + 1 in
+    compare_slice left loff (String.length left - loff) right roff
+      (String.length right - roff)
 
 let rec compare_list_items_with compare_item left right =
   match left, right with
@@ -422,13 +445,13 @@ let rec compare_value left right =
   | Instant left, Float right -> compare (Int64.to_float left) right
   | Float left, Instant right -> compare left (Int64.to_float right)
   | String left, String right -> compare left right
-  | Symbol left, Symbol right -> compare (split_keyword left) (split_keyword right)
+  | Symbol left, Symbol right -> compare_attr left right
   | Bool left, Bool right -> compare left right
   | Uuid left, Uuid right -> compare left right
   | Instant left, Instant right -> compare left right
   | Regex left, Regex right -> compare left right
   | Nil, Nil -> 0
-  | Keyword left, Keyword right -> compare (split_keyword left) (split_keyword right)
+  | Keyword left, Keyword right -> compare_attr left right
   | List left, List right -> compare_list_with compare_value left right
   | Vector left, Vector right -> compare_list_with compare_value left right
   | List left, Tuple right ->
