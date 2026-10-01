@@ -465,7 +465,12 @@ let apply_tx context tx_ops db =
       Hashtbl.reset tx_memo.datoms;
       Hashtbl.iter (Hashtbl.replace tx_memo.datoms) datoms;
       tx_memo.base_max_eid <- base_max_eid
-    | None -> tx_memo.active <- false
+    | None ->
+      (* The outermost transaction is over: the memo table is dead state
+         until the next transaction and would otherwise retain every datom
+         of the transaction that just ran. *)
+      tx_memo.active <- false;
+      Hashtbl.reset tx_memo.datoms
   in
   Fun.protect ~finally:restore_memo @@ fun () ->
   tx_memo.base_max_eid <- db.max_eid;
