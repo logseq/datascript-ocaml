@@ -42,23 +42,32 @@ jobs:
           echo "resolved pins sha: $sha"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Restore opam switch cache
-        id: opam-cache
+      # setup-ocaml creates a *local* switch: the compiler and installed
+      # packages live in `_opam/` (~1GB+), while `~/.opam` is only the opam
+      # root skeleton (~40MB) — caching `~/.opam` alone never restores deps.
+      - name: Restore opam root
+        id: opam-root
         uses: actions/cache/restore@v4
         with:
           path: ~/.opam
-          key: ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-opam-
+          key: opam-root-${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}
 
-      # Any restore (exact or restore-keys fallback) yields a complete opam
-      # root + switch; only the opam binary is needed. This skips
-      # ocaml/setup-ocaml, whose unconditional `opam update` costs ~1m30s on
-      # cache hits.
+      - name: Restore opam switch
+        id: opam-switch
+        uses: actions/cache/restore@v4
+        with:
+          path: _opam
+          key: opam-switch-${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.sha }}
+          restore-keys: |
+            opam-switch-${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}-
+
+      # A restored root + local switch is already complete; only the opam
+      # binary is needed. This skips ocaml/setup-ocaml, whose unconditional
+      # `opam update` costs ~1m30s on cache hits.
       - name: Check for restored opam environment
         id: opam-env
         run: |
-          if [ -f "$HOME/.opam/config" ]; then
+          if [ -f "$HOME/.opam/config" ] && [ -d "_opam" ]; then
             echo "restored=true" >> "$GITHUB_OUTPUT"
           else
             echo "restored=false" >> "$GITHUB_OUTPUT"
@@ -71,9 +80,7 @@ jobs:
           curl -fsSL https://github.com/ocaml/opam/releases/download/2.6.0/opam-2.6.0-x86_64-linux -o ~/.local/bin/opam
           chmod +x ~/.local/bin/opam
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          switch="$(opam switch list --short | head -n1)"
-          echo "OPAMSWITCH=$switch" >> "$GITHUB_ENV"
-          eval "$(opam env --switch="$switch")"
+          eval "$(opam env)"
           opam --version && ocaml -version
 
       - name: Set up OCaml
@@ -129,12 +136,19 @@ jobs:
             opam install . --deps-only --with-test -y
           }
 
-      - name: Save opam switch cache
-        if: steps.opam-cache.outputs.cache-hit != 'true'
+      - name: Save opam root
+        if: steps.opam-root.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.opam
-          key: ${{ steps.opam-cache.outputs.cache-primary-key }}
+          key: opam-root-${{ runner.os }}-ocaml-${{ matrix.ocaml-compiler }}
+
+      - name: Save opam switch
+        if: steps.opam-switch.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _opam
+          key: ${{ steps.opam-switch.outputs.cache-primary-key }}
 
       - name: Restore dune build cache
         uses: actions/cache/restore@v4
