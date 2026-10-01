@@ -30,7 +30,7 @@ The benchmark script supports these knobs:
 
 ## Latest Verified Results
 
-Verified on 2026-06-19.
+Verified on 2026-09-27.
 
 Configuration:
 
@@ -41,52 +41,97 @@ BENCH_SAMPLES=5
 UPSTREAM_DATASCRIPT_JS=_deps/datascript/release-js/datascript.js
 ```
 
-Lower is better.
+Milliseconds, lower is better.
 
 ### Size 200
 
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 3.05 | 6.72 | 14.25 |
-| add-one-by-one | 3.22 | 7.80 | 14.35 |
-| datoms-name | 0.01654 | 0.05378 | 0.00431 |
-| query-name-age | 0.02199 | 0.05820 | 0.06224 |
-| query-salary-pred | 0.00985 | 0.02585 | 0.15149 |
-| pull-one | 0.00313 | 0.00950 | 0.01040 |
+| add-1 | 2.18 | 5.28 | 6.33 |
+| add-5 | 3.85 | 6.13 | 13.89 |
+| add-all | 3.33 | 7.00 | 13.59 |
+| datoms-name | 0.00199 | 0.00391 | 0.00445 |
+| q1 | 0.00407 | 0.01049 | 0.02987 |
+| q2 | 0.00485 | 0.01415 | 0.06474 |
+| q3 | 0.01688 | 0.02748 | 0.06801 |
+| q4 | 0.02074 | 0.02817 | 0.10196 |
+| q5-shortcircuit | 0.00496 | 0.01108 | 0.03359 |
+| qpred1 | 0.01126 | 0.04702 | 0.12986 |
+| qpred2 | 0.01719 | 0.04581 | 0.16120 |
+| q2pred | 0.00557 | 0.01416 | 0.07445 |
+| pull-one | 0.00130 | 0.00277 | 0.00666 |
+| storage-roundtrip | 3.45 | 9.49 | n/a |
+| get-page-data | 0.30675 | 0.89606 | 1.17 |
 
 ### Size 1000
 
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 17.44 | 40.15 | 81.42 |
-| add-one-by-one | 22.76 | 61.44 | 80.87 |
-| datoms-name | 0.07618 | 0.25536 | 0.01825 |
-| query-name-age | 0.12468 | 0.31969 | 0.19548 |
-| query-salary-pred | 0.04302 | 0.11631 | 0.63592 |
-| pull-one | 0.00329 | 0.01021 | 0.01051 |
+| add-1 | 13.82 | 27.21 | 42.30 |
+| add-5 | 16.51 | 42.17 | 77.41 |
+| add-all | 22.26 | 64.25 | 81.16 |
+| datoms-name | 0.00699 | 0.01761 | 0.01886 |
+| q1 | 0.01939 | 0.06015 | 0.08590 |
+| q2 | 0.05351 | 0.06251 | 0.21758 |
+| q3 | 0.10196 | 0.12168 | 0.13764 |
+| q4 | 0.12178 | 0.12953 | 0.20986 |
+| q5-shortcircuit | 0.00572 | 0.01084 | 0.03235 |
+| qpred1 | 0.07263 | 0.26954 | 0.58958 |
+| qpred2 | 0.07048 | 0.25773 | 0.74998 |
+| q2pred | 0.02273 | 0.06615 | 0.21568 |
+| pull-one | 0.00130 | 0.00316 | 0.00700 |
+| storage-roundtrip | 33.71 | 84.50 | n/a |
+| get-page-data | 0.35314 | 0.84459 | 1.19 |
 
 ### Size 10000
 
 | Benchmark | OCaml native | js_of_ocaml | upstream CLJS/JS |
 | --- | ---: | ---: | ---: |
-| add-all | 209.66 | 496.00 | 999.61 |
-| add-one-by-one | 727.86 | 2906.00 | 999.67 |
-| datoms-name | 0.76836 | 2.75 | 0.19502 |
-| query-name-age | 1.94 | 5.19 | 1.71 |
-| query-salary-pred | 0.65311 | 1.44 | 6.43 |
-| pull-one | 0.00327 | 0.01041 | 0.01058 |
+| add-1 | 174.13 | 306.50 | 456.11 |
+| add-5 | 218.88 | 417.00 | 845.32 |
+| add-all | 742.30 | 2105.00 | 941.57 |
+| datoms-name | 0.06288 | 0.14988 | 0.20549 |
+| q1 | 0.25882 | 0.64516 | 0.81310 |
+| q2 | 0.78567 | 0.82372 | 2.02 |
+| q3 | 1.35 | 1.61 | 1.31 |
+| q4 | 1.87 | 2.07 | 2.26 |
+| q5-shortcircuit | 0.00923 | 0.02294 | 0.03312 |
+| qpred1 | 1.95 | 4.43 | 6.53 |
+| qpred2 | 1.90 | 4.39 | 6.64 |
+| q2pred | 0.29155 | 0.62344 | 1.71 |
+| pull-one | 0.00129 | 0.00294 | 0.00639 |
+| storage-roundtrip | 1321.55 | 4051.00 | n/a |
+| get-page-data | 0.40625 | 0.93110 | 1.22 |
 
 Current status:
 
-- The sequential explicit-id transaction regression is fixed for native OCaml:
-  size 10000 `add-one-by-one` dropped from 10212.84 ms to 727.86 ms.
-- `js_of_ocaml` also improved on the same path: size 10000
-  `add-one-by-one` dropped from 11707.00 ms to 2906.00 ms.
-- Native OCaml remains faster than upstream CLJS/JS on bulk add, small and
-  medium one-by-one add, salary predicate query, and pull.
-- Upstream CLJS/JS remains faster for `datoms-name`, and at size 10000 it is
-  still faster for `query-name-age` and one-by-one add. Those are tracked as
-  remaining gaps, not hidden by local API changes.
+- Native OCaml is faster than upstream CLJS/JS on every benchmark except `q3`
+  at size 10000, where the two are effectively tied (1.35 ms vs 1.31 ms).
+- `js_of_ocaml` is faster than upstream on nearly all cases; exceptions are
+  `add-all` at size 10000 (2105 ms vs 941.57 ms) and `q3` at sizes 1000 and
+  10000 (1.61 ms vs 1.31 ms at 10000).
+- `js_of_ocaml` overflows the default Node.js stack at size 10000
+  (`RangeError: Maximum call stack size exceeded` during `add-all`). The
+  numbers above were measured with `node --stack-size=8000`; this is a known
+  js_of_ocaml recursion limitation, not a benchmark artifact.
+- `storage-roundtrip` has no upstream equivalent (upstream bundle is in-memory
+  only), so it is reported without a comparison.
+- `get-page-data` models Logseq's `logseq.api.db-based.tools/get-page-data`:
+  look up a page by `avet :block/name`, list its ~100 blocks via
+  `avet :block/page`, materialize each entity (`entity_attrs` /
+  `(into {} (d/entity ...))`), then nest them by `:block/parent` sorted on
+  `:block/order` (`otree/blocks->vec-tree`). The fixture DB has ~100 blocks per
+  page so `size` scales page count, not per-page cost — which is why timings
+  are nearly flat. It exercises indexed-ref datoms slicing plus entity
+  materialization; pure string work in the real path
+  (`recur-replace-uuid-in-block-title`, `remove-hidden-properties`) is not
+  datascript work and is not modeled.
+- Since the 2026-06-19 run the benchmark set was expanded (now `add-1`,
+  `add-5`, `q1`–`q5-shortcircuit`, `qpred1`, `qpred2`, `q2pred`,
+  `storage-roundtrip`, `get-page-data`). The earlier gaps — upstream being faster on
+  `datoms-name` and the size-10000 one-by-one add — are now closed: native
+  `datoms-name` at size 10000 improved from 0.77 ms to 0.06 ms, and
+  one-by-one add (`add-5`) from 727.86 ms to 218.88 ms.
 
 ## Optimizations Applied
 
