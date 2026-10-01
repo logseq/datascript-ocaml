@@ -283,12 +283,13 @@ let storage_root_to_transit root =
     @ optional_metadata_entry "avet-metadata" root.storage_avet_metadata)
 
 let storage_node_to_transit = function
-  | PSet.Leaf datoms -> Transit.Map [ (Transit.Keyword "keys", datoms_to_transit datoms) ]
+  | PSet.Leaf datoms ->
+      Transit.Map [ (Transit.Keyword "keys", datoms_to_transit (Array.to_list datoms)) ]
   | PSet.Branch (keys, child_addresses) ->
       Transit.Map
         [
-          (Transit.Keyword "keys", datoms_to_transit keys);
-          (Transit.Keyword "children", Transit.Array (List.map address_to_transit child_addresses));
+          (Transit.Keyword "keys", datoms_to_transit (Array.to_list keys));
+          (Transit.Keyword "children", Transit.Array (List.map address_to_transit (Array.to_list child_addresses)));
         ]
 
 let storage_tail_to_transit groups =
@@ -348,10 +349,11 @@ let child_addresses_of_transit = function
   | _ -> invalid_arg "storage node :children must be a Transit array"
 
 let storage_node_of_transit entries =
-  let keys = datoms_of_transit (require_key "keys" entries) in
+  let keys = Array.of_list (datoms_of_transit (require_key "keys" entries)) in
   match lookup_transit_key "children" entries with
   | None -> PSet.Leaf keys
-  | Some children -> PSet.Branch (keys, child_addresses_of_transit children)
+  | Some children ->
+      PSet.Branch (keys, Array.of_list (child_addresses_of_transit children))
 
 let storage_tail_of_transit = function
   | Transit.Array groups | Transit.List groups -> List.map datoms_of_transit groups

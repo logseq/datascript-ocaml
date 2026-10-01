@@ -59,8 +59,8 @@ let buffered_node_storage pending_entries =
   ; accessed = (fun _address -> ())
   }
 
-let normalize_stored_datom schema datom =
-  let schema_attr = Schema.schema_attr_by_name schema datom.a in
+let normalize_stored_datom_with attr_by_name datom =
+  let schema_attr = attr_by_name datom.a in
   match schema_attr, datom.v with
   | Some { value_type = Some RefType; _ }, Int64 entity_id ->
     (match Util.int64_to_int entity_id with
@@ -76,13 +76,29 @@ let normalize_stored_datom schema datom =
     { datom with v = Tuple (List.map (fun value -> Some value) values) }
   | _ -> datom
 
-let normalize_stored_datoms schema =
-  List.map (normalize_stored_datom schema)
+let normalize_stored_datom schema =
+  normalize_stored_datom_with (Schema.schema_attr_by_name schema)
 
-let normalize_stored_node schema = function
-  | PSet.Leaf datoms -> PSet.Leaf (normalize_stored_datoms schema datoms)
+(* datoms in one node share few attrs; memoize the schema lookup per batch *)
+let memoized_attr_by_name schema =
+  let memo = Hashtbl.create 16 in
+  fun attr ->
+    match Hashtbl.find_opt memo attr with
+    | Some cached -> cached
+    | None ->
+        let found = Schema.schema_attr_by_name schema attr in
+        Hashtbl.add memo attr found;
+        found
+
+let normalize_stored_datoms schema =
+  List.map (normalize_stored_datom_with (memoized_attr_by_name schema))
+
+let normalize_stored_node schema =
+  let normalize = normalize_stored_datom_with (memoized_attr_by_name schema) in
+  function
+  | PSet.Leaf datoms -> PSet.Leaf (Array.map normalize datoms)
   | PSet.Branch (keys, child_addresses) ->
-    PSet.Branch (normalize_stored_datoms schema keys, child_addresses)
+    PSet.Branch (Array.map normalize keys, child_addresses)
 
 let normalize_stored_tail schema =
   List.map (normalize_stored_datoms schema)
@@ -130,7 +146,8 @@ let index_metadata pending_entries storage index_set root_address =
     match node with
     (* the tree is balanced, so every root-to-leaf path has the same depth:
        descending a single path is enough *)
-    | Some (PSet.Branch (_, child :: _)) -> 1 + depth child
+    | Some (PSet.Branch (_, child_addresses)) when Array.length child_addresses > 0 ->
+        1 + depth child_addresses.(0)
     | _ -> 0
   in
   { storage_index_count = PSet.count index_set
@@ -352,7 +369,7 @@ let rec node_addresses storage address =
   match storage.storage_restore address with
   | Some (Storage_node (PSet.Leaf _)) -> [ address ]
   | Some (Storage_node (PSet.Branch (_, child_addresses))) ->
-    address :: List.concat_map (node_addresses storage) child_addresses
+    address :: List.concat_map (node_addresses storage) (Array.to_list child_addresses)
   | Some _ -> [ address ]
   | None -> []
 

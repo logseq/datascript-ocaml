@@ -299,9 +299,9 @@ let storage_root_to_transit root =
 
 let storage_node_to_transit = function
   | PSet.Leaf datoms ->
-    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit datoms) ]
+    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit (Array.to_list datoms)) ]
   | PSet.Branch (keys, _child_addresses) ->
-    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit keys) ]
+    Transit.Map [ Transit.Keyword "keys", Transit.Array (List.map datom_to_transit (Array.to_list keys)) ]
 
 let storage_tail_to_transit groups =
   Transit.Array
@@ -319,6 +319,7 @@ let json_addresses_of_payload = function
       (Yojson.Safe.to_string
          (`List
            (child_addresses
+            |> Array.to_list
             |> List.map sqlite_addr_of_storage_address
             |> List.map (fun address -> `Int address))))
   | Storage_root _ | Storage_node (PSet.Leaf _) | Storage_tail _ -> None
@@ -495,8 +496,8 @@ let storage_node_of_transit addresses entries =
     | None -> invalid_arg "storage node is missing :keys"
   in
   match addresses_of_json addresses with
-  | [] -> PSet.Leaf keys
-  | child_addresses -> PSet.Branch (keys, child_addresses)
+  | [] -> PSet.Leaf (Array.of_list keys)
+  | child_addresses -> PSet.Branch (Array.of_list keys, Array.of_list child_addresses)
 
 let storage_tail_of_transit = function
   | Transit.Array groups | Transit.List groups ->
