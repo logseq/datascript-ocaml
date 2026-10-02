@@ -310,7 +310,11 @@ end) = struct
         | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
       in
       let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
-      Some { attrs; rows; lookup_vars; unique_rows = false }
+      (* Rows are provably unique when every pattern position is either
+         projected (a var) or constant: each datom then yields at most one
+         row, and distinct datoms cannot collapse onto the same row. *)
+      let unique_rows = List.for_all (fun term -> term <> QWildcard) terms in
+      Some { attrs; rows; lookup_vars; unique_rows }
 
   let reverse_comparison_predicate = function
     | GreaterThan -> LessThan
@@ -465,7 +469,7 @@ end) = struct
                 right.rows)
             left.rows
       ; lookup_vars
-      ; unique_rows = false
+      ; unique_rows = left.unique_rows && right.unique_rows
       }
     else
       let lookup_contexts =
@@ -484,7 +488,21 @@ end) = struct
         | Result_entity entity_id -> Some entity_id
         | _ -> None
       in
-      let rows =
+      (* [unique_right_keys key_of] reports whether every right row has a
+         distinct join key; combined with a unique left side the join output
+         is provably unique, letting callers skip the dedup pass. *)
+      let unique_right_keys key_of =
+        let seen = Hashtbl.create (List.length right.rows) in
+        List.for_all
+          (fun row ->
+            let key = key_of row in
+            if Hashtbl.mem seen key then false else (Hashtbl.add seen key (); true))
+          right.rows
+      in
+      let single_counts counts =
+        Hashtbl.fold (fun _ count acc -> acc && count = 1) counts true
+      in
+      let rows, unique_rows =
         match right_only, common with
         | [], [ attr ] ->
           let left_index = relation_attr_index left.attrs attr in
@@ -516,7 +534,8 @@ end) = struct
                 let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
                 Hashtbl.replace counts key (count + 1))
               right.rows;
-            collect_left counts (fun left_row -> Option.get (entity_key left_row left_index)))
+            ( collect_left counts (fun left_row -> Option.get (entity_key left_row left_index))
+            , left.unique_rows && single_counts counts ))
           else (
             let counts = Hashtbl.create (List.length right.rows) in
             List.iter
@@ -525,7 +544,8 @@ end) = struct
                 let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
                 Hashtbl.replace counts key (count + 1))
               right.rows;
-            collect_left counts (fun left_row -> key_value attr (row_value left_row left_index)))
+            ( collect_left counts (fun left_row -> key_value attr (row_value left_row left_index))
+            , left.unique_rows && single_counts counts ))
         | [], _ ->
           let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
           let counts = Hashtbl.create (List.length right.rows) in
@@ -536,20 +556,21 @@ end) = struct
               Hashtbl.replace counts key (count + 1))
             right.rows;
           let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
-          List.rev
-            (List.fold_left
-               (fun acc left_row ->
-                 match
-                   Hashtbl.find_opt counts
-                     (relation_key lookup_contexts left_common_indexes left_row)
-                 with
-                 | None -> acc
-                 | Some count ->
-                   let rec loop acc n =
-                     if n <= 0 then acc else loop (left_row :: acc) (n - 1)
-                   in
-                   loop acc count)
-               [] left.rows)
+          ( List.rev
+              (List.fold_left
+                 (fun acc left_row ->
+                   match
+                     Hashtbl.find_opt counts
+                       (relation_key lookup_contexts left_common_indexes left_row)
+                   with
+                   | None -> acc
+                   | Some count ->
+                     let rec loop acc n =
+                       if n <= 0 then acc else loop (left_row :: acc) (n - 1)
+                     in
+                     loop acc count)
+                 [] left.rows)
+          , left.unique_rows && single_counts counts )
         | _, [ attr ] ->
           let left_index = relation_attr_index left.attrs attr in
           let right_index = relation_attr_index right.attrs attr in
@@ -582,7 +603,9 @@ end) = struct
             all_left_entities
             && List.for_all (fun row -> Option.is_some (entity_key row right_index)) right.rows
           then
-            collect_right (fun right_row -> Option.get (entity_key right_row right_index)) grouped
+            ( collect_right (fun right_row -> Option.get (entity_key right_row right_index)) grouped
+            , left.unique_rows
+              && unique_right_keys (fun right_row -> Option.get (entity_key right_row right_index)) )
           else (
             let grouped = Hashtbl.create (List.length left.rows) in
             List.iter
@@ -591,7 +614,9 @@ end) = struct
                 let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
                 Hashtbl.replace grouped key (row :: rows))
               left.rows;
-            collect_right (fun right_row -> key_value attr (row_value right_row right_index)) grouped)
+            ( collect_right (fun right_row -> key_value attr (row_value right_row right_index)) grouped
+            , left.unique_rows
+              && unique_right_keys (fun right_row -> key_value attr (row_value right_row right_index)) ))
         | _, _ ->
           let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
           let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
@@ -602,22 +627,25 @@ end) = struct
               let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
               Hashtbl.replace grouped key (row :: rows))
             left.rows;
-          List.rev
-            (List.fold_left
-               (fun acc right_row ->
-                 match
-                   Hashtbl.find_opt grouped
-                     (relation_key lookup_contexts right_common_indexes right_row)
-                 with
-                 | None -> acc
-                 | Some left_rows ->
-                   List.fold_left
-                     (fun acc left_row ->
-                       append_relation_rows right_only_indexes left_row right_row :: acc)
-                     acc left_rows)
-               [] right.rows)
+          ( List.rev
+              (List.fold_left
+                 (fun acc right_row ->
+                   match
+                     Hashtbl.find_opt grouped
+                       (relation_key lookup_contexts right_common_indexes right_row)
+                   with
+                   | None -> acc
+                   | Some left_rows ->
+                     List.fold_left
+                       (fun acc left_row ->
+                         append_relation_rows right_only_indexes left_row right_row :: acc)
+                       acc left_rows)
+                 [] right.rows)
+          , left.unique_rows
+            && unique_right_keys (fun right_row ->
+              relation_key lookup_contexts right_common_indexes right_row) )
       in
-      { attrs; rows; lookup_vars; unique_rows = false }
+      { attrs; rows; lookup_vars; unique_rows }
 
   let anti_join left right =
     let common = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
@@ -798,7 +826,7 @@ end) = struct
           | None -> None
           | Some result -> bind_relation_output_at db output_var output_index result row)
       in
-      Some { relation with attrs; rows; unique_rows = false }
+      Some { relation with attrs; rows; unique_rows = relation.unique_rows }
 
   let name_result = function
     | Result_value (Keyword keyword) ->
@@ -858,7 +886,7 @@ end) = struct
               row
           | _ -> None)
       in
-      Some { relation with attrs; rows; unique_rows = false }
+      Some { relation with attrs; rows; unique_rows = relation.unique_rows }
     | _ -> None
 
   let apply_relation_arithmetic db relation op terms output_var =
@@ -910,7 +938,7 @@ end) = struct
           | None -> None
           | Some value -> bind_output value row)
       in
-      Some { relation with attrs; rows; unique_rows = false }
+      Some { relation with attrs; rows; unique_rows = relation.unique_rows }
 
   let relation_of_pattern_with_comparison db source terms predicate left_term right_term =
     match source, terms with
@@ -930,7 +958,8 @@ end) = struct
       let attrs = unique_vars terms in
       let lookup_vars = relation_lookup_vars source_db terms in
       let rows = relation_rows_of_pattern_datoms source_context source_db attrs terms datoms in
-      Some { attrs; rows; lookup_vars; unique_rows = false }
+      let unique_rows = List.for_all (fun term -> term <> QWildcard) terms in
+      Some { attrs; rows; lookup_vars; unique_rows }
     | _ -> None
 
   let relation_of_same_entity_patterns db source clauses =
