@@ -734,13 +734,29 @@ end) = struct
          let left_index = relation_attr_index left.attrs attr in
          let right_index = relation_attr_index pattern_attrs attr in
          let right_only_indexes = List.map (relation_attr_index pattern_attrs) right_only in
+         (* Entity join keys (the common case) hash on plain ints; the
+            generic normalized-key table is only populated if a non-entity
+            left key shows up. *)
+         let all_left_entity = ref true in
+         let grouped_entities = Hashtbl.create (List.length left.rows) in
          let grouped = Hashtbl.create (List.length left.rows) in
          List.iter
            (fun left_row ->
-             let key = key_value (row_value left_row left_index) in
-             match Hashtbl.find_opt grouped key with
-             | Some left_rows -> Hashtbl.replace grouped key (left_row :: left_rows)
-             | None -> Hashtbl.add grouped key [ left_row ])
+             match key_value (row_value left_row left_index), !all_left_entity with
+             | Result_entity entity_id, true ->
+               (match Hashtbl.find_opt grouped_entities entity_id with
+                | Some left_rows -> Hashtbl.replace grouped_entities entity_id (left_row :: left_rows)
+                | None -> Hashtbl.add grouped_entities entity_id [ left_row ])
+             | key, _ ->
+               if !all_left_entity then (
+                 all_left_entity := false;
+                 Hashtbl.iter
+                   (fun entity_id left_rows -> Hashtbl.add grouped (Result_entity entity_id) left_rows)
+                   grouped_entities;
+                 Hashtbl.reset grouped_entities);
+               (match Hashtbl.find_opt grouped key with
+                | Some left_rows -> Hashtbl.replace grouped key (left_row :: left_rows)
+                | None -> Hashtbl.add grouped key [ left_row ]))
            left.rows;
          (* Right relations can far outsize the left side; pre-size the
             uniqueness table so it does not rehash per growth step. *)
@@ -757,24 +773,55 @@ end) = struct
          in
          let rows = ref [] in
          let all_right_keys_unique = ref true in
-         let seen_keys = Hashtbl.create right_size_hint in
-         source_context.pattern_datoms source_db e_term a_term v_term None
-         |> Seq.iter (fun datom ->
-           match right_row_of_datom datom with
-           | Some right_row ->
-             let key = key_value (row_value right_row right_index) in
-             if Hashtbl.mem seen_keys key then
-               all_right_keys_unique := false
-             else
-               Hashtbl.add seen_keys key ();
-             (match Hashtbl.find_opt grouped key with
-              | Some left_rows ->
-                List.iter
-                  (fun left_row ->
-                    rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
-                  left_rows
-              | None -> ())
-           | None -> ());
+         let track_unique = left.unique_rows in
+         let emit_match right_row left_rows =
+           List.iter
+             (fun left_row ->
+               rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
+             left_rows
+         in
+         if !all_left_entity then (
+           (* Every left key is an entity id, so a non-entity right key can
+              never match; it still counts toward right-key uniqueness. *)
+           let seen_entities = Hashtbl.create right_size_hint in
+           let seen_other = Hashtbl.create 16 in
+           source_context.pattern_datoms source_db e_term a_term v_term None
+           |> Seq.iter (fun datom ->
+             match right_row_of_datom datom with
+             | Some right_row ->
+               (match key_value (row_value right_row right_index) with
+                | Result_entity entity_id ->
+                  if track_unique then
+                    if Hashtbl.mem seen_entities entity_id then
+                      all_right_keys_unique := false
+                    else
+                      Hashtbl.add seen_entities entity_id ();
+                  (match Hashtbl.find_opt grouped_entities entity_id with
+                   | Some left_rows -> emit_match right_row left_rows
+                   | None -> ())
+                | key ->
+                  if track_unique then
+                    if Hashtbl.mem seen_other key then
+                      all_right_keys_unique := false
+                    else
+                      Hashtbl.add seen_other key ())
+             | None -> ()))
+         else (
+           let seen_keys = Hashtbl.create right_size_hint in
+           source_context.pattern_datoms source_db e_term a_term v_term None
+           |> Seq.iter (fun datom ->
+             match right_row_of_datom datom with
+             | Some right_row ->
+               let key = key_value (row_value right_row right_index) in
+               if track_unique then
+                 if Hashtbl.mem seen_keys key then
+                   all_right_keys_unique := false
+                 else
+                   Hashtbl.add seen_keys key ();
+               (match Hashtbl.find_opt grouped key with
+                | Some left_rows -> emit_match right_row left_rows
+                | None -> ())
+             | None -> ()));
          Some
            { attrs = left.attrs @ right_only
            ; rows = List.rev !rows
