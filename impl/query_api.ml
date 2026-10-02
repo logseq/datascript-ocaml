@@ -166,22 +166,72 @@ end) = struct
     | [], _ :: _ -> -1
     | _ :: _, [] -> 1
 
+  (* Typed hash for dedup tables — caml_hash walks the generic runtime
+     representation and is markedly slower than hashing each leaf by
+     constructor. Result_db/Result_pull never appear in result rows. *)
+  let rec query_result_hash = function
+    | Result_entity e -> e * 5 + 1
+    | Result_attr a -> Hashtbl.hash a * 31 + 2
+    | Result_value v -> query_value_hash v * 31 + 3
+    | Result_db _ -> 0
+    | Result_pull _ -> 1
+  and query_value_hash = function
+    | Int64 i -> Hashtbl.hash i * 7 + 11
+    | Float f -> Hashtbl.hash f * 7 + 12
+    | String s | Symbol s | Uuid s | Regex s -> Hashtbl.hash s * 7 + 13
+    | Keyword s -> Hashtbl.hash s * 7 + 14
+    | Bool b -> Hashtbl.hash b * 7 + 15
+    | Instant i -> Hashtbl.hash i * 7 + 16
+    | Ref e -> e * 7 + 17
+    | List vs | Vector vs | Set vs ->
+      List.fold_left (fun acc v -> acc * 7 + query_value_hash v) 18 vs
+    | Tuple vs ->
+      List.fold_left
+        (fun acc v ->
+          match v with
+          | Some v -> acc * 7 + query_value_hash v
+          | None -> acc * 7 + 1)
+        19 vs
+    | Map entries ->
+      List.fold_left
+        (fun acc (k, v) -> acc * 7 + query_value_hash k + query_value_hash v)
+        20 entries
+    | Nil | TxRef | Ref_to _ -> 0
+
+  module Array_row_table = Hashtbl.Make (struct
+    type t = query_result array
+
+    let equal (a : t) (b : t) = a = b
+
+    let hash row = Array.fold_left (fun acc v -> acc * 31 + query_result_hash v) 0 row
+  end)
+
+  module List_row_table = Hashtbl.Make (struct
+    type t = query_result list
+
+    let equal (a : t) (b : t) = a = b
+
+    let hash row = List.fold_left (fun acc v -> acc * 31 + query_result_hash v) 0 row
+  end)
+
   (* O(n) hash dedup preserving first-occurrence order. [q] results are
      sets, so row order is unspecified — sorting survivors would only add
      O(n log n) cost for no observable difference. *)
   let dedup rows =
-    let seen = Hashtbl.create (List.length rows) in
+    let seen = List_row_table.create (List.length rows) in
     List.fold_left
       (fun acc row ->
-        if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
+        if List_row_table.mem seen row then acc
+        else (List_row_table.add seen row (); row :: acc))
       [] rows
     |> List.rev
 
   let dedup_rows_array rows =
-    let seen = Hashtbl.create (List.length rows) in
+    let seen = Array_row_table.create (List.length rows) in
     List.fold_left
       (fun acc row ->
-        if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
+        if Array_row_table.mem seen row then acc
+        else (Array_row_table.add seen row (); row :: acc))
       [] rows
     |> List.rev
 
@@ -212,13 +262,13 @@ end) = struct
       else
         (* Fuse projection + dedup: hash projected rows, convert only
            survivors to list rows. *)
-        let seen = Hashtbl.create (List.length rows) in
+        let seen = Array_row_table.create (List.length rows) in
         Some
           (List.fold_left
              (fun acc row ->
                let projected = project row in
-               if Hashtbl.mem seen projected then acc
-               else (Hashtbl.add seen projected (); Array.to_list projected :: acc))
+               if Array_row_table.mem seen projected then acc
+               else (Array_row_table.add seen projected (); Array.to_list projected :: acc))
              [] rows
            |> List.rev)
 
