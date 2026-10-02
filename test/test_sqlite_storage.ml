@@ -191,7 +191,7 @@ let assert_raises_invalid_arg label f =
   | _ -> failf "%s: expected Invalid_argument" label
 
 let assert_equal_query label expected actual =
-  if expected <> actual then
+  if List.sort compare expected <> List.sort compare actual then
     failf "%s: unexpected query result" label
 
 let rec string_of_value = function
@@ -1264,26 +1264,38 @@ let test_sqlite_storage_backed_query_result_shapes_after_restore () =
         | Some conn -> conn_db conn
         | None -> failwith "SQLite storage should restore conn for query result-shape test"
       in
+      let collection_names =
+        match q_return_string db "[:find [?name ...] :where [_ :name ?name]]" with
+        | Query_collection rows -> List.sort compare rows
+        | _ -> []
+      in
       if
-        q_return_string db "[:find [?name ...] :where [_ :name ?name]]"
-        <> Query_collection
-             [ Result_value (String "Ivan")
-             ; Result_value (String "Petr")
-             ; Result_value (String "Sergey")
-             ]
+        collection_names
+        <> [ Result_value (String "Ivan")
+           ; Result_value (String "Petr")
+           ; Result_value (String "Sergey")
+           ]
       then failwith "SQLite restored db should support collection find specs";
       if
         q_return_string db "[:find (count ?name) . :where [_ :name ?name]]"
         <> Query_scalar (Some (Result_value (Int64 3L)))
       then failwith "SQLite restored db should support scalar aggregate find specs";
+      let relation_maps =
+        match
+          q_return_map_string
+            db
+            "[:find ?name ?age
+              :keys n a
+              :where [?e :name ?name]
+                     [?e :age ?age]]"
+        with
+        | Query_relation_maps rows -> List.sort compare rows
+        | _ -> []
+      in
       if
-        q_return_map_string
-          db
-          "[:find ?name ?age
-            :keys n a
-            :where [?e :name ?name]
-                   [?e :age ?age]]"
-        <> Query_relation_maps
+        relation_maps
+        <> List.sort
+             compare
              [ [ Keyword "a", Result_value (Int64 25L); Keyword "n", Result_value (String "Ivan") ]
              ; [ Keyword "a", Result_value (Int64 44L); Keyword "n", Result_value (String "Petr") ]
              ; [ Keyword "a", Result_value (Int64 11L); Keyword "n", Result_value (String "Sergey") ]

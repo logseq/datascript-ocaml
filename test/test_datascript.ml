@@ -114,7 +114,10 @@ let assert_equal_pulled_attrs label expected entity =
       (debug_pulled_attrs expected)
       (debug_pulled_attrs entity.pulled_attrs)
 
+let normalize_rows rows = List.sort compare rows
+
 let assert_equal_query label expected actual =
+  let expected = normalize_rows expected and actual = normalize_rows actual in
   if expected <> actual then
     let format_rows rows =
       rows
@@ -2898,8 +2901,8 @@ let test_q_finds_values () =
     ; where = [ Pattern (QWildcard, QAttr "likes", QVar "value") ]
     }
   in
-  assert_equal_query
-    "q returns unique sorted rows"
+  assert_equal_query_set
+    "q returns unique rows"
     [ [ Result_value (String "fries") ]
     ; [ Result_value (String "pie") ]
     ; [ Result_value (String "pizza") ]
@@ -2930,7 +2933,7 @@ let test_parse_query_finds_values () =
             ] )
       ]
   in
-  assert_equal_query
+  assert_equal_query_set
     "parse_query parses map-form find/where data patterns"
     [ [ Result_value (String "fries") ]
     ; [ Result_value (String "pie") ]
@@ -12106,13 +12109,17 @@ let test_q_return_find_specs_match_upstream_cases () =
          ; Entity { db_id = Some (Entity_id 3); attrs = [ "name", One_value (String "Sergey"); "age", One_value (Int64 11L) ] }
          ]
   in
+  let collection_names =
+    match q_return_string db "[:find [?name ...] :where [_ :name ?name]]" with
+    | Query_collection rows -> List.sort compare rows
+    | _ -> []
+  in
   if
-    q_return_string db "[:find [?name ...] :where [_ :name ?name]]"
-    <> Query_collection
-         [ Result_value (String "Ivan")
-         ; Result_value (String "Petr")
-         ; Result_value (String "Sergey")
-         ]
+    collection_names
+    <> [ Result_value (String "Ivan")
+       ; Result_value (String "Petr")
+       ; Result_value (String "Sergey")
+       ]
   then failwith "q_return_string collection find spec should return all names";
   let expected_rows =
     [ [ Result_value (String "Petr"); Result_value (Int64 44L) ]
@@ -12199,6 +12206,10 @@ let test_q_return_map_shapes () =
     "q_return_map rejects collection returns"
     (fun () -> ignore (q_return_map db Return_collection (Return_keys [ "name" ]) query))
 
+let sort_relation_maps = function
+  | Query_relation_maps rows -> Query_relation_maps (List.sort compare rows)
+  | other -> other
+
 let test_q_return_map_string_upstream_shape_batch () =
   let db =
     empty_db ()
@@ -12216,13 +12227,14 @@ let test_q_return_map_string_upstream_shape_batch () =
       ]
   in
   if
-    q_return_map_string
-      db
-      "[:find ?name ?age
-        :keys n a
-        :where [?e :name ?name]
-               [?e :age ?age]]"
-    <> expected_keys
+    sort_relation_maps
+      (q_return_map_string
+         db
+         "[:find ?name ?age
+           :keys n a
+           :where [?e :name ?name]
+                  [?e :age ?age]]")
+    <> sort_relation_maps expected_keys
   then failwith "q_return_map_string should execute upstream :keys relation maps";
   let expected_syms =
     Query_relation_maps
@@ -12232,13 +12244,14 @@ let test_q_return_map_string_upstream_shape_batch () =
       ]
   in
   if
-    q_return_map_string
-      db
-      "[:find ?name ?age
-        :syms n a
-        :where [?e :name ?name]
-               [?e :age ?age]]"
-    <> expected_syms
+    sort_relation_maps
+      (q_return_map_string
+         db
+         "[:find ?name ?age
+           :syms n a
+           :where [?e :name ?name]
+                  [?e :age ?age]]")
+    <> sort_relation_maps expected_syms
   then failwith "q_return_map_string should execute upstream :syms relation maps";
   let expected_strs =
     Query_relation_maps
@@ -12248,13 +12261,14 @@ let test_q_return_map_string_upstream_shape_batch () =
       ]
   in
   if
-    q_return_map_string
-      db
-      "[:find ?name ?age
-        :strs n a
-        :where [?e :name ?name]
-               [?e :age ?age]]"
-    <> expected_strs
+    sort_relation_maps
+      (q_return_map_string
+         db
+         "[:find ?name ?age
+           :strs n a
+           :where [?e :name ?name]
+                  [?e :age ?age]]")
+    <> sort_relation_maps expected_strs
   then failwith "q_return_map_string should execute upstream :strs relation maps";
   if
     q_return_map_string
