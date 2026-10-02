@@ -135,7 +135,7 @@ end) = struct
 
   type relation =
     { attrs : string list
-    ; rows : query_result list list
+    ; rows : query_result array list
     ; lookup_vars : (string * db) list
     ; unique_rows : bool
     }
@@ -152,7 +152,7 @@ end) = struct
 
   let binding_row attrs binding =
     let rec collect acc = function
-      | [] -> Some (List.rev acc)
+      | [] -> Some (Array.of_list (List.rev acc))
       | attr :: rest ->
         (match List.assoc_opt attr binding with
          | Some value -> collect (value :: acc) rest
@@ -179,23 +179,9 @@ end) = struct
     | 4 -> Query.result_of_datom_op datom
     | _ -> invalid_arg "invalid datom pattern position"
 
-  let row_value row index =
-    match index, row with
-    | 0, value :: _ -> value
-    | 1, _ :: value :: _ -> value
-    | 2, _ :: _ :: value :: _ -> value
-    | 3, _ :: _ :: _ :: value :: _ -> value
-    | _ ->
-      let rec loop current = function
-        | [] -> invalid_arg "relation row is missing a value"
-        | value :: _ when current = index -> value
-        | _ :: rest -> loop (current + 1) rest
-      in
-      loop 0 row
+  let row_value row index = Array.get row index
 
-  let row_values row = row
-
-  let row_binding attrs row = List.combine attrs row
+  let row_binding attrs row = List.combine attrs (Array.to_list row)
 
   let direct_pattern_row attrs terms =
     let positions =
@@ -208,7 +194,7 @@ end) = struct
         in
         find 0 terms)
     in
-    fun datom -> List.map (result_of_pattern_position datom) positions
+    fun datom -> Array.of_list (List.map (result_of_pattern_position datom) positions)
 
   let relation_lookup_vars source_db terms =
     let add_var vars = function
@@ -445,18 +431,14 @@ end) = struct
       indexes
 
   let append_relation_rows right_only_indexes left_row right_row =
-    match right_only_indexes, left_row with
-    | [], _ -> left_row
-    | [ index ], [] -> [ row_value right_row index ]
-    | [ index ], [ left0 ] -> [ left0; row_value right_row index ]
-    | [ index ], [ left0; left1 ] -> [ left0; left1; row_value right_row index ]
-    | [ index ], [ left0; left1; left2 ] -> [ left0; left1; left2; row_value right_row index ]
-    | _ ->
-      let extra_right_values =
-        right_only_indexes
-        |> List.map (fun index -> row_value right_row index)
-      in
-      left_row @ extra_right_values
+    match right_only_indexes with
+    | [] -> left_row
+    | [ index ] ->
+      let out = Array.make (Array.length left_row + 1) (row_value right_row index) in
+      Array.blit left_row 0 out 0 (Array.length left_row);
+      out
+    | indexes ->
+      Array.append left_row (Array.of_list (List.map (fun index -> row_value right_row index) indexes))
 
   let hash_join left right =
     let common = List.filter (fun attr -> List.mem attr right.attrs) left.attrs in
@@ -469,9 +451,9 @@ end) = struct
         left.lookup_vars
         right.lookup_vars
     in
-    if left.attrs = [] && left.rows = [ [] ] then
+    if left.attrs = [] && left.rows = [ [| |] ] then
       { right with lookup_vars }
-    else if right.attrs = [] && right.rows = [ [] ] then
+    else if right.attrs = [] && right.rows = [ [| |] ] then
       { left with lookup_vars }
     else if common = [] then
       { attrs
@@ -479,7 +461,7 @@ end) = struct
           List.concat_map
             (fun left_row ->
               List.map
-                (fun right_row -> left_row @ right_row)
+                (fun right_row -> Array.append left_row right_row)
                 right.rows)
             left.rows
       ; lookup_vars
@@ -788,12 +770,9 @@ end) = struct
     { relation with rows }
 
   let append_relation_value row value =
-    match row with
-    | [] -> [ value ]
-    | [ first ] -> [ first; value ]
-    | [ first; second ] -> [ first; second; value ]
-    | [ first; second; third ] -> [ first; second; third; value ]
-    | _ -> row @ [ value ]
+    let out = Array.make (Array.length row + 1) value in
+    Array.blit row 0 out 0 (Array.length row);
+    out
 
   let bind_relation_output_at db output_var output_index result row =
     match output_index with
@@ -1299,7 +1278,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ Result_entity scan_datom.e; result_of_pattern_position scan_datom 2 ] :: acc) rest
+                      collect ([| Result_entity scan_datom.e; result_of_pattern_position scan_datom 2 |] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -1310,7 +1289,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ Result_entity scan_datom.e; Result_value scan_datom.v ] :: acc) rest
+                      collect ([| Result_entity scan_datom.e; Result_value scan_datom.v |] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -1335,7 +1314,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ result_of_pattern_position scan_datom 2; Result_entity scan_datom.e ] :: acc) rest
+                      collect ([| result_of_pattern_position scan_datom 2; Result_entity scan_datom.e |] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -1346,7 +1325,7 @@ end) = struct
                   | Seq.Nil -> List.rev acc
                   | Seq.Cons (scan_datom, rest) ->
                     if entity_allowed scan_datom.e then
-                      collect ([ Result_value scan_datom.v; Result_entity scan_datom.e ] :: acc) rest
+                      collect ([| Result_value scan_datom.v; Result_entity scan_datom.e |] :: acc) rest
                     else
                       collect acc rest
                 in
@@ -1404,18 +1383,18 @@ end) = struct
                   | [ first; second ] ->
                     let* first = value_of_slot scan_datom first in
                     let* second = value_of_slot scan_datom second in
-                    Some [ first; second ]
+                    Some [| first; second |]
                   | [ first; second; third ] ->
                     let* first = value_of_slot scan_datom first in
                     let* second = value_of_slot scan_datom second in
                     let* third = value_of_slot scan_datom third in
-                    Some [ first; second; third ]
+                    Some [| first; second; third |]
                   | [ first; second; third; fourth ] ->
                     let* first = value_of_slot scan_datom first in
                     let* second = value_of_slot scan_datom second in
                     let* third = value_of_slot scan_datom third in
                     let* fourth = value_of_slot scan_datom fourth in
-                    Some [ first; second; third; fourth ]
+                    Some [| first; second; third; fourth |]
                   | _ ->
                     slots
                     |> List.fold_left
@@ -1424,7 +1403,7 @@ end) = struct
                            | None -> None
                            | Some row -> Option.map (fun value -> value :: row) (value_of_slot scan_datom slot))
                          (Some [])
-                    |> Option.map List.rev
+                    |> Option.map (fun row -> Array.of_list (List.rev row))
                 in
                 let rec collect acc seq =
                   match seq () with
@@ -1522,7 +1501,7 @@ end) = struct
         if binding_attrs <> attrs then
           None
         else
-          Some (List.map (fun attr -> List.assoc attr binding) attrs)
+          Some (Array.of_list (List.map (fun attr -> List.assoc attr binding) attrs))
       in
       let rows = List.filter_map row_of_binding bindings in
       if List.length rows = List.length bindings then
@@ -1550,9 +1529,10 @@ end) = struct
   let project_relation vars relation =
     ensure_relation_vars_bound relation vars;
     let indexes = List.map (relation_attr_index relation.attrs) vars in
+    let index_array = Array.of_list indexes in
     let rows =
       relation.rows
-      |> List.map (fun row -> List.map (fun index -> row_value row index) indexes)
+      |> List.map (fun row -> Array.map (fun index -> row_value row index) index_array)
     in
     let lookup_vars =
       relation.lookup_vars
@@ -2209,18 +2189,20 @@ end) = struct
     in
     match relation_of_same_entity_patterns db default_source clauses with
     | Some relation -> Some relation
-    | None -> apply { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true } clauses
+    | None -> apply { attrs = []; rows = [ [| |] ]; lookup_vars = []; unique_rows = true } clauses
 
   let eval_relation_rows db sources rules bindings clauses =
     let default_source = source db sources "$" in
     match rules, bindings, relation_only_clauses clauses with
     | [], [ [] ], true ->
       eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
+      |> Option.map (fun relation ->
+        relation.attrs, List.map Array.to_list relation.rows, relation.unique_rows)
     | [], [ binding ], true ->
       let clauses = List.map (bound_relation_clause binding) clauses in
       eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
+      |> Option.map (fun relation ->
+        relation.attrs, List.map Array.to_list relation.rows, relation.unique_rows)
     | _ -> None
 
   let eval_relation_clauses ?(allow_initial_bindings = false) db sources default_source bindings clauses =
@@ -2425,7 +2407,7 @@ end) = struct
       in
       let* initial_relation =
         match single_binding with
-        | Some _ -> Some { attrs = []; rows = [ [] ]; lookup_vars = []; unique_rows = true }
+        | Some _ -> Some { attrs = []; rows = [ [| |] ]; lookup_vars = []; unique_rows = true }
         | None -> relation_of_bindings bindings
       in
       let* bindings = apply initial_relation clauses in
