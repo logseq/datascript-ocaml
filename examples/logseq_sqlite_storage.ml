@@ -218,7 +218,7 @@ let transit_of_tuple_attrs attrs =
 let transit_of_tuple_types types =
   Transit.Array (List.map transit_of_value_type types)
 
-let schema_attr_to_transit attr =
+let schema_attr_to_transit ~ident_backed attr ident =
   let entries = ref [] in
   let add key value = entries := (Transit.Keyword key, value) :: !entries in
   if attr.cardinality <> One then add "db/cardinality" (transit_of_cardinality attr.cardinality);
@@ -230,13 +230,20 @@ let schema_attr_to_transit attr =
   Option.iter (fun value_type -> add "db/valueType" (transit_of_value_type value_type)) attr.value_type;
   Option.iter (fun attrs -> add "db/tupleAttrs" (transit_of_tuple_attrs attrs)) attr.tuple_attrs;
   Option.iter (fun types -> add "db/tupleTypes" (transit_of_tuple_types types)) attr.tuple_types;
+  (* cljs update-schema merges {:db/ident ident} into the attr's spec map *)
+  if ident_backed then add "db/ident" (Transit.Keyword ident);
   Transit.Map (List.rev !entries)
 
-let schema_to_transit schema =
+let schema_to_transit ?(eids = []) schema =
   Transit.Map
-    (schema
-     |> List.map (fun (attr, schema_attr) ->
-       Transit.Keyword attr, schema_attr_to_transit schema_attr))
+    ((schema
+      |> List.map (fun (attr, schema_attr) ->
+        ( Transit.Keyword attr
+        , schema_attr_to_transit
+            ~ident_backed:(List.exists (fun (_, ident) -> String.equal ident attr) eids)
+            schema_attr
+            attr )))
+     @ List.map (fun (eid, ident) -> Transit.Int eid, Transit.Keyword ident) eids)
 
 let rec value_to_transit = function
   | Nil -> Transit.Null
@@ -283,7 +290,7 @@ let optional_metadata_entry key = function
 
 let storage_root_to_transit root =
   Transit.Map
-    ([ Transit.Keyword "schema", schema_to_transit root.storage_schema
+    ([ Transit.Keyword "schema", schema_to_transit ~eids:root.storage_schema_idents root.storage_schema
      ; Transit.Keyword "max-eid", Transit.Int root.storage_max_eid
      ; Transit.Keyword "max-tx", Transit.Int root.storage_max_tx
      ; Transit.Keyword "eavt", Transit.Int (sqlite_addr_of_storage_address root.storage_eavt)
@@ -389,6 +396,15 @@ let schema_of_transit = function
       | None -> None)
   | _ -> []
 
+let schema_eids_of_transit = function
+  | Transit.Map entries ->
+    entries
+    |> List.filter_map (fun (key, value) ->
+      match int_of_transit_value key, keyword_of_transit value with
+      | Some eid, Some ident -> Some (eid, ident)
+      | _ -> None)
+  | _ -> []
+
 let ref_type_of_transit = function
   | Transit.Keyword "weak" -> PSet.Weak
   | Transit.Keyword "strong" | _ -> PSet.Strong
@@ -472,6 +488,7 @@ let storage_root_of_transit entries =
     | _ -> None
   in
   { storage_schema = schema_of_transit (find "schema")
+  ; storage_schema_idents = schema_eids_of_transit (find "schema")
   ; storage_max_eid = int_of_transit "storage root :max-eid" (find "max-eid")
   ; storage_max_tx = int_of_transit "storage root :max-tx" (find "max-tx")
   ; storage_eavt =

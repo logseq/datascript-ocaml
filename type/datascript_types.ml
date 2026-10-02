@@ -85,6 +85,10 @@ type storage_index_metadata =
 
 type storage_root =
   { storage_schema : schema
+  ; (* cljs datascript's schema map also carries eid -> :db/ident entries
+       for every attribute installed through a :db/ident datom; keeping
+       them lets the stored root match cljs's payload shape *)
+    storage_schema_idents : (entity_id * attr) list
   ; storage_max_eid : entity_id
   ; storage_max_tx : tx
   ; storage_eavt : storage_address
