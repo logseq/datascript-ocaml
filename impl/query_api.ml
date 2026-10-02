@@ -70,6 +70,102 @@ end) = struct
       in
       collect [] find
 
+  (* Typed row comparator: polymorphic [compare] on query_result rows
+     pays the generic runtime dispatch (caml_compare/do_key) per node
+     and dominated join query profiles. Ordering reproduces the
+     polymorphic contract exactly: constructor declaration order across
+     variants, then per-argument comparison. *)
+  let rec compare_query_value left right =
+    match left, right with
+    | Nil, Nil -> 0
+    | Int64 left, Int64 right -> Int64.compare left right
+    | Float left, Float right -> compare left right
+    | String left, String right -> compare left right
+    | Symbol left, Symbol right -> compare left right
+    | Bool left, Bool right -> compare left right
+    | Keyword left, Keyword right -> compare left right
+    | Uuid left, Uuid right -> compare left right
+    | Instant left, Instant right -> Int64.compare left right
+    | Regex left, Regex right -> compare left right
+    | Ref left, Ref right -> compare left right
+    | List left, List right -> compare_value_list left right
+    | Vector left, Vector right -> compare_value_list left right
+    | Tuple left, Tuple right ->
+      let rec loop left right =
+        match left, right with
+        | [], [] -> 0
+        | Some left :: ls, Some right :: rs ->
+          let order = compare_query_value left right in
+          if order <> 0 then order else loop ls rs
+        | None :: ls, None :: rs -> loop ls rs
+        | Some _ :: _, None :: _ -> 1
+        | None :: _, Some _ :: _ -> -1
+        | [], _ :: _ -> -1
+        | _ :: _, [] -> 1
+      in
+      loop left right
+    | Map _, Map _ | Set _, Set _ | TxRef, TxRef | Ref_to _, Ref_to _ ->
+      compare left right
+    | _ -> compare (value_rank left) (value_rank right)
+
+  and compare_value_list left right =
+    match left, right with
+    | [], [] -> 0
+    | left :: ls, right :: rs ->
+      let order = compare_query_value left right in
+      if order <> 0 then order else compare_value_list ls rs
+    | [], _ :: _ -> -1
+    | _ :: _, [] -> 1
+
+  and value_rank = function
+    (* OCaml compare orders immediate constructors (no arguments)
+       before block constructors; within each group the order follows
+       declaration order. *)
+    | Nil -> 0
+    | TxRef -> 1
+    | Int64 _ -> 2
+    | Float _ -> 3
+    | String _ -> 4
+    | Symbol _ -> 5
+    | Bool _ -> 6
+    | Keyword _ -> 7
+    | Uuid _ -> 8
+    | Instant _ -> 9
+    | Regex _ -> 10
+    | Ref _ -> 11
+    | List _ -> 12
+    | Vector _ -> 13
+    | Map _ -> 14
+    | Set _ -> 15
+    | Tuple _ -> 16
+    | Ref_to _ -> 17
+
+  let compare_query_result left right =
+    match left, right with
+    | Result_entity left, Result_entity right -> compare left right
+    | Result_attr left, Result_attr right -> compare left right
+    | Result_value left, Result_value right -> compare_query_value left right
+    | Result_db _, Result_db _ | Result_pull _, Result_pull _ ->
+      compare left right
+    | _ ->
+      let rank = function
+        | Result_entity _ -> 0
+        | Result_attr _ -> 1
+        | Result_value _ -> 2
+        | Result_db _ -> 3
+        | Result_pull _ -> 4
+      in
+      compare (rank left) (rank right)
+
+  let rec compare_rows left right =
+    match left, right with
+    | [], [] -> 0
+    | left :: ls, right :: rs ->
+      let order = compare_query_result left right in
+      if order <> 0 then order else compare_rows ls rs
+    | [], _ :: _ -> -1
+    | _ :: _, [] -> 1
+
   let sort_uniq_presorted compare rows =
     let rec collect previous acc = function
       | [] -> Some (List.rev acc)
@@ -92,7 +188,7 @@ end) = struct
   let relation_rows_for_plain_find attrs rows unique_rows find =
     let* find_vars = find_var_names find in
     if find_vars = attrs then
-      Some (if unique_rows then rows else sort_uniq_presorted compare rows)
+      Some (if unique_rows then rows else sort_uniq_presorted compare_rows rows)
     else
       let* indexes =
         find_vars
@@ -109,7 +205,7 @@ end) = struct
       in
       rows
       |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
-      |> sort_uniq_presorted compare
+      |> sort_uniq_presorted compare_rows
       |> fun rows -> Some rows
 
   let find_spec_vars = function
@@ -132,7 +228,7 @@ end) = struct
       if required_vars <> [] && List.for_all (fun var -> List.mem var attrs) required_vars then
         rows
         |> List.filter_map (fun row -> collect_find_specs db sources (List.combine attrs row) find)
-        |> List.sort_uniq compare
+        |> sort_uniq_presorted compare_rows
         |> fun rows -> Some rows
       else
         None
@@ -146,7 +242,7 @@ end) = struct
       |> List.filter_map (fun binding ->
         Query.collect_find_vars binding vars
         |> Option.map (fun key -> key, binding))
-      |> List.sort_uniq (fun (left, _) (right, _) -> compare left right)
+      |> List.sort_uniq (fun (left, _) (right, _) -> compare_rows left right)
       |> List.map snd
   
   let q_sources_raw ?(inputs = []) db sources query =
@@ -171,13 +267,13 @@ end) = struct
            bindings
            |> fun bindings -> dedupe_bindings_for_find bindings query.find
            |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-           |> List.sort_uniq compare)
+           |> List.sort_uniq compare_rows)
       | None ->
         let bindings = eval_clauses ~callables db sources rules input_bindings where in
         bindings
         |> fun bindings -> dedupe_bindings_for_find bindings query.find
         |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-        |> List.sort_uniq compare
+        |> List.sort_uniq compare_rows
     else (
       let bindings = eval_clauses ~callables db sources rules input_bindings where in
       if has_aggregates then
@@ -191,7 +287,7 @@ end) = struct
       bindings
       |> fun bindings -> dedupe_bindings_for_find bindings query.find
       |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-      |> List.sort_uniq compare)
+      |> List.sort_uniq compare_rows)
   
   let q_with_raw ?(inputs = []) db with_vars query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
