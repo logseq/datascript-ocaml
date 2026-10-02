@@ -32,11 +32,29 @@ type context =
   ; compare_value : value -> value -> int
   }
 
+(* Adjacency index for a linear transitive-closure rule such as
+   [(name ?p ?c) [?c :attr ?p]] / [(name ?p ?c) [?t :attr ?p] (name ?t ?c)],
+   i.e. "?p is an ancestor of ?c along :attr edges".  Built once per
+   (source, attr) inside one query evaluation. *)
+type closure_index =
+  { up : (int, value list) Hashtbl.t
+  ; down : (int, int list) Hashtbl.t
+  ; leaf_up : (int, value list) Hashtbl.t
+  ; leaf_down : (value, int list) Hashtbl.t
+  ; anc : (int, value list) Hashtbl.t
+  ; desc : (int, int list) Hashtbl.t
+  }
+
+type query_closure_cache =
+  { closures : (string * string, closure_index) Hashtbl.t
+  }
+
 type query_callables =
   { callable_predicates : (string * (query_result list -> bool)) list
   ; callable_functions : (string * (query_result list -> query_result list option)) list
   ; callable_aggregates : (string * (query_result list -> query_result)) list
   ; callable_aliases : (string * string) list
+  ; closure_cache : query_closure_cache option
   }
 
 type result_resolution_context =
@@ -113,6 +131,7 @@ let empty_query_callables =
   ; callable_functions = []
   ; callable_aggregates = []
   ; callable_aliases = []
+  ; closure_cache = None
   }
 
 let q_sources context ?inputs db sources query =
@@ -719,17 +738,20 @@ let aggregate_values context default_db sources group_bindings terms =
     group_bindings
 
 let query_callables_of_inputs inputs =
-  inputs
-  |> List.fold_left
-       (fun callables -> function
-         | Input_predicate (var, predicate) ->
-           { callables with callable_predicates = (var, predicate) :: callables.callable_predicates }
-         | Input_function (var, f) ->
-           { callables with callable_functions = (var, f) :: callables.callable_functions }
-         | Input_aggregate (var, f) ->
-           { callables with callable_aggregates = (var, f) :: callables.callable_aggregates }
-         | _ -> callables)
-       empty_query_callables
+  let callables =
+    inputs
+    |> List.fold_left
+         (fun callables -> function
+           | Input_predicate (var, predicate) ->
+             { callables with callable_predicates = (var, predicate) :: callables.callable_predicates }
+           | Input_function (var, f) ->
+             { callables with callable_functions = (var, f) :: callables.callable_functions }
+           | Input_aggregate (var, f) ->
+             { callables with callable_aggregates = (var, f) :: callables.callable_aggregates }
+           | _ -> callables)
+         empty_query_callables
+  in
+  { callables with closure_cache = Some { closures = Hashtbl.create 4 } }
 
 let query_rules_of_inputs inputs =
   inputs

@@ -1747,11 +1747,25 @@ module Query_impl = Query
 let query_context = Query_api_impl.query_context
 
 module Query = struct
+  type closure_index = Query_impl.closure_index =
+    { up : (int, value list) Hashtbl.t
+    ; down : (int, int list) Hashtbl.t
+    ; leaf_up : (int, value list) Hashtbl.t
+    ; leaf_down : (value, int list) Hashtbl.t
+    ; anc : (int, value list) Hashtbl.t
+    ; desc : (int, int list) Hashtbl.t
+    }
+
+  type query_closure_cache = Query_impl.query_closure_cache =
+    { closures : (string * string, closure_index) Hashtbl.t
+    }
+
   type query_callables = Query_impl.query_callables =
     { callable_predicates : (string * (query_result list -> bool)) list
     ; callable_functions : (string * (query_result list -> query_result list option)) list
     ; callable_aggregates : (string * (query_result list -> query_result)) list
     ; callable_aliases : (string * string) list
+    ; closure_cache : query_closure_cache option
     }
 
   type result_resolution_context = Query_impl.result_resolution_context =

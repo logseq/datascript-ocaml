@@ -500,11 +500,25 @@ val parse_query_return_map_string_with_pull_context :
   query_return * query_return_map option * query
 
 module Query : sig
+  type closure_index =
+    { up : (int, value list) Hashtbl.t
+    ; down : (int, int list) Hashtbl.t
+    ; leaf_up : (int, value list) Hashtbl.t
+    ; leaf_down : (value, int list) Hashtbl.t
+    ; anc : (int, value list) Hashtbl.t
+    ; desc : (int, int list) Hashtbl.t
+    }
+
+  type query_closure_cache =
+    { closures : (string * string, closure_index) Hashtbl.t
+    }
+
   type query_callables =
     { callable_predicates : (string * (query_result list -> bool)) list
     ; callable_functions : (string * (query_result list -> query_result list option)) list
     ; callable_aggregates : (string * (query_result list -> query_result)) list
     ; callable_aliases : (string * string) list
+    ; closure_cache : query_closure_cache option
     }
 
   type result_resolution_context =

@@ -2623,6 +2623,237 @@ end) = struct
               | None -> Some binding))
          (Some outer_binding)
   
+  (* Linear transitive-closure rules of the shape
+     [(name ?p ?c) [?c :attr ?p]] / [(name ?p ?c) [?t :attr ?p] (name ?t ?c)]
+     ("?p is an ancestor of ?c along :attr") are evaluated by graph reachability
+     over the attr's aevt slice instead of per-binding rule expansion.
+     Each query_rule is one body alternative; the closure shape is exactly one
+     base candidate plus one linear-recursive candidate over the same attr. *)
+  let closure_literal_attr = function
+    | QAttr attr -> Some attr
+    | QValue (Keyword attr | String attr | Symbol attr) -> Some attr
+    | _ -> None
+  
+  let transitive_closure_attr (candidates : query_rule list) =
+    let base_attr (rule : query_rule) =
+      match rule.rule_params, rule.rule_body with
+      | [ p_param; c_param ], [ Pattern (QVar e, a, QVar v) ] ->
+        if e = c_param && v = p_param then
+          closure_literal_attr a
+        else
+          None
+      | _ -> None
+    in
+    let recursive_candidate attr (rule : query_rule) =
+      match rule.rule_params, rule.rule_body with
+      | [ p_param; c_param ], [ Pattern (QVar t, a, QVar v); Rule (name, [ QVar t2; QVar c2 ]) ] ->
+        name = rule.rule_name
+        && v = p_param
+        && c2 = c_param
+        && t = t2
+        && t <> p_param
+        && t <> c_param
+        && closure_literal_attr a = Some attr
+      | _ -> false
+    in
+    match candidates with
+    | [ first; second ] ->
+      (match base_attr first, base_attr second with
+       | Some attr, None -> if recursive_candidate attr second then Some attr else None
+       | None, Some attr -> if recursive_candidate attr first then Some attr else None
+       | _ -> None)
+    | _ -> None
+  
+  let closure_eid_of_value = function
+    | Ref eid -> Some eid
+    | Int64 eid -> (try Some (Int64.to_int eid) with _ -> None)
+    | _ -> None
+  
+  let closure_eid_of_result = function
+    | Result_entity eid -> Some eid
+    | Result_value v -> closure_eid_of_value v
+    | _ -> None
+  
+  (* value equality for closure node keys: Ref i and Int64 i address the same
+     node, mirroring values_compare_equal_fast. *)
+  let closure_value_eq left right =
+    match left, right with
+    | Ref l, Int64 r -> Int64.of_int l = r
+    | Int64 l, Ref r -> l = Int64.of_int r
+    | _ -> left = right
+  
+  let closure_value_of_result = function
+    | Result_entity eid -> Some (Ref eid)
+    | Result_value v -> Some v
+    | Result_attr attr -> Some (Keyword attr)
+    | _ -> None
+  
+  let table_get tbl key =
+    match Hashtbl.find_opt tbl key with
+    | Some values -> values
+    | None -> []
+  
+  let closure_index_empty () : Query.closure_index =
+    { up = Hashtbl.create 64
+    ; down = Hashtbl.create 64
+    ; leaf_up = Hashtbl.create 16
+    ; leaf_down = Hashtbl.create 16
+    ; anc = Hashtbl.create 64
+    ; desc = Hashtbl.create 64
+    }
+  
+  let closure_index_build (source_context : Query.source_context) source_db attr =
+    let index = closure_index_empty () in
+    source_context.pattern_datoms source_db QWildcard (QAttr attr) QWildcard None
+    |> Seq.iter (fun datom ->
+      match closure_eid_of_value datom.v with
+      | Some parent ->
+        Hashtbl.replace index.up datom.e (datom.v :: table_get index.up datom.e);
+        Hashtbl.replace index.down parent (datom.e :: table_get index.down parent)
+      | None ->
+        Hashtbl.replace index.leaf_up datom.e (datom.v :: table_get index.leaf_up datom.e);
+        Hashtbl.replace index.leaf_down datom.v (datom.e :: table_get index.leaf_down datom.v));
+    index
+  
+  let closure_index callables source_name source_context source_db attr =
+    match callables.Query.closure_cache with
+    | Some cache ->
+      (match Hashtbl.find_opt cache.closures (source_name, attr) with
+       | Some index -> index
+       | None ->
+         let index = closure_index_build source_context source_db attr in
+         Hashtbl.replace cache.closures (source_name, attr) index;
+         index)
+    | None -> closure_index_build source_context source_db attr
+  
+  (* All parent values reachable from child c through up-edges, raw datom v
+     forms (Ref/Int64/other), memoized per child. *)
+  let rec closure_ancestors (index : Query.closure_index) child =
+    match Hashtbl.find_opt index.anc child with
+    | Some values -> values
+    | None ->
+      let seen_nodes = Hashtbl.create 16
+      and seen_values = Hashtbl.create 16 in
+      let add_value values value =
+        if not (Hashtbl.mem seen_values value) then (
+          Hashtbl.replace seen_values value ();
+          value :: values)
+        else
+          values
+      in
+      let acc = ref [] in
+      let push value = acc := add_value !acc value in
+      let rec visit eid =
+        List.iter
+          (fun value ->
+            push value;
+            match closure_eid_of_value value with
+            | Some parent when not (Hashtbl.mem seen_nodes parent) ->
+              Hashtbl.replace seen_nodes parent ();
+              (match Hashtbl.find_opt index.anc parent with
+               | Some cached -> List.iter push cached
+               | None -> visit parent)
+            | _ -> ())
+          (table_get index.up eid);
+        List.iter push (table_get index.leaf_up eid)
+      in
+      visit child;
+      let values = !acc in
+      Hashtbl.replace index.anc child values;
+      values
+  
+  (* All child eids reachable from a parent eid through down-edges, memoized
+     per parent. *)
+  and closure_descendants (index : Query.closure_index) parent =
+    match Hashtbl.find_opt index.desc parent with
+    | Some children -> children
+    | None ->
+      let seen = Hashtbl.create 16 in
+      let rec visit eid =
+        List.iter
+          (fun child ->
+            if not (Hashtbl.mem seen child) then (
+              Hashtbl.replace seen child ();
+              match Hashtbl.find_opt index.desc child with
+              | Some cached -> List.iter (fun c -> Hashtbl.replace seen c ()) cached
+              | None -> visit child))
+          (table_get index.down eid)
+      in
+      visit parent;
+      let children = Hashtbl.fold (fun child () acc -> child :: acc) seen [] in
+      Hashtbl.replace index.desc parent children;
+      children
+  
+  (* Children of a non-entity parent value plus all their descendants. *)
+  and closure_descendants_of_leaf (index : Query.closure_index) parent =
+    let seen = Hashtbl.create 16 in
+    table_get index.leaf_down parent
+    |> List.iter (fun child ->
+      if not (Hashtbl.mem seen child) then (
+        Hashtbl.replace seen child ();
+        List.iter (fun c -> Hashtbl.replace seen c ()) (closure_descendants index child)));
+    Hashtbl.fold (fun child () acc -> child :: acc) seen []
+  
+  (* A closure candidate set evaluated as graph reachability; returns outer
+     bindings for the matched (p, c) pairs.  None when arity does not fit —
+     the caller falls back to normal evaluation. *)
+  let eval_closure_invocation db callables source_name source_context source_db bindings attr (rule : query_rule) terms =
+    match terms, rule.rule_params with
+    | [ p_term; c_term ], [ p_param; c_param ] ->
+      let index = closure_index callables source_name source_context source_db attr in
+      Some
+        (
+         let p_result = eval_query_term db bindings p_term
+         and c_result = eval_query_term db bindings c_term in
+         let emit rule_binding =
+           match propagate_rule_binding db bindings rule_binding rule terms with
+           | Some binding -> [ binding ]
+           | None -> []
+         in
+         (match p_result, c_result with
+          | Some p_res, Some c_res ->
+            (match closure_eid_of_result c_res with
+             | Some c ->
+               (match closure_value_of_result p_res with
+                | Some p_value ->
+                  if List.exists (closure_value_eq p_value) (closure_ancestors index c) then
+                    emit [ p_param, p_res; c_param, c_res ]
+                  else
+                    []
+                | None -> [])
+             | None -> [])
+          | Some p_res, None ->
+            let children =
+              match closure_eid_of_result p_res, p_res with
+              | Some parent, _ -> closure_descendants index parent
+              | None, Result_value value -> closure_descendants_of_leaf index value
+              | None, Result_attr attr -> closure_descendants_of_leaf index (Keyword attr)
+              | _ -> []
+            in
+            List.concat_map
+              (fun c -> emit [ p_param, p_res; c_param, Result_entity c ])
+              children
+          | None, Some c_res ->
+            (match closure_eid_of_result c_res with
+             | Some c ->
+               List.concat_map
+                 (fun p_value -> emit [ p_param, Query.result_of_ref (Result_value p_value); c_param, c_res ])
+                 (closure_ancestors index c)
+             | None -> [])
+          | None, None ->
+            let children =
+              Hashtbl.fold (fun c _ acc -> c :: acc) index.up []
+              @ Hashtbl.fold (fun c _ acc -> c :: acc) index.leaf_up []
+              |> List.sort_uniq compare
+            in
+            List.concat_map
+              (fun c ->
+                List.concat_map
+                  (fun p_value -> emit [ p_param, Query.result_of_ref (Result_value p_value); c_param, Result_entity c ])
+                  (closure_ancestors index c))
+              children))
+    | _ -> None
+  
   let rec eval_clauses
       ?(active_rules = [])
       ?(callables = empty_query_callables)
@@ -3905,7 +4136,19 @@ end) = struct
       |> List.filter_map (merge_projected_binding clause_db vars bindings)
     | Rule (name, terms) ->
       let key = rule_call_key db "" name bindings terms in
-      matching_rules_for_call active_rules key rules name terms
+      let candidates = matching_rules_for_call active_rules key rules name terms in
+      (match
+         if List.mem key active_rules then
+           None
+         else
+           (match candidates, transitive_closure_attr candidates with
+            | first :: _, Some attr ->
+              eval_closure_invocation db callables "" (query_source_context db) db bindings attr first terms
+            | _ -> None)
+       with
+       | Some rows -> rows
+       | None ->
+      candidates
       |> List.concat_map (fun rule ->
         match rule_invocation_binding db bindings rule terms with
         | None -> []
@@ -3923,12 +4166,24 @@ end) = struct
               rules
               [ rule_binding ]
               rule.rule_body
-            |> List.filter_map (fun rule_binding -> propagate_rule_binding db bindings rule_binding rule terms))
+            |> List.filter_map (fun rule_binding -> propagate_rule_binding db bindings rule_binding rule terms)))
     | SourceRule (source, name, terms) ->
       let rule_db = source_db db sources source in
       let source_sources = sources_with_root_default db sources in
       let key = rule_call_key rule_db source name bindings terms in
-      matching_rules_for_call active_rules key rules name terms
+      let candidates = matching_rules_for_call active_rules key rules name terms in
+      (match
+         if List.mem key active_rules then
+           None
+         else
+           (match candidates, transitive_closure_attr candidates with
+            | first :: _, Some attr ->
+              eval_closure_invocation rule_db callables source (query_source_context rule_db) rule_db bindings attr first terms
+            | _ -> None)
+       with
+       | Some rows -> rows
+       | None ->
+      candidates
       |> List.concat_map (fun rule ->
         match rule_invocation_binding rule_db bindings rule terms with
         | None -> []
@@ -3946,6 +4201,6 @@ end) = struct
               rules
               [ rule_binding ]
               rule.rule_body
-            |> List.filter_map (fun rule_binding -> propagate_rule_binding rule_db bindings rule_binding rule terms))
+            |> List.filter_map (fun rule_binding -> propagate_rule_binding rule_db bindings rule_binding rule terms)))
   
 end
