@@ -2225,13 +2225,11 @@ end) = struct
     match rules, bindings, relation_only_clauses clauses with
     | [], [ [] ], true ->
       eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation ->
-        relation.attrs, List.map Array.to_list relation.rows, relation.unique_rows)
+      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
     | [], [ binding ], true ->
       let clauses = List.map (bound_relation_clause binding) clauses in
       eval_relation_from_empty db sources default_source clauses
-      |> Option.map (fun relation ->
-        relation.attrs, List.map Array.to_list relation.rows, relation.unique_rows)
+      |> Option.map (fun relation -> relation.attrs, relation.rows, relation.unique_rows)
     | _ -> None
 
   let eval_relation_clauses ?(allow_initial_bindings = false) db sources default_source bindings clauses =

@@ -23,7 +23,7 @@ module Make (Context : sig
     query_rule list ->
     bindings list ->
     query_clause list ->
-    (string list * query_result list list * bool) option
+    (string list * query_result array list * bool) option
   val has_aggregates : find_spec list -> bool
   val aggregate_rows : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> query_result list list
   val aggregate_rows_with : ?callables:Query.query_callables -> db -> (string * query_source) list -> bindings list -> find_spec list -> string list -> query_result list list
@@ -177,10 +177,20 @@ end) = struct
       [] rows
     |> List.rev
 
-  let relation_rows_for_plain_find attrs rows unique_rows find =
+  let dedup_rows_array rows =
+    let seen = Hashtbl.create (List.length rows) in
+    List.fold_left
+      (fun acc row ->
+        if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
+      [] rows
+    |> List.rev
+
+  let relation_rows_for_plain_find attrs (rows : query_result array list) unique_rows find =
     let* find_vars = find_var_names find in
     if find_vars = attrs then
-      Some (if unique_rows then rows else dedup rows)
+      Some
+        (if unique_rows then List.map Array.to_list rows
+         else dedup_rows_array rows |> List.map Array.to_list)
     else
       let* indexes =
         find_vars
@@ -195,10 +205,22 @@ end) = struct
              (Some [])
         |> Option.map List.rev
       in
-      rows
-      |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
-      |> dedup
-      |> fun rows -> Some rows
+      let index_array = Array.of_list indexes in
+      let project row = Array.map (Array.get row) index_array in
+      if unique_rows then
+        Some (List.map (fun row -> Array.to_list (project row)) rows)
+      else
+        (* Fuse projection + dedup: hash projected rows, convert only
+           survivors to list rows. *)
+        let seen = Hashtbl.create (List.length rows) in
+        Some
+          (List.fold_left
+             (fun acc row ->
+               let projected = project row in
+               if Hashtbl.mem seen projected then acc
+               else (Hashtbl.add seen projected (); Array.to_list projected :: acc))
+             [] rows
+           |> List.rev)
 
   let find_spec_vars = function
     | Find_var var
@@ -212,14 +234,15 @@ end) = struct
       [ var; pattern_var ]
     | Find_aggregate _ -> []
 
-  let relation_rows_for_find db sources attrs rows unique_rows find =
+  let relation_rows_for_find db sources attrs (rows : query_result array list) unique_rows find =
     match relation_rows_for_plain_find attrs rows unique_rows find with
     | Some rows -> Some rows
     | None ->
       let required_vars = find |> List.concat_map find_spec_vars |> List.sort_uniq compare in
       if required_vars <> [] && List.for_all (fun var -> List.mem var attrs) required_vars then
         rows
-        |> List.filter_map (fun row -> collect_find_specs db sources (List.combine attrs row) find)
+        |> List.filter_map (fun row ->
+             collect_find_specs db sources (List.combine attrs (Array.to_list row)) find)
         |> dedup
         |> fun rows -> Some rows
       else
