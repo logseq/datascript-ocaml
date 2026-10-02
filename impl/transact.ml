@@ -752,11 +752,23 @@ let apply_tx context tx_ops db =
       |> List.filter (fun datom -> datom.e <> old_e)
     in
     let dedupe_facts datoms =
-      datoms
-      |> List.fold_left
-           (fun deduped d ->
-             if List.exists (context.same_fact d) deduped then deduped else d :: deduped)
-           []
+      let buckets : (entity_id * attr, datom list) Hashtbl.t =
+        Hashtbl.create (List.length datoms)
+      in
+      List.filter
+        (fun d ->
+          let key = (d.e, d.a) in
+          match Hashtbl.find_opt buckets key with
+          | Some bucket when List.exists (context.same_fact d) bucket -> false
+          | Some bucket ->
+            Hashtbl.replace buckets key (d :: bucket);
+            true
+          | None ->
+            Hashtbl.replace buckets key [ d ];
+            true)
+        datoms
+      (* the old fold accumulated reversed — keep that output order *)
+      |> List.rev
     in
     let remapped_ref_datoms =
       referring_datoms
