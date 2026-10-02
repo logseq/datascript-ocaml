@@ -125,15 +125,11 @@ let read_edn input =
                 && (token.[0] = '+' || token.[0] = '-')
                 && (is_digit token.[1]
                     || (length > 2 && token.[1] = '.' && is_digit token.[2])))
-            || (length > 1 && token.[0] = '.' && is_digit token.[1]))
+            || (length > 1 && token.[0] = '.' && is_digit token.[1])
+            || (length > 1 && token.[0] = '_' && is_digit token.[1]))
       in
       if starts_like_number then
-        let all_digits =
-          let first = if token.[0] = '+' || token.[0] = '-' then 1 else 0 in
-          let rec loop i = i >= length || (is_digit token.[i] && loop (i + 1)) in
-          loop first
-        in
-        (match (if all_digits then Int64.of_string_opt token else None) with
+        (match Int64.of_string_opt token with
          | Some value -> QueryFormInt value
          | None ->
            let float_charset =
