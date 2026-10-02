@@ -131,6 +131,15 @@ jobs:
       # newly released versions.
       - name: Install OCaml dependencies
         run: |
+          # A partially-restored switch keeps its recorded pins, and opam
+          # does not override them from pin-depends — re-pin each
+          # pin-depends entry so a moved ref or URL actually rebuilds.
+          grep -hoE '\["[A-Za-z0-9_.-]+" +"git\+[^"]+"\]' ./*.opam \
+            | sed 's/\["//; s/"\]$//; s/" "/ /' \
+            | sort -u \
+            | while read -r pkg url; do
+                opam pin add "$pkg" "$url" -y
+              done
           opam install . --deps-only --with-test -y || {
             opam update -y
             opam install . --deps-only --with-test -y
