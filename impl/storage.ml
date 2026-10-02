@@ -165,7 +165,18 @@ let index_metadata pending_entries storage index_set root_address =
 let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_address aevt_address
     avet_address =
   let settings = PSet.settings db.eavt_index in
+  let schema_idents =
+    (* eid -> :db/ident pairs, matching cljs's schema map entries *)
+    let first_ident = { e = 0; a = "db/ident"; v = Nil; tx = 0; added = true } in
+    db.aevt_index
+    |> PSet.slice_seq ~from_:first_ident
+    |> PSet.to_seq
+    |> Seq.take_while (fun d -> String.equal d.a "db/ident")
+    |> Seq.filter_map (fun d -> match d.v with Keyword ident -> Some (d.e, ident) | _ -> None)
+    |> List.of_seq
+  in
   { storage_schema = db.schema
+  ; storage_schema_idents = schema_idents
   ; storage_max_eid = db.max_eid
   ; storage_max_tx = db.max_tx
   ; storage_eavt = eavt_address

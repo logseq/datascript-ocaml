@@ -70,3 +70,15 @@
   ../script/benchmark_gate_vs_cljs_check_test.sh)
  (action
   (run bash %{dep:../script/benchmark_gate_vs_cljs_check_test.sh})))
+
+(executable
+ (name write_probe)
+ (modules write_probe)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
+
+(executable
+ (name codec_parity)
+ (modules codec_parity)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))

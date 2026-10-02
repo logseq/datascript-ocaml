@@ -109,7 +109,7 @@ let transit_of_tuple_attrs attrs =
 let transit_of_tuple_types types =
   Transit.Array (List.map transit_of_value_type types)
 
-let schema_attr_to_transit attr =
+let schema_attr_to_transit ~ident_backed attr ident =
   let entries = ref [] in
   let add key value = entries := (Transit.Keyword key, value) :: !entries in
   (match attr.cardinality with
@@ -125,13 +125,21 @@ let schema_attr_to_transit attr =
     attr.value_type;
   Option.iter (fun attrs -> add "db/tupleAttrs" (transit_of_tuple_attrs attrs)) attr.tuple_attrs;
   Option.iter (fun types -> add "db/tupleTypes" (transit_of_tuple_types types)) attr.tuple_types;
+  (* cljs update-schema merges {:db/ident ident} into the attr's spec map *)
+  if ident_backed then add "db/ident" (Transit.Keyword ident);
   Transit.Map (List.rev !entries)
 
-let schema_to_transit schema =
+let schema_to_transit ?(eids = []) schema =
   Transit.Map
     (List.map
-       (fun (attr, schema_attr) -> (Transit.Keyword attr, schema_attr_to_transit schema_attr))
-       schema)
+       (fun (attr, schema_attr) ->
+         ( Transit.Keyword attr
+         , schema_attr_to_transit
+             ~ident_backed:(List.exists (fun (_, ident) -> String.equal ident attr) eids)
+             schema_attr
+             attr ))
+       schema
+     @ List.map (fun (eid, ident) -> (Transit.Int eid, Transit.Keyword ident)) eids)
 
 let tuple_attrs_of_transit = function
   | Transit.Array values | Transit.List values -> Some (List.filter_map keyword_of_transit values)
@@ -171,6 +179,16 @@ let schema_of_transit = function
           match keyword_of_transit attr with
           | Some attr -> Some (attr, schema_attr_of_transit schema_attr)
           | None -> None)
+        entries
+  | _ -> []
+
+let schema_eids_of_transit = function
+  | Transit.Map entries ->
+      List.filter_map
+        (fun (key, value) ->
+          match int_of_transit_value key, keyword_of_transit value with
+          | Some eid, Some ident -> Some (eid, ident)
+          | _ -> None)
         entries
   | _ -> []
 
@@ -267,7 +285,7 @@ let optional_metadata_entry key = function
 let storage_root_to_transit root =
   Transit.Map
     ([
-       (Transit.Keyword "schema", schema_to_transit root.storage_schema);
+       (Transit.Keyword "schema", schema_to_transit ~eids:root.storage_schema_idents root.storage_schema);
        (Transit.Keyword "max-eid", Transit.Int root.storage_max_eid);
        (Transit.Keyword "max-tx", Transit.Int root.storage_max_tx);
        (Transit.Keyword "eavt", address_to_transit root.storage_eavt);
@@ -328,6 +346,7 @@ let optional_metadata key entries =
 let storage_root_of_transit entries =
   {
     Ds.storage_schema = schema_of_transit (require_key "schema" entries);
+    storage_schema_idents = schema_eids_of_transit (require_key "schema" entries);
     storage_max_eid = int_of_transit "storage root :max-eid" (require_key "max-eid" entries);
     storage_max_tx = int_of_transit "storage root :max-tx" (require_key "max-tx" entries);
     storage_eavt = address_of_transit "storage root :eavt" (require_key "eavt" entries);
