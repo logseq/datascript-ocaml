@@ -171,36 +171,16 @@ end) = struct
      full pre-dedup input. *)
   let dedup_sorted compare rows =
     let seen = Hashtbl.create (List.length rows) in
-    rows
-    |> List.fold_left
-         (fun acc row ->
-           if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
-         []
+    List.fold_left
+      (fun acc row ->
+        if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
+      [] rows
     |> List.sort compare
-
-  let sort_uniq_presorted compare rows =
-    let rec collect previous acc = function
-      | [] -> Some (List.rev acc)
-      | row :: rest ->
-        (match previous with
-         | None -> collect (Some row) (row :: acc) rest
-         | Some previous ->
-           let order = compare previous row in
-           if order = 0 then
-             collect (Some previous) acc rest
-           else if order < 0 then
-             collect (Some row) (row :: acc) rest
-           else
-             None)
-    in
-    match collect None [] rows with
-    | Some rows -> rows
-    | None -> dedup_sorted compare rows
 
   let relation_rows_for_plain_find attrs rows unique_rows find =
     let* find_vars = find_var_names find in
     if find_vars = attrs then
-      Some (if unique_rows then rows else sort_uniq_presorted compare_rows rows)
+      Some (if unique_rows then List.sort compare_rows rows else dedup_sorted compare_rows rows)
     else
       let* indexes =
         find_vars
@@ -217,7 +197,7 @@ end) = struct
       in
       rows
       |> List.map (fun row -> indexes |> List.map (fun index -> List.nth row index))
-      |> sort_uniq_presorted compare_rows
+      |> dedup_sorted compare_rows
       |> fun rows -> Some rows
 
   let find_spec_vars = function
@@ -240,7 +220,7 @@ end) = struct
       if required_vars <> [] && List.for_all (fun var -> List.mem var attrs) required_vars then
         rows
         |> List.filter_map (fun row -> collect_find_specs db sources (List.combine attrs row) find)
-        |> sort_uniq_presorted compare_rows
+        |> dedup_sorted compare_rows
         |> fun rows -> Some rows
       else
         None
