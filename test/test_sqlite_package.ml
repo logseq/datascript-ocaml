@@ -32,7 +32,7 @@ let test_storage_roundtrip () =
       ; Add (Temp_id "todo-1", "todo/title", String "Move storage into datascript")
       ]
   in
-  store ~storage report.db_after;
+  ignore (store ~storage report.db_after);
   let restored =
     match restore storage with
     | Some db -> db

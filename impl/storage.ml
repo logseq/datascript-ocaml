@@ -202,8 +202,7 @@ let store_index node_storage index index_set =
   match PSet.store index_set with
   | address, _ -> address
   | exception Invalid_argument message when String.equal message "store requires a storage-backed set" ->
-    let storage_backed = storage_backed_index node_storage index index_set in
-    fst (PSet.store storage_backed)
+    fst (PSet.store (storage_backed_index node_storage index index_set))
 
 let store_to_storage db storage =
   let pending_entries = ref [] in
@@ -222,7 +221,29 @@ let store_to_storage db storage =
     (List.rev !pending_entries
      @ [ root_address, Storage_root root
        ; tail_address, Storage_tail []
-       ])
+       ]);
+  (* store_node_tree can't write addresses back into immutable nodes, so
+     reinstall each index as a lazy Deferred set over the freshly stored
+     root — cljs achieves the same by flagging nodes stored in place.
+     Rebuild via PSet.restore with the real (readable) node storage:
+     the set PSet.store returns inherits whatever storage the input set
+     carried, which for sets built by storage_backed_index is this call's
+     throwaway buffered storage — adopting it would route later node
+     writes into a dead buffer and lose them. *)
+  let adopt_node_storage = restoring_node_storage ~schema:db.schema storage in
+  let adopt index address metadata =
+    match
+      PSet.restore ~cmp:(Util.compare_datom index) ~settings:(settings_of_root root)
+        ~count:metadata.storage_index_count adopt_node_storage address
+    with
+    | Some index -> index
+    | None -> invalid_arg "stored index failed to restore"
+  in
+  { db with
+      eavt_index = adopt Eavt eavt_address eavt_metadata
+    ; aevt_index = adopt Aevt aevt_address aevt_metadata
+    ; avet_index = adopt Avet avet_address avet_metadata
+    }
 
 let store ?storage db =
   match storage, db.storage_ref with

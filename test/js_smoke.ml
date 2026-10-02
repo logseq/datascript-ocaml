@@ -40,7 +40,7 @@ let () =
     incr reads; base.storage_restore address) } in
   let schema = schema_of_edn_string "{:name {:db/index true}}" in
   let db = init_db ~schema [datom ~e:1 ~a:"name" ~v:(String "v") ()] in
-  store ~storage db;
+  ignore (store ~storage db);
   let restored = Option.get (restore storage) in
   reads := 0;
   List.iter (fun set ->

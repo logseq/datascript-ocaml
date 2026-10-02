@@ -5,11 +5,11 @@ type t
 type creation_context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-  ; store : ?storage:storage -> db -> unit
+  ; store : ?storage:storage -> db -> db
   }
 
 type schema_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; with_schema : db -> schema -> db
   }
 
@@ -19,7 +19,7 @@ type restore_context =
   }
 
 type transact_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; store_tail : storage -> datom list list -> unit
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
@@ -27,14 +27,14 @@ type transact_context =
   }
 
 type reset_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; datoms : db -> datom list
   }
 
 type context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-  ; store : ?storage:storage -> db -> unit
+  ; store : ?storage:storage -> db -> db
   ; store_tail : storage -> datom list list -> unit
   ; restore : storage -> db option
   ; restore_tail_groups : storage -> datom list list

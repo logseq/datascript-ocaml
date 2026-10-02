@@ -150,7 +150,7 @@ let test_int64_storage_migration () =
       ; Db.datom ~e:2 ~a:"count" ~v:(Int64 9_223_372_036_854_775_000L) ()
       ]
   in
-  store ~storage db;
+  ignore (store ~storage db);
   (match restore storage with
    | None -> failwith "restore failed"
    | Some restored ->

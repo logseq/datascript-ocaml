@@ -625,7 +625,7 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
           ~schema:[ "name", indexed ]
           [ datom ~e:1 ~a:"name" ~v:(String "Ada") () ]
       in
-      store ~storage db;
+      ignore (store ~storage db);
       assert_equal
         "kvs schema"
         "CREATE TABLE kvs (addr INTEGER primary key, content TEXT, addresses JSON)"

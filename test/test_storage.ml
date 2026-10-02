@@ -86,7 +86,7 @@ let reset_writes writes = writes := []
 let test_storage__test_basics () =
   let storage = memory_storage () in
   let db = small_db () in
-  store ~storage db;
+  ignore (store ~storage db);
   assert_upstream_storage_addresses "store writes upstream storage addresses" (storage_addresses storage);
   (match restore storage with
    | None -> failwith "restore should read stored db"
@@ -99,7 +99,7 @@ let test_storage__test_basics () =
        failwith "settings should expose storage attachment");
   let attached_storage = memory_storage () in
   let attached = empty_db ~schema:[ "name", indexed ] ~storage:attached_storage () in
-  store attached;
+  ignore (store attached);
   (match restore attached_storage with
    | None -> failwith "store should use db-attached storage"
    | Some restored ->
@@ -108,7 +108,7 @@ let test_storage__test_basics () =
 let test_storage__test_upstream_wire_addresses () =
   let storage = memory_storage () in
   let db = small_db () in
-  store ~storage db;
+  ignore (store ~storage db);
   let addresses = storage_addresses storage in
   if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
     failwith "storage should not use OCaml snapshot address names";
@@ -134,7 +134,7 @@ let test_storage__test_file_storage () =
     (fun () ->
       let storage = file_storage dir in
       let db = small_db () in
-      store ~storage db;
+      ignore (store ~storage db);
       store_tail storage [ [ datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Alex") () ] ];
       let restored_storage = file_storage dir in
       assert_upstream_storage_addresses "file_storage lists persisted addresses" (storage_addresses restored_storage);
@@ -149,7 +149,7 @@ let test_storage__test_file_storage () =
 let test_storage__test_gc () =
   let storage = memory_storage () in
   let db = small_db () in
-  store ~storage db;
+  ignore (store ~storage db);
   store_tail storage [ [ datom ~tx:(tx0 + 2) ~e:1 ~a:"name" ~v:(String "Alex") () ] ];
   storage.storage_store [ "stale/node", Storage_tail [] ];
   collect_garbage storage;
@@ -165,7 +165,7 @@ let test_storage__test_gc () =
 let test_storage__test_restored_db_addresses () =
   let storage = memory_storage () in
   let db = small_db () in
-  store ~storage db;
+  ignore (store ~storage db);
   let restored =
     match restore storage with
     | Some db -> db
@@ -176,14 +176,14 @@ let test_storage__test_restored_db_addresses () =
 let test_storage__test_restored_incremental_store_reuses_index_nodes () =
   let storage, writes = counting_storage () in
   let db = large_db () in
-  store ~storage db;
+  ignore (store ~storage db);
   let restored =
     match restore storage with
     | Some db -> db
     | None -> failwith "restore should read stored large db"
   in
   reset_writes writes;
-  store ~storage restored;
+  ignore (store ~storage restored);
   assert_int_at_most
     "storing an unchanged restored db should not rewrite index nodes"
     2
@@ -192,7 +192,7 @@ let test_storage__test_restored_incremental_store_reuses_index_nodes () =
   let db_after =
     db_with [ Add (Entity_id 1001, "str", String "1001") ] restored
   in
-  store ~storage db_after;
+  ignore (store ~storage db_after);
   assert_int_at_most
     "storing an incrementally changed restored db should write only changed index paths"
     8
@@ -205,7 +205,7 @@ let test_storage__test_restored_incremental_store_reuses_index_nodes () =
   let db_after_replacement =
     db_with [ Add (Entity_id 1, "str", String "changed") ] restored
   in
-  store ~storage db_after_replacement;
+  ignore (store ~storage db_after_replacement);
   assert_int_at_most
     "storing a cardinality-one replacement should write only changed index paths"
     16
@@ -215,9 +215,36 @@ let test_storage__test_restored_incremental_store_reuses_index_nodes () =
     [ 1, "str", String "changed" ]
     (datoms db_after_replacement Eavt ~e:1 ())
 
+let test_storage__test_conn_repeated_transacts_store_incrementally () =
+  let storage, writes = counting_storage () in
+  let conn = create_conn ~schema:[ "name", indexed ] ~storage () in
+  for i = 1 to 300 do
+    ignore
+      (transact_conn conn
+         [ Add (Entity_id i, "name", String (string_of_int i)) ])
+  done;
+  if List.length !writes = 0 then
+    failwith "storage-backed conn should compact its tail into index nodes";
+  (* each compaction should only write the index nodes created since the
+     previous store; rewriting the whole tree on every store made total
+     writes grow quadratically with the number of transactions. At 300
+     transactions the buggy code writes well over 3000 entries while the
+     incremental store stays under 1000. *)
+  assert_int_at_most
+    "repeated transacts should not rewrite the whole index tree on every store"
+    1500
+    (List.length !writes);
+  (match restore storage with
+   | None -> failwith "storage-backed conn should restore"
+   | Some restored ->
+     assert_equal_int
+       "all committed datoms remain restorable"
+       300
+       (List.length (datoms restored Eavt ())))
+
 let test_storage__test_restore_is_lazy () =
   let storage = memory_storage () in
-  large_db () |> store ~storage;
+  large_db () |> store ~storage |> ignore;
   let address_count = List.length (storage_addresses storage) in
   if address_count < 20 then
     failf "large stored db should have many index nodes, got %d" address_count;
@@ -240,7 +267,7 @@ let test_storage__test_restore_is_lazy () =
 
 let test_storage__test_restore_with_tail_is_lazy () =
   let storage = memory_storage () in
-  large_db () |> store ~storage;
+  large_db () |> store ~storage |> ignore;
   let address_count = List.length (storage_addresses storage) in
   store_tail storage
     [
@@ -266,7 +293,7 @@ let test_storage__test_restore_with_tail_is_lazy () =
 
 let test_storage__test_transact_after_restore_uses_index_slices () =
   let storage = memory_storage () in
-  large_db () |> store ~storage;
+  large_db () |> store ~storage |> ignore;
   let baseline_storage, baseline_reads = restore_counting_storage storage in
   let baseline =
     match restore baseline_storage with
@@ -390,7 +417,7 @@ let count_fixture () =
     datom ~e:(i / 2 + 1)
       ~a:(if i mod 2 = 0 then "probe/indexed" else "probe/plain")
       ~v:(String (Printf.sprintf "v%04d" i)) ()) in
-  store ~storage (init_db ~schema datoms);
+  ignore (store ~storage (init_db ~schema datoms));
   storage
 
 let index_counts db =
@@ -455,13 +482,13 @@ let test_storage__test_restore_counts_after_tail () =
   check_cached_counts "restore_conn counts after tail" [4096;4096;2048] (conn_db conn) reads;
   let tx = transact_conn conn [ Add (Entity_id 2050, "probe/indexed", String "later") ] in
   check_cached_counts "incremental conn transaction count" [4097;4097;2049] tx.db_after reads;
-  store tx.db_after;
+  ignore (store tx.db_after);
   let restored_again = Option.get (restore measured) in
   check_cached_counts "new snapshot count excludes cleared tail" [4097;4097;2049] restored_again reads
 
 let test_storage__test_empty_and_missing_count_metadata () =
   let storage = memory_storage () in
-  store ~storage (empty_db ());
+  ignore (store ~storage (empty_db ()));
   let measured, reads = restore_counting_storage storage in
   let empty = Option.get (restore measured) in
   check_cached_counts "empty snapshot count" [0;0;0] empty reads;
@@ -496,5 +523,6 @@ let () =
   test_storage__test_restore_is_lazy ();
   test_storage__test_restore_with_tail_is_lazy ();
   test_storage__test_transact_after_restore_uses_index_slices ();
+  test_storage__test_conn_repeated_transacts_store_incrementally ();
   test_storage__test_conn ();
   test_storage__test_db_with_tail ();

@@ -43,7 +43,7 @@ let run_roundtrip db_path =
       ~schema:[ "name", indexed ]
       [ datom ~e:1 ~a:"name" ~v:(String "SQLite example") () ]
   in
-  store ~storage db;
+  ignore (store ~storage db);
   match restore (Storage.storage db_path) with
   | None -> failwith "failed to restore SQLite-backed db"
   | Some restored ->
