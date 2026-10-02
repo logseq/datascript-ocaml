@@ -697,10 +697,7 @@ end) = struct
 
   (* Fused pattern-eval + join for a single shared join variable: streams the
      pattern's datoms and probes the left-side bucket table directly, so the
-     right relation is never materialized. When the join variable sits at the
-     entity position and few distinct left keys remain, seeks each key through
-     a tight (attr, entity) aevt slice instead of walking the whole attribute.
-     Produces the same row multiset as
+     right relation is never materialized. Produces the same row multiset as
      [hash_join left (relation_of_pattern …)]. *)
   let stream_join_pattern db source left terms =
     match source, terms with
@@ -738,15 +735,12 @@ end) = struct
          let right_index = relation_attr_index pattern_attrs attr in
          let right_only_indexes = List.map (relation_attr_index pattern_attrs) right_only in
          let grouped = Hashtbl.create (List.length left.rows) in
-         let distinct_keys = ref 0 in
          List.iter
            (fun left_row ->
              let key = key_value (row_value left_row left_index) in
              match Hashtbl.find_opt grouped key with
              | Some left_rows -> Hashtbl.replace grouped key (left_row :: left_rows)
-             | None ->
-               incr distinct_keys;
-               Hashtbl.add grouped key [ left_row ])
+             | None -> Hashtbl.add grouped key [ left_row ])
            left.rows;
          let right_row_of_datom =
            if direct_pattern_terms terms then
@@ -760,50 +754,24 @@ end) = struct
          in
          let rows = ref [] in
          let all_right_keys_unique = ref true in
-         let seek_per_key =
-           (match e_term with
-            | QVar var when var = attr -> true
-            | _ -> false)
-           && (!distinct_keys <= 512 || !distinct_keys * 4 <= List.length left.rows)
-         in
-         if seek_per_key then
-           Hashtbl.iter
-             (fun key left_rows ->
-               match query_result_entity_id db key with
-               | None -> ()
-               | Some entity_id ->
-                 let key_right_rows = ref 0 in
-                 source_context.pattern_datoms source_db (QEntity entity_id) a_term v_term None
-                 |> Seq.iter (fun datom ->
-                   match right_row_of_datom datom with
-                   | Some right_row ->
-                     incr key_right_rows;
-                     List.iter
-                       (fun left_row ->
-                         rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
-                       left_rows
-                   | None -> ());
-                 if !key_right_rows > 1 then all_right_keys_unique := false)
-             grouped
-         else (
-           let seen_keys = Hashtbl.create 1024 in
-           source_context.pattern_datoms source_db e_term a_term v_term None
-           |> Seq.iter (fun datom ->
-             match right_row_of_datom datom with
-             | Some right_row ->
-               let key = key_value (row_value right_row right_index) in
-               if Hashtbl.mem seen_keys key then
-                 all_right_keys_unique := false
-               else
-                 Hashtbl.add seen_keys key ();
-               (match Hashtbl.find_opt grouped key with
-                | Some left_rows ->
-                  List.iter
-                    (fun left_row ->
-                      rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
-                    left_rows
-                | None -> ())
-             | None -> ()));
+         let seen_keys = Hashtbl.create 1024 in
+         source_context.pattern_datoms source_db e_term a_term v_term None
+         |> Seq.iter (fun datom ->
+           match right_row_of_datom datom with
+           | Some right_row ->
+             let key = key_value (row_value right_row right_index) in
+             if Hashtbl.mem seen_keys key then
+               all_right_keys_unique := false
+             else
+               Hashtbl.add seen_keys key ();
+             (match Hashtbl.find_opt grouped key with
+              | Some left_rows ->
+                List.iter
+                  (fun left_row ->
+                    rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
+                  left_rows
+              | None -> ())
+           | None -> ());
          Some
            { attrs = left.attrs @ right_only
            ; rows = List.rev !rows
