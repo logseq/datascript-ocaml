@@ -166,6 +166,18 @@ end) = struct
     | [], _ :: _ -> -1
     | _ :: _, [] -> 1
 
+  (* Hash-dedup first (O(n)), then sort only the survivors — same output
+     as List.sort_uniq compare but skips the O(n log n) sort on the
+     full pre-dedup input. *)
+  let dedup_sorted compare rows =
+    let seen = Hashtbl.create (List.length rows) in
+    rows
+    |> List.fold_left
+         (fun acc row ->
+           if Hashtbl.mem seen row then acc else (Hashtbl.add seen row (); row :: acc))
+         []
+    |> List.sort compare
+
   let sort_uniq_presorted compare rows =
     let rec collect previous acc = function
       | [] -> Some (List.rev acc)
@@ -183,7 +195,7 @@ end) = struct
     in
     match collect None [] rows with
     | Some rows -> rows
-    | None -> List.sort_uniq compare rows
+    | None -> dedup_sorted compare rows
 
   let relation_rows_for_plain_find attrs rows unique_rows find =
     let* find_vars = find_var_names find in
@@ -242,8 +254,13 @@ end) = struct
       |> List.filter_map (fun binding ->
         Query.collect_find_vars binding vars
         |> Option.map (fun key -> key, binding))
-      |> List.sort_uniq (fun (left, _) (right, _) -> compare_rows left right)
-      |> List.map snd
+      |> fun pairs ->
+        let seen = Hashtbl.create (List.length pairs) in
+        List.fold_left
+          (fun acc (key, binding) ->
+            if Hashtbl.mem seen key then acc else (Hashtbl.add seen key (); binding :: acc))
+          [] pairs
+        |> List.rev
   
   let q_sources_raw ?(inputs = []) db sources query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
@@ -267,13 +284,13 @@ end) = struct
            bindings
            |> fun bindings -> dedupe_bindings_for_find bindings query.find
            |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-           |> List.sort_uniq compare_rows)
+           |> dedup_sorted compare_rows)
       | None ->
         let bindings = eval_clauses ~callables db sources rules input_bindings where in
         bindings
         |> fun bindings -> dedupe_bindings_for_find bindings query.find
         |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-        |> List.sort_uniq compare_rows
+        |> dedup_sorted compare_rows
     else (
       let bindings = eval_clauses ~callables db sources rules input_bindings where in
       if has_aggregates then
@@ -287,7 +304,7 @@ end) = struct
       bindings
       |> fun bindings -> dedupe_bindings_for_find bindings query.find
       |> List.filter_map (fun binding -> collect_find_specs db sources binding query.find)
-      |> List.sort_uniq compare_rows)
+      |> dedup_sorted compare_rows)
   
   let q_with_raw ?(inputs = []) db with_vars query =
     let callables, input_bindings, input_rules = initial_query_context db query inputs in
