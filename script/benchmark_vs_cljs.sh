@@ -24,6 +24,15 @@ if [ "${BENCH_SKIP_BUILD:-0}" != "1" ]; then
   dune build --profile release bench/bench_ocaml.exe bench/bench_ocaml.bc.js
 fi
 
+# Run separate untimed processes before any benchmark. Comparing complete typed
+# facts and results prevents a fast empty or differently encoded query from winning.
+semantic_dir="$(mktemp -d)"
+trap 'rm -rf "$semantic_dir"' EXIT
+env BENCH_RUNTIME_LABEL="ocaml-native" "$ocaml_native" --size "$size" --semantic-only > "$semantic_dir/native.json"
+env BENCH_RUNTIME_LABEL="js_of_ocaml" node "$ocaml_js" --size "$size" --semantic-only > "$semantic_dir/jsoo.json"
+env UPSTREAM_DATASCRIPT_JS="$upstream_datascript_js" node "$repo_root/bench/bench_upstream.js" --size "$size" --semantic-only > "$semantic_dir/cljs.json"
+node "$repo_root/script/benchmark_semantics_check.js" "$semantic_dir/native.json" "$semantic_dir/jsoo.json" "$semantic_dir/cljs.json"
+
 args=(--size "$size" --warmup-ms "$warmup_ms" --sample-ms "$sample_ms" --samples "$samples")
 
 run() {

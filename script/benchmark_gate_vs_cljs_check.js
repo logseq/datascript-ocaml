@@ -54,6 +54,10 @@ function check(output) {
 
   const names = comparableNames(upstream);
   const failures = [];
+  if (names.length === 0) return ["no finite upstream-cljs-js benchmark results"];
+  for (const [name, value] of Object.entries(upstream)) {
+    if (!Number.isFinite(value)) failures.push(`invalid upstream-cljs-js ${name} benchmark result`);
+  }
   for (const runtimeName of ["ocaml-native", "js_of_ocaml"]) {
     failures.push(...compareRuntime(results, runtimeName, upstream, names));
   }

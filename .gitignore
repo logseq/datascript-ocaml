@@ -9,3 +9,6 @@ tmp/
 /db.sqlite-shm
 /db.sqlite-wal
 /_deps/
+
+# Local benchmark measurements and review reports.
+/test-results/

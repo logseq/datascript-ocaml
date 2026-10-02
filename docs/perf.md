@@ -28,6 +28,48 @@ The benchmark script supports these knobs:
 - `BENCH_SAMPLES`
 - `UPSTREAM_DATASCRIPT_JS`
 
+## Semantic preflight and comparable inputs
+
+`script/benchmark_vs_cljs.sh` first launches untimed semantic exports from all
+three runtimes. It compares typed fixture facts, schema options, exact query
+strings and scalar inputs, complete query results, transaction outputs, pulls,
+and the selected page's materialized entities and ordered tree. Any difference
+stops the script before timing begins. `storage-roundtrip` has no CLJS timing
+counterpart; its restored facts are verified against the native fixture instead.
+
+Random draws use an explicit shared order. Entity IDs are positive integers so
+reference targets do not depend on temporary-ID allocation. Attributes and sex
+values are genuine keywords; placeholder `block/uuid` values are strings in all
+runtimes. The CLJS harness obtains typed literals using the pinned bundle's own
+public EDN query reader and function input, then passes them to unchanged public
+transaction/query APIs. It does not use the OCaml JS facade's implicit string
+conversion. Typed input construction runs once before timing in both harnesses;
+the `add-*` cases now measure database transactions over prepared input, rather
+than entity generation or EDN parsing. Page result consumption includes `db/id`
+in both runtimes. Historical measurements below predate these changes and must
+be rerun before using them as current comparisons.
+
+The semantic regression test covers sizes 0, 1, 20 and 1000, and deliberately
+injects a wrong row with an unchanged row count and a string/keyword mismatch.
+With `UPSTREAM_DATASCRIPT_JS` pointing to the pinned bundle, run:
+
+```sh
+opam exec -- dune runtest bench --profile release
+```
+
+The comparison script prints timings; the separate strict speed gate is:
+
+```sh
+opam exec -- script/benchmark_gate_vs_cljs.sh
+```
+
+The gate still requires each OCaml runtime's printed median to be strictly lower
+than CLJS on every comparable case, with no tolerance. Empty/non-finite reference
+results now fail. CI currently invokes the comparison script, so a successful CI
+comparison confirms semantic agreement and execution, not a passing strict
+speed gate. Native and Node measurements are separate runtimes and should not
+be mixed into a same-runtime performance claim.
+
 ## Latest Verified Results
 
 Verified on 2026-09-27.
