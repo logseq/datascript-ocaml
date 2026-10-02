@@ -290,7 +290,14 @@ and map_entries_of_tx_entity (entity : tx_entity) : (value * value) list =
 and value_of_entity_ref = function
   | Entity_id entity_id -> Int64 (Int64.of_int entity_id)
   | Temp_id tempid ->
-    (match Int64.of_string_opt tempid with Some n -> Int64 n | None -> String tempid)
+    (* digits-only check first: of_string_opt raises internally on
+       non-numeric tempids, and this runs per entity-ref in tx output *)
+    let len = String.length tempid in
+    let first = if len > 0 && (tempid.[0] = '-' || tempid.[0] = '+') then 1 else 0 in
+    let rec digits i = i >= len || (tempid.[i] >= '0' && tempid.[i] <= '9' && digits (i + 1)) in
+    (match (if first < len && digits first then Int64.of_string_opt tempid else None) with
+     | Some n -> Int64 n
+     | None -> String tempid)
   | Ident ident -> Keyword ident
   | Lookup_ref (attr, value) -> Vector [ Keyword attr; value ]
   | CurrentTx -> Keyword "db/current-tx"

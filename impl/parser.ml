@@ -112,15 +112,43 @@ let read_edn input =
     | _ when String.length token > 0 && token.[0] = ':' ->
       QueryFormKeyword (String.sub token 1 (String.length token - 1))
     | _ ->
-      (match Int64.of_string_opt token with
-       | Some value -> QueryFormInt value
-       | None ->
-         if String.contains token '.' || String.contains token 'e' || String.contains token 'E' then
-           match float_of_string_opt token with
-           | Some value -> QueryFormFloat value
-           | None -> QueryFormSymbol token
-         else
-           QueryFormSymbol token)
+      (* Classify before parsing: Int64.of_string_opt / float_of_string_opt
+         raise internally on non-numeric input, and String.contains raises
+         Not_found internally on a miss. With query/pull strings parsed once
+         per endpoint call, exception-driven symbol classification is hot. *)
+      let length = String.length token in
+      let is_digit c = '0' <= c && c <= '9' in
+      let starts_like_number =
+        length > 0
+        && (is_digit token.[0]
+            || (length > 1
+                && (token.[0] = '+' || token.[0] = '-')
+                && (is_digit token.[1]
+                    || (length > 2 && token.[1] = '.' && is_digit token.[2])))
+            || (length > 1 && token.[0] = '.' && is_digit token.[1]))
+      in
+      if starts_like_number then
+        let all_digits =
+          let first = if token.[0] = '+' || token.[0] = '-' then 1 else 0 in
+          let rec loop i = i >= length || (is_digit token.[i] && loop (i + 1)) in
+          loop first
+        in
+        (match (if all_digits then Int64.of_string_opt token else None) with
+         | Some value -> QueryFormInt value
+         | None ->
+           let float_charset =
+             let ok c = is_digit c || c = '+' || c = '-' || c = '.' || c = 'e' || c = 'E' in
+             let rec loop i = i >= length || (ok token.[i] && loop (i + 1)) in
+             loop 0
+           in
+           if float_charset then
+             (match float_of_string_opt token with
+              | Some value -> QueryFormFloat value
+              | None -> QueryFormSymbol token)
+           else
+             QueryFormSymbol token)
+      else
+        QueryFormSymbol token
   in
   let namespaced_map_namespace token =
     if String.length token >= 3 && String.sub token 0 3 = "#::" then
