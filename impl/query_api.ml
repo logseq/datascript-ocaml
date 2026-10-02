@@ -257,20 +257,18 @@ end) = struct
       in
       let index_array = Array.of_list indexes in
       let project row = Array.map (Array.get row) index_array in
-      if unique_rows then
-        Some (List.map (fun row -> Array.to_list (project row)) rows)
-      else
-        (* Fuse projection + dedup: hash projected rows, convert only
-           survivors to list rows. *)
-        let seen = Array_row_table.create (List.length rows) in
-        Some
-          (List.fold_left
-             (fun acc row ->
-               let projected = project row in
-               if Array_row_table.mem seen projected then acc
-               else (Array_row_table.add seen projected (); Array.to_list projected :: acc))
-             [] rows
-           |> List.rev)
+      (* unique_rows covers only unprojected rows: projection collapses
+         columns, so distinct input rows can map onto the same output row —
+         dedup must run regardless of the flag. *)
+      let seen = Array_row_table.create (List.length rows) in
+      Some
+        (List.fold_left
+           (fun acc row ->
+             let projected = project row in
+             if Array_row_table.mem seen projected then acc
+             else (Array_row_table.add seen projected (); Array.to_list projected :: acc))
+           [] rows
+         |> List.rev)
 
   let find_spec_vars = function
     | Find_var var
