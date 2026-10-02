@@ -695,6 +695,124 @@ end) = struct
               left.rows
         }
 
+  (* Fused pattern-eval + join for a single shared join variable: streams the
+     pattern's datoms and probes the left-side bucket table directly, so the
+     right relation is never materialized. When the join variable sits at the
+     entity position and few distinct left keys remain, seeks each key through
+     a tight (attr, entity) aevt slice instead of walking the whole attribute.
+     Produces the same row multiset as
+     [hash_join left (relation_of_pattern …)]. *)
+  let stream_join_pattern db source left terms =
+    match source, terms with
+    | Db_source source_db, [ e_term; a_term; v_term ] ->
+      let pattern_attrs = unique_vars terms in
+      let common = List.filter (fun attr -> List.mem attr left.attrs) pattern_attrs in
+      (match common with
+       | [ attr ] ->
+         let source_context = query_source_context db in
+         let right_only = List.filter (fun attr -> not (List.mem attr left.attrs)) pattern_attrs in
+         let pattern_lookup_vars = relation_lookup_vars source_db terms in
+         let lookup_vars =
+           List.fold_left
+             (fun lookup_vars ((var, _) as lookup_var) ->
+               if List.mem_assoc var lookup_vars then lookup_vars else lookup_var :: lookup_vars)
+             left.lookup_vars
+             pattern_lookup_vars
+         in
+         let right_probe =
+           { attrs = pattern_attrs; rows = []; lookup_vars = pattern_lookup_vars; unique_rows = false }
+         in
+         let lookup_contexts =
+           [ attr ]
+           |> List.filter_map (fun attr ->
+             Option.map
+               (fun ctx_db -> attr, ctx_db)
+               (relation_join_lookup_context left right_probe attr))
+         in
+         let key_value value =
+           match List.assoc_opt attr lookup_contexts with
+           | Some ctx_db -> relation_join_key_value_for_lookup ctx_db value
+           | None -> relation_join_key_value value
+         in
+         let left_index = relation_attr_index left.attrs attr in
+         let right_index = relation_attr_index pattern_attrs attr in
+         let right_only_indexes = List.map (relation_attr_index pattern_attrs) right_only in
+         let grouped = Hashtbl.create (List.length left.rows) in
+         let distinct_keys = ref 0 in
+         List.iter
+           (fun left_row ->
+             let key = key_value (row_value left_row left_index) in
+             match Hashtbl.find_opt grouped key with
+             | Some left_rows -> Hashtbl.replace grouped key (left_row :: left_rows)
+             | None ->
+               incr distinct_keys;
+               Hashtbl.add grouped key [ left_row ])
+           left.rows;
+         let right_row_of_datom =
+           if direct_pattern_terms terms then
+             let direct = direct_pattern_row pattern_attrs terms in
+             fun datom -> Some (direct datom)
+           else
+             fun datom ->
+               (match source_context.match_data_pattern source_db [] e_term a_term v_term datom with
+                | Some binding -> binding_row pattern_attrs binding
+                | None -> None)
+         in
+         let rows = ref [] in
+         let all_right_keys_unique = ref true in
+         let seek_per_key =
+           (match e_term with
+            | QVar var when var = attr -> true
+            | _ -> false)
+           && (!distinct_keys <= 512 || !distinct_keys * 4 <= List.length left.rows)
+         in
+         if seek_per_key then
+           Hashtbl.iter
+             (fun key left_rows ->
+               match query_result_entity_id db key with
+               | None -> ()
+               | Some entity_id ->
+                 let key_right_rows = ref 0 in
+                 source_context.pattern_datoms source_db (QEntity entity_id) a_term v_term None
+                 |> Seq.iter (fun datom ->
+                   match right_row_of_datom datom with
+                   | Some right_row ->
+                     incr key_right_rows;
+                     List.iter
+                       (fun left_row ->
+                         rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
+                       left_rows
+                   | None -> ());
+                 if !key_right_rows > 1 then all_right_keys_unique := false)
+             grouped
+         else (
+           let seen_keys = Hashtbl.create 1024 in
+           source_context.pattern_datoms source_db e_term a_term v_term None
+           |> Seq.iter (fun datom ->
+             match right_row_of_datom datom with
+             | Some right_row ->
+               let key = key_value (row_value right_row right_index) in
+               if Hashtbl.mem seen_keys key then
+                 all_right_keys_unique := false
+               else
+                 Hashtbl.add seen_keys key ();
+               (match Hashtbl.find_opt grouped key with
+                | Some left_rows ->
+                  List.iter
+                    (fun left_row ->
+                      rows := append_relation_rows right_only_indexes left_row right_row :: !rows)
+                    left_rows
+                | None -> ())
+             | None -> ()));
+         Some
+           { attrs = left.attrs @ right_only
+           ; rows = List.rev !rows
+           ; lookup_vars
+           ; unique_rows = left.unique_rows && !all_right_keys_unique
+           }
+       | _ -> None)
+    | _ -> None
+
   let value_of_relation_term db relation row term =
     let binding = row_binding relation.attrs row in
     match eval_query_term db binding term with
@@ -1605,8 +1723,14 @@ end) = struct
       | [] -> Some relation
       | _ when relation.rows = [] -> Some relation
       | Pattern (e_term, a_term, v_term) :: rest ->
-        let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
-        apply (hash_join relation next) rest
+        let* relation =
+          match stream_join_pattern db default_source relation [ e_term; a_term; v_term ] with
+          | Some relation -> Some relation
+          | None ->
+            let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
+            Some (hash_join relation next)
+        in
+        apply relation rest
       | PatternTx (e_term, a_term, v_term, tx_term) :: rest ->
         let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term ] in
         apply (hash_join relation next) rest
@@ -1614,8 +1738,18 @@ end) = struct
         let* next = relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term; op_term ] in
         apply (hash_join relation next) rest
       | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
-        let* next = relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ] in
-        apply (hash_join relation next) rest
+        let* relation =
+          match
+            stream_join_pattern db (source db sources source_name) relation [ e_term; a_term; v_term ]
+          with
+          | Some relation -> Some relation
+          | None ->
+            let* next =
+              relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ]
+            in
+            Some (hash_join relation next)
+        in
+        apply relation rest
       | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
         let* next =
           relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term; tx_term ]
@@ -2110,8 +2244,14 @@ end) = struct
              (filter_relation_comparison db relation predicate left_term right_term)
              (Pattern (e_term, a_term, v_term) :: rest))
       | Pattern (e_term, a_term, v_term) :: rest ->
-        let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
-        apply (hash_join relation next) rest
+        let* relation =
+          match stream_join_pattern db default_source relation [ e_term; a_term; v_term ] with
+          | Some relation -> Some relation
+          | None ->
+            let* next = relation_of_pattern db default_source [ e_term; a_term; v_term ] in
+            Some (hash_join relation next)
+        in
+        apply relation rest
       | PatternTx (e_term, a_term, v_term, tx_term) :: ComparisonPredicate (predicate, left_term, right_term) :: rest ->
         let terms = [ e_term; a_term; v_term; tx_term ] in
         (match relation_of_pattern_with_comparison db default_source terms predicate left_term right_term with
@@ -2134,8 +2274,18 @@ end) = struct
            let* next = relation_of_pattern db source terms in
            apply (hash_join relation next) (ComparisonPredicate (predicate, left_term, right_term) :: rest))
       | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
-        let* next = relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ] in
-        apply (hash_join relation next) rest
+        let* relation =
+          match
+            stream_join_pattern db (source db sources source_name) relation [ e_term; a_term; v_term ]
+          with
+          | Some relation -> Some relation
+          | None ->
+            let* next =
+              relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term ]
+            in
+            Some (hash_join relation next)
+        in
+        apply relation rest
       | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
         let* next =
           relation_of_pattern db (source db sources source_name) [ e_term; a_term; v_term; tx_term ]
