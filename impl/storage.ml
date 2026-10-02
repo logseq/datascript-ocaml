@@ -51,8 +51,12 @@ let file_storage = Platform.file_storage
 
 let buffered_node_storage pending_entries =
   { PSet.store_node =
-      (fun node ->
-        let address = next_storage_address () in
+      (fun ?address node ->
+        let address =
+          match address with
+          | Some address -> address
+          | None -> next_storage_address ()
+        in
         pending_entries := (address, Storage_node node) :: !pending_entries;
         address)
   ; restore_node = (fun _address -> None)
@@ -105,8 +109,12 @@ let normalize_stored_tail schema =
 
 let restoring_node_storage ?schema storage =
   { PSet.store_node =
-      (fun node ->
-        let address = next_storage_address () in
+      (fun ?address node ->
+        let address =
+          match address with
+          | Some address -> address
+          | None -> next_storage_address ()
+        in
         storage.storage_store [ address, Storage_node node ];
         address)
   ; restore_node =
