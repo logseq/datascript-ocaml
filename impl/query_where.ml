@@ -197,15 +197,18 @@ end) = struct
 
   let row_binding attrs row = List.combine attrs row
 
-  let direct_pattern_row attrs terms datom =
-    attrs
-    |> List.map (fun attr ->
-      let rec find index = function
-        | [] -> invalid_arg "pattern variable is missing from row"
-        | QVar var :: _ when var = attr -> result_of_pattern_position datom index
-        | _ :: rest -> find (index + 1) rest
-      in
-      find 0 terms)
+  let direct_pattern_row attrs terms =
+    let positions =
+      attrs
+      |> List.map (fun attr ->
+        let rec find index = function
+          | [] -> invalid_arg "pattern variable is missing from row"
+          | QVar var :: _ when var = attr -> index
+          | _ :: rest -> find (index + 1) rest
+        in
+        find 0 terms)
+    in
+    fun datom -> List.map (result_of_pattern_position datom) positions
 
   let relation_lookup_vars source_db terms =
     let add_var vars = function
@@ -494,12 +497,6 @@ end) = struct
         | Some db -> relation_join_key_value_for_lookup db value
         | None -> relation_join_key_value value
       in
-      let repeat_row row count =
-        let rec loop acc remaining =
-          if remaining <= 0 then acc else loop (row :: acc) (remaining - 1)
-        in
-        loop [] count
-      in
       let entity_key row index =
         match row_value row index with
         | Result_entity entity_id -> Some entity_id
@@ -510,8 +507,24 @@ end) = struct
         | [], [ attr ] ->
           let left_index = relation_attr_index left.attrs attr in
           let right_index = relation_attr_index right.attrs attr in
-          if
+          let collect_left counts key_of =
+            List.rev
+              (List.fold_left
+                 (fun acc left_row ->
+                   match Hashtbl.find_opt counts (key_of left_row) with
+                   | None -> acc
+                   | Some count ->
+                     let rec loop acc n =
+                       if n <= 0 then acc else loop (left_row :: acc) (n - 1)
+                     in
+                     loop acc count)
+                 [] left.rows)
+          in
+          let all_left_entities =
             List.for_all (fun row -> Option.is_some (entity_key row left_index)) left.rows
+          in
+          if
+            all_left_entities
             && List.for_all (fun row -> Option.is_some (entity_key row right_index)) right.rows
           then (
             let counts = Hashtbl.create (List.length right.rows) in
@@ -521,12 +534,7 @@ end) = struct
                 let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
                 Hashtbl.replace counts key (count + 1))
               right.rows;
-            left.rows
-            |> List.concat_map (fun left_row ->
-              let key = Option.get (entity_key left_row left_index) in
-              match Hashtbl.find_opt counts key with
-              | None -> []
-              | Some count -> repeat_row left_row count))
+            collect_left counts (fun left_row -> Option.get (entity_key left_row left_index)))
           else (
             let counts = Hashtbl.create (List.length right.rows) in
             List.iter
@@ -535,12 +543,7 @@ end) = struct
                 let count = Option.value (Hashtbl.find_opt counts key) ~default:0 in
                 Hashtbl.replace counts key (count + 1))
               right.rows;
-            left.rows
-            |> List.concat_map (fun left_row ->
-              let key = key_value attr (row_value left_row left_index) in
-              match Hashtbl.find_opt counts key with
-              | None -> []
-              | Some count -> repeat_row left_row count))
+            collect_left counts (fun left_row -> key_value attr (row_value left_row left_index)))
         | [], _ ->
           let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
           let counts = Hashtbl.create (List.length right.rows) in
@@ -551,35 +554,53 @@ end) = struct
               Hashtbl.replace counts key (count + 1))
             right.rows;
           let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
-          left.rows
-          |> List.concat_map (fun left_row ->
-            let key = relation_key lookup_contexts left_common_indexes left_row in
-            match Hashtbl.find_opt counts key with
-            | None -> []
-            | Some count -> repeat_row left_row count)
+          List.rev
+            (List.fold_left
+               (fun acc left_row ->
+                 match
+                   Hashtbl.find_opt counts
+                     (relation_key lookup_contexts left_common_indexes left_row)
+                 with
+                 | None -> acc
+                 | Some count ->
+                   let rec loop acc n =
+                     if n <= 0 then acc else loop (left_row :: acc) (n - 1)
+                   in
+                   loop acc count)
+               [] left.rows)
         | _, [ attr ] ->
           let left_index = relation_attr_index left.attrs attr in
           let right_index = relation_attr_index right.attrs attr in
+          let collect_right key_of grouped =
+            List.rev
+              (List.fold_left
+                 (fun acc right_row ->
+                   match Hashtbl.find_opt grouped (key_of right_row) with
+                   | None -> acc
+                   | Some left_rows ->
+                     List.fold_left
+                       (fun acc left_row ->
+                         append_relation_rows right_only_indexes left_row right_row :: acc)
+                       acc left_rows)
+                 [] right.rows)
+          in
+          let grouped = Hashtbl.create (List.length left.rows) in
+          let all_left_entities =
+            List.fold_left
+              (fun ok row ->
+                match entity_key row left_index with
+                | Some key ->
+                  let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
+                  Hashtbl.replace grouped key (row :: rows);
+                  ok
+                | None -> false)
+              true left.rows
+          in
           if
-            List.for_all (fun row -> Option.is_some (entity_key row left_index)) left.rows
+            all_left_entities
             && List.for_all (fun row -> Option.is_some (entity_key row right_index)) right.rows
-          then (
-            let grouped = Hashtbl.create (List.length left.rows) in
-            List.iter
-              (fun row ->
-                let key = Option.get (entity_key row left_index) in
-                let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
-                Hashtbl.replace grouped key (row :: rows))
-              left.rows;
-            right.rows
-            |> List.concat_map (fun right_row ->
-              let key = Option.get (entity_key right_row right_index) in
-              match Hashtbl.find_opt grouped key with
-              | None -> []
-              | Some left_rows ->
-                List.map
-                  (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
-                  left_rows))
+          then
+            collect_right (fun right_row -> Option.get (entity_key right_row right_index)) grouped
           else (
             let grouped = Hashtbl.create (List.length left.rows) in
             List.iter
@@ -588,15 +609,7 @@ end) = struct
                 let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
                 Hashtbl.replace grouped key (row :: rows))
               left.rows;
-            right.rows
-            |> List.concat_map (fun right_row ->
-              let key = key_value attr (row_value right_row right_index) in
-              match Hashtbl.find_opt grouped key with
-              | None -> []
-              | Some left_rows ->
-                List.map
-                  (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
-                  left_rows))
+            collect_right (fun right_row -> key_value attr (row_value right_row right_index)) grouped)
         | _, _ ->
           let left_common_indexes = List.map (fun attr -> attr, relation_attr_index left.attrs attr) common in
           let right_common_indexes = List.map (fun attr -> attr, relation_attr_index right.attrs attr) common in
@@ -607,15 +620,20 @@ end) = struct
               let rows = Option.value (Hashtbl.find_opt grouped key) ~default:[] in
               Hashtbl.replace grouped key (row :: rows))
             left.rows;
-          right.rows
-          |> List.concat_map (fun right_row ->
-            let key = relation_key lookup_contexts right_common_indexes right_row in
-            match Hashtbl.find_opt grouped key with
-            | None -> []
-            | Some left_rows ->
-              List.map
-                (fun left_row -> append_relation_rows right_only_indexes left_row right_row)
-                left_rows)
+          List.rev
+            (List.fold_left
+               (fun acc right_row ->
+                 match
+                   Hashtbl.find_opt grouped
+                     (relation_key lookup_contexts right_common_indexes right_row)
+                 with
+                 | None -> acc
+                 | Some left_rows ->
+                   List.fold_left
+                     (fun acc left_row ->
+                       append_relation_rows right_only_indexes left_row right_row :: acc)
+                     acc left_rows)
+               [] right.rows)
       in
       { attrs; rows; lookup_vars; unique_rows = false }
 
