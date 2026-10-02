@@ -403,7 +403,8 @@ let settings (db : db) =
   ]
 
 let collect_garbage storage =
-  let live = storage_root_addresses storage in
+  let live = Hashtbl.create 257 in
+  List.iter (fun address -> Hashtbl.replace live address ()) (storage_root_addresses storage);
   storage.storage_list_addresses ()
-  |> List.filter (fun address -> not (List.mem address live))
+  |> List.filter (fun address -> not (Hashtbl.mem live address))
   |> storage.storage_delete

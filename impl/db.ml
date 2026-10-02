@@ -208,7 +208,12 @@ let find_active_datom_by_fact db datom =
   in
   match PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index @ duplicate_matches with
   | [] -> None
-  | matches -> Some (matches |> List.sort (Util.compare_datom Eavt) |> List.hd)
+  | first :: rest ->
+    Some
+      (List.fold_left
+         (fun best d -> if Util.compare_datom Eavt d best < 0 then d else best)
+         first
+         rest)
 
 let add_datom_to_indexes db datom =
   { db with
@@ -222,49 +227,69 @@ let add_datom_to_indexes db datom =
   ; max_datom_e = max db.max_datom_e datom.e
   }
 
-let remove_fact_from_duplicate_tables db active =
+let remove_facts_from_duplicate_tables db actives =
   (* Retraction removes the fact entirely, so every stored copy — including
      the ones kept out of the PSet indexes in the duplicate tables — must go.
      The tables are shared with prior db values, so rebuild them rather than
-     mutate in place. *)
-  let duplicate_datoms = List.filter (fun d -> not (same_fact d active)) db.duplicate_datoms in
-  if duplicate_datoms == db.duplicate_datoms then
+     mutate in place. Facts are batched so the whole duplicate list is
+     filtered and re-sorted once per transaction, not once per datom. *)
+  if db.duplicate_datoms = [] then
     db
   else
-    let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
-    let duplicate_avet_datoms =
-      duplicate_datoms
-      |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible db.schema datom.a)
-      |> List.sort (Util.compare_datom Avet)
+    let removed : (int * string, value list) Hashtbl.t =
+      Hashtbl.create (List.length actives)
     in
-    { db with
-      duplicate_datoms
-    ; duplicate_aevt_datoms
-    ; duplicate_avet_datoms
-    ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
-    ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
-    ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
-    }
+    List.iter
+      (fun (d : datom) ->
+         let key = (d.e, d.a) in
+         match Hashtbl.find_opt removed key with
+         | Some vs -> Hashtbl.replace removed key (d.v :: vs)
+         | None -> Hashtbl.replace removed key [ d.v ])
+      actives;
+    let is_removed (d : datom) =
+      match Hashtbl.find_opt removed (d.e, d.a) with
+      | Some vs -> List.exists (value_equal d.v) vs
+      | None -> false
+    in
+    let duplicate_datoms = List.filter (fun d -> not (is_removed d)) db.duplicate_datoms in
+    if duplicate_datoms == db.duplicate_datoms then
+      db
+    else
+      let duplicate_aevt_datoms = List.sort (Util.compare_datom Aevt) duplicate_datoms in
+      let duplicate_avet_datoms =
+        duplicate_datoms
+        |> List.filter (fun datom -> Schema.schema_attr_is_avet_accessible db.schema datom.a)
+        |> List.sort (Util.compare_datom Avet)
+      in
+      { db with
+        duplicate_datoms
+      ; duplicate_aevt_datoms
+      ; duplicate_avet_datoms
+      ; duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms
+      ; duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms
+      ; duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms
+      }
 
 let refresh_indexes_with_tx_data db tx_data =
-  let db =
+  let db, removed_actives =
     List.fold_left
-      (fun db datom ->
+      (fun (db, removed) datom ->
         if datom.added then
-          add_datom_to_indexes db datom
+          add_datom_to_indexes db datom, removed
         else
           match find_active_datom_by_fact db datom with
-          | None -> db
+          | None -> db, removed
           | Some active ->
-            let db = remove_fact_from_duplicate_tables db active in
-            { db with
-              eavt_index = PSet.remove active db.eavt_index
-            ; aevt_index = PSet.remove active db.aevt_index
-            ; avet_index = PSet.remove active db.avet_index
-            })
-      db
+            ( { db with
+                eavt_index = PSet.remove active db.eavt_index
+              ; aevt_index = PSet.remove active db.aevt_index
+              ; avet_index = PSet.remove active db.avet_index
+              }
+            , active :: removed ))
+      (db, [])
       tx_data
   in
+  let db = remove_facts_from_duplicate_tables db removed_actives in
   invalidate_attr_tables db
 
 let with_datoms db datoms =
@@ -994,9 +1019,31 @@ let index_range context db attr ?start ?stop () =
 let diff left right =
   let left_datoms = visible_index_datoms left Eavt in
   let right_datoms = visible_index_datoms right Eavt in
-  ( List.filter (fun d -> not (List.exists (same_fact d) right_datoms)) left_datoms
-  , List.filter (fun d -> not (List.exists (same_fact d) left_datoms)) right_datoms
-  , List.filter (fun d -> List.exists (same_fact d) right_datoms) left_datoms
+  (* (e, a) -> values hash table per side turns the pairwise same_fact
+     scan into an O(1)-amortized lookup per datom. *)
+  let fact_table datoms =
+    let tbl : (int * string, value list) Hashtbl.t =
+      Hashtbl.create (List.length datoms)
+    in
+    List.iter
+      (fun (d : datom) ->
+         let key = (d.e, d.a) in
+         match Hashtbl.find_opt tbl key with
+         | Some vs -> Hashtbl.replace tbl key (d.v :: vs)
+         | None -> Hashtbl.replace tbl key [ d.v ])
+      datoms;
+    tbl
+  in
+  let has_fact tbl (d : datom) =
+    match Hashtbl.find_opt tbl (d.e, d.a) with
+    | Some vs -> List.exists (value_equal d.v) vs
+    | None -> false
+  in
+  let left_facts = fact_table left_datoms in
+  let right_facts = fact_table right_datoms in
+  ( List.filter (fun d -> not (has_fact right_facts d)) left_datoms
+  , List.filter (fun d -> not (has_fact left_facts d)) right_datoms
+  , List.filter (fun d -> has_fact right_facts d) left_datoms
   )
 
 let squuid_counter = ref 0
