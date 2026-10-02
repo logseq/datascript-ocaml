@@ -742,6 +742,9 @@ end) = struct
              | Some left_rows -> Hashtbl.replace grouped key (left_row :: left_rows)
              | None -> Hashtbl.add grouped key [ left_row ])
            left.rows;
+         (* Right relations can far outsize the left side; pre-size the
+            uniqueness table so it does not rehash per growth step. *)
+         let right_size_hint = max 1024 (List.length left.rows) in
          let right_row_of_datom =
            if direct_pattern_terms terms then
              let direct = direct_pattern_row pattern_attrs terms in
@@ -754,7 +757,7 @@ end) = struct
          in
          let rows = ref [] in
          let all_right_keys_unique = ref true in
-         let seen_keys = Hashtbl.create 1024 in
+         let seen_keys = Hashtbl.create right_size_hint in
          source_context.pattern_datoms source_db e_term a_term v_term None
          |> Seq.iter (fun datom ->
            match right_row_of_datom datom with
