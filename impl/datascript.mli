@@ -81,11 +81,11 @@ module Conn : sig
   type creation_context =
     { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
     ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-    ; store : ?storage:storage -> db -> unit
+    ; store : ?storage:storage -> db -> db
     }
 
   type schema_context =
-    { store : ?storage:storage -> db -> unit
+    { store : ?storage:storage -> db -> db
     ; with_schema : db -> schema -> db
     }
 
@@ -95,7 +95,7 @@ module Conn : sig
     }
 
   type transact_context =
-    { store : ?storage:storage -> db -> unit
+    { store : ?storage:storage -> db -> db
     ; store_tail : storage -> datom list list -> unit
     ; storage_tail_datom_count : datom list list -> int
     ; storage_tail_compaction_threshold : db -> int
@@ -103,7 +103,7 @@ module Conn : sig
     }
 
   type reset_context =
-    { store : ?storage:storage -> db -> unit
+    { store : ?storage:storage -> db -> db
     ; datoms : db -> datom list
     }
 
@@ -248,7 +248,7 @@ module Storage : sig
   val tail_address : storage_address
   val memory_storage : unit -> storage
   val file_storage : string -> storage
-  val store : ?storage:storage -> db -> unit
+  val store : ?storage:storage -> db -> db
   val store_tail : storage -> datom list list -> unit
   val tail_compaction_threshold : db -> int
   val tail_datom_count : datom list list -> int
@@ -414,7 +414,7 @@ val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
 val file_storage : string -> storage
-val store : ?storage:storage -> db -> unit
+val store : ?storage:storage -> db -> db
 val store_tail : storage -> datom list list -> unit
 val restore : storage -> db option
 val db_with_tail : db -> datom list list -> db

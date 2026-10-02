@@ -11,11 +11,11 @@ type t =
 type creation_context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-  ; store : ?storage:storage -> db -> unit
+  ; store : ?storage:storage -> db -> db
   }
 
 type schema_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; with_schema : db -> schema -> db
   }
 
@@ -25,7 +25,7 @@ type restore_context =
   }
 
 type transact_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; store_tail : storage -> datom list list -> unit
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
@@ -33,14 +33,14 @@ type transact_context =
   }
 
 type reset_context =
-  { store : ?storage:storage -> db -> unit
+  { store : ?storage:storage -> db -> db
   ; datoms : db -> datom list
   }
 
 type context =
   { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
   ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-  ; store : ?storage:storage -> db -> unit
+  ; store : ?storage:storage -> db -> db
   ; store_tail : storage -> datom list list -> unit
   ; restore : storage -> db option
   ; restore_tail_groups : storage -> datom list list
@@ -78,8 +78,7 @@ let create (context : creation_context) ?schema ?storage () =
     match storage with
     | None -> db
     | Some storage ->
-      context.store ~storage db;
-      { db with storage_ref = Some storage }
+      { (context.store ~storage db) with storage_ref = Some storage }
   in
   make ?storage db
 
@@ -87,8 +86,7 @@ let from_db (context : creation_context) db =
   match db.storage_ref with
   | None -> make db
   | Some storage ->
-    context.store ~storage db;
-    make ~storage db
+    make ~storage (context.store ~storage db)
 
 let from_datoms (context : creation_context) ?schema ?storage datoms =
   from_db context (context.init_db ?schema ?storage datoms)
@@ -129,7 +127,7 @@ let reset_schema (context : schema_context) conn schema =
   (match conn.storage with
    | None -> ()
    | Some storage ->
-     context.store ~storage db;
+     conn.db <- context.store ~storage db;
      conn.storage_tail <- []);
   db
 
@@ -149,7 +147,7 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
        if report.tx_data <> [] then begin
          let tail = conn.storage_tail @ [ report.tx_data ] in
          if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold report.db_after then begin
-           context.store ~storage report.db_after;
+           conn.db <- context.store ~storage report.db_after;
            conn.storage_tail <- []
          end else begin
            conn.storage_tail <- tail;
@@ -177,7 +175,7 @@ let apply_report (context : transact_context) conn (report : tx_report) =
      if report.tx_data <> [] then begin
        let tail = conn.storage_tail @ [ report.tx_data ] in
        if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold db_after then begin
-         context.store ~storage db_after;
+         conn.db <- context.store ~storage db_after;
          conn.storage_tail <- []
        end else begin
          conn.storage_tail <- tail;
@@ -203,7 +201,7 @@ let reset (context : reset_context) ?(tx_meta = []) conn db =
   (match conn.storage with
    | None -> ()
    | Some storage ->
-     context.store ~storage db;
+     conn.db <- context.store ~storage db;
      conn.storage_tail <- []);
   notify_listeners conn report;
   db

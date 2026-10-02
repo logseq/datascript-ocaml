@@ -382,7 +382,7 @@ let logseq_get_page_data db name =
 let build_storage_db size =
   let storage = memory_storage () in
   let db = db_with (people size) (empty_db ~schema ~storage ()) in
-  store db;
+  ignore (store db);
   match restore storage with
   | Some db -> db
   | None -> failwith "storage-backed benchmark db should restore"

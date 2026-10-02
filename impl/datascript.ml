@@ -900,15 +900,19 @@ let tx_meta_skips_store tx_meta =
     tx_meta
 
 let persist_transact_tail ~tx_meta db tx_data =
-  if tx_data <> [] && not (tx_meta_skips_store tx_meta) then
+  if tx_data = [] || tx_meta_skips_store tx_meta then
+    db
+  else
     match db.storage_ref with
-    | None -> ()
+    | None -> db
     | Some storage ->
       let tail = restore_tail_groups storage @ [ tx_data ] in
       if storage_tail_datom_count tail > storage_tail_compaction_threshold db then
         store ~storage db
-      else
-        store_tail storage tail
+      else begin
+        store_tail storage tail;
+        db
+      end
 
 let transact_report ?(tx_meta = []) db tx_ops =
   let db_after, tempids, tx_data = apply_tx tx_ops db in
@@ -916,8 +920,8 @@ let transact_report ?(tx_meta = []) db tx_ops =
 
 let transact ?(tx_meta = []) db tx_ops =
   let report = transact_report ~tx_meta db tx_ops in
-  persist_transact_tail ~tx_meta report.db_after report.tx_data;
-  report
+  let db_after = persist_transact_tail ~tx_meta report.db_after report.tx_data in
+  { report with db_after }
 
 let with_tx ?tx_meta db tx_ops = transact ?tx_meta db tx_ops
 

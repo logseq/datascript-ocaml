@@ -126,7 +126,7 @@ let run_size size =
       let persistent_build, persistent_db =
         time "snapshot-build-and-store" (fun () ->
             let db = db_with tx (empty_db ~schema ~storage ()) in
-            store db;
+            ignore (store db);
             db)
       in
       print_timing persistent_build;
@@ -152,7 +152,7 @@ let run_size size =
                 (add_block_tx "persistent-new" (Float.of_int (size + 1)))
                 restored_db
             in
-            store db;
+            ignore (store db);
             db)
       in
       print_timing persistent_add;
@@ -163,7 +163,7 @@ let run_size size =
       let persistent_update, restored_db =
         time "snapshot-update-one-and-store-after-add" (fun () ->
             let db = db_with (update_content_tx "block-00001" "Edited") restored_db in
-            store db;
+            ignore (store db);
             db)
       in
       print_timing persistent_update;
