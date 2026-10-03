@@ -310,9 +310,9 @@ let run_fuzz_parity () =
   for i = 0 to fuzz_batch_count - 1 do
     ignore (Internal.transact_conn conn (fuzz_generated_batch i))
   done;
-  let db = Internal.conn_db conn in
+  let db = Internal.Conn.db conn in
   emit "fuzz.(schema final)" (schema_json db);
-  emit "fuzz.final.datoms" (datoms_json (Internal.datoms db Eavt () |> List.of_seq))
+  emit "fuzz.final.datoms" (datoms_json (datoms db Eavt ()))
 
 let () =
   let schema = [ "name", unique_identity; "age", indexed; "friend", ref_attr; "aka", many ] in
@@ -363,3 +363,4 @@ let () =
           ; Entity { db_id = Some (Entity_id 2L); attrs = [ "email", One_value (String "a@example.test") ] }
             ])));
   run_fuzz_parity ()
+

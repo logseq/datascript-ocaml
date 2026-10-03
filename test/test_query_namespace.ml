@@ -84,11 +84,11 @@ let test_query_namespace__test_public_query_api () =
     |> Internal.db_with [ DT.Add (DT.Entity_id (1L), "name", DT.String "Ivan"); DT.Add (DT.Entity_id (2L), "name", DT.String "Oleg") ]
   in
   assert_equal_query
-    "Internal.q_string exposes relation query API"
+    "q_string exposes relation query API"
     [ [ DT.Result_value (DT.String "Ivan") ]; [ DT.Result_value (DT.String "Oleg") ] ]
     (Internal.q_string db "[:find ?name :where [_ :name ?name]]");
   assert_equal_query
-    "Internal.q_sources_string exposes named sources"
+    "q_sources_string exposes named sources"
     [ [ DT.Result_value (DT.String "Ivan") ] ]
     (Internal.q_sources_string
        (Internal.empty_db ())
@@ -101,21 +101,21 @@ let test_query_namespace__test_public_query_api () =
          ; [ DT.Keyword "id", DT.Result_entity (2L); DT.Keyword "name", DT.Result_value (DT.String "Oleg") ]
          ]
   then
-    failwith "Internal.q_return_map_string should expose return-map query API"
+    failwith "q_return_map_string should expose return-map query API"
 
 let test_query_namespace__test_query_result_helpers () =
   let add_datom = { DT.e = 1L; DT.a = "name"; DT.v = DT.String "Ivan"; DT.tx = 7L; DT.added = true } in
   let retract_datom = { add_datom with DT.tx = 8L; DT.added = false } in
-  (if (DT.Result_entity 1L) <> (Internal.Query.result_of_datom_e add_datom) then failf "result_of_datom_e returns Internal.entityresults");
+  (if (DT.Result_entity 1L) <> (Internal.Query.result_of_datom_e add_datom) then failf "result_of_datom_e returns entityresults");
   (if (DT.Result_attr "name") <> (Internal.Query.result_of_datom_a add_datom) then failf "result_of_datom_a returns attr results");
   (if (DT.Result_value (DT.String "Ivan")) <> (Internal.Query.result_of_datom_v add_datom) then failf "result_of_datom_v returns value results");
-  (if (DT.Result_entity 7L) <> (Internal.Query.result_of_datom_tx add_datom) then failf "result_of_datom_tx returns tx Internal.entityresults");
+  (if (DT.Result_entity 7L) <> (Internal.Query.result_of_datom_tx add_datom) then failf "result_of_datom_tx returns tx entityresults");
   (if (DT.Result_value (DT.Keyword "db/add")) <> (Internal.Query.result_of_datom_op add_datom) then failf "result_of_datom_op returns add op keywords");
   (if (DT.Result_value (DT.Keyword "db/retract")) <> (Internal.Query.result_of_datom_op retract_datom) then failf "result_of_datom_op returns retract op keywords");
-  (if (DT.Result_entity 42L) <> (Internal.Query.result_of_ref (DT.Result_value (DT.Ref 42L))) then failf "result_of_ref turns ref values into Internal.entityresults");
+  (if (DT.Result_entity 42L) <> (Internal.Query.result_of_ref (DT.Result_value (DT.Ref 42L))) then failf "result_of_ref turns ref values into entityresults");
   (if (DT.Result_value (DT.String "Ivan")) <> (Internal.Query.result_of_ref (DT.Result_value (DT.String "Ivan"))) then failf "result_of_ref leaves non-ref results unchanged");
   let validate_entity_id entity_id =
-    if entity_id <= 0L then invalid_arg "invalid Internal.entityid";
+    if entity_id <= 0L then invalid_arg "invalid entityid";
     entity_id
   in
   let result_resolution_context =
@@ -133,7 +133,7 @@ let test_query_namespace__test_query_result_helpers () =
     }
   in
   assert_equal_int_option
-    "entity_id_of_resolved_query_result accepts Internal.entityresults"
+    "entity_id_of_resolved_query_result accepts entityresults"
     (Some 42)
     (Option.map Int64.to_int (Internal.Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (DT.Result_entity 42L))));
   assert_equal_int_option
@@ -145,7 +145,7 @@ let test_query_namespace__test_query_result_helpers () =
     (Some 44)
     (Option.map Int64.to_int (Internal.Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (DT.Result_value (DT.Ref 44L)))));
   assert_equal_int_option
-    "entity_id_of_resolved_query_result rejects non-Internal.entityvalues"
+    "entity_id_of_resolved_query_result rejects non-entityvalues"
     None
     (Option.map Int64.to_int (Internal.Query.entity_id_of_resolved_query_result ~validate_entity_id (Some (DT.Result_value (DT.String "Ivan")))));
   assert_equal_int_option
@@ -196,7 +196,7 @@ let test_query_namespace__test_query_result_helpers () =
     false
     (Internal.Query.query_results_equivalent result_resolution_context (DT.Result_db (Internal.empty_db ())) (DT.Result_db (Internal.empty_db ())));
   assert_equal_bool
-    "query_results_equivalent compares lookup refs through Internal.entityids"
+    "query_results_equivalent compares lookup refs through entityids"
     true
     (Internal.Query.query_results_equivalent
        result_resolution_context
@@ -230,7 +230,7 @@ let test_query_namespace__test_query_result_helpers () =
     None
     (Internal.Query.bind_var result_resolution_context "e" (DT.Result_entity 99L) [ "e", DT.Result_entity 42L ]);
   assert_equal_bool
-    "result_matches_entity accepts equivalent Internal.entityids"
+    "result_matches_entity accepts equivalent entityids"
     true
     (Internal.Query.result_matches_entity result_resolution_context 42L (DT.Result_value (DT.Keyword "known-ident")));
   assert_equal_bool
@@ -271,7 +271,7 @@ let test_query_namespace__test_query_matching_helpers () =
     (Some base_binding)
     (Internal.Query.match_query_term match_context DT.QWildcard (DT.Result_entity 1L) base_binding);
   assert_equal_query_option
-    "match_query_term matches Internal.entityterms through result equivalence"
+    "match_query_term matches entityterms through result equivalence"
     (Some [])
     (Internal.Query.match_query_term match_context (DT.QEntity (42L)) (DT.Result_value (DT.Keyword "known-ident")) []);
   assert_equal_query_option
@@ -301,11 +301,11 @@ let test_query_namespace__test_query_matching_helpers () =
     (Some [])
     (Internal.Query.match_query_term match_context (DT.QValue (DT.String "Ivan")) (DT.Result_value (DT.String "Ivan")) []);
   assert_equal_query_option
-    "match_query_term matches ref values against Internal.entityresults"
+    "match_query_term matches ref values against entityresults"
     (Some [])
     (Internal.Query.match_query_term match_context (DT.QValue (DT.Ref (42L))) (DT.Result_entity 42L) []);
   assert_equal_query_option
-    "match_query_term matches keyword idents against Internal.entityresults"
+    "match_query_term matches keyword idents against entityresults"
     (Some [])
     (Internal.Query.match_query_term match_context (DT.QValue (DT.Keyword "known-ident")) (DT.Result_entity 42L) []);
   assert_equal_query_option
@@ -360,7 +360,7 @@ let test_query_namespace__test_query_matching_helpers () =
     (Some (DT.Result_value (DT.String "kept")))
     (Internal.Query.eval_query_term match_context base_binding (DT.QVar "existing"));
   assert_equal_query_option
-    "eval_query_term resolves Internal.entityterms"
+    "eval_query_term resolves entityterms"
     (Some (DT.Result_entity 42L))
     (Internal.Query.eval_query_term match_context [] (DT.QEntity (42L)));
   assert_equal_query_option
@@ -408,7 +408,7 @@ let test_query_namespace__test_query_matching_helpers () =
     "insufficient bindings"
     (fun () -> ignore (Internal.Query.collect_query_terms_exn match_context base_binding [ DT.QWildcard ]));
   assert_equal_int_option
-    "query_term_entity_id returns Internal.entityids for evaluated terms"
+    "query_term_entity_id returns entityids for evaluated terms"
     (Some 42)
     (Option.map
        Int64.to_int
@@ -515,7 +515,7 @@ let test_query_namespace__test_source_matching_helpers () =
             []
             [ (DT.QVar "e"); (DT.QAttr "name") ]));
   assert_equal_query_rows
-    "match_relation_source_pattern expands short database Internal.entitypatterns"
+    "match_relation_source_pattern expands short database entitypatterns"
     [ [ "e", DT.Result_entity (1L) ] ]
     (Internal.Query.match_relation_source_pattern source_context root_db [] "$" [] [ (DT.QVar "e") ]);
   assert_equal_query_rows
@@ -541,9 +541,9 @@ let test_query_namespace__test_source_matching_helpers () =
 
 let test_query_namespace__test_aggregate_helpers () =
   if not (Internal.Query.has_aggregates [ DT.Find_aggregate (DT.Sum, [ (DT.QVar "amount") ]) ]) then
-    failwith "Internal.Query.has_aggregates should detect aggregate find specs";
+    failwith "Query.has_aggregates should detect aggregate find specs";
   if Internal.Query.has_aggregates [ DT.Find_var "amount" ] then
-    failwith "Internal.Query.has_aggregates should ignore non-aggregate find specs";
+    failwith "Query.has_aggregates should ignore non-aggregate find specs";
   assert_equal_aggregate
     "dynamic min amount resolves from the first group binding"
     (DT.MinN 2)
@@ -821,7 +821,7 @@ let test_query_namespace__test_input_binding_helpers () =
     [ [ "name", DT.Result_value (DT.String "Ivan") ] ]
     (Internal.Query.apply_query_input input_context [ [] ] (DT.Input_scalar ("name", DT.Result_value (DT.String "Ivan"))));
   assert_equal_query_rows
-    "apply_query_input binds Internal.entityref inputs"
+    "apply_query_input binds entityref inputs"
     [ [ "e", DT.Result_entity 42L ] ]
     (Internal.Query.apply_query_input input_context [ [] ] (DT.Input_entity_ref ("e", Ident "known")));
   assert_equal_query_rows
@@ -1139,9 +1139,9 @@ let test_query_namespace__test_source_discovery_helpers () =
             ; [ DT.DynamicPredicate ("pred", [ (DT.QSource "dynamic") ]) ]
             ] )));
   assert_equal_string_list
-    "sources_of_find_spec includes Internal.pull sources"
-    [ "Internal.pull-db" ]
-    (Internal.Query.sources_of_find_spec (DT.Find_pull_source ("Internal.pull-db", "e", [ DT.Pull_id ])));
+    "sources_of_find_spec includes pull sources"
+    [ "pull-db" ]
+    (Internal.Query.sources_of_find_spec (DT.Find_pull_source ("pull-db", "e", [ DT.Pull_id ])));
   assert_equal_string_list
     "sources_of_find_spec includes aggregate term sources"
     [ "amounts" ]
@@ -1214,11 +1214,11 @@ let test_query_namespace__test_rule_source_analysis_helpers () =
     ]
     [ Internal.Query.resolve_dynamic_rule [ "parent" ] rule ];
   if not (Internal.Query.find_spec_uses_default_source (DT.Find_pull_source ("$", "e", [ DT.Pull_id ]))) then
-    failwith "find_spec_uses_default_source should detect explicit default Internal.pull sources";
+    failwith "find_spec_uses_default_source should detect explicit default pull sources";
   if Internal.Query.find_spec_uses_default_source (DT.Find_pull_source ("other", "e", [ DT.Pull_id ])) then
-    failwith "find_spec_uses_default_source should ignore named Internal.pull sources";
+    failwith "find_spec_uses_default_source should ignore named pull sources";
   if Internal.Query.find_spec_uses_default_source (DT.Find_pull ("e", [ DT.Pull_id ])) then
-    failwith "find_spec_uses_default_source should ignore implicit Internal.pull specs";
+    failwith "find_spec_uses_default_source should ignore implicit pull specs";
   if not (Internal.Query.clause_uses_default_source (DT.Pattern ((DT.QVar "e"), (DT.QAttr "name"), (DT.QVar "name")))) then
     failwith "clause_uses_default_source should treat bare patterns as default-source clauses";
   if

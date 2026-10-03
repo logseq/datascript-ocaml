@@ -445,19 +445,19 @@ let rec value_of_transit = function
 
 let datom_of_transit = function
   | Transit.Array [ entity; attr; value; tx ] ->
-    let e = int_of_transit "Internal.datom ~e:Internal.entity ~a:" entity in
+    let e = int_of_transit "datom ~e:entity ~a:" entity in
     let a =
       match keyword_of_transit attr with
       | Some attr -> attr
-      | None -> invalid_arg " ~v:Internal.datom attr must be a Transit keyword"
+      | None -> invalid_arg " ~v:datom attr must be a Transit keyword"
     in
-    let tx = int_of_transit "Internal.datom ~e:tx ~a:" tx in
+    let tx = int_of_transit "datom ~e:tx ~a:" tx in
     Internal.datom ~e:(Int64.of_int e) ~a ~v:(value_of_transit value) ~tx:(Int64.abs (Int64.of_int tx)) ~added:(tx >= 0) ()
-  | _ -> invalid_arg " ~v:storage Internal.datom ~e:must ~a:be ~v:[e a v tx]"
+  | _ -> invalid_arg " ~v:storage datom ~e:must ~a:be ~v:[e a v tx]"
 
 let datoms_of_transit = function
   | Transit.Array datoms | Transit.List datoms -> List.map datom_of_transit datoms
-  | _ -> invalid_arg "storage node :keys must be a Internal.datom ~e:array ~a:"
+  | _ -> invalid_arg "storage node :keys must be a datom ~e:array ~a:"
 
 let addresses_of_json = function
   | None -> []
@@ -905,10 +905,10 @@ let schema_of_logseq_graph ?(read_only = false) db_path =
            | Some attr -> Some (attr, logseq_schema_attr_of_transit schema |> normalize_logseq_schema_attr attr)
            | None -> None)
        | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
-       | None -> invalid_arg "Logseq graph root metadata has no :Internal.schema"
+       | None -> invalid_arg "Logseq graph root metadata has no :schema"
      with
      | Transit.Decode_error _ | Yojson.Json_error _ ->
-       invalid_arg "Logseq graph root metadata has no decodable :Internal.schema")
+       invalid_arg "Logseq graph root metadata has no decodable :schema")
 
 let int_of_shallow_string text =
   match int_of_string_opt text with
@@ -982,7 +982,7 @@ let logseq_attr_of_shallow_json reader = function
   | `String text ->
     let text = shallow_decode_string reader text in
     if starts_with "~:" text then String.sub text 2 (String.length text - 2) else text
-  | _ -> invalid_arg "Logseq Internal.datom ~e:attr ~a:must ~v:be () a Transit keyword string"
+  | _ -> invalid_arg "Logseq datom ~e:attr ~a:must ~v:be () a Transit keyword string"
 
 let logseq_int_of_shallow_json reader = function
   | `Int value -> value
@@ -991,7 +991,7 @@ let logseq_int_of_shallow_json reader = function
     let text = shallow_decode_string reader text in
     if starts_with "~i" text then int_of_shallow_string (String.sub text 2 (String.length text - 2))
     else int_of_shallow_string text
-  | _ -> invalid_arg "Logseq Internal.datom ~e:integer ~a:field ~v:must () be an integer"
+  | _ -> invalid_arg "Logseq datom ~e:integer ~a:field ~v:must () be an integer"
 
 let logseq_datom_of_shallow_json reader = function
   | `List [ entity; attr; value; tx ] ->
@@ -1000,7 +1000,7 @@ let logseq_datom_of_shallow_json reader = function
     let v = logseq_value_of_shallow_json reader value in
     let tx = logseq_int_of_shallow_json reader tx in
     Internal.datom ~tx:(Int64.of_int tx) ~e:(Int64.of_int e) ~a ~v ()
-  | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] Internal.datoms"
+  | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
 
 let logseq_datoms_of_row_with_reader reader content =
   match Yojson.Safe.from_string content with

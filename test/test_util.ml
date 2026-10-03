@@ -29,7 +29,7 @@ let test_util__value_semantics () =
       ]
   in
   if normalized <> Internal.Util.normalize_value nested then
-    failf "Internal.Util.normalize_value normalizes unordered values without losing vector shape";
+    failf "Util.normalize_value normalizes unordered values without losing vector shape";
   if Internal.Util.compare_value (V.Vector [ V.Int64 1L; V.Int64 2L ]) (V.List [ V.Int64 1L; V.Int64 2L ]) = 0 then
     failf "vectors and lists must remain distinct values"
 

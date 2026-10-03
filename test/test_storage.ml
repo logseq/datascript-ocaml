@@ -85,23 +85,23 @@ let test_storage__test_basics () =
   let storage = Internal.memory_storage () in
   let db = small_db () in
   ignore (Internal.store ~storage db);
-  assert_upstream_storage_addresses "Internal.store writes upstream storage addresses" (Internal.storage_addresses storage);
+  assert_upstream_storage_addresses "store writes upstream storage addresses" (Internal.storage_addresses storage);
   (match Internal.restore storage with
-   | None -> failwith "Internal.restore should read stored db"
+   | None -> failwith "restore should read stored db"
    | Some restored ->
      assert_equal_triples
-       "Internal.restore returns stored facts"
+       "restore returns stored facts"
        [ 1L, "name", String "Ivan"; 2L, "name", String "Oleg"; 3L, "name", String "Petr" ]
        (datoms restored Eavt);
      if List.assoc_opt "storage" (Internal.settings restored) <> Some (Bool true) then
-       failwith "Internal.settings should expose storage attachment");
+       failwith "settings should expose storage attachment");
   let attached_storage = Internal.memory_storage () in
   let attached = Internal.empty_db ~schema:[ "name", indexed ] ~storage:attached_storage () in
   ignore (Internal.store attached);
   (match Internal.restore attached_storage with
-   | None -> failwith "Internal.store should use db-attached storage"
+   | None -> failwith "store should use db-attached storage"
    | Some restored ->
-     if Internal.schema restored <> [ "name", indexed ] then failwith "Internal.restore should preserve Internal.schema")
+     if Internal.schema restored <> [ "name", indexed ] then failwith "restore should preserve schema")
 
 let test_storage__test_upstream_wire_addresses () =
   let storage = Internal.memory_storage () in
@@ -135,12 +135,12 @@ let test_storage__test_file_storage () =
       ignore (Internal.store ~storage db);
       Internal.store_tail storage [ [ Internal.datom ~tx:(Int64.add Internal.Db.tx0 2L) ~e:1L ~a:"name" ~v:(String "Alex") () ] ];
       let restored_storage = Internal.file_storage dir in
-      assert_upstream_storage_addresses "Internal.file_storage lists persisted addresses" (Internal.storage_addresses restored_storage);
+      assert_upstream_storage_addresses "file_storage lists persisted addresses" (Internal.storage_addresses restored_storage);
       match Internal.restore restored_storage with
-      | None -> failwith "Internal.file_storage should Internal.restore stored db"
+      | None -> failwith "file_storage should restore stored db"
       | Some restored ->
         assert_equal_triples
-          "Internal.file_storage restores root and replays persisted tail"
+          "file_storage restores root and replays persisted tail"
           [ 1L, "name", String "Alex"; 2L, "name", String "Oleg"; 3L, "name", String "Petr" ]
           (datoms restored Eavt))
 
@@ -151,12 +151,12 @@ let test_storage__test_gc () =
   Internal.store_tail storage [ [ Internal.datom ~tx:(Int64.add Internal.Db.tx0 2L) ~e:1L ~a:"name" ~v:(String "Alex") () ] ];
   storage.storage_store [ "stale/node", Storage_tail [] ];
   Internal.collect_garbage storage;
-  assert_upstream_storage_addresses "Internal.collect_garbage keeps live storage addresses" (Internal.storage_addresses storage);
+  assert_upstream_storage_addresses "collect_garbage keeps live storage addresses" (Internal.storage_addresses storage);
   match Internal.restore storage with
-  | None -> failwith "Internal.restore should work after garbage collection"
+  | None -> failwith "restore should work after garbage collection"
   | Some restored ->
     assert_equal_triples
-      "Internal.collect_garbage preserves restorable data"
+      "collect_garbage preserves restorable data"
       [ 1L, "name", String "Alex"; 2L, "name", String "Oleg"; 3L, "name", String "Petr" ]
       (datoms restored Eavt)
 
@@ -167,7 +167,7 @@ let test_storage__test_restored_db_addresses () =
   let restored =
     match Internal.restore storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored db"
+    | None -> failwith "restore should read stored db"
   in
   assert_upstream_storage_addresses "addresses should include restored db live nodes" (Internal.Storage.addresses [ restored ])
 
@@ -178,7 +178,7 @@ let test_storage__test_restored_incremental_store_reuses_index_nodes () =
   let restored =
     match Internal.restore storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored large db"
+    | None -> failwith "restore should read stored large db"
   in
   reset_writes writes;
   ignore (Internal.store ~storage restored);
@@ -229,11 +229,11 @@ let test_storage__test_conn_repeated_transacts_store_incrementally () =
      transactions the buggy code writes well over 3000 entries while the
      incremental Internal.store stays under 1000. *)
   assert_int_at_most
-    "repeated transacts should not rewrite the whole index tree on every Internal.store"
+    "repeated transacts should not rewrite the whole index tree on every store"
     1500
     (List.length !writes);
   (match Internal.restore storage with
-   | None -> failwith "storage-backed conn should Internal.restore"
+   | None -> failwith "storage-backed conn should restore"
    | Some restored ->
      assert_equal_int
        "all committed datoms remain restorable"
@@ -250,17 +250,17 @@ let test_storage__test_restore_is_lazy () =
   let restored =
     match Internal.restore counted_storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored large db"
+    | None -> failwith "restore should read stored large db"
   in
-  assert_int_at_most "Internal.restore should only read root and tail addresses" 2
+  assert_int_at_most "restore should only read root and tail addresses" 2
     (List.length !reads);
   ignore (Seq.uncons (datoms_seq restored Eavt ()));
   let reads_after_first_datom = List.length !reads in
   if reads_after_first_datom <= 2 then
-    failwith "reading the first Internal.datom ~e:(Int64.of_int should) ~a:load ~v:the () first index path";
+    failwith "reading the first datom ~e:(Int64.of_int should) ~a:load ~v:the () first index path";
   if reads_after_first_datom >= address_count then
     failf
-      "reading the first Internal.datom ~e:(Int64.of_int should) ~a:not ~v:Internal.restore () every stored node: reads=%d addresses=%d"
+      "reading the first datom ~e:(Int64.of_int should) ~a:not ~v:restore () every stored node: reads=%d addresses=%d"
       reads_after_first_datom address_count
 
 let test_storage__test_restore_with_tail_is_lazy () =
@@ -278,11 +278,11 @@ let test_storage__test_restore_with_tail_is_lazy () =
   let restored =
     match Internal.restore counted_storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored large db with tail"
+    | None -> failwith "restore should read stored large db with tail"
   in
   if List.length !reads >= address_count then
     failf
-      "Internal.restore tail replay should not Internal.restore every stored node: reads=%d addresses=%d"
+      "restore tail replay should not restore every stored node: reads=%d addresses=%d"
       (List.length !reads) address_count;
   assert_equal_triples
     "tail replay should apply raw datoms"
@@ -296,7 +296,7 @@ let test_storage__test_transact_after_restore_uses_index_slices () =
   let baseline =
     match Internal.restore baseline_storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored large db for baseline"
+    | None -> failwith "restore should read stored large db for baseline"
   in
   ignore (Seq.uncons (datoms_seq ~e:1L baseline Eavt ()));
   let slice_read_count = List.length !baseline_reads in
@@ -304,14 +304,14 @@ let test_storage__test_transact_after_restore_uses_index_slices () =
   let restored =
     match Internal.restore counted_storage with
     | Some db -> db
-    | None -> failwith "Internal.restore should read stored large db"
+    | None -> failwith "restore should read stored large db"
   in
   let db_after =
     Internal.db_with [ Retract (Entity_id 1L, "str", Some (String "1")) ] restored
   in
   if List.length !reads > slice_read_count + 8 then
     failf
-      "Internal.transact after Internal.restore should use bounded index slices: reads=%d slice_reads=%d"
+      "transact after restore should use bounded index slices: reads=%d slice_reads=%d"
       (List.length !reads) slice_read_count;
   assert_equal_triples
     "restored db transaction should retract the targeted fact"
@@ -321,24 +321,24 @@ let test_storage__test_transact_after_restore_uses_index_slices () =
 let test_storage__test_conn () =
   let storage = Internal.memory_storage () in
   let conn = Internal.create_conn ~schema:[ "name", indexed ] ~storage () in
-  assert_upstream_storage_addresses "storage-backed Internal.create_conn stores upstream addresses" (Internal.storage_addresses storage);
+  assert_upstream_storage_addresses "storage-backed create_conn stores upstream addresses" (Internal.storage_addresses storage);
   ignore (Internal.transact_conn conn [ Add (Entity_id 1L, "name", String "Ivan") ]);
   ignore (Internal.transact_conn conn [ Add (Entity_id 2L, "name", String "Oleg") ]);
   let restored =
     match Internal.restore_conn storage with
     | Some conn -> conn
-    | None -> failwith "Internal.restore_conn should Internal.restore storage-backed conn"
+    | None -> failwith "restore_conn should restore storage-backed conn"
   in
   assert_equal_triples
-    "Internal.restore_conn replays transaction tail"
+    "restore_conn replays transaction tail"
     [ 1L, "name", String "Ivan"; 2L, "name", String "Oleg" ]
     (datoms (Internal.conn_db restored) Eavt);
-  ignore (Internal.transact_conn ~tx_meta:[ "skip-Internal.store?", Bool true ] restored [ Add (Entity_id 3L, "name", String "Skipped") ]);
+  ignore (Internal.transact_conn ~tx_meta:[ "skip-store?", Bool true ] restored [ Add (Entity_id 3L, "name", String "Skipped") ]);
   (match Internal.restore storage with
    | None -> failwith "storage root should remain available"
    | Some restored_db ->
      assert_equal_triples
-       "skip-Internal.store transaction is not persisted"
+       "skip-store transaction is not persisted"
        [ 1L, "name", String "Ivan"; 2L, "name", String "Oleg" ]
        (datoms restored_db Eavt));
   ignore
@@ -359,10 +359,10 @@ let test_storage__test_conn () =
   (match Internal.restore from_db_storage with
    | Some restored_db ->
      assert_equal_triples
-       "Internal.conn_from_db stores the initial attached db root"
+       "conn_from_db stores the initial attached db root"
        [ 1L, "name", String "Ivan" ]
        (datoms restored_db Eavt)
-   | None -> failwith "Internal.conn_from_db should Internal.store attached dbs");
+   | None -> failwith "conn_from_db should store attached dbs");
   let from_datoms_storage = Internal.memory_storage () in
   ignore
     (Internal.conn_from_datoms
@@ -372,10 +372,10 @@ let test_storage__test_conn () =
   match Internal.restore from_datoms_storage with
   | Some restored_db ->
     assert_equal_triples
-      "Internal.conn_from_datoms stores the initial attached db root"
+      "conn_from_datoms stores the initial attached db root"
       [ 3L, "name", String "Petr" ]
       (datoms restored_db Eavt)
-  | None -> failwith "Internal.conn_from_datoms should Internal.store attached datoms"
+  | None -> failwith "conn_from_datoms should store attached datoms"
 
 let test_storage__test_db_with_tail () =
   let db =
@@ -393,18 +393,18 @@ let test_storage__test_db_with_tail () =
   in
   let restored = Internal.db_with_tail db tail in
   assert_equal_triples
-    "Internal.db_with_tail retracts stale cardinality-one values"
+    "db_with_tail retracts stale cardinality-one values"
     [ 1L, "block/updated-at", Int64 1772979061145L ]
     (datoms ~a:"block/updated-at" restored Avet);
   assert_equal_triples
-    "Internal.db_with_tail drops rejected unique-conflict tail groups"
+    "db_with_tail drops rejected unique-conflict tail groups"
     []
     (datoms ~e:2L restored Eavt);
   assert_equal_triples
-    "Internal.db_with_tail keeps later valid groups"
+    "db_with_tail keeps later valid groups"
     [ 3L, "block/title", String "Later" ]
     (datoms ~e:3L restored Eavt);
-  assert_equal_int "Internal.db_with_tail advances max tx" (Int64.to_int (Int64.add Internal.Db.tx0 6L)) (Int64.to_int restored.max_tx)
+  assert_equal_int "db_with_tail advances max tx" (Int64.to_int (Int64.add Internal.Db.tx0 6L)) (Int64.to_int restored.max_tx)
 
 module PSet = Persistent_sorted_set
 
@@ -447,7 +447,7 @@ let test_storage__test_restore_keeps_snapshot_counts () =
    | _ -> failwith "expected root metadata");
   let measured, reads = restore_counting_storage storage in
   let restored = Option.get (Internal.restore measured) in
-  assert_equal_int "Internal.restore reads only root and tail" 2 (List.length !reads);
+  assert_equal_int "restore reads only root and tail" 2 (List.length !reads);
   check_cached_counts "cold snapshot counts" [4096;4096;2048] restored reads;
   let changed = Internal.db_with [ Add (Entity_id 2049L, "probe/indexed", String "new") ] restored in
   check_cached_counts "successful add count" [4097;4097;2049] changed reads;
@@ -475,7 +475,7 @@ let test_storage__test_restore_counts_after_tail () =
       (List.length (datoms restored index)))
     [Eavt;Aevt;Avet] [4096;4096;2048];
   let conn = Option.get (Internal.restore_conn measured) in
-  check_cached_counts "Internal.restore_conn counts after tail" [4096;4096;2048] (Internal.conn_db conn) reads;
+  check_cached_counts "restore_conn counts after tail" [4096;4096;2048] (Internal.conn_db conn) reads;
   let tx = Internal.transact_conn conn [ Add (Entity_id 2050L, "probe/indexed", String "later") ] in
   check_cached_counts "incremental conn transaction count" [4097;4097;2049] tx.db_after reads;
   ignore (Internal.store tx.db_after);
@@ -495,7 +495,7 @@ let test_storage__test_empty_and_missing_count_metadata () =
     storage_eavt_metadata = None; storage_aevt_metadata = None; storage_avet_metadata = None});
   let measured, reads = restore_counting_storage storage in
   let restored = Option.get (Internal.restore measured) in
-  assert_equal_int "missing metadata Internal.restore stays lazy" 2 (List.length !reads);
+  assert_equal_int "missing metadata restore stays lazy" 2 (List.length !reads);
   reads := [];
   assert_index_counts "missing metadata falls back to actual count" [4096;4096;2048] restored;
   if !reads = [] then failwith "missing metadata should load nodes for count";

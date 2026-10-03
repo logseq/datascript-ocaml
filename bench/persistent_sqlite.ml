@@ -116,7 +116,7 @@ let run_size size =
     (fun () ->
       let storage = Datascript_sqlite.storage session in
       let persistent_build, persistent_db =
-        time "snapshot-build-and-Internal.store" (fun () ->
+        time "snapshot-build-and-store" (fun () ->
             let db = Internal.db_with tx (Internal.empty_db ~schema ~storage ()) in
             ignore (Internal.store db);
             db)
@@ -131,14 +131,14 @@ let run_size size =
       Printf.printf "snapshot-kvs-rows-after-build\t%d\n%!" persistent_rows;
       Printf.printf "snapshot-file-size-after-build\t%d\n%!" (file_size db_path);
       let restore_timing, restored_db =
-        time "snapshot-Internal.restore" (fun () ->
+        time "snapshot-restore" (fun () ->
             match Internal.restore storage with
             | Some db -> db
-            | None -> failwith "persistent db should Internal.restore")
+            | None -> failwith "persistent db should restore")
       in
       print_timing restore_timing;
       let persistent_add, restored_db =
-        time "snapshot-add-one-and-Internal.store-after-Internal.restore" (fun () ->
+        time "snapshot-add-one-and-store-after-restore" (fun () ->
             let db =
               Internal.db_with
                 (add_block_tx "persistent-new" (Float.of_int (size + 1)))
@@ -153,7 +153,7 @@ let run_size size =
         (sqlite_count db_path "select count(*) from kvs;");
       Printf.printf "snapshot-file-size-after-add\t%d\n%!" (file_size db_path);
       let persistent_update, restored_db =
-        time "snapshot-update-one-and-Internal.store-after-add" (fun () ->
+        time "snapshot-update-one-and-store-after-add" (fun () ->
             let db = Internal.db_with (update_content_tx "block-00001" "Edited") restored_db in
             ignore (Internal.store db);
             db)
@@ -194,14 +194,14 @@ let run_size size =
         (sqlite_count conn_db_path "select count(*) from kvs;");
       Printf.printf "conn-file-size-after-build\t%d\n%!" (file_size conn_db_path);
       let conn_restore, conn =
-        time "conn-Internal.restore" (fun () ->
+        time "conn-restore" (fun () ->
             match Internal.restore_conn storage with
             | Some conn -> conn
-            | None -> failwith "persistent conn should Internal.restore")
+            | None -> failwith "persistent conn should restore")
       in
       print_timing conn_restore;
       let conn_add, _report =
-        time "conn-add-one-after-Internal.restore" (fun () ->
+        time "conn-add-one-after-restore" (fun () ->
             Internal.transact_conn conn (add_block_tx "conn-new" (Float.of_int (size + 1))))
       in
       print_timing conn_add;
