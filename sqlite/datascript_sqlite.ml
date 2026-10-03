@@ -1,4 +1,5 @@
 module Ds = Datascript
+module DT = Ds.Internal.Datascript_types
 
 type session =
   { path : string
@@ -24,8 +25,11 @@ let close session =
     sqlite_close session.path;
     session.closed <- true)
 
-let storage session : Ds.storage =
-  { storage_store =
+(* The SQLite backend stores the physical [storage_payload] representation,
+   so it builds an implementation-level [storage] record rather than the
+   bytes-level [Ds.Storage.S] backend. *)
+let storage session : DT.storage =
+  { DT.storage_store =
       (fun entries ->
         ensure_open session;
         sqlite_store session.path

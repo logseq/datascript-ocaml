@@ -412,9 +412,7 @@ end) = struct
        | None -> relation_join_key_value result)
     | Result_value (Ref entity_id) -> Result_entity entity_id
     | Result_value (Int64 entity_id) ->
-      (match Util.int64_to_int entity_id with
-       | Some entity_id -> Result_entity entity_id
-       | None -> relation_join_key_value result)
+      Result_entity entity_id
     | _ -> relation_join_key_value result
 
   let relation_attr_index attrs attr =
@@ -1103,7 +1101,7 @@ end) = struct
       let rec loop bound_vars = function
         | [] -> ()
         | Not not_clauses :: rest ->
-          let outer_binding_vars = bound_vars |> List.map (fun var -> var, Result_entity 0) in
+          let outer_binding_vars = bound_vars |> List.map (fun var -> var, Result_entity 0L) in
           Query.ensure_not_has_outer_binding
             ~value_to_string:edn_string_of_value
             outer_binding_vars
@@ -1225,11 +1223,11 @@ end) = struct
           else
           let constant_sets =
             let set_from_datoms datoms =
-              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+              let entities = Bytes.make (Int64.to_int source_db.max_datom_e + 1) '\000' in
               List.iter
                 (fun datom ->
-                  if datom.e >= 0 && datom.e < Bytes.length entities then
-                    Bytes.set entities datom.e '\001')
+                  if datom.e >= 0L && datom.e < Int64.of_int (Bytes.length entities) then
+                    Bytes.set entities (Int64.to_int datom.e) '\001')
                 datoms;
               entities
             in
@@ -1266,11 +1264,11 @@ end) = struct
           let excluded_sets =
             excluded_patterns
             |> List.map (fun (_, attr, value_term) ->
-              let entities = Bytes.make (source_db.max_datom_e + 1) '\000' in
+              let entities = Bytes.make (Int64.to_int source_db.max_datom_e + 1) '\000' in
               let datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) value_term None in
               let mark datom =
-                if datom.e >= 0 && datom.e < Bytes.length entities then
-                  Bytes.set entities datom.e '\001'
+                if datom.e >= 0L && datom.e < Int64.of_int (Bytes.length entities) then
+                  Bytes.set entities (Int64.to_int datom.e) '\001'
               in
               if direct_attr attr then
                 datoms |> Seq.iter mark
@@ -1303,25 +1301,25 @@ end) = struct
           let constant_matches entity_id =
             constant_sets
             |> List.for_all (fun entities ->
-              entity_id >= 0
-              && entity_id < Bytes.length entities
-              && Bytes.get entities entity_id = '\001')
+              entity_id >= 0L
+              && entity_id < Int64.of_int (Bytes.length entities)
+              && Bytes.get entities (Int64.to_int entity_id) = '\001')
           in
           let matches_constants =
             match constant_sets with
             | [] -> fun _ -> true
             | [ entities ] ->
               fun entity_id ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001'
+                entity_id >= 0L
+                && entity_id < Int64.of_int (Bytes.length entities)
+                && Bytes.get entities (Int64.to_int entity_id) = '\001'
             | [ left; right ] ->
               fun entity_id ->
-                entity_id >= 0
-                && entity_id < Bytes.length left
-                && Bytes.get left entity_id = '\001'
-                && entity_id < Bytes.length right
-                && Bytes.get right entity_id = '\001'
+                entity_id >= 0L
+                && entity_id < Int64.of_int (Bytes.length left)
+                && Bytes.get left (Int64.to_int entity_id) = '\001'
+                && entity_id < Int64.of_int (Bytes.length right)
+                && Bytes.get right (Int64.to_int entity_id) = '\001'
             | _ -> constant_matches
           in
           let matches_excluded =
@@ -1329,16 +1327,16 @@ end) = struct
             | [] -> fun _ -> false
             | [ entities ] ->
               fun entity_id ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001'
+                entity_id >= 0L
+                && entity_id < Int64.of_int (Bytes.length entities)
+                && Bytes.get entities (Int64.to_int entity_id) = '\001'
             | sets ->
               fun entity_id ->
                 sets
                 |> List.exists (fun entities ->
-                  entity_id >= 0
-                  && entity_id < Bytes.length entities
-                  && Bytes.get entities entity_id = '\001')
+                  entity_id >= 0L
+                  && entity_id < Int64.of_int (Bytes.length entities)
+                  && Bytes.get entities (Int64.to_int entity_id) = '\001')
           in
           let entity_allowed =
             match excluded_sets with
@@ -1378,7 +1376,7 @@ end) = struct
               let entity_id =
                 match List.assoc e_var binding with
                 | Result_entity entity_id -> entity_id
-                | _ -> -1
+                | _ -> -1L
               in
               let values = value_results entity_id attr in
               values
@@ -1431,9 +1429,9 @@ end) = struct
                 match allowed with
                 | Some allowed ->
                   fun entity_id ->
-                    entity_id >= 0
-                    && entity_id < Bytes.length allowed
-                    && Bytes.get allowed entity_id = '\001'
+                    entity_id >= 0L
+                    && entity_id < Int64.of_int (Bytes.length allowed)
+                    && Bytes.get allowed (Int64.to_int entity_id) = '\001'
                     && matches_required entity_id
                 | None -> entity_allowed
               in
@@ -1467,9 +1465,9 @@ end) = struct
                 match allowed with
                 | Some allowed ->
                   fun entity_id ->
-                    entity_id >= 0
-                    && entity_id < Bytes.length allowed
-                    && Bytes.get allowed entity_id = '\001'
+                    entity_id >= 0L
+                    && entity_id < Int64.of_int (Bytes.length allowed)
+                    && Bytes.get allowed (Int64.to_int entity_id) = '\001'
                     && matches_required entity_id
                 | None -> entity_allowed
               in
@@ -1499,15 +1497,15 @@ end) = struct
             let value_tables =
               remaining_value_vars
               |> List.map (fun (value_var, attr) ->
-                let values = Array.make (source_db.max_datom_e + 1) None in
+                let values = Array.make (Int64.to_int source_db.max_datom_e + 1) None in
                 source_context.pattern_datoms source_db (QVar e_var) (QAttr attr) QWildcard None
                 |> Seq.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (result_of_pattern_position datom 2));
+                  if datom.e >= 0L && datom.e < Int64.of_int (Array.length values) then
+                    values.(Int64.to_int datom.e) <- Some (result_of_pattern_position datom 2));
                 value_var, values)
             in
             let value_for entity_id values =
-              if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+              if entity_id >= 0L && entity_id < Int64.of_int (Array.length values) then values.(Int64.to_int entity_id) else None
             in
             let scan_datoms = source_context.pattern_datoms source_db (QVar e_var) (QAttr scan_attr) QWildcard None in
             if List.for_all (fun (_, attr) -> direct_attr attr) value_var_patterns then (
@@ -1813,7 +1811,7 @@ end) = struct
         in
         apply relation rest
       | Not [ Pattern (e_term, a_term, v_term) ] :: rest ->
-        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
         Query.ensure_not_has_outer_binding
           ~value_to_string:edn_string_of_value
           outer_binding_vars
@@ -1822,7 +1820,7 @@ end) = struct
         let* relation = anti_join relation excluded in
         apply relation rest
       | SourceNot (source_name, [ Pattern (e_term, a_term, v_term) ]) :: rest ->
-        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
         Query.ensure_not_has_outer_binding
           ~value_to_string:edn_string_of_value
           outer_binding_vars
@@ -2349,7 +2347,7 @@ end) = struct
         in
         apply relation rest
       | Not [ Pattern (e_term, a_term, v_term) ] :: rest ->
-        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
         Query.ensure_not_has_outer_binding
           ~value_to_string:edn_string_of_value
           outer_binding_vars
@@ -2358,7 +2356,7 @@ end) = struct
         let* relation = anti_join relation excluded in
         apply relation rest
       | SourceNot (source_name, [ Pattern (e_term, a_term, v_term) ]) :: rest ->
-        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+        let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
         Query.ensure_not_has_outer_binding
           ~value_to_string:edn_string_of_value
           outer_binding_vars
@@ -2565,7 +2563,7 @@ end) = struct
           in
           apply relation rest
         | Not [ Pattern (e_term, a_term, v_term) ] :: rest ->
-          let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+          let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
           Query.ensure_not_has_outer_binding
             ~value_to_string:edn_string_of_value
             outer_binding_vars
@@ -2574,7 +2572,7 @@ end) = struct
           let* relation = anti_join relation excluded in
           apply relation rest
         | SourceNot (source_name, [ Pattern (e_term, a_term, v_term) ]) :: rest ->
-          let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0) in
+          let outer_binding_vars = relation.attrs |> List.map (fun var -> var, Result_entity 0L) in
           Query.ensure_not_has_outer_binding
             ~value_to_string:edn_string_of_value
             outer_binding_vars
@@ -2666,7 +2664,7 @@ end) = struct
   
   let closure_eid_of_value = function
     | Ref eid -> Some eid
-    | Int64 eid -> (try Some (Int64.to_int eid) with _ -> None)
+    | Int64 eid -> Some eid
     | _ -> None
   
   let closure_eid_of_result = function
@@ -2678,8 +2676,8 @@ end) = struct
      node, mirroring values_compare_equal_fast. *)
   let closure_value_eq left right =
     match left, right with
-    | Ref l, Int64 r -> Int64.of_int l = r
-    | Int64 l, Ref r -> l = Int64.of_int r
+    | Ref l, Int64 r -> l = r
+    | Int64 l, Ref r -> l = r
     | _ -> left = right
   
   let closure_value_of_result = function

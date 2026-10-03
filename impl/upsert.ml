@@ -15,19 +15,19 @@ let conflicting_upserts_message context (left_attr, left_value, left_e) (right_a
   "Conflicting upserts: "
   ^ lookup_ref_string context left_attr left_value
   ^ " resolves to "
-  ^ string_of_int left_e
+  ^ Int64.to_string left_e
   ^ ", but "
   ^ lookup_ref_string context right_attr right_value
   ^ " resolves to "
-  ^ string_of_int right_e
+  ^ Int64.to_string right_e
 
 let explicit_conflict_message context attr value target_e entity_id =
   "Conflicting upsert: "
   ^ lookup_ref_string context attr value
   ^ " resolves to "
-  ^ string_of_int target_e
+  ^ Int64.to_string target_e
   ^ ", but entity already has :db/id "
-  ^ string_of_int entity_id
+  ^ Int64.to_string entity_id
 
 let identity_resolutions context db datoms attrs =
   attrs

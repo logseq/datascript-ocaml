@@ -48,19 +48,10 @@ let seq_length seq =
   Seq.fold_left (fun count _ -> count + 1) 0 seq
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
-let unique_identity = { indexed with unique = Some Identity }
-let ref_attr = { indexed with indexed = false; value_type = Some RefType }
+let unique_identity = Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+let ref_attr = Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let schema =
   [ "block/id", unique_identity
@@ -136,7 +127,7 @@ let main () =
   bench config "insert-one-block" (fun iteration ->
     let id, tx = txs.(iteration land (Array.length txs - 1)) in
     let next_db = db_with tx db in
-    consume_int (seq_length (datoms next_db Avet ~a:"block/id" ~v:(String id) ())));
+    consume_int (seq_length (datoms ~a:"block/id" ~v:(String id) next_db Avet)));
   Printf.eprintf "blackhole=%d\n%!" !blackhole
 
 let () = main ()

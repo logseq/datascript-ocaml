@@ -1,4 +1,5 @@
 open Datascript
+open Internal.Datascript_types
 
 let failf fmt = Printf.ksprintf failwith fmt
 
@@ -34,6 +35,6 @@ let test_parser_query__validation () =
   ; "[:find ?e :where (rule ?e)]", "Missing rules var"
   ]
   |> List.iter (fun (query, message) ->
-    assert_invalid_contains query message (fun () -> ignore (Parser.parse_query_string query)))
+    assert_invalid_contains query message (fun () -> ignore (Internal.Parser.parse_query_string Internal.default_parser_context query)))
 
 let () = test_parser_query__validation ()

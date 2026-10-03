@@ -1,6 +1,15 @@
-type entity_id = int
+(* Semantic aliases for distinct identifier domains. Inside the library these
+   are plain strings; the public interface exposes them as private types so
+   unrelated concepts cannot be mixed accidentally. *)
+type var = string
+type source_var = string
+type rule_name = string
+type sym = string
+type ident = string
+
+type entity_id = int64
 type attr = string
-type tx = int
+type tx = int64
 
 type entity_ref =
   | Entity_id of entity_id
@@ -209,13 +218,13 @@ type pull_selector =
   | Pull_as of pull_selector * pull_key
 
 type query_term =
-  | QVar of string
+  | QVar of var
   | QEntity of entity_id
-  | QIdent of string
+  | QIdent of ident
   | QLookupRef of attr * value
   | QAttr of attr
   | QValue of value
-  | QSource of string
+  | QSource of source_var
   | QWildcard
 
 type query_result =
@@ -393,13 +402,13 @@ type query_clause =
   | SourceRule of string * string * query_term list
 
 type query_rule =
-  { rule_name : string
-  ; rule_params : string list
+  { rule_name : rule_name
+  ; rule_params : var list
   ; rule_body : query_clause list
   }
 
 type input_binding =
-  | Bind_scalar of string
+  | Bind_scalar of var
   | Bind_ignore
   | Bind_collection of input_binding
   | Bind_tuple of input_binding list
@@ -472,27 +481,27 @@ type aggregate =
   | Rand
   | RandN of int
   | Sample of int
-  | MinNVar of string
-  | MaxNVar of string
-  | RandNVar of string
-  | SampleVar of string
-  | CustomVar of string
+  | MinNVar of var
+  | MaxNVar of var
+  | RandNVar of var
+  | SampleVar of var
+  | CustomVar of var
   | Custom of (query_result list -> query_result)
 
 type find_spec =
-  | Find_var of string
-  | Find_pull of string * pull_selector list
-  | Find_pull_form of string * query_form
-  | Find_pull_var of string * string
-  | Find_pull_source of string * string * pull_selector list
-  | Find_pull_source_form of string * string * query_form
-  | Find_pull_source_var of string * string * string
+  | Find_var of var
+  | Find_pull of var * pull_selector list
+  | Find_pull_form of var * query_form
+  | Find_pull_var of var * var
+  | Find_pull_source of source_var * var * pull_selector list
+  | Find_pull_source_form of source_var * var * query_form
+  | Find_pull_source_var of source_var * var * var
   | Find_aggregate of aggregate * query_term list
 
 type query =
   { find : find_spec list
   ; inputs : query_input list
-  ; with_vars : string list
+  ; with_vars : var list
   ; rules : query_rule list
   ; where : query_clause list
   }
@@ -520,15 +529,6 @@ type index =
   | Eavt
   | Aevt
   | Avet
-
-(* Semantic aliases for distinct identifier domains. Inside the library these
-   are plain strings; the public interface exposes them as private types so
-   unrelated concepts cannot be mixed accidentally. *)
-type var = string
-type source_var = string
-type rule_name = string
-type sym = string
-type ident = string
 
 (* Tuple attribute spec: either a homogeneous composite of named attributes
    (:db/tupleAttrs) or a fixed-type tuple (:db/tupleTypes). Keeping the two

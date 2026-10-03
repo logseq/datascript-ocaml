@@ -78,7 +78,7 @@ let from_serializable context snapshot =
       (fun max_eid d -> Db.max_eid_in_value (Db.max_eid_with_entity_id max_eid d.e) d.v)
       snapshot.serializable_max_eid datoms
   in
-  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 datoms in
+  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0L datoms in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) snapshot.serializable_max_tx datoms in
   let duplicate_datoms = duplicate_datoms datoms in
   let duplicate_aevt_datoms = duplicate_aevt_datoms duplicate_datoms in

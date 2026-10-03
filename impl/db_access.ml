@@ -13,7 +13,7 @@ module Make (Context : sig
   val entity_ref_of_ref_attr_value : value -> entity_ref option
   val compare_value : value -> value -> int
   val first_nonzero : int list -> int
-  val validate_entity_id : int -> entity_id
+  val validate_entity_id : int64 -> entity_id
 end) = struct
   open Context
 

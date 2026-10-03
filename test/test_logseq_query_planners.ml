@@ -1,27 +1,19 @@
 open Datascript
+module DT = Internal.Datascript_types
 
 let failf fmt = Printf.ksprintf failwith fmt
 
 let ref_many =
-  { cardinality = Many
-  ; unique = None
-  ; indexed = false
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = Some RefType
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(Many) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(Some RefType) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_one =
-  { ref_many with cardinality = One }
+  Schema.spec ~cardinality:(One) ?unique:((Schema.unique ref_many)) ~indexed:((Schema.indexed ref_many)) ~is_component:((Schema.is_component ref_many)) ~no_history:((Schema.no_history ref_many)) ?doc:((Schema.doc ref_many)) ?value_type:((Schema.value_type ref_many)) ?tuple:(match ((Schema.tuple_attrs ref_many), (Schema.tuple_types ref_many)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let one =
-  { ref_many with cardinality = One; value_type = None }
+  Schema.spec ~cardinality:(One) ?unique:((Schema.unique ref_many)) ~indexed:((Schema.indexed ref_many)) ~is_component:((Schema.is_component ref_many)) ~no_history:((Schema.no_history ref_many)) ?doc:((Schema.doc ref_many)) ?value_type:(None) ?tuple:(match ((Schema.tuple_attrs ref_many), (Schema.tuple_types ref_many)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let unique_identity =
-  { one with unique = Some Identity; indexed = true }
+  Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:(Some Identity) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let perf_threshold_multiplier () =
   (* Normal test runs use coarse wall-clock gates; set this to 1 for strict local checks. *)
@@ -49,7 +41,7 @@ let entity_ids_of_collection = function
   | Query_collection values ->
     values
     |> List.map (function
-      | Result_entity entity_id -> entity_id
+      | Result_entity entity_id -> Entity_id.to_int entity_id
       | _ -> failwith "expected entity id")
     |> List.sort compare
   | _ -> failwith "expected collection query result"
@@ -57,7 +49,7 @@ let entity_ids_of_collection = function
 let entity_pairs_of_relation rows =
   rows
   |> List.map (function
-    | [ Result_entity left; Result_entity right ] -> left, right
+    | [ Result_entity left; Result_entity right ] -> Entity_id.to_int left, Entity_id.to_int right
     | _ -> failwith "expected entity pair")
   |> List.sort compare
 
@@ -99,16 +91,22 @@ let test_wildcard_pull_uses_upstream_value_order_for_scalar_ties () =
   let db =
     init_db
       ~schema:[ "block/name", one; "logseq.property/icon", one ]
-      [ datom ~e:1 ~a:"block/name" ~v:(String "robot") ~tx:10 ()
-      ; datom ~e:1 ~a:"logseq.property/icon" ~v:normal_icon ~tx:20 ()
-      ; datom ~e:1 ~a:"logseq.property/icon" ~v:inverted_icon ~tx:20 ()
+      [ datom ~tx:(txid 10L) (eid 1L) "block/name" (String "robot")
+      ; datom ~tx:(txid 20L) (eid 1L)  "logseq.property/icon" normal_icon
+      ; datom ~tx:(txid 20L) (eid 1L)  "logseq.property/icon" inverted_icon
       ]
   in
   match q_return_string db "[:find (pull ?b [*]) :where [?b :block/name]]" with
   | Query_relation [ [ Result_pull entity ] ] ->
     (match pulled_attr (Keyword "logseq.property/icon") entity.pulled_attrs with
      | Pulled_scalar value ->
-       if not (Db.value_equal (Util.normalize_value inverted_icon) value) then
+       if
+       not
+         (Db.value_equal
+            (Internal_convert.externalize_value
+               (Internal.Util.normalize_value (Internal_convert.internalize_value inverted_icon)))
+            value)
+     then
          failf
            "wildcard pull should keep the same scalar value as upstream DataScript, got %s"
            (value_label value)
@@ -119,14 +117,14 @@ let test_comment_area_parent_join_uses_indexed_shape () =
   let comment_tag = 10 in
   let count = 1_200 in
   let datoms =
-    datom ~e:comment_tag ~a:"db/ident" ~v:(Keyword "logseq.class/Comments") ()
+    datom (eid (Int64.of_int comment_tag)) "db/ident" (Keyword "logseq.class/Comments")
     :: List.concat
          (List.init count (fun index ->
             let area = 1_000 + index in
             let parent = 10_000 + index in
-            [ datom ~e:area ~a:"block/tags" ~v:(Ref comment_tag) ()
-            ; datom ~e:area ~a:"block/parent" ~v:(Ref parent) ()
-            ; datom ~e:(20_000 + index) ~a:"block/title" ~v:(String "unrelated") ()
+            [ datom (eid (Int64.of_int area)) "block/tags" (Ref (eid (Int64.of_int comment_tag)))
+            ; datom (eid (Int64.of_int area)) "block/parent" (Ref (eid (Int64.of_int parent)))
+            ; datom (eid (Int64.of_int (20_000 + index))) "block/title" (String "unrelated")
             ]))
   in
   let db = init_db ~schema:[ "db/ident", unique_identity; "block/tags", ref_many; "block/parent", ref_one ] datoms in
@@ -145,14 +143,14 @@ let test_comment_parent_reverse_join_uses_ref_value_lookup () =
   let comment_tag = 10 in
   let count = 1_000 in
   let datoms =
-    datom ~e:comment_tag ~a:"db/ident" ~v:(Keyword "logseq.class/Comments") ()
+    datom (eid (Int64.of_int comment_tag)) "db/ident" (Keyword "logseq.class/Comments")
     :: List.concat
          (List.init count (fun index ->
             let area = 1_000 + index in
             let comment = 10_000 + index in
-            [ datom ~e:area ~a:"block/tags" ~v:(Ref comment_tag) ()
-            ; datom ~e:comment ~a:"block/parent" ~v:(Ref area) ()
-            ; datom ~e:(20_000 + index) ~a:"block/parent" ~v:(Ref (30_000 + index)) ()
+            [ datom (eid (Int64.of_int area)) "block/tags" (Ref (eid (Int64.of_int comment_tag)))
+            ; datom (eid (Int64.of_int comment)) "block/parent" (Ref (eid (Int64.of_int area)))
+            ; datom (eid (Int64.of_int (20_000 + index))) "block/parent" (Ref (eid (Int64.of_int (30_000 + index))))
             ]))
   in
   let db = init_db ~schema:[ "db/ident", unique_identity; "block/tags", ref_many; "block/parent", ref_one ] datoms in
@@ -170,35 +168,31 @@ let test_source_comment_parent_join_uses_relation_ref_lookup () =
   let count = 1_000 in
   let noise_count = 120_000 in
   let area_datoms =
-    datom ~e:comment_tag ~a:"db/ident" ~v:(Keyword "logseq.class/Comments") ()
+    datom (eid (Int64.of_int comment_tag)) "db/ident" (Keyword "logseq.class/Comments")
     :: List.concat
          (List.init count (fun index ->
             let area = 1_000 + index in
-            [ datom ~e:area ~a:"block/tags" ~v:(Ref comment_tag) () ]))
+            [ datom (eid (Int64.of_int area)) "block/tags" (Ref (eid (Int64.of_int comment_tag))) ]))
   in
   let comment_datoms =
     List.concat
       (List.init count (fun index ->
          let area = 1_000 + index in
          let comment = 10_000 + index in
-         [ datom ~e:comment ~a:"block/parent" ~v:(Ref area) ()
-         ; datom ~e:(100_000 + index) ~a:"block/parent" ~v:(Ref (200_000 + index)) ()
+         [ datom (eid (Int64.of_int comment)) "block/parent" (Ref (eid (Int64.of_int area)))
+         ; datom (eid (Int64.of_int (100_000 + index))) "block/parent" (Ref (eid (Int64.of_int (200_000 + index))))
          ]))
     @ List.init noise_count (fun index ->
-        datom ~e:(300_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+        datom (eid (Int64.of_int (300_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let areas = init_db ~schema:[ "db/ident", unique_identity; "block/tags", ref_many ] area_datoms in
   let comments = init_db ~schema:[ "block/parent", ref_one; "noise/value", one ] comment_datoms in
   let query =
-    { find = [ Find_var "comment" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ SourcePattern ("areas", QVar "comments-area", QAttr "block/tags", QValue (Keyword "logseq.class/Comments"))
-        ; SourcePattern ("comments", QVar "comment", QAttr "block/parent", QVar "comments-area")
-        ]
-    }
+    Query.v ~in_:[ Spec_source "areas"; Spec_source "comments" ]
+      [ Find_var "comment" ]
+      [ Clause.pattern ~src:"areas" (QVar "comments-area") (QAttr "block/tags") (QValue (Keyword "logseq.class/Comments"))
+      ; Clause.pattern ~src:"comments" (QVar "comment") (QAttr "block/parent") (QVar "comments-area")
+      ]
   in
   let rows =
     timed "source comment reverse parent join" 0.120 (fun () ->
@@ -212,34 +206,43 @@ let test_source_namespace_value_join_uses_relation_functions () =
   let datoms =
     List.concat
       (List.init count (fun index ->
-         let entity = 1_000 + index in
+         let entity = Int64.of_int (1_000 + index) in
          let ident =
            if index mod 10 = 0 then
              Printf.sprintf "user.property/p%d" index
            else
              Printf.sprintf "system.property/p%d" index
          in
-         [ datom ~e:entity ~a:"db/ident" ~v:(Keyword ident) ()
-         ; datom ~e:entity ~a:"property/value" ~v:(String (Printf.sprintf "value-%d" index)) ()
+         [ { DT.e = entity; DT.a = "db/ident"; DT.v = DT.Keyword ident; DT.tx = 1L; DT.added = true }
+         ; { DT.e = entity; DT.a = "property/value"; DT.v = DT.String (Printf.sprintf "value-%d" index); DT.tx = 1L; DT.added = true }
          ]))
   in
-  let db = init_db ~schema:[ "db/ident", unique_identity; "property/value", one ] datoms in
+  let db =
+    Internal.init_db
+      ~schema:[ "db/ident", { DT.cardinality = DT.One; DT.unique = Some DT.Identity
+                            ; DT.indexed = false; DT.is_component = false; DT.no_history = false
+                            ; DT.doc = None; DT.value_type = None; DT.tuple_attrs = None; DT.tuple_types = None }
+              ; "property/value", { DT.cardinality = DT.One; DT.unique = None
+                                  ; DT.indexed = false; DT.is_component = false; DT.no_history = false
+                                  ; DT.doc = None; DT.value_type = None; DT.tuple_attrs = None; DT.tuple_types = None } ]
+      datoms
+  in
   let query =
-    { find = [ Find_var "ident"; Find_var "value" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ SourcePattern ("props", QVar "p", QAttr "db/ident", QVar "ident")
-        ; NamespaceValue (QVar "ident", "namespace")
-        ; EqualityPredicate (EqualValues, [ QVar "namespace"; QValue (String "user.property") ])
-        ; SourcePattern ("props", QVar "p", QAttr "property/value", QVar "value")
+    { DT.find = [ DT.Find_var "ident"; DT.Find_var "value" ]
+    ; DT.inputs = []
+    ; DT.with_vars = []
+    ; DT.rules = []
+    ; DT.where =
+        [ DT.SourcePattern ("props", DT.QVar "p", DT.QAttr "db/ident", DT.QVar "ident")
+        ; DT.NamespaceValue (DT.QVar "ident", "namespace")
+        ; DT.EqualityPredicate (DT.EqualValues, [ DT.QVar "namespace"; DT.QValue (DT.String "user.property") ])
+        ; DT.SourcePattern ("props", DT.QVar "p", DT.QAttr "property/value", DT.QVar "value")
         ]
     }
   in
   let rows =
     timed "source namespace value relation join" 0.120 (fun () ->
-      q_sources (empty_db ()) [ "props", Db_source db ] query)
+      Internal.q_sources (Internal.empty_db ()) [ "props", DT.Db_source db ] query)
   in
   if List.length rows <> count / 10 then
     failf "source namespace value join should return %d rows, got %d" (count / 10) (List.length rows)
@@ -250,9 +253,9 @@ let test_wildcard_pull_single_attr_pattern_uses_bounded_entity_scan () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ()
-         ; datom ~e:entity ~a:"block/title" ~v:(String (Printf.sprintf "Block %d" entity)) ()
-         ; datom ~e:entity ~a:"block/order" ~v:(String "a") ()
+         [ datom (eid (Int64.of_int entity)) "block/uuid" (Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity))
+         ; datom (eid (Int64.of_int entity)) "block/title" (String (Printf.sprintf "Block %d" entity))
+         ; datom (eid (Int64.of_int entity)) "block/order" (String "a")
          ]))
   in
   let db = init_db ~schema:[ "block/uuid", unique_identity; "block/title", one; "block/order", one ] datoms in
@@ -273,15 +276,15 @@ let test_wildcard_pull_page_missing_query_uses_bounded_entity_scan () =
       (List.init page_count (fun index ->
          let page = 1_000 + index in
          let block = 10_000 + index in
-         [ datom ~e:page ~a:"block/name" ~v:(String (Printf.sprintf "page-%d" index)) ()
-         ; datom ~e:page ~a:"block/title" ~v:(String (Printf.sprintf "Page %d" index)) ()
-         ; datom ~e:block ~a:"block/title" ~v:(String (Printf.sprintf "Block %d" index)) ()
-         ; datom ~e:block ~a:"block/page" ~v:(Ref page) ()
+         [ datom (eid (Int64.of_int page)) "block/name" (String (Printf.sprintf "page-%d" index))
+         ; datom (eid (Int64.of_int page)) "block/title" (String (Printf.sprintf "Page %d" index))
+         ; datom (eid (Int64.of_int block)) "block/title" (String (Printf.sprintf "Block %d" index))
+         ; datom (eid (Int64.of_int block)) "block/page" (Ref (eid (Int64.of_int page)))
          ]))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -311,13 +314,13 @@ let test_attr_prefix_query_ignores_unrelated_duplicate_datoms () =
   let duplicate_noise =
     List.concat
       (List.init duplicate_count (fun index ->
-         let d = datom ~e:(100_000 + index) ~a:"aaa/noise" ~v:(String "duplicate") () in
+         let d = datom (eid (Int64.of_int (100_000 + index))) "aaa/noise" (String "duplicate") in
          [ d; d ]))
   in
   let targets =
     List.init target_count (fun index ->
       let entity = 1_000 + index in
-      datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ())
+      datom (eid (Int64.of_int entity)) "block/uuid" (Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)))
   in
   let db =
     init_db
@@ -338,17 +341,17 @@ let test_tag_value_with_present_attr_uses_indexed_intersection () =
   let tagged_count = 60 in
   let noise_count = 120_000 in
   let tagged_datoms =
-    datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+    datom (eid (Int64.of_int tag)) "db/ident" (Keyword "logseq.class/Tag")
     :: List.concat
          (List.init tagged_count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"block/tags" ~v:(Ref tag) ()
-            ; datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ()
+            [ datom (eid (Int64.of_int entity)) "block/tags" (Ref (eid (Int64.of_int tag)))
+            ; datom (eid (Int64.of_int entity)) "block/uuid" (Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity))
             ]))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -376,22 +379,22 @@ let test_tag_value_without_attr_uses_indexed_difference () =
   let count = 80 in
   let noise_count = 120_000 in
   let tagged_datoms =
-    datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+    datom (eid (Int64.of_int tag)) "db/ident" (Keyword "logseq.class/Tag")
     :: List.concat
          (List.init count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"block/tags" ~v:(Ref tag) ()
-            ; datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ()
+            [ datom (eid (Int64.of_int entity)) "block/tags" (Ref (eid (Int64.of_int tag)))
+            ; datom (eid (Int64.of_int entity)) "block/uuid" (Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity))
             ]
             @
             if index mod 2 = 0 then
-              [ datom ~e:entity ~a:"logseq.property/built-in?" ~v:(Bool true) () ]
+              [ datom (eid (Int64.of_int entity)) "logseq.property/built-in?" (Bool true) ]
             else
               []))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -421,10 +424,10 @@ let test_simple_not_uses_relation_antijoin () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
+         [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)) ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:entity ~a:"item/excluded?" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int entity)) "item/excluded?" (Bool true) ]
          else
            []))
   in
@@ -445,14 +448,14 @@ let test_source_not_uses_relation_antijoin () =
   let item_datoms =
     List.init count (fun index ->
       let entity = 1_000 + index in
-      datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ())
+      datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)))
   in
   let excluded_datoms =
     List.filter_map
       (fun index ->
         if index mod 2 = 0 then
           let entity = 1_000 + index in
-          Some (datom ~e:entity ~a:"item/excluded?" ~v:(Bool true) ())
+          Some (datom (eid (Int64.of_int entity)) "item/excluded?" (Bool true))
         else
           None)
       (List.init count Fun.id)
@@ -460,15 +463,10 @@ let test_source_not_uses_relation_antijoin () =
   let items = init_db ~schema:[ "item/value", one ] item_datoms in
   let excluded = init_db ~schema:[ "item/excluded?", one ] excluded_datoms in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ SourcePattern ("items", QVar "e", QAttr "item/value", QVar "v")
-        ; SourceNot ("excluded", [ Pattern (QVar "e", QAttr "item/excluded?", QWildcard) ])
-        ]
-    }
+    Query.v ~in_:[ Spec_source "excluded"; Spec_source "items" ] 
+      [ Find_var "e" ]
+      ([ Clause.pattern ~src:"items" (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.not_) ~src:"excluded" [ Clause.pattern (QVar "e") (QAttr "item/excluded?") (QWildcard) ]
+        ])
   in
   let rows =
     timed "source not relation antijoin" 0.300 (fun () ->
@@ -482,22 +480,22 @@ let test_tag_value_ident_without_attr_allows_reversed_clause_order () =
   let count = 80 in
   let noise_count = 120_000 in
   let property_datoms =
-    datom ~e:property_tag ~a:"db/ident" ~v:(Keyword "logseq.class/Property") ()
+    datom (eid (Int64.of_int property_tag)) "db/ident" (Keyword "logseq.class/Property")
     :: List.concat
          (List.init count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"db/ident" ~v:(Keyword (Printf.sprintf "user.property/p%d" index)) ()
-            ; datom ~e:entity ~a:"block/tags" ~v:(Ref property_tag) ()
+            [ datom (eid (Int64.of_int entity)) "db/ident" (Keyword (Printf.sprintf "user.property/p%d" index))
+            ; datom (eid (Int64.of_int entity)) "block/tags" (Ref (eid (Int64.of_int property_tag)))
             ]
             @
             if index mod 2 = 0 then
-              [ datom ~e:entity ~a:"logseq.property/built-in?" ~v:(Bool true) () ]
+              [ datom (eid (Int64.of_int entity)) "logseq.property/built-in?" (Bool true) ]
             else
               []))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -526,26 +524,26 @@ let test_page_ref_pairs_with_tagged_non_journal_pages_use_indexed_join () =
   let page_count = 80 in
   let noise_count = 120_000 in
   let page_datoms =
-    [ datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
-    ; datom ~e:journal ~a:"db/ident" ~v:(Keyword "logseq.class/Journal") ()
+    [ datom (eid (Int64.of_int tag)) "db/ident" (Keyword "logseq.class/Tag")
+    ; datom (eid (Int64.of_int journal)) "db/ident" (Keyword "logseq.class/Journal")
     ]
     @ List.concat
         (List.init page_count (fun index ->
            let page = 1_000 + index in
            let block = 10_000 + index in
-           [ datom ~e:page ~a:"block/tags" ~v:(Ref tag) ()
-           ; datom ~e:block ~a:"block/page" ~v:(Ref page) ()
-           ; datom ~e:block ~a:"block/refs" ~v:(Ref (20_000 + index)) ()
+           [ datom (eid (Int64.of_int page)) "block/tags" (Ref (eid (Int64.of_int tag)))
+           ; datom (eid (Int64.of_int block)) "block/page" (Ref (eid (Int64.of_int page)))
+           ; datom (eid (Int64.of_int block)) "block/refs" (Ref (eid (Int64.of_int (20_000 + index))))
            ]
            @
            if index mod 2 = 0 then
-             [ datom ~e:page ~a:"block/tags" ~v:(Ref journal) () ]
+             [ datom (eid (Int64.of_int page)) "block/tags" (Ref (eid (Int64.of_int journal))) ]
            else
              []))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -575,26 +573,26 @@ let test_source_page_ref_pairs_with_tagged_non_journal_pages_use_relation_evalua
   let page_count = 80 in
   let noise_count = 120_000 in
   let page_datoms =
-    [ datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
-    ; datom ~e:journal ~a:"db/ident" ~v:(Keyword "logseq.class/Journal") ()
+    [ datom (eid (Int64.of_int tag)) "db/ident" (Keyword "logseq.class/Tag")
+    ; datom (eid (Int64.of_int journal)) "db/ident" (Keyword "logseq.class/Journal")
     ]
     @ List.concat
         (List.init page_count (fun index ->
            let page = 1_000 + index in
            let block = 10_000 + index in
-           [ datom ~e:page ~a:"block/tags" ~v:(Ref tag) ()
-           ; datom ~e:block ~a:"block/page" ~v:(Ref page) ()
-           ; datom ~e:block ~a:"block/refs" ~v:(Ref (20_000 + index)) ()
+           [ datom (eid (Int64.of_int page)) "block/tags" (Ref (eid (Int64.of_int tag)))
+           ; datom (eid (Int64.of_int block)) "block/page" (Ref (eid (Int64.of_int page)))
+           ; datom (eid (Int64.of_int block)) "block/refs" (Ref (eid (Int64.of_int (20_000 + index))))
            ]
            @
            if index mod 2 = 0 then
-             [ datom ~e:page ~a:"block/tags" ~v:(Ref journal) () ]
+             [ datom (eid (Int64.of_int page)) "block/tags" (Ref (eid (Int64.of_int journal))) ]
            else
              []))
   in
   let noise_datoms =
     List.init noise_count (fun index ->
-      datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+      datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -630,16 +628,16 @@ let test_source_incoming_ref_without_attr_uses_relation_antijoin () =
       (List.init count (fun index ->
          let page = 1_000 + index in
          let block = 10_000 + index in
-         [ datom ~e:page ~a:"block/title" ~v:(String (Printf.sprintf "Page %d" index)) ()
-         ; datom ~e:block ~a:"block/refs" ~v:(Ref page) ()
+         [ datom (eid (Int64.of_int page)) "block/title" (String (Printf.sprintf "Page %d" index))
+         ; datom (eid (Int64.of_int block)) "block/refs" (Ref (eid (Int64.of_int page)))
          ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:page ~a:"logseq.property/built-in?" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int page)) "logseq.property/built-in?" (Bool true) ]
          else
            []))
     @ List.init noise_count (fun index ->
-        datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+        datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
   in
   let db =
     init_db
@@ -652,16 +650,10 @@ let test_source_incoming_ref_without_attr_uses_relation_antijoin () =
       datoms
   in
   let query =
-    { find = [ Find_var "page" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ SourcePattern ("graph", QVar "page", QAttr "block/title", QWildcard)
-        ; SourcePattern ("graph", QWildcard, QAttr "block/refs", QVar "page")
-        ; SourceNot ("graph", [ Pattern (QVar "page", QAttr "logseq.property/built-in?", QWildcard) ])
-        ]
-    }
+    Query.v ~in_:[ Spec_source "graph" ] 
+      [ Find_var "page" ]
+      ([ Clause.pattern ~src:"graph" (QVar "page") (QAttr "block/title") (QWildcard) ; (Clause.pattern) ~src:"graph" (QWildcard) (QAttr "block/refs") (QVar "page") ; (Clause.not_) ~src:"graph" [ Clause.pattern (QVar "page") (QAttr "logseq.property/built-in?") (QWildcard) ]
+        ])
   in
   let rows =
     timed "source incoming ref without attr" 0.120 (fun () ->
@@ -672,19 +664,17 @@ let test_source_incoming_ref_without_attr_uses_relation_antijoin () =
 
 let test_missing_property_ident_rule_call_returns_empty_without_rule_scan () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[has-property ?b ?prop]
+    parse_rules_string "[[[has-property ?b ?prop]
            [?x :noise/value ?v]
            [?b ?prop _]
            [?prop-e :db/ident ?prop]
-           [?prop-e :block/tags :logseq.class/Property]]]")
+           [?prop-e :block/tags :logseq.class/Property]]]"
   in
   let db =
     init_db
       ~schema:[ "block/title", one; "noise/value", one ]
       (List.init 120_000 (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index))))
   in
   match
     timed "missing property ident rule call" 0.250 (fun () ->
@@ -699,19 +689,17 @@ let test_missing_property_ident_rule_call_returns_empty_without_rule_scan () =
 
 let test_source_missing_property_ident_rule_call_uses_rule_prefix_context () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[has-property ?b ?prop]
+    parse_rules_string "[[[has-property ?b ?prop]
            [?x :noise/value ?v]
            [?b ?prop _]
            [?prop-e :db/ident ?prop]
-           [?prop-e :block/tags :logseq.class/Property]]]")
+           [?prop-e :block/tags :logseq.class/Property]]]"
   in
   let db =
     init_db
       ~schema:[ "block/title", one; "noise/value", one ]
       (List.init 120_000 (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index))))
   in
   let rows =
     timed "source missing property ident rule call" 0.250 (fun () ->
@@ -726,18 +714,16 @@ let test_source_missing_property_ident_rule_call_uses_rule_prefix_context () =
 
 let test_has_property_with_missing_title_returns_empty_without_rule_scan () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[has-property ?b ?prop]
+    parse_rules_string "[[[has-property ?b ?prop]
            [?x :noise/value ?v]
            [?b ?prop _]
-           [?prop-e :db/ident ?prop]]]")
+           [?prop-e :db/ident ?prop]]]"
   in
   let db =
     init_db
       ~schema:[ "block/title", one; "noise/value", one ]
       (List.init 120_000 (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index))))
   in
   match
     timed "has-property missing title" 0.250 (fun () ->
@@ -752,18 +738,16 @@ let test_has_property_with_missing_title_returns_empty_without_rule_scan () =
 
 let test_source_has_property_with_missing_title_uses_rule_prefix_context () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[has-property ?b ?prop]
+    parse_rules_string "[[[has-property ?b ?prop]
            [?x :noise/value ?v]
            [?b ?prop _]
-           [?prop-e :db/ident ?prop]]]")
+           [?prop-e :db/ident ?prop]]]"
   in
   let db =
     init_db
       ~schema:[ "block/title", one; "noise/value", one ]
       (List.init 120_000 (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index))))
   in
   let rows =
     timed "source has-property missing title" 0.250 (fun () ->
@@ -778,21 +762,19 @@ let test_source_has_property_with_missing_title_uses_rule_prefix_context () =
 
 let test_has_property_with_bound_title_uses_rule_suffix_context () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[has-property ?b ?prop]
+    parse_rules_string "[[[has-property ?b ?prop]
            [?b ?prop _]
-           [?prop-e :db/ident ?prop]]]")
+           [?prop-e :db/ident ?prop]]]"
   in
   let count = 180_000 in
   let db =
     init_db
       ~schema:[ "block/title", one; "db/ident", unique_identity; "noise/value", one ]
-      ([ datom ~e:1 ~a:"block/title" ~v:(String "Page1") ()
-       ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "noise/value") ()
+      ([ datom (eid 1L) "block/title" (String "Page1")
+       ; datom (eid 2L) "db/ident" (Keyword "noise/value")
        ]
        @ List.init count (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/value" (Int64 (Int64.of_int index))))
   in
   match
     timed "has-property bound title suffix context" 0.250 (fun () ->
@@ -807,26 +789,24 @@ let test_has_property_with_bound_title_uses_rule_suffix_context () =
 
 let test_ref_property_with_bound_title_uses_rule_suffix_context () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[ref-property ?b ?prop ?val]
+    parse_rules_string "[[[ref-property ?b ?prop ?val]
            [?b ?prop ?pv]
            [?prop-e :db/ident ?prop]
            (ref->val ?pv ?val)]
           [[ref->val ?pv ?val]
-           [?pv :block/title ?val]]]")
+           [?pv :block/title ?val]]]"
   in
   let count = 180_000 in
   let target = 99 in
   let db =
     init_db
       ~schema:[ "block/title", one; "db/ident", unique_identity; "noise/ref", ref_one ]
-      ([ datom ~e:1 ~a:"block/title" ~v:(String "Page1") ()
-       ; datom ~e:2 ~a:"db/ident" ~v:(Keyword "noise/ref") ()
-       ; datom ~e:target ~a:"block/title" ~v:(String "bar") ()
+      ([ datom (eid 1L) "block/title" (String "Page1")
+       ; datom (eid 2L) "db/ident" (Keyword "noise/ref")
+       ; datom (eid (Int64.of_int target)) "block/title" (String "bar")
        ]
        @ List.init count (fun index ->
-         datom ~e:(100_000 + index) ~a:"noise/ref" ~v:(Ref target) ()))
+         datom (eid (Int64.of_int (100_000 + index))) "noise/ref" (Ref (eid (Int64.of_int target)))))
   in
   match
     timed "ref-property bound title suffix context" 0.250 (fun () ->
@@ -841,22 +821,20 @@ let test_ref_property_with_bound_title_uses_rule_suffix_context () =
 
 let test_source_task_page_ref_literal_string_uses_rule_prefix_context () =
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[[task ?b]
+    parse_rules_string "[[[task ?b]
            [?x :noise/value ?v]
            [?b :block/marker ?m]]
           [[page-ref ?b ?ref]
-           [?b :block/refs ?ref]]]")
+           [?b :block/refs ?ref]]]"
   in
   let db =
     init_db
       ~schema:[ "block/marker", one; "block/refs", ref_many; "noise/value", one ]
       (List.concat
          [ List.init 2_000 (fun index ->
-             datom ~e:(1_000 + index) ~a:"block/marker" ~v:(String "TODO") ())
+             datom (eid (Int64.of_int (1_000 + index))) "block/marker" (String "TODO"))
          ; List.init 120_000 (fun index ->
-             datom ~e:(100_000 + index) ~a:"noise/value" ~v:(String (Printf.sprintf "noise-%d" index)) ())
+             datom (eid (Int64.of_int (100_000 + index))) "noise/value" (String (Printf.sprintf "noise-%d" index)))
          ])
   in
   let rows =
@@ -874,12 +852,12 @@ let test_scalar_title_query_rejects_non_string_input_without_title_scan () =
   let tag = 10 in
   let count = 180_000 in
   let datoms =
-    datom ~e:tag ~a:"db/ident" ~v:(Keyword "logseq.class/Tag") ()
+    datom (eid (Int64.of_int tag)) "db/ident" (Keyword "logseq.class/Tag")
     :: List.concat
          (List.init count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"block/title" ~v:(String (Printf.sprintf "Title %d" index)) ()
-            ; datom ~e:entity ~a:"block/tags" ~v:(Ref tag) ()
+            [ datom (eid (Int64.of_int entity)) "block/title" (String (Printf.sprintf "Title %d" index))
+            ; datom (eid (Int64.of_int entity)) "block/tags" (Ref (eid (Int64.of_int tag)))
             ]))
   in
   let db = init_db ~schema:[ "db/ident", unique_identity; "block/title", one; "block/tags", ref_many ] datoms in
@@ -914,8 +892,8 @@ let test_exact_title_simple_pull_uses_entity_lookup_for_small_results () =
            else
              Printf.sprintf "Page %d" index
          in
-         [ datom ~e:entity ~a:"block/title" ~v:(String title) ()
-         ; datom ~e:entity ~a:"block/uuid" ~v:(Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity)) ()
+         [ datom (eid (Int64.of_int entity)) "block/title" (String title)
+         ; datom (eid (Int64.of_int entity)) "block/uuid" (Uuid (Printf.sprintf "00000000-0000-0000-0000-%012d" entity))
          ]))
   in
   let db = init_db ~schema:[ "block/title", one; "block/uuid", unique_identity ] datoms in
@@ -924,8 +902,8 @@ let test_exact_title_simple_pull_uses_entity_lookup_for_small_results () =
       q_return_string db "[:find (pull ?p [:block/uuid]) :where [?p :block/title \"Plain Page\"]]")
   with
   | Query_relation [ [ Result_pull entity ] ] ->
-    if entity.pulled_id <> target then
-      failf "expected target entity %d, got %d" target entity.pulled_id
+    if Entity_id.to_int entity.pulled_id <> target then
+      failf "expected target entity %d, got %d" target (Entity_id.to_int entity.pulled_id)
   | Query_relation rows -> failf "expected one pulled row, got %d" (List.length rows)
   | _ -> failwith "expected relation result"
 
@@ -935,14 +913,12 @@ let test_block_content_rule_uses_title_scan_once () =
     init_db
       ~schema:[ "block/title", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"block/title" ~v:(String (Printf.sprintf "Title %d" index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "block/title" (String (Printf.sprintf "Title %d" index))))
   in
   let rules =
-    Parser.parse_rules
-      (read_edn
-         "[[(block-content ?b ?query)
+    parse_rules_string "[[(block-content ?b ?query)
             [?b :block/title ?content]
-            [(clojure.string/includes? ?content ?query)]]]")
+            [(clojure.string/includes? ?content ?query)]]]"
   in
   let result =
     timed "block-content rule title includes" 0.025 (fun () ->
@@ -961,32 +937,25 @@ let test_source_ref_property_malformed_lookup_keeps_upstream_error_order () =
     [ { rule_name = "ref-property-value"
       ; rule_params = [ "b"; "prop-e"; "val" ]
       ; rule_body =
-          [ Pattern (QVar "prop-e", QAttr "db/ident", QVar "prop")
-          ; Pattern (QVar "b", QVar "prop", QVar "pv")
-          ; Rule ("ref->val", [ QVar "pv"; QVar "val" ])
+          [ Clause.pattern (QVar "prop-e") (QAttr "db/ident") (QVar "prop") ; (Clause.pattern) (QVar "b") (QVar "prop") (QVar "pv") ; (Clause.rule_call "ref->val") [ (QVar "pv"); (QVar "val") ]
           ]
       }
     ; { rule_name = "ref-property"
       ; rule_params = [ "b"; "prop"; "val" ]
       ; rule_body =
-          [ Pattern (QVar "prop-e", QAttr "db/ident", QVar "prop")
-          ; Rule ("ref-property-value", [ QVar "b"; QVar "prop-e"; QVar "val" ])
+          [ Clause.pattern (QVar "prop-e") (QAttr "db/ident") (QVar "prop") ; (Clause.rule_call "ref-property-value") [ (QVar "b"); (QVar "prop-e"); (QVar "val") ]
           ]
       }
     ; { rule_name = "ref->val"
       ; rule_params = [ "pv"; "val" ]
-      ; rule_body = [ Pattern (QVar "pv", QAttr "block/title", QVar "val") ]
+      ; rule_body = [ Clause.pattern (QVar "pv") (QAttr "block/title") (QVar "val") ]
       }
     ]
   in
   let db =
     init_db
-      [ datom ~e:1 ~a:"db/ident" ~v:(Keyword "logseq.property.table/ordered-columns") ()
-      ; datom
-          ~e:3
-          ~a:"logseq.property.table/ordered-columns"
-          ~v:(Vector [ Keyword "block/title"; Keyword "logseq.property/status"; Keyword "block/tags" ])
-          ()
+      [ datom (eid 1L) "db/ident" (Keyword "logseq.property.table/ordered-columns")
+      ; datom (eid 3L) "logseq.property.table/ordered-columns" (Vector [ Keyword "block/title"; Keyword "logseq.property/status"; Keyword "block/tags" ])
       ]
   in
   let expected = "Lookup ref should contain 2 elements: [:block/title :logseq.property/status :block/tags]" in
@@ -1013,10 +982,10 @@ let test_rule_call_uses_relation_context_for_many_bindings () =
     [ { rule_name = "flagged"
       ; rule_params = [ "e" ]
       ; rule_body =
-          [ Pattern (QVar "e", QAttr "item/flag?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/live?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/visible?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/indexed?", QValue (Bool true))
+          [ Clause.pattern (QVar "e") (QAttr "item/flag?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/live?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/visible?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/indexed?") (QValue (Bool true))
           ]
       }
     ]
@@ -1033,27 +1002,21 @@ let test_rule_call_uses_relation_context_for_many_bindings () =
       (List.concat
          (List.init count (fun index ->
             let entity = 1_000 + index in
-            [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
+            [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)) ]
             @
             if index mod 2 = 0 then
-              [ datom ~e:entity ~a:"item/flag?" ~v:(Bool true) ()
-              ; datom ~e:entity ~a:"item/live?" ~v:(Bool true) ()
-              ; datom ~e:entity ~a:"item/visible?" ~v:(Bool true) ()
-              ; datom ~e:entity ~a:"item/indexed?" ~v:(Bool true) ()
+              [ datom (eid (Int64.of_int entity)) "item/flag?" (Bool true)
+              ; datom (eid (Int64.of_int entity)) "item/live?" (Bool true)
+              ; datom (eid (Int64.of_int entity)) "item/visible?" (Bool true)
+              ; datom (eid (Int64.of_int entity)) "item/indexed?" (Bool true)
               ]
             else
               [])))
   in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; Rule ("flagged", [ QVar "e" ])
+    Query.v ~rules:rules ([ Find_var "e" ])
+        [ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.rule_call "flagged" [ (QVar "e") ])
         ]
-    }
   in
   let rows =
     timed "rule call relation context" 3.000 (fun () ->
@@ -1068,10 +1031,10 @@ let test_source_rule_call_uses_relation_context_for_many_bindings () =
     [ { rule_name = "flagged"
       ; rule_params = [ "e" ]
       ; rule_body =
-          [ Pattern (QVar "e", QAttr "item/flag?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/live?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/visible?", QValue (Bool true))
-          ; Pattern (QVar "e", QAttr "item/indexed?", QValue (Bool true))
+          [ Clause.pattern (QVar "e") (QAttr "item/flag?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/live?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/visible?") (QValue (Bool true))
+          ; Clause.pattern (QVar "e") (QAttr "item/indexed?") (QValue (Bool true))
           ]
       }
     ]
@@ -1080,7 +1043,7 @@ let test_source_rule_call_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "item/value" (Int64 (Int64.of_int index))))
   in
   let source_datoms =
     List.filter_map
@@ -1088,10 +1051,10 @@ let test_source_rule_call_uses_relation_context_for_many_bindings () =
          if index mod 2 = 0 then
            let entity = 1_000 + index in
            Some
-             [ datom ~e:entity ~a:"item/flag?" ~v:(Bool true) ()
-             ; datom ~e:entity ~a:"item/live?" ~v:(Bool true) ()
-             ; datom ~e:entity ~a:"item/visible?" ~v:(Bool true) ()
-             ; datom ~e:entity ~a:"item/indexed?" ~v:(Bool true) ()
+             [ datom (eid (Int64.of_int entity)) "item/flag?" (Bool true)
+             ; datom (eid (Int64.of_int entity)) "item/live?" (Bool true)
+             ; datom (eid (Int64.of_int entity)) "item/visible?" (Bool true)
+             ; datom (eid (Int64.of_int entity)) "item/indexed?" (Bool true)
              ]
          else
            None)
@@ -1104,15 +1067,8 @@ let test_source_rule_call_uses_relation_context_for_many_bindings () =
       source_datoms
   in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; SourceRule ("flags", "flagged", [ QVar "e" ])
-        ]
-    }
+    (Query.v ~rules:rules ([ Find_var "e" ]) ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.rule_call ~src:"flags" "flagged" [ (QVar "e") ])
+        ]))
   in
   let rows =
     timed "source rule call relation context" 3.000 (fun () ->
@@ -1127,27 +1083,20 @@ let test_top_level_or_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
+         [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)) ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int entity)) "item/a" (Bool true) ]
          else
-           [ datom ~e:entity ~a:"item/b" ~v:(Bool true) () ]))
+           [ datom (eid (Int64.of_int entity)) "item/b" (Bool true) ]))
   in
   let db = init_db ~schema:[ "item/value", one; "item/a", one; "item/b", one ] datoms in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; Or
-            [ [ Pattern (QVar "e", QAttr "item/a", QValue (Bool true)) ]
-            ; [ Pattern (QVar "e", QAttr "item/b", QValue (Bool true)) ]
-            ]
-        ]
-    }
+    (Query.v ([ Find_var "e" ]) ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.or_
+            [ [ Clause.pattern (QVar "e") (QAttr "item/a") (QValue (Bool true)) ]
+            ; [ Clause.pattern (QVar "e") (QAttr "item/b") (QValue (Bool true)) ]
+            ])
+        ]))
   in
   let rows =
     timed "top-level or relation context" 3.000 (fun () ->
@@ -1162,29 +1111,20 @@ let test_top_level_or_join_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
+         [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)) ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int entity)) "item/a" (Bool true) ]
          else
-           [ datom ~e:entity ~a:"item/b" ~v:(Bool true) () ]))
+           [ datom (eid (Int64.of_int entity)) "item/b" (Bool true) ]))
   in
   let db = init_db ~schema:[ "item/value", one; "item/a", one; "item/b", one ] datoms in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; OrJoin
-            ( [ "e" ]
-            , [ [ Pattern (QVar "e", QAttr "item/a", QValue (Bool true)) ]
-              ; [ Pattern (QVar "e", QAttr "item/b", QValue (Bool true)) ]
-              ]
-            )
-        ]
-    }
+    (Query.v ([ Find_var "e" ]) ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; Clause.or_join [ "e" ]
+            [ [ Clause.pattern (QVar "e") (QAttr "item/a") (QValue (Bool true)) ]
+            ; [ Clause.pattern (QVar "e") (QAttr "item/b") (QValue (Bool true)) ]
+            ]
+        ]))
   in
   let rows =
     timed "top-level or-join relation context" 3.000 (fun () ->
@@ -1200,39 +1140,26 @@ let test_top_level_or_join_required_uses_relation_context_for_many_bindings () =
       (List.init count (fun index ->
          let entity = 1_000 + index in
          let group = index mod 16 in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()
-         ; datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) ()
+         [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index))
+         ; datom (eid (Int64.of_int entity)) "item/group" (Int64 (Int64.of_int group))
          ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int entity)) "item/a" (Bool true) ]
          else
-           [ datom ~e:entity ~a:"item/b" ~v:(Bool true) () ]))
+           [ datom (eid (Int64.of_int entity)) "item/b" (Bool true) ]))
   in
   let db =
     init_db ~schema:[ "item/value", one; "item/group", one; "item/a", one; "item/b", one ] datoms
   in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; Pattern (QVar "e", QAttr "item/group", QVar "g")
-        ; OrJoinRequired
-            ( [ "g" ]
-            , [ "e" ]
-            , [ [ Pattern (QVar "e", QAttr "item/group", QVar "g")
-                ; Pattern (QVar "e", QAttr "item/a", QValue (Bool true))
-                ]
-              ; [ Pattern (QVar "e", QAttr "item/group", QVar "g")
-                ; Pattern (QVar "e", QAttr "item/b", QValue (Bool true))
-                ]
+    (Query.v ([ Find_var "e" ]) ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.pattern) (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.or_join_required ~required:[ "g" ] [ "e" ]
+            [ [ Clause.pattern (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.pattern (QVar "e") (QAttr "item/a") (QValue (Bool true))
               ]
-            )
-        ]
-    }
+            ; [ Clause.pattern (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.pattern (QVar "e") (QAttr "item/b") (QValue (Bool true))
+              ]
+            ]
+        ]))
   in
   let rows =
     timed "top-level or-join required relation context" 3.000 (fun () ->
@@ -1250,8 +1177,8 @@ let test_source_or_join_required_uses_relation_context_for_many_bindings () =
          (List.init count (fun index ->
             let entity = 1_000 + index in
             let group = index mod 16 in
-            [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()
-            ; datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) ()
+            [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index))
+            ; datom (eid (Int64.of_int entity)) "item/group" (Int64 (Int64.of_int group))
             ])))
   in
   let source_db =
@@ -1261,35 +1188,21 @@ let test_source_or_join_required_uses_relation_context_for_many_bindings () =
          (List.init count (fun index ->
             let entity = 1_000 + index in
             let group = index mod 16 in
-            [ datom ~e:entity ~a:"item/group" ~v:(Int64 (Int64.of_int group)) () ]
+            [ datom (eid (Int64.of_int entity)) "item/group" (Int64 (Int64.of_int group)) ]
             @
             if index mod 2 = 0 then
-              [ datom ~e:entity ~a:"item/a" ~v:(Bool true) () ]
+              [ datom (eid (Int64.of_int entity)) "item/a" (Bool true) ]
             else
-              [ datom ~e:entity ~a:"item/b" ~v:(Bool true) () ])))
+              [ datom (eid (Int64.of_int entity)) "item/b" (Bool true) ])))
   in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; Pattern (QVar "e", QAttr "item/group", QVar "g")
-        ; SourceOrJoinRequired
-            ( "flags"
-            , [ "g" ]
-            , [ "e" ]
-            , [ [ Pattern (QVar "e", QAttr "item/group", QVar "g")
-                ; Pattern (QVar "e", QAttr "item/a", QValue (Bool true))
-                ]
-              ; [ Pattern (QVar "e", QAttr "item/group", QVar "g")
-                ; Pattern (QVar "e", QAttr "item/b", QValue (Bool true))
-                ]
+    (Query.v ~in_:[ Spec_source "flags" ]  ([ Find_var "e" ]) ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; (Clause.pattern) (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.or_join_required ~src:"flags" ~required:[ "g" ] [ "e" ]
+            [ [ Clause.pattern (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.pattern (QVar "e") (QAttr "item/a") (QValue (Bool true))
               ]
-            )
-        ]
-    }
+            ; [ Clause.pattern (QVar "e") (QAttr "item/group") (QVar "g") ; Clause.pattern (QVar "e") (QAttr "item/b") (QValue (Bool true))
+              ]
+            ]
+        ]))
   in
   let rows =
     timed "source or-join required relation context" 3.000 (fun () ->
@@ -1304,24 +1217,19 @@ let test_top_level_not_join_uses_relation_context_for_many_bindings () =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"item/value" ~v:(Int64 (Int64.of_int index)) () ]
+         [ datom (eid (Int64.of_int entity)) "item/value" (Int64 (Int64.of_int index)) ]
          @
          if index mod 2 = 0 then
-           [ datom ~e:entity ~a:"item/excluded?" ~v:(Bool true) () ]
+           [ datom (eid (Int64.of_int entity)) "item/excluded?" (Bool true) ]
          else
            []))
   in
   let db = init_db ~schema:[ "item/value", one; "item/excluded?", one ] datoms in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; NotJoin ([ "e" ], [ Pattern (QVar "e", QAttr "item/excluded?", QValue (Bool true)) ])
-        ]
-    }
+    Query.v
+      [ Find_var "e" ]
+      ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; Clause.not_join [ "e" ] [ Clause.pattern (QVar "e") (QAttr "item/excluded?") (QValue (Bool true)) ]
+        ])
   in
   let rows =
     timed "top-level not-join relation context" 3.000 (fun () ->
@@ -1336,7 +1244,7 @@ let test_source_not_join_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "item/value" (Int64 (Int64.of_int index))))
   in
   let excluded_db =
     init_db
@@ -1344,22 +1252,16 @@ let test_source_not_join_uses_relation_context_for_many_bindings () =
       (List.filter_map
          (fun index ->
             if index mod 2 = 0 then
-              Some (datom ~e:(1_000 + index) ~a:"item/excluded?" ~v:(Bool true) ())
+              Some (datom (eid (Int64.of_int (1_000 + index))) "item/excluded?" (Bool true))
             else
               None)
          (List.init count Fun.id))
   in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "v")
-        ; SourceNotJoin
-            ("excluded", [ "e" ], [ Pattern (QVar "e", QAttr "item/excluded?", QValue (Bool true)) ])
-        ]
-    }
+    Query.v ~in_:[ Spec_source "excluded" ] 
+      [ Find_var "e" ]
+      ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "v") ; Clause.not_join ~src:"excluded" [ "e" ] [ Clause.pattern (QVar "e") (QAttr "item/excluded?") (QValue (Bool true)) ]
+        ])
   in
   let rows =
     timed "source not-join relation context" 3.000 (fun () ->
@@ -1374,7 +1276,7 @@ let test_relation_source_join_uses_relation_context_for_many_bindings () =
     init_db
       ~schema:[ "item/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"item/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "item/value" (Int64 (Int64.of_int index))))
   in
   let labels =
     List.init count (fun index ->
@@ -1383,15 +1285,10 @@ let test_relation_source_join_uses_relation_context_for_many_bindings () =
       ])
   in
   let query =
-    { find = [ Find_var "e"; Find_var "label" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "item/value", QVar "value")
-        ; SourceRelationPattern ("labels", [ QVar "value"; QVar "label" ])
-        ]
-    }
+    Query.v ~in_:[ Spec_source "labels" ] 
+      [ Find_var "e"; Find_var "label" ]
+      ([ Clause.pattern (QVar "e") (QAttr "item/value") (QVar "value") ; (Clause.relation) ~src:"labels" [ (QVar "value"); (QVar "label") ]
+        ])
   in
   let rows =
     timed "relation source join relation context" 0.120 (fun () ->
@@ -1406,7 +1303,7 @@ let test_input_bound_predicate_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "score/value" (Int64 (Int64.of_int index))))
   in
   let threshold = 0 in
   let rows =
@@ -1429,19 +1326,14 @@ let test_source_clause_predicate_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "score/value" (Int64 (Int64.of_int index))))
   in
   let source_db = empty_db () in
   let query =
-    { find = [ Find_var "e" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "score/value", QVar "score")
-        ; SourceClause ("scores", ComparisonPredicate (GreaterThan, QVar "score", QValue (Int64 0L)))
-        ]
-    }
+    Query.v ~in_:[ Spec_source "scores" ] 
+      [ Find_var "e" ]
+      ([ Clause.pattern (QVar "e") (QAttr "score/value") (QVar "score") ; Clause.comparison ~src:"scores" GreaterThan (QVar "score") (QValue (Int64 0L))
+        ])
   in
   let rows =
     timed "source clause predicate relation rows" 1.000 (fun () ->
@@ -1456,19 +1348,14 @@ let test_source_clause_function_uses_relation_rows () =
     init_db
       ~schema:[ "score/value", one ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "score/value" (Int64 (Int64.of_int index))))
   in
   let source_db = empty_db () in
   let query =
-    { find = [ Find_var "e"; Find_var "next" ]
-    ; inputs = []
-    ; with_vars = []
-    ; rules = []
-    ; where =
-        [ Pattern (QVar "e", QAttr "score/value", QVar "score")
-        ; SourceClause ("scores", ArithmeticValue (AddNumbers, [ QVar "score"; QValue (Int64 1L) ], "next"))
-        ]
-    }
+    Query.v ~in_:[ Spec_source "scores" ] 
+      [ Find_var "e"; Find_var "next" ]
+      ([ Clause.pattern (QVar "e") (QAttr "score/value") (QVar "score") ; Clause.arithmetic ~src:"scores" AddNumbers [ (QVar "score"); (QValue (Int64 1L)) ] "next"
+        ])
   in
   let rows =
     timed "source clause function relation rows" 1.000 (fun () ->
@@ -1481,9 +1368,9 @@ let test_input_bound_predicate_uses_index_range () =
   let count = 300_000 in
   let db =
     init_db
-      ~schema:[ "score/value", { one with indexed = true } ]
+      ~schema:[ "score/value", Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:((Schema.unique one)) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) () ]
       (List.init count (fun index ->
-         datom ~e:(1_000 + index) ~a:"score/value" ~v:(Int64 (Int64.of_int index)) ()))
+         datom (eid (Int64.of_int (1_000 + index))) "score/value" (Int64 (Int64.of_int index))))
   in
   let threshold = count - 11 in
   let rows =
@@ -1502,20 +1389,20 @@ let test_input_bound_predicate_uses_index_range () =
 let test_same_entity_indexed_chain_uses_sparse_candidate_scan () =
   let count = 300_000 in
   let schema =
-    [ "person/name", { one with indexed = true }
-    ; "person/last-name", { one with indexed = true }
-    ; "person/age", { one with indexed = true }
-    ; "person/sex", { one with indexed = true }
+    [ "person/name", Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:((Schema.unique one)) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+    ; "person/last-name", Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:((Schema.unique one)) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+    ; "person/age", Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:((Schema.unique one)) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+    ; "person/sex", Schema.spec ~cardinality:((Schema.cardinality one)) ?unique:((Schema.unique one)) ~indexed:(true) ~is_component:((Schema.is_component one)) ~no_history:((Schema.no_history one)) ?doc:((Schema.doc one)) ?value_type:((Schema.value_type one)) ?tuple:(match ((Schema.tuple_attrs one), (Schema.tuple_types one)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
     ]
   in
   let datoms =
     List.concat
       (List.init count (fun index ->
          let entity = 1_000 + index in
-         [ datom ~e:entity ~a:"person/name" ~v:(String (if index mod 8 = 0 then "Ivan" else "Petr")) ()
-         ; datom ~e:entity ~a:"person/last-name" ~v:(String (Printf.sprintf "L%d" (index mod 97))) ()
-         ; datom ~e:entity ~a:"person/age" ~v:(Int64 (Int64.of_int (index mod 100))) ()
-         ; datom ~e:entity ~a:"person/sex" ~v:(Keyword (if index mod 2 = 0 then "male" else "female")) ()
+         [ datom (eid (Int64.of_int entity)) "person/name" (String (if index mod 8 = 0 then "Ivan" else "Petr"))
+         ; datom (eid (Int64.of_int entity)) "person/last-name" (String (Printf.sprintf "L%d" (index mod 97)))
+         ; datom (eid (Int64.of_int entity)) "person/age" (Int64 (Int64.of_int (index mod 100)))
+         ; datom (eid (Int64.of_int entity)) "person/sex" (Keyword (if index mod 2 = 0 then "male" else "female"))
          ]))
   in
   let db = init_db ~schema datoms in

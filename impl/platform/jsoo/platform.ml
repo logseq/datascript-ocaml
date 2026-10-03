@@ -9,6 +9,9 @@ let now_seconds () =
 let file_storage _dir =
   invalid_arg "file_storage is not supported on js_of_ocaml"
 
+let make_storage ~write:_ ~read:_ ~list:_ ~delete:_ =
+  invalid_arg "Storage.make is not supported on js_of_ocaml"
+
 let compile_regex = Regexp.regexp
 
 let validate_regex pattern = ignore (compile_regex pattern)

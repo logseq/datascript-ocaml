@@ -39,10 +39,14 @@ let int_collection = function
   | Query_collection values ->
     values
     |> List.map (function
-      | Result_entity entity_id -> entity_id
+      | Result_entity entity_id -> Int64.to_int (Entity_id.to_int64 entity_id)
       | _ -> failwith "expected entity result")
     |> List.sort compare
   | _ -> failwith "expected collection result"
+
+let logseq_query ?read_only ?inputs db_path query_string =
+  Sqlite_storage.query_logseq_graph ?read_only ?inputs db_path query_string
+  |> Internal_convert.externalize_query_output
 
 let assert_equal_ints label expected actual =
   let actual = List.sort compare actual in
@@ -83,7 +87,7 @@ let test_attr_filtered_query_preserves_transit_shorthand_segment () =
        ^ "insert into kvs (addr, content, addresses) values (4, "
        ^ sql_quote unrelated_broken_row
        ^ ", '[]');");
-    Sqlite_storage.query_logseq_graph
+    logseq_query
       ~read_only:true
       db_path
       "[:find [?e ...] :where [?e :db/ident]]"
@@ -107,7 +111,7 @@ let test_attr_filtered_query_keeps_idents_for_keyword_ref_constants () =
        ^ "insert into kvs (addr, content, addresses) values (2, "
        ^ sql_quote graph_row
        ^ ", '[]');");
-    Sqlite_storage.query_logseq_graph
+    logseq_query
       ~read_only:true
       db_path
       "[:find [?e ...] :where [?e :block/tags :logseq.class/Journal]]"
@@ -132,7 +136,7 @@ let test_attr_filtered_query_keeps_pull_selector_attrs () =
        ^ sql_quote graph_row
        ^ ", '[]');");
     match
-      Sqlite_storage.query_logseq_graph
+      logseq_query
         ~read_only:true
         db_path
         "[:find [(pull ?e [:file/path :file/content]) ...] :where [?e :file/path]]"

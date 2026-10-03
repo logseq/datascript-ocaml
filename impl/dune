@@ -3,4 +3,4 @@
  (public_name datascript_ocaml)
  (virtual_modules platform)
  (modes native byte melange)
- (libraries datascript_types persistent_sorted_set_ocaml))
+ (libraries persistent_sorted_set_ocaml))

@@ -30,28 +30,19 @@ let seq_length seq =
   Seq.fold_left (fun count _ -> count + 1) 0 seq
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let unique_identity =
-  { indexed with unique = Some Identity }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_attr =
-  { indexed with indexed = false; value_type = Some RefType }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_many =
-  { ref_attr with cardinality = Many }
+  Schema.spec ~cardinality:(Many) ?unique:((Schema.unique ref_attr)) ~indexed:((Schema.indexed ref_attr)) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let many =
-  { indexed with cardinality = Many; indexed = false }
+  Schema.spec ~cardinality:(Many) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let schema =
   [ "id", unique_identity
@@ -73,7 +64,7 @@ let person size i =
   let friend = if i = size then 1 else i + 1 in
   let mentor = if i <= 10 then 1 else i - 10 in
   Entity
-    { db_id = Some (Entity_id i)
+    { db_id = Some (Entity_id (eid (Int64.of_int i)))
     ; attrs =
         [ "id", One_value (Int64 (Int64.of_int i))
         ; "name", One_value (String names.((i - 1) mod Array.length names))
@@ -81,12 +72,12 @@ let person size i =
         ; "salary", One_value (Int64 (Int64.of_int ((i * 7919) mod 100_000)))
         ; "status", One_value (String statuses.(i mod Array.length statuses))
         ; "score", One_value (Int64 (Int64.of_int ((i * 13) mod 10_000)))
-        ; "friend", One_value (Ref friend)
-        ; "mentor", One_value (Ref mentor)
+        ; "friend", One_value (Ref (eid (Int64.of_int friend)))
+        ; "mentor", One_value (Ref (eid (Int64.of_int mentor)))
         ; ( "team"
           , Many_values
-              [ Ref (((i + 7) mod size) + 1)
-              ; Ref (((i + 19) mod size) + 1)
+              [ Ref (eid (Int64.of_int (((i + 7) mod size) + 1)))
+              ; Ref (eid (Int64.of_int (((i + 19) mod size) + 1)))
               ] )
         ; "alias", Many_values [ String ("alias-" ^ string_of_int (i mod 64)); String ("tag-" ^ string_of_int (i mod 251)) ]
         ]
@@ -101,7 +92,7 @@ let build_db size =
 let update_entity size i =
   let entity_id = ((i * 17) mod size) + 1 in
   Entity
-    { db_id = Some (Entity_id entity_id)
+    { db_id = Some (Entity_id (eid (Int64.of_int entity_id)))
     ; attrs =
         [ "status", One_value (String statuses.((i + 1) mod Array.length statuses))
         ; "score", One_value (Int64 (Int64.of_int ((i * 97) mod 10_000)))
@@ -120,7 +111,7 @@ let pull_friend =
   [ Pull_attr "name"; Pull_attr "status"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ]
 
 let run_queries ?(probe = fun _ -> ()) db =
-  consume_int (seq_length (datoms db Aevt ~a:"name" ()));
+  consume_int (seq_length (datoms ~a:"name" db Aevt));
   probe "datoms-name";
   consume_int (List.length (q db (Lazy.force query_name_age)));
   probe "query-name-age";
@@ -129,7 +120,7 @@ let run_queries ?(probe = fun _ -> ()) db =
   consume_int (List.length (q db (Lazy.force query_status_score)));
   probe "query-status-score";
   for entity_id = 1 to 100 do
-    match pull db pull_friend (Entity_id entity_id) with
+    match pull db pull_friend (Entity_id (eid (Int64.of_int entity_id))) with
     | None -> consume_int 0
     | Some entity -> consume_int (List.length entity.pulled_attrs)
   done;
@@ -154,7 +145,7 @@ let ref_attrs =
 let canonical_value attr = function
   | Int64 value when List.mem attr ref_attrs -> "ref:" ^ Int64.to_string value
   | Int64 value -> "int:" ^ Int64.to_string value
-  | Ref entity_id -> "ref:" ^ string_of_int entity_id
+  | Ref entity_id -> "ref:" ^ Int64.to_string (Entity_id.to_int64 entity_id)
   | String value -> "string:" ^ value
   | Bool value -> "bool:" ^ string_of_bool value
   | Keyword value -> "keyword:" ^ value
@@ -171,13 +162,13 @@ let canonical_value attr = function
 let canonical_datom_line datom =
   Printf.sprintf
     "datom\t%d\t%s\t%s"
-    datom.e
+    (Entity_id.to_int datom.e)
     datom.a
     (canonical_value datom.a datom.v)
 
 let write_final_data path db =
   let lines =
-    datoms db Eavt ()
+    datoms db Eavt
     |> List.of_seq
     |> List.map canonical_datom_line
     |> List.sort String.compare
@@ -195,5 +186,5 @@ let maybe_write_final_data db =
 
 let finish db =
   maybe_write_final_data db;
-  consume_int db.max_eid;
+  consume_int (Entity_id.to_int (serializable db).serializable_max_eid);
   Printf.eprintf "blackhole=%d\n%!" !blackhole

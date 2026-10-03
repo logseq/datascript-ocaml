@@ -1,4 +1,6 @@
 open Datascript
+module DT = Internal.Datascript_types
+open DT
 
 module PSet = Persistent_sorted_set
 module Transit = Transit_native.Transit.Json
@@ -256,7 +258,7 @@ let rec value_to_transit = function
   | Uuid value -> Transit.Uuid value
   | Instant value -> Transit.Date value
   | Regex value -> Transit.Tagged ("regex", Transit.String value)
-  | Ref entity_id -> Transit.Int entity_id
+  | Ref entity_id -> Transit.Int64 entity_id
   | List values -> Transit.List (List.map value_to_transit values)
   | Vector values -> Transit.Array (List.map value_to_transit values)
   | Map entries ->
@@ -270,12 +272,12 @@ let rec value_to_transit = function
   | Ref_to _ -> invalid_arg "storage payload cannot contain unresolved refs"
 
 let datom_to_transit datom =
-  let tx = if datom.added then datom.tx else -datom.tx in
+  let tx = if datom.added then datom.tx else Int64.neg datom.tx in
   Transit.Array
-    [ Transit.Int datom.e
+    [ Transit.Int64 datom.e
     ; Transit.Keyword datom.a
     ; value_to_transit datom.v
-    ; Transit.Int tx
+    ; Transit.Int64 tx
     ]
 
 let index_metadata_to_transit metadata =
@@ -290,9 +292,9 @@ let optional_metadata_entry key = function
 
 let storage_root_to_transit root =
   Transit.Map
-    ([ Transit.Keyword "schema", schema_to_transit ~eids:root.storage_schema_idents root.storage_schema
-     ; Transit.Keyword "max-eid", Transit.Int root.storage_max_eid
-     ; Transit.Keyword "max-tx", Transit.Int root.storage_max_tx
+    ([ Transit.Keyword "schema", schema_to_transit ~eids:(List.map (fun (eid_, ident) -> Int64.to_int eid_, ident) root.storage_schema_idents) root.storage_schema
+     ; Transit.Keyword "max-eid", Transit.Int64 root.storage_max_eid
+     ; Transit.Keyword "max-tx", Transit.Int64 root.storage_max_tx
      ; Transit.Keyword "eavt", Transit.Int (sqlite_addr_of_storage_address root.storage_eavt)
      ; Transit.Keyword "aevt", Transit.Int (sqlite_addr_of_storage_address root.storage_aevt)
      ; Transit.Keyword "avet", Transit.Int (sqlite_addr_of_storage_address root.storage_avet)
@@ -401,7 +403,7 @@ let schema_eids_of_transit = function
     entries
     |> List.filter_map (fun (key, value) ->
       match int_of_transit_value key, keyword_of_transit value with
-      | Some eid, Some ident -> Some (eid, ident)
+      | Some eid, Some ident -> Some (Int64.of_int eid, ident)
       | _ -> None)
   | _ -> []
 
@@ -443,19 +445,19 @@ let rec value_of_transit = function
 
 let datom_of_transit = function
   | Transit.Array [ entity; attr; value; tx ] ->
-    let e = int_of_transit "datom entity" entity in
+    let e = int_of_transit "Internal.datom ~e:Internal.entity ~a:" entity in
     let a =
       match keyword_of_transit attr with
       | Some attr -> attr
-      | None -> invalid_arg "datom attr must be a Transit keyword"
+      | None -> invalid_arg " ~v:Internal.datom attr must be a Transit keyword"
     in
-    let tx = int_of_transit "datom tx" tx in
-    datom ~e ~a ~v:(value_of_transit value) ~tx:(abs tx) ~added:(tx >= 0) ()
-  | _ -> invalid_arg "storage datom must be [e a v tx]"
+    let tx = int_of_transit "Internal.datom ~e:tx ~a:" tx in
+    Internal.datom ~e:(Int64.of_int e) ~a ~v:(value_of_transit value) ~tx:(Int64.abs (Int64.of_int tx)) ~added:(tx >= 0) ()
+  | _ -> invalid_arg " ~v:storage Internal.datom ~e:must ~a:be ~v:[e a v tx]"
 
 let datoms_of_transit = function
   | Transit.Array datoms | Transit.List datoms -> List.map datom_of_transit datoms
-  | _ -> invalid_arg "storage node :keys must be a datom array"
+  | _ -> invalid_arg "storage node :keys must be a Internal.datom ~e:array ~a:"
 
 let addresses_of_json = function
   | None -> []
@@ -466,7 +468,7 @@ let addresses_of_json = function
        |> List.map (function
          | `Int address -> storage_address_of_sqlite_addr address
          | `Intlit address -> storage_address_of_sqlite_addr (int_of_string address)
-         | _ -> invalid_arg "SQLite addresses JSON must contain integers")
+         | _ -> invalid_arg " ~v:SQLite addresses JSON must contain integers")
      | _ -> invalid_arg "SQLite addresses column must be a JSON array")
 
 let storage_root_of_transit entries =
@@ -489,8 +491,8 @@ let storage_root_of_transit entries =
   in
   { storage_schema = schema_of_transit (find "schema")
   ; storage_schema_idents = schema_eids_of_transit (find "schema")
-  ; storage_max_eid = int_of_transit "storage root :max-eid" (find "max-eid")
-  ; storage_max_tx = int_of_transit "storage root :max-tx" (find "max-tx")
+  ; storage_max_eid = Int64.of_int (int_of_transit "storage root :max-eid" (find "max-eid"))
+  ; storage_max_tx = Int64.of_int (int_of_transit "storage root :max-tx" (find "max-tx"))
   ; storage_eavt =
       storage_address_of_sqlite_addr (int_of_transit "storage root :eavt" (find "eavt"))
   ; storage_aevt =
@@ -903,10 +905,10 @@ let schema_of_logseq_graph ?(read_only = false) db_path =
            | Some attr -> Some (attr, logseq_schema_attr_of_transit schema |> normalize_logseq_schema_attr attr)
            | None -> None)
        | Some _ -> invalid_arg "Logseq graph root :schema must be a Transit map"
-       | None -> invalid_arg "Logseq graph root metadata has no :schema"
+       | None -> invalid_arg "Logseq graph root metadata has no :Internal.schema"
      with
      | Transit.Decode_error _ | Yojson.Json_error _ ->
-       invalid_arg "Logseq graph root metadata has no decodable :schema")
+       invalid_arg "Logseq graph root metadata has no decodable :Internal.schema")
 
 let int_of_shallow_string text =
   match int_of_string_opt text with
@@ -980,7 +982,7 @@ let logseq_attr_of_shallow_json reader = function
   | `String text ->
     let text = shallow_decode_string reader text in
     if starts_with "~:" text then String.sub text 2 (String.length text - 2) else text
-  | _ -> invalid_arg "Logseq datom attr must be a Transit keyword string"
+  | _ -> invalid_arg "Logseq Internal.datom ~e:attr ~a:must ~v:be () a Transit keyword string"
 
 let logseq_int_of_shallow_json reader = function
   | `Int value -> value
@@ -989,7 +991,7 @@ let logseq_int_of_shallow_json reader = function
     let text = shallow_decode_string reader text in
     if starts_with "~i" text then int_of_shallow_string (String.sub text 2 (String.length text - 2))
     else int_of_shallow_string text
-  | _ -> invalid_arg "Logseq datom integer field must be an integer"
+  | _ -> invalid_arg "Logseq Internal.datom ~e:integer ~a:field ~v:must () be an integer"
 
 let logseq_datom_of_shallow_json reader = function
   | `List [ entity; attr; value; tx ] ->
@@ -997,8 +999,8 @@ let logseq_datom_of_shallow_json reader = function
     let a = logseq_attr_of_shallow_json reader attr in
     let v = logseq_value_of_shallow_json reader value in
     let tx = logseq_int_of_shallow_json reader tx in
-    datom ~e ~a ~v ~tx ()
-  | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] datoms"
+    Internal.datom ~tx:(Int64.of_int tx) ~e:(Int64.of_int e) ~a ~v ()
+  | _ -> invalid_arg "Logseq graph :keys entries must be [e a v tx] Internal.datoms"
 
 let logseq_datoms_of_row_with_reader reader content =
   match Yojson.Safe.from_string content with
@@ -1019,7 +1021,7 @@ let logseq_datoms_of_row content =
 
 let add_query_attr acc = function
   | QAttr attr -> attr :: acc
-  | QValue (Keyword attr | String attr | Symbol attr) -> attr :: acc
+  | (QValue (Keyword attr | String attr | Symbol attr)) -> attr :: acc
   | QVar _ | QEntity _ | QIdent _ | QLookupRef _ | QValue _ | QSource _ | QWildcard -> acc
 
 let add_short_pattern_attrs acc = function
@@ -1183,7 +1185,7 @@ let rec add_pull_form_attrs acc = function
       (fun attrs (key, value) -> add_pull_form_attrs (add_pull_form_attrs attrs key) value)
       acc
       entries
-  | QueryFormTagged (_, form) -> add_pull_form_attrs acc form
+  | (QueryFormTagged (_, form)) -> add_pull_form_attrs acc form
   | QueryFormNil | QueryFormBool _ | QueryFormInt _ | QueryFormFloat _ | QueryFormString _ | QueryFormSymbol _ ->
     acc
 
@@ -1290,9 +1292,10 @@ let datoms_of_logseq_graph ?(read_only = false) ?limit db_path =
 
 let parse_logseq_query_with_schema ?(read_only = false) db_path query_string =
   let schema = schema_of_logseq_graph ~read_only db_path in
-  let schema_db = empty_db ~schema () in
+  let schema_db = Internal.empty_db ~schema () in
   let return, return_map, query =
-    parse_query_return_map_string_with_pull_context ~default_pull_db:schema_db query_string
+    Internal.Parser.parse_query_return_map_string_with_pull_context
+      Internal.default_parser_context ~default_pull_db:schema_db query_string
   in
   schema, return, return_map, query
 
@@ -1306,8 +1309,8 @@ let query_logseq_graph ?(read_only = false) ?inputs db_path query_string =
   let graph_datoms =
     datoms_of_logseq_graph_for_attrs ~read_only db_path (if has_rules_input then [] else query_attrs query)
   in
-  let db = init_db ~schema graph_datoms in
-  q_return_map_string ?inputs db query_string
+  let db = Internal.init_db ~schema graph_datoms in
+  Internal.q_return_map_string ?inputs db query_string
 
 let delete_sql addresses =
   match addresses with

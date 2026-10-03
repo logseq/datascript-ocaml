@@ -2,7 +2,7 @@ open Datascript_types
 
 module PSet = Persistent_sorted_set
 
-let tx0 = 0x20000000
+let tx0 = 0x20000000L
 
 let datom ?(tx = tx0) ?(added = true) ~e ~a ~v () = { e; a; v; tx; added }
 
@@ -12,18 +12,18 @@ type core_context =
   { next_db_uid : unit -> int
   }
 
-let max_entity_id = 0x7fffffff
-let max_allocatable_entity_id = tx0 - 1
+let max_entity_id = 0x7fffffffL
+let max_allocatable_entity_id = Int64.sub tx0 1L
 
 let validate_entity_id entity_id =
-  if entity_id < 0 then
-    invalid_arg ("entity id must not be negative: " ^ string_of_int entity_id);
+  if entity_id < 0L then
+    invalid_arg ("entity id must not be negative: " ^ Int64.to_string entity_id);
   if entity_id > max_entity_id then
     invalid_arg
       ("Highest supported entity id is "
-       ^ string_of_int max_entity_id
+       ^ Int64.to_string max_entity_id
        ^ ", got "
-       ^ string_of_int entity_id);
+       ^ Int64.to_string entity_id);
   entity_id
 
 let max_eid_with_entity_id max_eid entity_id =
@@ -138,7 +138,7 @@ let set_indexes_from_datoms db datoms =
   let duplicate_eavt_by_entity = duplicate_eavt_by_entity duplicate_datoms in
   let duplicate_aevt_by_attr = duplicate_datoms_by_attr duplicate_aevt_datoms in
   let duplicate_avet_by_attr = duplicate_datoms_by_attr duplicate_avet_datoms in
-  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0 datoms in
+  let max_datom_e = List.fold_left (fun max_e d -> max max_e d.e) 0L datoms in
   { db with
     eavt_index
   ; aevt_index
@@ -236,7 +236,7 @@ let remove_facts_from_duplicate_tables db actives =
   if db.duplicate_datoms = [] then
     db
   else
-    let removed : (int * string, value list) Hashtbl.t =
+    let removed : (entity_id * string, value list) Hashtbl.t =
       Hashtbl.create (List.length actives)
     in
     List.iter
@@ -310,8 +310,8 @@ let empty_db context ?(schema = []) ?storage () =
   ; duplicate_eavt_by_entity = Hashtbl.create 0
   ; duplicate_aevt_by_attr = Hashtbl.create 0
   ; duplicate_avet_by_attr = Hashtbl.create 0
-  ; max_eid = 0
-  ; max_datom_e = 0
+  ; max_eid = 0L
+  ; max_datom_e = 0L
   ; max_tx = tx0
   ; filter_pred = None
   ; storage_ref = storage
@@ -324,7 +324,7 @@ let init_db context ?(schema = []) ?storage datoms =
   let schema = Schema.validate_schema schema in
   let datoms = List.map (normalize_datom_for_schema schema) datoms in
   let max_eid =
-    List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0 datoms
+    List.fold_left (fun max_eid d -> max_eid_in_value (max_eid_with_entity_id max_eid d.e) d.v) 0L datoms
   in
   let max_tx = List.fold_left (fun max_tx d -> max max_tx d.tx) tx0 datoms in
   { db_uid = context.next_db_uid ()
@@ -341,7 +341,7 @@ let init_db context ?(schema = []) ?storage datoms =
   ; duplicate_aevt_by_attr = Hashtbl.create 0
   ; duplicate_avet_by_attr = Hashtbl.create 0
   ; max_eid
-  ; max_datom_e = 0
+  ; max_datom_e = 0L
   ; max_tx
   ; filter_pred = None
   ; storage_ref = storage
@@ -441,7 +441,7 @@ let duplicate_attr_datoms db index attr =
 
 let primary_attr_datoms db index attr =
   let attr_prefix_datoms index index_set =
-    let bound = datom ~e:0 ~a:attr ~v:Nil () in
+    let bound = datom ~e:0L ~a:attr ~v:Nil () in
     let compare_prefix left right = Util.compare_attr left.a right.a in
     let cmp left right =
       if right == bound then compare_prefix left right
@@ -523,9 +523,9 @@ let values_compare_equal context actual expected =
   | Ref actual, Ref expected ->
     actual = expected
   | Int64 actual, Ref expected ->
-    actual = Int64.of_int expected
+    actual = expected
   | Ref actual, Int64 expected ->
-    Int64.of_int actual = expected
+    actual = expected
   | String actual, String expected
   | Symbol actual, Symbol expected
   | Keyword actual, Keyword expected
@@ -547,7 +547,7 @@ type bound_fields =
   ; bound_tx : bool
   }
 
-let bound_datom ?(e = 0) ?(a = "") ?(v = Nil) ?(tx = tx0) () =
+let bound_datom ?(e = 0L) ?(a = "") ?(v = Nil) ?(tx = tx0) () =
   { e; a; v; tx; added = true }
 
 let first_nonzero4 first second third fourth =
@@ -666,8 +666,8 @@ let exact_prefix_bound index e a v tx =
    Reusing [bound_datom] defaults (e = 0, tx = tx0) would instead position
    the bound at the *start* of the range. *)
 let rseek_prefix_bound e a v tx =
-  let emax = max_int in
-  let txmax = max_int in
+  let emax = Int64.max_int in
+  let txmax = Int64.max_int in
   Some
     ( bound_datom
         ~e:(Option.value e ~default:emax)
@@ -1022,7 +1022,7 @@ let diff left right =
   (* (e, a) -> values hash table per side turns the pairwise same_fact
      scan into an O(1)-amortized lookup per datom. *)
   let fact_table datoms =
-    let tbl : (int * string, value list) Hashtbl.t =
+    let tbl : (entity_id * string, value list) Hashtbl.t =
       Hashtbl.create (List.length datoms)
     in
     List.iter

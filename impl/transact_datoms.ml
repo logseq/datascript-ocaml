@@ -15,8 +15,8 @@ module Make (Context : sig
   val same_fact : datom -> datom -> bool
   val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   val normalize_value : value -> value
-  val validate_entity_id : int -> entity_id
-  val max_allocatable_entity_id : int
+  val validate_entity_id : int64 -> entity_id
+  val max_allocatable_entity_id : int64
   val visible_datoms : db -> datom list
 end) = struct
   open Context
@@ -263,8 +263,8 @@ end) = struct
   
   let allocate_entity_id max_eid =
     if max_eid >= max_allocatable_entity_id then
-      invalid_arg ("next entity id would enter the transaction id range: " ^ string_of_int (max_eid + 1));
-    validate_entity_id (max_eid + 1)
+      invalid_arg ("next entity id would enter the transaction id range: " ^ Int64.to_string (Int64.add max_eid 1L));
+    validate_entity_id (Int64.add max_eid 1L)
   
   let rec coerce_tuple_lookup_value db datoms attr value =
     match schema_attr db attr, value with
@@ -278,7 +278,7 @@ end) = struct
         match value with
         | Nil -> None
         | Int64 entity_id when is_ref_attr db source_attr ->
-          Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
+          Some (Ref (validate_entity_id entity_id))
         | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
           (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
            | Some entity_id -> Some (Ref entity_id)
@@ -296,7 +296,7 @@ end) = struct
         | None -> None
         | Some Nil -> None
         | Some (Int64 entity_id) when is_ref_attr db source_attr ->
-          Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
+          Some (Ref (validate_entity_id entity_id))
         | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
           (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_in_datoms db datoms attr lookup_value) with
            | Some entity_id -> Some (Ref entity_id)
