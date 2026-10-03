@@ -47,13 +47,13 @@ let test_int64_values_roundtrip () =
 
 let test_int64_equality_and_ordering () =
   expect_true "Int64 1 is not equal to Float 1.0" (not (Internal.Util.value_equal (Int64 1L) (Float 1.0)));
-  expect_true "Int64 1 orders with Float 1.0" (compare (Int64 1L) (Float 1.0) = 0);
-  expect_true "Int64 5 is comparable to Instant 5" (compare (Int64 5L) (Instant 5L) = 0);
+  expect_true "Int64 1 orders with Float 1.0" (Internal.Util.compare_value (Int64 1L) (Float 1.0) = 0);
+  expect_true "Int64 5 is comparable to Instant 5" (Internal.Util.compare_value (Int64 5L) (Instant 5L) = 0);
   expect_true "Int64 5 is never equal to Instant 5" (not (Internal.Util.value_equal (Int64 5L) (Instant 5L)));
-  expect_true "Instant 4 sorts below Int64 5" (compare (Instant 4L) (Int64 5L) < 0);
-  expect_true "Int64 5 sorts below Instant 6" (compare (Int64 5L) (Instant 6L) < 0);
-  expect_true "Int64 ordering uses full 64-bit range" (compare (Int64 Int64.max_int) (Int64 1L) > 0);
-  expect_true "Int64 min sorts below max" (compare (Int64 Int64.min_int) (Int64 Int64.max_int) < 0)
+  expect_true "Instant 4 sorts below Int64 5" (Internal.Util.compare_value (Instant 4L) (Int64 5L) < 0);
+  expect_true "Int64 5 sorts below Instant 6" (Internal.Util.compare_value (Int64 5L) (Instant 6L) < 0);
+  expect_true "Int64 ordering uses full 64-bit range" (Internal.Util.compare_value (Int64 Int64.max_int) (Int64 1L) > 0);
+  expect_true "Int64 min sorts below max" (Internal.Util.compare_value (Int64 Int64.min_int) (Int64 Int64.max_int) < 0)
 
 let test_int64_predicates () =
   expect_true "number? accepts Int64" (Internal.Built_ins.matches_value_predicate NumberValue (Int64 1L));

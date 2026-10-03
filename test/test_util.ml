@@ -30,7 +30,7 @@ let test_util__value_semantics () =
   in
   if normalized <> Internal.Util.normalize_value nested then
     failf "Internal.Util.normalize_value normalizes unordered values without losing vector shape";
-  if compare (V.Vector [ V.Int64 1L; V.Int64 2L ]) (V.List [ V.Int64 1L; V.Int64 2L ]) = 0 then
+  if Internal.Util.compare_value (V.Vector [ V.Int64 1L; V.Int64 2L ]) (V.List [ V.Int64 1L; V.Int64 2L ]) = 0 then
     failf "vectors and lists must remain distinct values"
 
 let test_util__keyword_order_matches_upstream () =
@@ -81,15 +81,15 @@ let test_util__keyword_order_matches_upstream () =
             ]
       ]
   in
-  if compare normal inverted >= 0 then
+  if Internal.Util.compare_value normal inverted >= 0 then
     failf "map value ordering should match upstream DataScript value-compare";
-  if compare (Internal.Util.normalize_value normal) (Internal.Util.normalize_value inverted) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value normal) (Internal.Util.normalize_value inverted) >= 0 then
     failf "normalized map value ordering should match upstream DataScript value-compare";
-  if compare (Internal.Util.normalize_value tabler) (Internal.Util.normalize_value inverted_tabler) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value tabler) (Internal.Util.normalize_value inverted_tabler) >= 0 then
     failf "normalized tabler map value ordering should match upstream DataScript value-compare";
-  if compare (Internal.Util.normalize_value filters) (Internal.Util.normalize_value status_filters) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value filters) (Internal.Util.normalize_value status_filters) >= 0 then
     failf "normalized filter map value ordering should match upstream DataScript value-compare";
-  if compare (Internal.Util.normalize_value nested_filters) (Internal.Util.normalize_value nested_status_filters) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value nested_filters) (Internal.Util.normalize_value nested_status_filters) >= 0 then
     failf "normalized nested filter map value ordering should match upstream DataScript value-compare"
 
 let test_util__vector_values_in_db () =
