@@ -8,7 +8,8 @@
  (depends
   (ocaml (>= 5.1.1))
   (persistent_sorted_set_ocaml (= dev))
-  melange))
+  melange
+  (odoc :with-doc)))
 
 (package
  (name datascript-ocaml-native)
