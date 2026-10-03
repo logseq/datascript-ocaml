@@ -311,7 +311,7 @@ let run_fuzz_parity () =
     ignore (Internal.transact_conn conn (fuzz_generated_batch i))
   done;
   let db = Internal.Conn.db conn in
-  emit "fuzz.(schema final)" (schema_json db);
+  emit "fuzz.final.schema" (schema_json db);
   emit "fuzz.final.datoms" (datoms_json (datoms db Eavt ()))
 
 let () =
