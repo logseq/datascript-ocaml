@@ -7,20 +7,35 @@ let failf fmt = Printf.ksprintf failwith fmt
 
 let datoms_seq = datoms
 
-let datoms db index ?e ?a ?v ?tx () =
-  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+let datoms ?e ?a ?v ?tx db index =
+  datoms_seq ?e ?a ?v ?tx db index |> List.of_seq
 
 let seek_datoms_seq = seek_datoms
-let seek_datoms db index ?e ?a ?v ?tx () =
-  seek_datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+let seek_datoms ?e ?a ?v ?tx db index =
+  seek_datoms_seq ?e ?a ?v ?tx db index |> List.of_seq
 
 let rseek_datoms_seq = rseek_datoms
-let rseek_datoms db index ?e ?a ?v ?tx () =
-  rseek_datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
+let rseek_datoms ?e ?a ?v ?tx db index =
+  rseek_datoms_seq ?e ?a ?v ?tx db index |> List.of_seq
+
+let sqlite_storage db_path =
+  Internal_convert.externalize_storage (Sqlite_storage.storage db_path)
+
+let logseq_datoms ?read_only ?limit db_path =
+  Sqlite_storage.datoms_of_logseq_graph ?read_only ?limit db_path
+  |> List.map Internal_convert.externalize_datom
+
+let logseq_schema ?read_only db_path =
+  Sqlite_storage.schema_of_logseq_graph ?read_only db_path
+  |> List.map (fun (a, spec) -> a, Internal_convert.externalize_schema_attr spec)
+
+let logseq_query ?read_only ?inputs db_path query_string =
+  Sqlite_storage.query_logseq_graph ?read_only ?inputs db_path query_string
+  |> Internal_convert.externalize_query_output
 
 let index_range_seq = index_range
-let index_range db attr ?start ?stop () =
-  index_range_seq db attr ?start ?stop () |> List.of_seq
+let index_range ?start ?stop db attr =
+  index_range_seq ?start ?stop db attr |> List.of_seq
 
 let assert_upstream_storage_addresses label addresses =
   if List.mem "datascript/root" addresses || List.mem "datascript/tail" addresses then
@@ -205,7 +220,7 @@ let rec string_of_value = function
   | Uuid value -> "#uuid " ^ Printf.sprintf "%S" value
   | Instant value -> Int64.to_string value
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string (Entity_id.to_int64 entity_id)
   | List values -> "[" ^ String.concat " " (List.map string_of_value values) ^ "]"
   | Vector values -> "#vector[" ^ String.concat " " (List.map string_of_value values) ^ "]"
   | Map entries ->
@@ -226,7 +241,7 @@ let rec string_of_value = function
 
 let string_of_triples triples =
   triples
-  |> List.map (fun (e, a, v) -> Printf.sprintf "(%d :%s %s)" e a (string_of_value v))
+  |> List.map (fun (e, a, v) -> Printf.sprintf "(%Ld :%s %s)" (Entity_id.to_int64 e) a (string_of_value v))
   |> String.concat "; "
 
 let assert_equal_triples label expected actual =
@@ -239,50 +254,28 @@ let assert_equal_triples label expected actual =
       (string_of_triples triples)
 
 let many =
-  { cardinality = Many
-  ; unique = None
-  ; indexed = false
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(Many) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let unique_identity =
-  { indexed with unique = Some Identity }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_attr =
-  { indexed with indexed = false; value_type = Some RefType }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_many =
-  { ref_attr with cardinality = Many }
+  Schema.spec ~cardinality:(Many) ?unique:((Schema.unique ref_attr)) ~indexed:((Schema.indexed ref_attr)) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let component =
-  { ref_attr with is_component = true }
+  Schema.spec ~cardinality:((Schema.cardinality ref_attr)) ?unique:((Schema.unique ref_attr)) ~indexed:((Schema.indexed ref_attr)) ~is_component:(true) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let no_history =
-  { indexed with no_history = true }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:(true) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let tuple_unique_identity attrs =
-  { indexed with
-    unique = Some Identity
-  ; value_type = Some TupleType
-  ; tuple_attrs = Some attrs
-  }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some TupleType) ?tuple:(match (Some attrs, (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let assert_equal_tx_flags label expected actual =
   let values = List.map (fun datom -> datom.e, datom.a, datom.v, datom.added) actual in
@@ -318,7 +311,7 @@ let assert_equal_sqlite_size label expected actual =
       actual.sqlite_file_bytes
 
 let comparable_datoms db =
-  datoms db Eavt ()
+  datoms db Eavt
   |> List.map (fun datom -> datom.e, datom.a, datom.v, datom.tx, datom.added)
 
 let assert_equal_final_datoms label expected actual =
@@ -368,7 +361,7 @@ let block_name title =
 let create_page_tx page =
   let title = "Page " ^ string_of_int page in
   [ Entity
-      { db_id = Some (Entity_id page)
+      { db_id = Some (Entity_id (eid (Int64.of_int page)))
       ; attrs =
           [ "block/uuid", One_value (String ("page-" ^ string_of_int page))
           ; "block/name", One_value (String (block_name title))
@@ -379,7 +372,7 @@ let create_page_tx page =
 
 let create_property_tx property =
   [ Entity
-      { db_id = Some (Entity_id property)
+      { db_id = Some (Entity_id (eid (Int64.of_int property)))
       ; attrs =
           [ "db/ident", One_value (Keyword ("property/generated-" ^ string_of_int property))
           ; "property/type", One_value (Keyword "default")
@@ -396,19 +389,19 @@ let create_block_tx state revision =
   let page = page_id state in
   let parent = if Random.State.bool state then page else block_id state in
   [ Entity
-      { db_id = Some (Entity_id block)
+      { db_id = Some (Entity_id (eid (Int64.of_int block)))
       ; attrs =
           [ "block/uuid", One_value (String ("block-" ^ string_of_int block))
           ; "block/name", One_value (String (block_name title))
           ; "block/title", One_value (String title)
-          ; "block/page", One_value (Ref page)
-          ; "block/parent", One_value (Ref parent)
+          ; "block/page", One_value (Ref (eid (Int64.of_int page)))
+          ; "block/parent", One_value (Ref (eid (Int64.of_int parent)))
           ; ( "block/refs"
             , Many_values
-                [ Ref (page_id state)
-                ; Ref (property_id state)
+                [ Ref (eid (Int64.of_int (page_id state)))
+                ; Ref (eid (Int64.of_int (property_id state)))
                 ] )
-          ; "block/tags", Many_values [ Ref (property_id state) ]
+          ; "block/tags", Many_values [ Ref (eid (Int64.of_int (property_id state))) ]
           ; "property/status", One_value (Keyword (random_choice state [| "todo"; "doing"; "done" |]))
           ; "property/priority", One_value (Int64 (Int64.of_int (1 + Random.State.int state 5)))
           ; "property/labels", Many_values [ label_value state ]
@@ -421,33 +414,33 @@ let update_block_tx state revision =
   let title = block_title "Updated" block revision in
   match Random.State.int state 7 with
   | 0 ->
-    [ Add (Entity_id block, "block/title", String title)
-    ; Add (Entity_id block, "block/name", String (block_name title))
+    [ Add (Entity_id (eid (Int64.of_int block)), "block/title", String title)
+    ; Add (Entity_id (eid (Int64.of_int block)), "block/name", String (block_name title))
     ]
   | 1 ->
-    [ Add (Entity_id block, "block/page", Ref (page_id state))
-    ; Add (Entity_id block, "block/parent", Ref (block_id state))
+    [ Add (Entity_id (eid (Int64.of_int block)), "block/page", Ref (eid (Int64.of_int (page_id state))))
+    ; Add (Entity_id (eid (Int64.of_int block)), "block/parent", Ref (eid (Int64.of_int (block_id state))))
     ]
   | 2 ->
-    [ Add (Entity_id block, "block/refs", Ref (page_id state))
-    ; Add (Entity_id block, "block/tags", Ref (property_id state))
+    [ Add (Entity_id (eid (Int64.of_int block)), "block/refs", Ref (eid (Int64.of_int (page_id state))))
+    ; Add (Entity_id (eid (Int64.of_int block)), "block/tags", Ref (eid (Int64.of_int (property_id state))))
     ]
   | 3 ->
-    [ Retract (Entity_id block, "block/refs", Some (Ref (page_id state)))
-    ; Retract (Entity_id block, "block/tags", Some (Ref (property_id state)))
+    [ Retract (Entity_id (eid (Int64.of_int block)), "block/refs", Some (Ref (eid (Int64.of_int (page_id state)))))
+    ; Retract (Entity_id (eid (Int64.of_int block)), "block/tags", Some (Ref (eid (Int64.of_int (property_id state)))))
     ]
   | 4 ->
-    [ Add (Entity_id block, "property/status", Keyword (random_choice state [| "todo"; "doing"; "done"; "blocked" |]))
-    ; Add (Entity_id block, "property/priority", Int64 (Int64.of_int (1 + Random.State.int state 5)))
-    ; Add (Entity_id block, "property/estimate", Int64 (Int64.of_int (Random.State.int state 21)))
+    [ Add (Entity_id (eid (Int64.of_int block)), "property/status", Keyword (random_choice state [| "todo"; "doing"; "done"; "blocked" |]))
+    ; Add (Entity_id (eid (Int64.of_int block)), "property/priority", Int64 (Int64.of_int (1 + Random.State.int state 5)))
+    ; Add (Entity_id (eid (Int64.of_int block)), "property/estimate", Int64 (Int64.of_int (Random.State.int state 21)))
     ]
   | 5 ->
-    [ Add (Entity_id block, "property/reviewer", Ref (block_id state))
-    ; Add (Entity_id block, "property/labels", label_value state)
+    [ Add (Entity_id (eid (Int64.of_int block)), "property/reviewer", Ref (eid (Int64.of_int (block_id state))))
+    ; Add (Entity_id (eid (Int64.of_int block)), "property/labels", label_value state)
     ]
   | _ ->
-    [ RetractAttr (Entity_id block, "property/status")
-    ; Retract (Entity_id block, "property/labels", Some (label_value state))
+    [ RetractAttr (Entity_id (eid (Int64.of_int block)), "property/status")
+    ; Retract (Entity_id (eid (Int64.of_int block)), "property/labels", Some (label_value state))
     ]
 
 let update_property_tx state =
@@ -455,26 +448,26 @@ let update_property_tx state =
   match Random.State.int state 4 with
   | 0 -> create_property_tx property
   | 1 ->
-    [ Add (Entity_id property, "property/type", Keyword (random_choice state [| "default"; "number"; "date"; "checkbox" |]))
-    ; Add (Entity_id property, "property/public?", Bool (Random.State.bool state))
+    [ Add (Entity_id (eid (Int64.of_int property)), "property/type", Keyword (random_choice state [| "default"; "number"; "date"; "checkbox" |]))
+    ; Add (Entity_id (eid (Int64.of_int property)), "property/public?", Bool (Random.State.bool state))
     ]
   | 2 ->
-    [ Add (Entity_id property, "property/default-value", String ("default-" ^ string_of_int (Random.State.int state 128))) ]
-  | _ -> [ RetractEntity (Entity_id property) ]
+    [ Add (Entity_id (eid (Int64.of_int property)), "property/default-value", String ("default-" ^ string_of_int (Random.State.int state 128))) ]
+  | _ -> [ RetractEntity (Entity_id (eid (Int64.of_int property))) ]
 
 let delete_block_tx state =
   match Random.State.int state 3 with
-  | 0 -> [ RetractEntity (Entity_id (block_id state)) ]
+  | 0 -> [ RetractEntity (Entity_id (eid (Int64.of_int (block_id state)))) ]
   | 1 ->
     let block = block_id state in
-    [ RetractAttr (Entity_id block, "block/parent")
-    ; RetractAttr (Entity_id block, "block/page")
+    [ RetractAttr (Entity_id (eid (Int64.of_int block)), "block/parent")
+    ; RetractAttr (Entity_id (eid (Int64.of_int block)), "block/page")
     ]
   | _ ->
     let block = block_id state in
-    [ RetractAttr (Entity_id block, "property/priority")
-    ; RetractAttr (Entity_id block, "property/estimate")
-    ; RetractAttr (Entity_id block, "property/reviewer")
+    [ RetractAttr (Entity_id (eid (Int64.of_int block)), "property/priority")
+    ; RetractAttr (Entity_id (eid (Int64.of_int block)), "property/estimate")
+    ; RetractAttr (Entity_id (eid (Int64.of_int block)), "property/reviewer")
     ]
 
 let random_graph_tx state index =
@@ -526,7 +519,7 @@ let apply_txs conn txs =
   List.iter (fun tx -> ignore (transact_conn conn tx)) txs
 
 let sqlite_property_db db_path txs =
-  let storage = Sqlite_storage.storage db_path in
+  let storage = sqlite_storage db_path in
   let conn = create_conn ~schema:random_graph_schema ~storage () in
   apply_txs conn txs;
   match restore storage with
@@ -570,7 +563,7 @@ let test_sqlite_storage_validates_db_attribute_transactions () =
     prerr_endline "Skipping SQLite db attribute validation test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let conn = create_conn ~storage:(Sqlite_storage.storage db_path) () in
+      let conn = create_conn ~storage:(sqlite_storage db_path) () in
       assert_raises_invalid_arg
         "SQLite schema transaction with valueType requires db/ident"
         (fun () ->
@@ -578,7 +571,7 @@ let test_sqlite_storage_validates_db_attribute_transactions () =
             (transact_conn
                conn
                [ Entity
-                   { db_id = Some (Entity_id 1)
+                   { db_id = Some (Entity_id (eid 1L))
                    ; attrs =
                        [ "db/valueType", One_value (Keyword "db.type/ref")
                        ; "db/cardinality", One_value (Keyword "db.cardinality/one")
@@ -592,7 +585,7 @@ let test_sqlite_storage_validates_db_attribute_transactions () =
             (transact_conn
                conn
                [ Entity
-                   { db_id = Some (Entity_id 2)
+                   { db_id = Some (Entity_id (eid 2L))
                    ; attrs =
                        [ "db/ident", One_value (Keyword "friend")
                        ; "db/valueType", One_value (Keyword "db.type/ref")
@@ -606,7 +599,7 @@ let test_sqlite_storage_validates_db_attribute_transactions () =
             (transact_conn
                conn
                [ Entity
-                   { db_id = Some (Entity_id 3)
+                   { db_id = Some (Entity_id (eid 3L))
                    ; attrs =
                        [ "db/ident", One_value (Keyword "db/user")
                        ; "db/cardinality", One_value (Keyword "db.cardinality/one")
@@ -619,11 +612,11 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
     prerr_endline "Skipping SQLite storage round trip: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let db =
         init_db
           ~schema:[ "name", indexed ]
-          [ datom ~e:1 ~a:"name" ~v:(String "Ada") () ]
+          [ datom (eid 1L) "name" (String "Ada") ]
       in
       ignore (store ~storage db);
       assert_equal
@@ -636,11 +629,11 @@ let test_sqlite_storage_round_trips_ocaml_payloads () =
               "select sql from sqlite_master where type = 'table' and name = 'kvs';"));
       assert_equal_int "row count" 5 (Sqlite_storage.inspect db_path).row_count;
       assert_upstream_storage_addresses "storage addresses" (storage_addresses storage);
-      match restore (Sqlite_storage.storage db_path) with
+      match restore (sqlite_storage db_path) with
       | None -> failwith "SQLite storage should restore the stored db"
       | Some restored ->
-        let names = datoms restored Avet ~a:"name" () in
-        if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ 1, "name", String "Ada" ] then
+        let names = datoms ~a:"name" restored Avet in
+        if List.map (fun datom -> datom.e, datom.a, datom.v) names <> [ (eid 1L), "name", String "Ada" ] then
           failwith "SQLite storage should preserve stored datoms")
 
 (* Instant and Uuid must serialize through Transit's cljs-compatible date/uuid
@@ -694,7 +687,7 @@ let test_sqlite_storage_raw_layout_after_transact () =
     prerr_endline "Skipping SQLite raw storage layout test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let schema =
         [ "name", unique_identity
         ; "age", indexed
@@ -707,22 +700,22 @@ let test_sqlite_storage_raw_layout_after_transact () =
       ignore
         (transact_conn
            conn
-           ([ Add (Entity_id 1, "name", String "Ivan")
-            ; Add (Entity_id 1, "age", Int64 15L)
-            ; Add (Entity_id 1, "aka", String "Devil")
-            ; Add (Entity_id 1, "aka", String "Tupen")
-            ; Add (Entity_id 1, "friend", Ref 2)
-            ; Add (Entity_id 2, "name", String "Petr")
-            ; Add (Entity_id 2, "age", Int64 37L)
+           ([ Add (Entity_id (eid 1L), "name", String "Ivan")
+            ; Add (Entity_id (eid 1L), "age", Int64 15L)
+            ; Add (Entity_id (eid 1L), "aka", String "Devil")
+            ; Add (Entity_id (eid 1L), "aka", String "Tupen")
+            ; Add (Entity_id (eid 1L), "friend", Ref (eid 2L))
+            ; Add (Entity_id (eid 2L), "name", String "Petr")
+            ; Add (Entity_id (eid 2L), "age", Int64 37L)
             ]
             @ List.init 40 (fun index ->
-              Add (Entity_id 1, "tag", String ("tag-" ^ string_of_int index)))));
+              Add (Entity_id (eid 1L), "tag", String ("tag-" ^ string_of_int index)))));
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 2, "aka", String "Czar")
-           ; Add (Entity_id 3, "name", String "Nikolai")
-           ; Add (Entity_id 1, "tag", String "tail-tag")
+           [ Add (Entity_id (eid 2L), "aka", String "Czar")
+           ; Add (Entity_id (eid 3L), "name", String "Nikolai")
+           ; Add (Entity_id (eid 1L), "tag", String "tail-tag")
            ]);
       assert_equal_int
         "SQLite kvs should contain root and tail rows"
@@ -819,7 +812,7 @@ let test_sqlite_storage_raw_layout_after_transact () =
         failwith "SQLite tail should contain Nikolai name datom";
       if not (has_fact 1 "tag" (Transit.String "tail-tag")) then
         failwith "SQLite tail should contain the latest tag datom";
-      match restore_conn (Sqlite_storage.storage db_path) with
+      match restore_conn (sqlite_storage db_path) with
       | None -> failwith "SQLite storage should restore raw-layout test db"
       | Some restored ->
         assert_equal_query
@@ -857,19 +850,19 @@ let test_sqlite_storage_store_and_delete_are_separate () =
       assert_equal
         "storage addresses before explicit delete"
         "2,3"
-        (String.concat "," (storage_addresses storage));
+        (String.concat "," (Internal.storage_addresses storage));
       storage.storage_delete [ "2" ];
       assert_equal
         "storage addresses after explicit delete"
         "3"
-        (String.concat "," (storage_addresses storage)))
+        (String.concat "," (Internal.storage_addresses storage)))
 
 let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed query/transact test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let schema =
         [ "name", unique_identity
         ; "age", indexed
@@ -881,13 +874,13 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 1, "age", Int64 15L)
-           ; Add (Entity_id 1, "aka", String "Devil")
-           ; Add (Entity_id 1, "aka", String "Tupen")
-           ; Add (Entity_id 1, "friend", Ref 2)
-           ; Add (Entity_id 2, "name", String "Petr")
-           ; Add (Entity_id 2, "age", Int64 37L)
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 1L), "age", Int64 15L)
+           ; Add (Entity_id (eid 1L), "aka", String "Devil")
+           ; Add (Entity_id (eid 1L), "aka", String "Tupen")
+           ; Add (Entity_id (eid 1L), "friend", Ref (eid 2L))
+           ; Add (Entity_id (eid 2L), "name", String "Petr")
+           ; Add (Entity_id (eid 2L), "age", Int64 37L)
            ]);
       let restored =
         match restore_conn storage with
@@ -911,7 +904,7 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
            "[:find ?aka :where [1 :aka ?aka]]");
       assert_equal_query
         "restored SQLite conn queries transaction ids"
-        [ [ Result_value (String "Ivan"); Result_entity (tx0 + 1) ] ]
+        [ [ Result_value (String "Ivan"); Result_entity (eid (Int64.add (Tx_id.to_int64 tx0) 1L)) ] ]
         (q_string
            (conn_db restored)
            "[:find ?name ?tx :where [1 :name ?name ?tx]]");
@@ -919,7 +912,7 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
         (transact_conn
            restored
            [ Add (Lookup_ref ("name", String "Ivan"), "age", Int64 16L)
-           ; Retract (Entity_id 1, "aka", Some (String "Devil"))
+           ; Retract (Entity_id (eid 1L), "aka", Some (String "Devil"))
            ]);
       let restored_again =
         match restore storage with
@@ -928,7 +921,7 @@ let test_sqlite_storage_backed_connections_query_and_transact_after_restore () =
       in
       assert_equal_query
         "SQLite storage persists lookup-ref transact after restore"
-        [ [ Result_entity 1; Result_value (Int64 16L) ] ]
+        [ [ Result_entity (eid 1L); Result_value (Int64 16L) ] ]
         (q_string
            restored_again
            "[:find ?e ?age
@@ -946,17 +939,17 @@ let test_sqlite_storage_restored_reverse_ref_lookup () =
     prerr_endline "Skipping SQLite restored reverse-ref lookup test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let schema = [ "name", unique_identity; "friend", ref_attr; "parent", ref_attr ] in
       let conn = create_conn ~schema ~storage () in
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 2, "name", String "Petr")
-           ; Add (Entity_id 2, "friend", Ref 1)
-           ; Add (Entity_id 3, "name", String "Anna")
-           ; Add (Entity_id 3, "parent", Ref 1)
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 2L), "name", String "Petr")
+           ; Add (Entity_id (eid 2L), "friend", Ref (eid 1L))
+           ; Add (Entity_id (eid 3L), "name", String "Anna")
+           ; Add (Entity_id (eid 3L), "parent", Ref (eid 1L))
            ]);
       let restored =
         match restore_conn storage with
@@ -964,12 +957,12 @@ let test_sqlite_storage_restored_reverse_ref_lookup () =
         | None -> failwith "SQLite storage should restore a connection for reverse-ref lookup"
       in
       let restored_db = conn_db restored in
-      (* avet lookup by ref value: datoms whose v is (Ref 1) *)
+      (* avet lookup by ref value: datoms whose v is (Ref (eid 1L)) *)
       let friend_refs =
-        datoms restored_db Avet ~a:"friend" ()
-        |> List.filter (fun d -> d.v = Ref 1)
+        datoms ~a:"friend" restored_db Avet
+        |> List.filter (fun d -> d.v = Ref (eid 1L))
       in
-      if List.map (fun d -> d.e, d.a, d.v) friend_refs <> [ 2, "friend", Ref 1 ] then
+      if List.map (fun d -> d.e, d.a, d.v) friend_refs <> [ (eid 2L), "friend", Ref (eid 1L) ] then
         failwith "SQLite restored avet should index ref-attr values";
       (* _attr pattern: who references entity 1 via :friend *)
       assert_equal_query
@@ -994,7 +987,7 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
     prerr_endline "Skipping SQLite storage-backed filter/entity/rules test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let schema =
         [ "name", unique_identity
         ; "age", indexed
@@ -1008,17 +1001,17 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 1, "age", Int64 25L)
-           ; Add (Entity_id 1, "aka", String "Terrible")
-           ; Add (Entity_id 1, "aka", String "IV")
-           ; Add (Entity_id 1, "password", String "<PROTECTED>")
-           ; Add (Entity_id 1, "friend", Ref 2)
-           ; Add (Entity_id 2, "name", String "Petr")
-           ; Add (Entity_id 2, "age", Int64 37L)
-           ; Add (Entity_id 2, "password", String "<SECRET>")
-           ; Add (Entity_id 3, "name", String "Nikolai")
-           ; Add (Entity_id 3, "age", Int64 7L)
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 1L), "age", Int64 25L)
+           ; Add (Entity_id (eid 1L), "aka", String "Terrible")
+           ; Add (Entity_id (eid 1L), "aka", String "IV")
+           ; Add (Entity_id (eid 1L), "password", String "<PROTECTED>")
+           ; Add (Entity_id (eid 1L), "friend", Ref (eid 2L))
+           ; Add (Entity_id (eid 2L), "name", String "Petr")
+           ; Add (Entity_id (eid 2L), "age", Int64 37L)
+           ; Add (Entity_id (eid 2L), "password", String "<SECRET>")
+           ; Add (Entity_id (eid 3L), "name", String "Nikolai")
+           ; Add (Entity_id (eid 3L), "age", Int64 7L)
            ]);
       let restored =
         match restore_conn storage with
@@ -1026,7 +1019,7 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
         | None -> failwith "SQLite storage should restore conn for filter/entity/rules test"
       in
       let visible =
-        filter (conn_db restored) (fun _ datom -> datom.a <> "password" && datom.e <> 3)
+        filter (conn_db restored) (fun _ datom -> datom.a <> "password" && datom.e <> eid 3L)
       in
       assert_equal_query
         "SQLite restored filtered db hides password attrs in queries"
@@ -1043,36 +1036,32 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
           | None -> ()
           | Some _ -> failwith "SQLite restored filtered entity should hide password attr");
          (match entity_attr entity "friend" with
-          | Some (One_entity friend) when friend.db_id = Some (Entity_id 2) -> ()
+          | Some (One_entity friend) when friend.db_id = Some (Entity_id (eid 2L)) -> ()
           | _ -> failwith "SQLite restored filtered entity should navigate visible refs"));
       assert_equal_query
         "SQLite restored db supports structured rule queries"
         [ [ Result_value (String "Petr") ] ]
         (q
            (conn_db restored)
-           { find = [ Find_var "friend_name" ]
-           ; inputs = []
-           ; with_vars = []
-           ; rules =
-               [ { rule_name = "friend-name"
-                 ; rule_params = [ "e"; "friend_name" ]
-                 ; rule_body =
-                     [ Pattern (QVar "e", QAttr "friend", QVar "friend")
-                     ; Pattern (QVar "friend", QAttr "name", QVar "friend_name")
-                     ]
-                 }
-               ]
-           ; where =
-               [ Pattern (QVar "e", QAttr "name", QValue (String "Ivan"))
-               ; Rule ("friend-name", [ QVar "e"; QVar "friend_name" ])
-               ]
-           });
+           (Query.v
+              ~rules:
+                [ { rule_name = "friend-name"
+                  ; rule_params = [ "e"; "friend_name" ]
+                  ; rule_body =
+                      [ Clause.pattern (QVar "e") (QAttr "friend") (QVar "friend")
+                      ; Clause.pattern (QVar "friend") (QAttr "name") (QVar "friend_name")
+                      ]
+                  }
+                ]
+              [ Find_var "friend_name" ]
+              [ Clause.pattern (QVar "e") (QAttr "name") (QValue (String "Ivan"))
+              ; Clause.rule_call "friend-name" [ (QVar "e"); (QVar "friend_name") ]
+              ]));
       let friend_name_rules =
         [ { rule_name = "friend-name"
           ; rule_params = [ "e"; "friend_name" ]
           ; rule_body =
-              [ Pattern (QVar "e", QAttr "friend", QVar "friend")
-              ; Pattern (QVar "friend", QAttr "name", QVar "friend_name")
+              [ Clause.pattern (QVar "e") (QAttr "friend") (QVar "friend") ; (Clause.pattern) (QVar "friend") (QAttr "name") (QVar "friend_name")
               ]
           }
         ]
@@ -1091,9 +1080,9 @@ let test_sqlite_storage_backed_connections_filter_entity_rules_and_repeated_tran
         (transact_conn
            restored
            [ Add (Lookup_ref ("name", String "Ivan"), "tag", String "restored")
-           ; Add (Entity_id 4, "name", String "Nina")
-           ; Add (Entity_id 4, "age", Int64 42L)
-           ; Add (Lookup_ref ("name", String "Ivan"), "friend", Ref 4)
+           ; Add (Entity_id (eid 4L), "name", String "Nina")
+           ; Add (Entity_id (eid 4L), "age", Int64 42L)
+           ; Add (Lookup_ref ("name", String "Ivan"), "friend", Ref (eid 4L))
            ]);
       let restored_again =
         match restore_conn storage with
@@ -1121,19 +1110,19 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
     prerr_endline "Skipping SQLite storage-backed index/query/transact test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn = create_conn ~schema:[ "name", indexed; "age", indexed; "path", indexed ] ~storage () in
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Petr")
-           ; Add (Entity_id 1, "age", Int64 44L)
-           ; Add (Entity_id 1, "path", List [ Int64 1L; Int64 2L ])
-           ; Add (Entity_id 2, "name", String "Ivan")
-           ; Add (Entity_id 2, "age", Int64 25L)
-           ; Add (Entity_id 2, "path", List [ Int64 1L; Int64 2L; Int64 3L ])
-           ; Add (Entity_id 3, "name", String "Sergey")
-           ; Add (Entity_id 3, "age", Int64 11L)
+           [ Add (Entity_id (eid 1L), "name", String "Petr")
+           ; Add (Entity_id (eid 1L), "age", Int64 44L)
+           ; Add (Entity_id (eid 1L), "path", List [ Int64 1L; Int64 2L ])
+           ; Add (Entity_id (eid 2L), "name", String "Ivan")
+           ; Add (Entity_id (eid 2L), "age", Int64 25L)
+           ; Add (Entity_id (eid 2L), "path", List [ Int64 1L; Int64 2L; Int64 3L ])
+           ; Add (Entity_id (eid 3L), "name", String "Sergey")
+           ; Add (Entity_id (eid 3L), "age", Int64 11L)
            ]);
       let restored =
         match restore_conn storage with
@@ -1143,51 +1132,51 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
       let restored_db = conn_db restored in
       assert_equal_triples
         "SQLite restored db preserves AEVT order"
-        [ 1, "age", Int64 44L
-        ; 2, "age", Int64 25L
-        ; 3, "age", Int64 11L
-        ; 1, "name", String "Petr"
-        ; 2, "name", String "Ivan"
-        ; 3, "name", String "Sergey"
-        ; 1, "path", List [ Int64 1L; Int64 2L ]
-        ; 2, "path", List [ Int64 1L; Int64 2L; Int64 3L ]
+        [ (eid 1L), "age", Int64 44L
+        ; (eid 2L), "age", Int64 25L
+        ; (eid 3L), "age", Int64 11L
+        ; (eid 1L), "name", String "Petr"
+        ; (eid 2L), "name", String "Ivan"
+        ; (eid 3L), "name", String "Sergey"
+        ; (eid 1L), "path", List [ Int64 1L; Int64 2L ]
+        ; (eid 2L), "path", List [ Int64 1L; Int64 2L; Int64 3L ]
         ]
-        (datoms restored_db Aevt ());
+        (datoms restored_db Aevt);
       assert_equal_triples
         "SQLite restored db supports AVET seek across attrs"
-        [ 3, "age", Int64 11L
-        ; 2, "age", Int64 25L
-        ; 1, "age", Int64 44L
-        ; 2, "name", String "Ivan"
-        ; 1, "name", String "Petr"
-        ; 3, "name", String "Sergey"
-        ; 1, "path", List [ Int64 1L; Int64 2L ]
-        ; 2, "path", List [ Int64 1L; Int64 2L; Int64 3L ]
+        [ (eid 3L), "age", Int64 11L
+        ; (eid 2L), "age", Int64 25L
+        ; (eid 1L), "age", Int64 44L
+        ; (eid 2L), "name", String "Ivan"
+        ; (eid 1L), "name", String "Petr"
+        ; (eid 3L), "name", String "Sergey"
+        ; (eid 1L), "path", List [ Int64 1L; Int64 2L ]
+        ; (eid 2L), "path", List [ Int64 1L; Int64 2L; Int64 3L ]
         ]
-        (seek_datoms restored_db Avet ~a:"age" ~v:(Int64 10L) ());
+        (seek_datoms ~a:"age" ~v:(Int64 10L) restored_db Avet);
       assert_equal_triples
         "SQLite restored db supports AVET reverse seek"
-        [ 1, "name", String "Petr"
-        ; 2, "name", String "Ivan"
-        ; 1, "age", Int64 44L
-        ; 2, "age", Int64 25L
-        ; 3, "age", Int64 11L
+        [ (eid 1L), "name", String "Petr"
+        ; (eid 2L), "name", String "Ivan"
+        ; (eid 1L), "age", Int64 44L
+        ; (eid 2L), "age", Int64 25L
+        ; (eid 3L), "age", Int64 11L
         ]
-        (rseek_datoms restored_db Avet ~a:"name" ~v:(String "Petr") ());
+        (rseek_datoms ~a:"name" ~v:(String "Petr") restored_db Avet);
       assert_equal_triples
         "SQLite restored db supports index ranges"
-        [ 2, "name", String "Ivan"; 1, "name", String "Petr" ]
-        (index_range restored_db "name" ~start:(String "I") ~stop:(String "Q") ());
+        [ (eid 2L), "name", String "Ivan"; (eid 1L), "name", String "Petr" ]
+        (index_range ~start:(String "I") ~stop:(String "Q") restored_db "name");
       assert_equal_query
         "SQLite restored db query sees indexed list values exactly"
-        [ [ Result_entity 1 ] ]
+        [ [ Result_entity (eid 1L) ] ]
         (q_string restored_db "[:find ?e :where [?e :path (1 2)]]");
       ignore
         (transact_conn
            restored
-           [ Add (Entity_id 4, "name", String "Nina")
-           ; Add (Entity_id 4, "age", Int64 42L)
-           ; Add (Entity_id 4, "path", List [ Int64 2L ])
+           [ Add (Entity_id (eid 4L), "name", String "Nina")
+           ; Add (Entity_id (eid 4L), "age", Int64 42L)
+           ; Add (Entity_id (eid 4L), "path", List [ Int64 2L ])
            ]);
       let restored_again =
         match restore storage with
@@ -1200,15 +1189,15 @@ let test_sqlite_storage_backed_connections_index_query_and_transact_parity () =
         (q_string restored_again "[:find ?name :where [?e :age 42] [?e :name ?name]]");
       assert_equal_triples
         "SQLite storage persists later indexed transacts for AVET"
-        [ 4, "age", Int64 42L; 1, "age", Int64 44L ]
-        (index_range restored_again "age" ~start:(Int64 42L) ~stop:(Int64 44L) ()))
+        [ (eid 4L), "age", Int64 42L; (eid 1L), "age", Int64 44L ]
+        (index_range ~start:(Int64 42L) ~stop:(Int64 44L) restored_again "age"))
 
 let test_sqlite_storage_backed_composite_values_after_restore () =
   if not (sqlite3_available ()) then
     prerr_endline "Skipping SQLite storage-backed composite value test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let profile =
         Map
           [ Keyword "tags", Vector [ String "alpha"; String "beta" ]
@@ -1216,7 +1205,7 @@ let test_sqlite_storage_backed_composite_values_after_restore () =
           ]
       in
       let conn = create_conn ~schema:[ "profile", indexed ] ~storage () in
-      ignore (transact_conn conn [ Add (Entity_id 1, "profile", profile) ]);
+      ignore (transact_conn conn [ Add (Entity_id (eid 1L), "profile", profile) ]);
       let restored =
         match restore_conn storage with
         | Some conn -> conn
@@ -1225,7 +1214,7 @@ let test_sqlite_storage_backed_composite_values_after_restore () =
       let restored_db = conn_db restored in
       assert_equal_query
         "SQLite restored db queries map-of-vector datom values by structural equality"
-        [ [ Result_entity 1 ] ]
+        [ [ Result_entity (eid 1L) ] ]
         (q_string
            restored_db
            "[:find ?e :where [?e :profile {:tags [\"alpha\" \"beta\"] :prefs {:pins [1 2] :theme \"dark\"}}]]");
@@ -1237,7 +1226,7 @@ let test_sqlite_storage_backed_composite_values_after_restore () =
            "[:find ?pins :where [?e :profile ?profile] [(get ?profile :prefs) ?prefs] [(get ?prefs :pins) ?pins]]");
       assert_equal_query
         "SQLite restored db uses map datom values in AVET lookups"
-        [ [ Result_entity 1 ] ]
+        [ [ Result_entity (eid 1L) ] ]
         (q_string
            restored_db
            "[:find ?e :where [?e :profile {:prefs {:theme \"dark\" :pins [1 2]} :tags [\"alpha\" \"beta\"]}]]"))
@@ -1247,17 +1236,17 @@ let test_sqlite_storage_backed_query_result_shapes_after_restore () =
     prerr_endline "Skipping SQLite storage-backed query result-shape test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Petr")
-           ; Add (Entity_id 1, "age", Int64 44L)
-           ; Add (Entity_id 2, "name", String "Ivan")
-           ; Add (Entity_id 2, "age", Int64 25L)
-           ; Add (Entity_id 3, "name", String "Sergey")
-           ; Add (Entity_id 3, "age", Int64 11L)
+           [ Add (Entity_id (eid 1L), "name", String "Petr")
+           ; Add (Entity_id (eid 1L), "age", Int64 44L)
+           ; Add (Entity_id (eid 2L), "name", String "Ivan")
+           ; Add (Entity_id (eid 2L), "age", Int64 25L)
+           ; Add (Entity_id (eid 3L), "name", String "Sergey")
+           ; Add (Entity_id (eid 3L), "age", Int64 11L)
            ]);
       let db =
         match restore_conn storage with
@@ -1317,7 +1306,7 @@ let test_sqlite_storage_backed_lookup_ref_transacts_after_restore () =
     prerr_endline "Skipping SQLite storage-backed lookup-ref transact test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn =
         create_conn
           ~schema:[ "name", unique_identity; "email", unique_identity; "friend", ref_attr; "friends", ref_many; "age", indexed ]
@@ -1327,12 +1316,12 @@ let test_sqlite_storage_backed_lookup_ref_transacts_after_restore () =
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 1, "email", String "ivan@example.com")
-           ; Add (Entity_id 2, "name", String "Petr")
-           ; Add (Entity_id 2, "email", String "petr@example.com")
-           ; Add (Entity_id 3, "name", String "Oleg")
-           ; Add (Entity_id 3, "email", String "oleg@example.com")
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 1L), "email", String "ivan@example.com")
+           ; Add (Entity_id (eid 2L), "name", String "Petr")
+           ; Add (Entity_id (eid 2L), "email", String "petr@example.com")
+           ; Add (Entity_id (eid 3L), "name", String "Oleg")
+           ; Add (Entity_id (eid 3L), "email", String "oleg@example.com")
            ]);
       let restored =
         match restore_conn storage with
@@ -1407,19 +1396,19 @@ let test_sqlite_storage_backed_not_or_queries_after_restore () =
     prerr_endline "Skipping SQLite storage-backed not/or query test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 1, "age", Int64 10L)
-           ; Add (Entity_id 2, "name", String "Ivan")
-           ; Add (Entity_id 2, "age", Int64 20L)
-           ; Add (Entity_id 3, "name", String "Oleg")
-           ; Add (Entity_id 3, "age", Int64 10L)
-           ; Add (Entity_id 4, "name", String "Oleg")
-           ; Add (Entity_id 4, "age", Int64 20L)
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 1L), "age", Int64 10L)
+           ; Add (Entity_id (eid 2L), "name", String "Ivan")
+           ; Add (Entity_id (eid 2L), "age", Int64 20L)
+           ; Add (Entity_id (eid 3L), "name", String "Oleg")
+           ; Add (Entity_id (eid 3L), "age", Int64 10L)
+           ; Add (Entity_id (eid 4L), "name", String "Oleg")
+           ; Add (Entity_id (eid 4L), "age", Int64 20L)
            ]);
       let db =
         match restore storage with
@@ -1428,12 +1417,12 @@ let test_sqlite_storage_backed_not_or_queries_after_restore () =
       in
       assert_equal_query
         "SQLite restored db supports not query clauses"
-        [ [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        [ [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
         (q_string db "[:find ?e :where [?e :name] (not [?e :name \"Ivan\"])]");
       assert_equal_query
         "SQLite restored db supports not-join query clauses"
-        [ [ Result_entity 1; Result_value (Int64 10L) ]
-        ; [ Result_entity 2; Result_value (Int64 20L) ]
+        [ [ Result_entity (eid 1L); Result_value (Int64 10L) ]
+        ; [ Result_entity (eid 2L); Result_value (Int64 20L) ]
         ]
         (q_string
            db
@@ -1445,11 +1434,11 @@ let test_sqlite_storage_backed_not_or_queries_after_restore () =
                       [?e :age ?a])]");
       assert_equal_query
         "SQLite restored db supports or query clauses"
-        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
         (q_string db "[:find ?e :where (or [?e :name \"Oleg\"] [?e :age 10])]");
       assert_equal_query
         "SQLite restored db supports or-join query clauses"
-        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+        [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
         (q_string
            db
            "[:find ?e
@@ -1464,7 +1453,7 @@ let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
     prerr_endline "Skipping SQLite storage-backed transact/history/current-tx test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn =
         create_conn
           ~schema:
@@ -1493,9 +1482,9 @@ let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
       in
       if report.tx_meta <> [ "source", String "sqlite-parity" ] then
         failwith "SQLite storage-backed transact should preserve tx metadata in reports";
-      if resolve_tempid report.tempids "ivan" <> Some 1 then
+      if resolve_tempid report.tempids "ivan" <> Some (eid 1L) then
         failwith "SQLite storage-backed transact should expose resolved entity tempids";
-      if resolve_tempid report.tempids "db/current-tx" <> Some (tx0 + 1) then
+      if resolve_tempid report.tempids "db/current-tx" <> Some (eid (Int64.add (Tx_id.to_int64 tx0) 1L)) then
         failwith "SQLite storage-backed transact should expose current tx tempid";
       let restored =
         match restore_conn storage with
@@ -1528,12 +1517,12 @@ let test_sqlite_storage_backed_transact_history_and_current_tx_parity () =
         (q_string db "[:find ?name :where [?e :name ?name]]");
       assert_equal_tx_flags
         "SQLite restored db exposes current name facts"
-        [ 1, "name", String "Petr", true ]
-        (datoms db Eavt ~a:"name" ());
+        [ (eid 1L), "name", String "Petr", true ]
+        (datoms ~a:"name" db Eavt);
       assert_equal_triples
         "SQLite restored db exposes current no-history facts"
-        [ 1, "secret", String "beta" ]
-        (datoms db Eavt ~a:"secret" ());
+        [ (eid 1L), "secret", String "beta" ]
+        (datoms ~a:"secret" db Eavt);
       assert_equal_query
         "SQLite restored active db keeps latest no-history value"
         [ [ Result_value (String "beta") ] ]
@@ -1544,7 +1533,7 @@ let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
     prerr_endline "Skipping SQLite storage-backed transact.cljc batch: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn =
         create_conn
           ~schema:
@@ -1563,17 +1552,17 @@ let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
         (transact_conn
            conn
            [ Entity
-               { db_id = Some (Entity_id 1)
+               { db_id = Some (Entity_id (eid 1L))
                ; attrs =
                    [ "name", One_value (String "Ivan")
                    ; "age", One_value (Int64 15L)
                    ; "aka", Many_values [ String "Devil"; String "Tupen" ]
-                   ; "friend", One_value (Ref 2)
+                   ; "friend", One_value (Ref (eid 2L))
                    ; "created-at", One_value TxRef
                    ]
                }
            ; Entity
-               { db_id = Some (Entity_id 2)
+               { db_id = Some (Entity_id (eid 2L))
                ; attrs = [ "name", One_value (String "Petr"); "age", One_value (Int64 37L) ]
                }
            ; Add (CurrentTx, "tx/source", String "initial")
@@ -1582,9 +1571,9 @@ let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
       ignore
         (transact_conn
            conn
-           [ CompareAndSet (Entity_id 1, "age", Some (Int64 15L), Int64 16L)
-           ; CompareAndSet (Entity_id 1, "label", None, String "fresh")
-           ; Retract (Entity_id 1, "aka", Some (String "Devil"))
+           [ CompareAndSet (Entity_id (eid 1L), "age", Some (Int64 15L), Int64 16L)
+           ; CompareAndSet (Entity_id (eid 1L), "label", None, String "fresh")
+           ; Retract (Entity_id (eid 1L), "aka", Some (String "Devil"))
            ]);
       let restored =
         match restore_conn storage with
@@ -1614,13 +1603,13 @@ let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
                     [?tx :tx/source ?source]]");
       assert_equal_query
         "SQLite restored db persists transaction function entity output"
-        [ [ Result_entity 3 ] ]
+        [ [ Result_entity (eid 3L) ] ]
         (q_string (conn_db restored) "[:find ?e :where [?e :name \"Generated\"]]");
       let second_report =
         transact_conn
           restored
-          [ RetractAttr (Entity_id 1, "aka")
-          ; RetractEntity (Entity_id 2)
+          [ RetractAttr (Entity_id (eid 1L), "aka")
+          ; RetractEntity (Entity_id (eid 2L))
           ; Entity
               { db_id = Some (Temp_id "oleg")
               ; attrs =
@@ -1643,12 +1632,12 @@ let test_sqlite_storage_backed_transact_cljc_batch_after_restore () =
       in
       assert_equal_query
         "SQLite second restore persists retractAttribute and retractEntity effects"
-        [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity oleg_id ] ]
+        [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ]; [ Result_entity oleg_id ] ]
         (q_string db "[:find ?e :where [?e :name]]");
       assert_equal_triples
         "SQLite second restore removes incoming refs to retracted entities"
         []
-        (datoms db Eavt ~e:1 ~a:"friend" ());
+        (datoms ~e:(eid 1L) ~a:"friend" db Eavt);
       assert_equal_query
         "SQLite second restore queries tempid entity current-tx facts"
         [ [ Result_value (String "second") ] ]
@@ -1665,8 +1654,8 @@ let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ()
   else
     with_temp_db (fun people_path ->
       with_temp_db (fun score_path ->
-        let people_storage = Sqlite_storage.storage people_path in
-        let score_storage = Sqlite_storage.storage score_path in
+        let people_storage = sqlite_storage people_path in
+        let score_storage = sqlite_storage score_path in
         let people_conn =
           create_conn
             ~schema:[ "email", unique_identity; "name", indexed; "friend", ref_attr ]
@@ -1682,19 +1671,19 @@ let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ()
         ignore
           (transact_conn
              people_conn
-             [ Add (Entity_id 1, "email", String "ivan@example.com")
-             ; Add (Entity_id 1, "name", String "Ivan")
-             ; Add (Entity_id 1, "friend", Ref 2)
-             ; Add (Entity_id 2, "email", String "petr@example.com")
-             ; Add (Entity_id 2, "name", String "Petr")
+             [ Add (Entity_id (eid 1L), "email", String "ivan@example.com")
+             ; Add (Entity_id (eid 1L), "name", String "Ivan")
+             ; Add (Entity_id (eid 1L), "friend", Ref (eid 2L))
+             ; Add (Entity_id (eid 2L), "email", String "petr@example.com")
+             ; Add (Entity_id (eid 2L), "name", String "Petr")
              ]);
         ignore
           (transact_conn
              score_conn
-             [ Add (Entity_id 10, "email", String "ivan@example.com")
-             ; Add (Entity_id 10, "score", Int64 20L)
-             ; Add (Entity_id 11, "email", String "petr@example.com")
-             ; Add (Entity_id 11, "score", Int64 40L)
+             [ Add (Entity_id (eid 10L), "email", String "ivan@example.com")
+             ; Add (Entity_id (eid 10L), "score", Int64 20L)
+             ; Add (Entity_id (eid 11L), "email", String "petr@example.com")
+             ; Add (Entity_id (eid 11L), "score", Int64 40L)
              ]);
         let people =
           match restore people_storage with
@@ -1737,7 +1726,7 @@ let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ()
              pulled.pulled_attrs
              <> [ Keyword "friend",
                   Pulled_entity
-                    { pulled_id = 2
+                    { pulled_id = eid 2L
                     ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ]
                     }
                 ; Keyword "name", Pulled_scalar (String "Ivan")
@@ -1752,11 +1741,11 @@ let test_sqlite_storage_backed_pull_sources_and_relation_inputs_after_restore ()
           <> Query_scalar
                (Some
                   (Result_pull
-                     { pulled_id = 1
+                     { pulled_id = eid 1L
                      ; pulled_attrs =
                          [ Keyword "friend",
                            Pulled_entity
-                             { pulled_id = 2
+                             { pulled_id = eid 2L
                              ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Petr") ]
                              }
                          ; Keyword "name", Pulled_scalar (String "Ivan")
@@ -1769,9 +1758,9 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
     prerr_endline "Skipping SQLite storage-backed reset-schema/compaction test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn = create_conn ~schema:[ "name", indexed; "age", indexed ] ~storage () in
-      ignore (transact_conn conn [ Add (Entity_id 1, "name", String "Ivan") ]);
+      ignore (transact_conn conn [ Add (Entity_id (eid 1L), "name", String "Ivan") ]);
       let restored =
         match restore_conn storage with
         | Some conn -> conn
@@ -1781,7 +1770,7 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
       ignore
         (transact_conn
            restored
-           [ Add (Entity_id 1, "email", String "ivan@example.com")
+           [ Add (Entity_id (eid 1L), "email", String "ivan@example.com")
            ; Add (Temp_id "same-email", "email", String "ivan@example.com")
            ; Add (Temp_id "same-email", "name", String "Ivan Upserted")
            ]);
@@ -1797,7 +1786,7 @@ let test_sqlite_storage_backed_reset_schema_and_compaction_parity () =
         failwith "SQLite reset_schema should persist added unique attrs";
       assert_equal_query
         "SQLite reset schema persists unique identity tempid upsert semantics"
-        [ [ Result_entity 1; Result_value (String "ivan@example.com"); Result_value (String "Ivan Upserted") ] ]
+        [ [ Result_entity (eid 1L); Result_value (String "ivan@example.com"); Result_value (String "Ivan Upserted") ] ]
         (q_string db "[:find ?e ?email ?name :where [?e :email ?email] [?e :name ?name]]");
       assert_upstream_storage_addresses
         "SQLite reset schema compacts stale tail"
@@ -1808,7 +1797,7 @@ let test_sqlite_storage_backed_aggregates_and_upserts_after_restore () =
     prerr_endline "Skipping SQLite storage-backed aggregate/upsert test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn =
         create_conn
           ~schema:
@@ -1895,19 +1884,19 @@ let test_sqlite_storage_backed_aggregates_and_upserts_after_restore () =
       in
       assert_equal_query
         "SQLite restored db persists unique identity and tempid upserts"
-        [ [ Result_entity 1
+        [ [ Result_entity (eid 1L)
           ; Result_value (String "Ivan")
           ; Result_value (String "ivan+updated@example.com")
           ; Result_value (String "red")
           ; Result_value (Int64 15L)
           ]
-        ; [ Result_entity 2
+        ; [ Result_entity (eid 2L)
           ; Result_value (String "Petr")
           ; Result_value (String "petr@example.com")
           ; Result_value (String "red")
           ; Result_value (Int64 25L)
           ]
-        ; [ Result_entity 3
+        ; [ Result_entity (eid 3L)
           ; Result_value (String "Oleg")
           ; Result_value (String "oleg@example.com")
           ; Result_value (String "green")
@@ -1923,11 +1912,11 @@ let test_sqlite_storage_backed_aggregates_and_upserts_after_restore () =
                     [?e :score ?score]]");
       assert_equal_triples
         "SQLite restored db persists tuple identity datoms after upserts"
-        [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan+updated@example.com") ]
-        ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
-        ; 3, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+        [ (eid 1L), "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan+updated@example.com") ]
+        ; (eid 2L), "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+        ; (eid 3L), "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
         ]
-        (datoms db Eavt ~a:"name+email" ()))
+        (datoms ~a:"name+email" db Eavt))
 
 let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
   if not (sqlite3_available ()) then
@@ -1935,8 +1924,8 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
   else
     with_temp_db (fun people_path ->
       with_temp_db (fun score_path ->
-        let people_storage = Sqlite_storage.storage people_path in
-        let score_storage = Sqlite_storage.storage score_path in
+        let people_storage = sqlite_storage people_path in
+        let score_storage = sqlite_storage score_path in
         let people_conn =
           create_conn
             ~schema:
@@ -1985,11 +1974,11 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
                {:db/id 12 :email \"oleg@example.com\" :score 5}]");
         assert_equal_triples
           "SQLite live parsed transacts derive tuple attrs before persistence"
-          [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
-          ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
-          ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+          [ (eid 1L), "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; (eid 2L), "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+          ; (eid 4L), "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
           ]
-          (datoms (conn_db people_conn) Eavt ~a:"name+email" ());
+          (datoms ~a:"name+email" (conn_db people_conn) Eavt);
         let people =
           match restore people_storage with
           | Some db -> db
@@ -2002,11 +1991,11 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
         in
         assert_equal_triples
           "SQLite parsed transacts persist derived tuple attrs"
-          [ 1, "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
-          ; 2, "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
-          ; 4, "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
+          [ (eid 1L), "name+email", Tuple [ Some (String "Ivan"); Some (String "ivan@example.com") ]
+          ; (eid 2L), "name+email", Tuple [ Some (String "Petr"); Some (String "petr@example.com") ]
+          ; (eid 4L), "name+email", Tuple [ Some (String "Oleg"); Some (String "oleg@example.com") ]
           ]
-          (datoms people Eavt ~a:"name+email" ());
+          (datoms ~a:"name+email" people Eavt);
         assert_equal_query
           "SQLite restored db queries derived tuple attrs with tuple function output"
           [ [ Result_value (String "Ivan") ] ]
@@ -2062,7 +2051,7 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           <> Query_scalar
                (Some
                   (Result_pull
-                     { pulled_id = 1
+                     { pulled_id = eid 1L
                      ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
                      }))
         then failwith "SQLite restored db should support pull find specs with pattern inputs";
@@ -2076,7 +2065,7 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           <> Query_scalar
                (Some
                   (Result_pull
-                     { pulled_id = 1
+                     { pulled_id = eid 1L
                      ; pulled_attrs = [ Keyword "name", Pulled_scalar (String "Ivan") ]
                      }))
         then failwith "SQLite restored db should support symbolic pull pattern inputs";
@@ -2085,7 +2074,7 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           [ [ Result_value (Ref_to (Lookup_ref ("name", String "Ivan")))
             ; Result_value (Int64 25L)
             ; Result_pull
-                { pulled_id = 1
+                { pulled_id = eid 1L
                 ; pulled_attrs =
                     [ Keyword "db/id", Pulled_scalar (Int64 1L)
                     ; Keyword "name", Pulled_scalar (String "Ivan")
@@ -2095,7 +2084,7 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           ; [ Result_value (Ref_to (Lookup_ref ("name", String "Petr")))
             ; Result_value (Int64 44L)
             ; Result_pull
-                { pulled_id = 2
+                { pulled_id = eid 2L
                 ; pulled_attrs =
                     [ Keyword "db/id", Pulled_scalar (Int64 2L)
                     ; Keyword "name", Pulled_scalar (String "Petr")
@@ -2120,13 +2109,13 @@ let test_sqlite_storage_backed_parsed_transact_and_query_pull_parity () =
           "SQLite restored named sources use source-specific pull contexts"
           [ [ Result_value (String "Ivan")
             ; Result_pull
-                { pulled_id = 10
+                { pulled_id = eid 10L
                 ; pulled_attrs = [ Keyword "score", Pulled_scalar (Int64 20L) ]
                 }
             ]
           ; [ Result_value (String "Petr")
             ; Result_pull
-                { pulled_id = 11
+                { pulled_id = eid 11L
                 ; pulled_attrs = [ Keyword "score", Pulled_scalar (Int64 40L) ]
                 }
             ]
@@ -2147,7 +2136,7 @@ let test_sqlite_storage_backed_query_input_maps_after_restore () =
     prerr_endline "Skipping SQLite storage-backed query input map test: sqlite3 is not available"
   else
     with_temp_db (fun db_path ->
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       let conn =
         create_conn
           ~schema:[ "name", unique_identity; "age", indexed; "score", indexed ]
@@ -2157,15 +2146,15 @@ let test_sqlite_storage_backed_query_input_maps_after_restore () =
       ignore
         (transact_conn
            conn
-           [ Add (Entity_id 1, "name", String "Ivan")
-           ; Add (Entity_id 1, "age", Int64 25L)
-           ; Add (Entity_id 1, "score", Int64 4L)
-           ; Add (Entity_id 2, "name", String "Petr")
-           ; Add (Entity_id 2, "age", Int64 44L)
-           ; Add (Entity_id 2, "score", Int64 7L)
-           ; Add (Entity_id 3, "name", String "Oleg")
-           ; Add (Entity_id 3, "age", Int64 11L)
-           ; Add (Entity_id 3, "score", Int64 2L)
+           [ Add (Entity_id (eid 1L), "name", String "Ivan")
+           ; Add (Entity_id (eid 1L), "age", Int64 25L)
+           ; Add (Entity_id (eid 1L), "score", Int64 4L)
+           ; Add (Entity_id (eid 2L), "name", String "Petr")
+           ; Add (Entity_id (eid 2L), "age", Int64 44L)
+           ; Add (Entity_id (eid 2L), "score", Int64 7L)
+           ; Add (Entity_id (eid 3L), "name", String "Oleg")
+           ; Add (Entity_id (eid 3L), "age", Int64 11L)
+           ; Add (Entity_id (eid 3L), "score", Int64 2L)
            ]);
       let restored =
         match restore_conn storage with
@@ -2299,12 +2288,12 @@ let test_logseq_sqlite_import_preserves_clojure_collection_values () =
             ^ "insert into kvs (addr, content, addresses) values (2, "
             ^ sql_quote content
             ^ ", '[]');"));
-      let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path in
+      let datoms = logseq_datoms ~read_only:true db_path in
       assert_equal_triples
         "Logseq SQLite import preserves vector/list/map value shapes"
-        [ 101, "item/vector", Vector [ Int64 1L; Int64 2L ]
-        ; 102, "item/list", List [ Int64 1L; Int64 2L ]
-        ; ( 103
+        [ (eid 101L), "item/vector", Vector [ Int64 1L; Int64 2L ]
+        ; (eid 102L), "item/list", List [ Int64 1L; Int64 2L ]
+        ; ( eid 103L
           , "item/profile"
           , Map
               [ Keyword "tags", Vector [ String "alpha"; String "beta" ]
@@ -2315,7 +2304,7 @@ let test_logseq_sqlite_import_preserves_clojure_collection_values () =
       let db = init_db ~schema:[ "item/vector", indexed; "item/profile", indexed ] datoms in
       assert_equal_query
         "Logseq SQLite imported vectors query as Clojure vectors"
-        [ [ Result_entity 101 ] ]
+        [ [ Result_entity (eid 101L) ] ]
         (q_string db "[:find ?e :where [?e :item/vector [1 2]]]");
       assert_equal_query
         "Logseq SQLite imported nested map vectors query structurally"
@@ -2339,11 +2328,11 @@ let test_logseq_sqlite_datom_cache_ignores_uuid_values () =
             ^ "insert into kvs (addr, content, addresses) values (2, "
             ^ sql_quote content
             ^ ", '[]');"));
-      let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path in
+      let datoms = logseq_datoms ~read_only:true db_path in
       assert_equal_triples
         "Logseq datom cache codes should not be shifted by UUID values"
-        [ 97, "block/created-at", Int64 1778143747442L ]
-        (List.filter (fun datom -> datom.e = 97 && datom.v = Int64 1778143747442L) datoms))
+        [ (eid 97L), "block/created-at", Int64 1778143747442L ]
+        (List.filter (fun datom -> datom.e = eid 97L && datom.v = Int64 1778143747442L) datoms))
 
 let test_logseq_sqlite_datom_cache_ignores_transit_tag_values () =
   if not (sqlite3_available ()) then
@@ -2362,8 +2351,8 @@ let test_logseq_sqlite_datom_cache_ignores_transit_tag_values () =
             ^ ", '[]');"));
       assert_equal_triples
         "Logseq datom cache codes should not be shifted by Transit tags"
-        [ 2, "block/created-at", Int64 1000L; 3, "block/created-at", Int64 2000L ]
-        (Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path
+        [ (eid 2L), "block/created-at", Int64 1000L; (eid 3L), "block/created-at", Int64 2000L ]
+        (logseq_datoms ~read_only:true db_path
          |> List.filter (fun datom -> datom.a = "block/created-at")))
 
 let test_logseq_sqlite_datom_cache_spans_ordered_rows () =
@@ -2389,8 +2378,8 @@ let test_logseq_sqlite_datom_cache_spans_ordered_rows () =
             ^ ", '[]');"));
       assert_equal_triples
         "Logseq datom cache codes should carry across SQLite rows in addr order"
-        [ 1, "block/created-at", Int64 1000L; 2, "block/created-at", Int64 2000L ]
-        (Sqlite_storage.datoms_of_logseq_graph ~read_only:true db_path))
+        [ (eid 1L), "block/created-at", Int64 1000L; (eid 2L), "block/created-at", Int64 2000L ]
+        (logseq_datoms ~read_only:true db_path))
 
 let test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization () =
   if not (sqlite3_available ()) then
@@ -2422,7 +2411,7 @@ let test_logseq_sqlite_query_loads_matching_nodes_without_full_materialization (
         ; [ Result_value (Int64 2000L); Result_value (String "Beta") ]
         ]
         (match
-           Sqlite_storage.query_logseq_graph
+           logseq_query
              ~read_only:true
              db_path
              "[:find ?created ?title
@@ -2447,9 +2436,9 @@ let test_logseq_sqlite_schema_decodes_cached_schema_keys () =
          ^ "insert into kvs (addr, content, addresses) values (0, "
          ^ sql_quote root_content
          ^ ", '[]');");
-      let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true db_path in
+      let schema = logseq_schema ~read_only:true db_path in
       match List.assoc_opt "block/name" schema with
-      | Some block_name_schema when block_name_schema.indexed -> ()
+      | Some block_name_schema when (Schema.indexed block_name_schema) -> ()
       | Some _ -> failwith "cached Logseq schema key should mark :block/name as indexed"
       | None -> failwith "cached Logseq schema should expose :block/name")
 
@@ -2482,7 +2471,7 @@ let test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks
           ]
         ]
         (match
-           Sqlite_storage.query_logseq_graph
+           logseq_query
              ~read_only:true
              db_path
              "[:find ?title ?created ?updated ?graph-created
@@ -2497,15 +2486,15 @@ let test_logseq_sqlite_query_treats_timestamp_attrs_as_scalars_when_schema_marks
 
 let logseq_schema_attr_json attr schema =
   let props =
-    [ Some ("~:db/cardinality", (match schema.cardinality with Many -> "~:db.cardinality/many" | One -> "~:db.cardinality/one"))
-    ; (match schema.unique with
+    [ Some ("~:db/cardinality", (match (Schema.cardinality schema) with Many -> "~:db.cardinality/many" | One -> "~:db.cardinality/one"))
+    ; (match (Schema.unique schema) with
        | Some Identity -> Some ("~:db/unique", "~:db.unique/identity")
        | Some Value -> Some ("~:db/unique", "~:db.unique/value")
        | None -> None)
-    ; if schema.indexed then Some ("~:db/index", "true") else None
-    ; if schema.is_component then Some ("~:db/isComponent", "true") else None
-    ; if schema.no_history then Some ("~:db/noHistory", "true") else None
-    ; (match schema.value_type with
+    ; if (Schema.indexed schema) then Some ("~:db/index", "true") else None
+    ; if (Schema.is_component schema) then Some ("~:db/isComponent", "true") else None
+    ; if (Schema.no_history schema) then Some ("~:db/noHistory", "true") else None
+    ; (match (Schema.value_type schema) with
        | Some RefType -> Some ("~:db/valueType", "~:db.type/ref")
        | Some StringType -> Some ("~:db/valueType", "~:db.type/string")
        | Some KeywordType -> Some ("~:db/valueType", "~:db.type/keyword")
@@ -2548,7 +2537,7 @@ let logseq_json_of_value = function
   | Bool value -> if value then "true" else "false"
   | Keyword value -> json_quote ("~:" ^ value)
   | Uuid value -> json_quote ("~u" ^ value)
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string (Entity_id.to_int64 entity_id)
   | value -> failf "unsupported Logseq test value: %s" (string_of_value value)
 
 let logseq_row_content datoms =
@@ -2556,10 +2545,10 @@ let logseq_row_content datoms =
     "["
     ^ String.concat
         ","
-        [ string_of_int datom.e
+        [ Int64.to_string (Entity_id.to_int64 datom.e)
         ; json_quote ("~:" ^ datom.a)
         ; logseq_json_of_value datom.v
-        ; string_of_int datom.tx
+        ; Int64.to_string (Tx_id.to_int64 datom.tx)
         ]
     ^ "]"
   in
@@ -2606,27 +2595,27 @@ let test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks 
       let report =
         transact
           (empty_db ~schema ())
-          [ Add (Entity_id 100, "db/ident", Keyword "logseq.class/Property")
-          ; Add (Entity_id 100, "block/title", String "Property")
-          ; Add (Entity_id 100, "block/name", String "property")
-          ; Add (Entity_id 101, "db/ident", Keyword "logseq.class/Page")
-          ; Add (Entity_id 101, "block/title", String "Page")
-          ; Add (Entity_id 101, "block/name", String "page")
-          ; Add (Entity_id 200, "db/ident", Keyword "user/priority")
-          ; Add (Entity_id 200, "block/title", String "Priority")
-          ; Add (Entity_id 200, "block/name", String "priority")
-          ; Add (Entity_id 200, "block/tags", Keyword "logseq.class/Property")
-          ; Add (Entity_id 200, "logseq.property/type", Keyword "default")
-          ; Add (Entity_id 200, "logseq.property/public?", Bool true)
-          ; Add (Entity_id 300, "block/title", String "Project Alpha")
-          ; Add (Entity_id 300, "block/name", String "project alpha")
-          ; Add (Entity_id 300, "block/tags", Keyword "logseq.class/Page")
-          ; Add (Entity_id 400, "block/title", String "Ship generated sqlite")
-          ; Add (Entity_id 400, "block/page", Ref 300)
-          ; Add (Entity_id 400, "block/order", String "a0")
-          ; Add (Entity_id 400, "block/created-at", Int64 1781829000000L)
-          ; Add (Entity_id 400, "block/updated-at", Int64 1781829297990L)
-          ; Add (Entity_id 400, "user/priority", String "high")
+          [ Add (Entity_id (eid 100L), "db/ident", Keyword "logseq.class/Property")
+          ; Add (Entity_id (eid 100L), "block/title", String "Property")
+          ; Add (Entity_id (eid 100L), "block/name", String "property")
+          ; Add (Entity_id (eid 101L), "db/ident", Keyword "logseq.class/Page")
+          ; Add (Entity_id (eid 101L), "block/title", String "Page")
+          ; Add (Entity_id (eid 101L), "block/name", String "page")
+          ; Add (Entity_id (eid 200L), "db/ident", Keyword "user/priority")
+          ; Add (Entity_id (eid 200L), "block/title", String "Priority")
+          ; Add (Entity_id (eid 200L), "block/name", String "priority")
+          ; Add (Entity_id (eid 200L), "block/tags", Keyword "logseq.class/Property")
+          ; Add (Entity_id (eid 200L), "logseq.property/type", Keyword "default")
+          ; Add (Entity_id (eid 200L), "logseq.property/public?", Bool true)
+          ; Add (Entity_id (eid 300L), "block/title", String "Project Alpha")
+          ; Add (Entity_id (eid 300L), "block/name", String "project alpha")
+          ; Add (Entity_id (eid 300L), "block/tags", Keyword "logseq.class/Page")
+          ; Add (Entity_id (eid 400L), "block/title", String "Ship generated sqlite")
+          ; Add (Entity_id (eid 400L), "block/page", Ref (eid 300L))
+          ; Add (Entity_id (eid 400L), "block/order", String "a0")
+          ; Add (Entity_id (eid 400L), "block/created-at", Int64 1781829000000L)
+          ; Add (Entity_id (eid 400L), "block/updated-at", Int64 1781829297990L)
+          ; Add (Entity_id (eid 400L), "user/priority", String "high")
           ]
       in
       insert_logseq_rows
@@ -2643,7 +2632,7 @@ let test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks 
           ]
         ]
         (match
-           Sqlite_storage.query_logseq_graph
+           logseq_query
              ~read_only:true
              db_path
              "[:find ?title ?ident ?type
@@ -2662,7 +2651,7 @@ let test_logseq_sqlite_generated_graph_queries_transacted_properties_and_blocks 
           ]
         ]
         (match
-           Sqlite_storage.query_logseq_graph
+           logseq_query
              ~read_only:true
              db_path
              "[:find ?title ?priority ?updated
@@ -2691,15 +2680,15 @@ let cljs_datom_compare index (left : Datascript.datom) (right : Datascript.datom
         (compare left.e right.e)
         (tie
            (cljs_ns_name_attr_compare left.a right.a)
-           (tie (Util.compare_value left.v right.v) (compare left.tx right.tx)))
+           (tie (compare left.v right.v) (compare left.tx right.tx)))
   | Aevt ->
       tie
         (cljs_ns_name_attr_compare left.a right.a)
-        (tie (compare left.e right.e) (tie (Util.compare_value left.v right.v) (compare left.tx right.tx)))
+        (tie (compare left.e right.e) (tie (compare left.v right.v) (compare left.tx right.tx)))
   | Avet ->
       tie
         (cljs_ns_name_attr_compare left.a right.a)
-        (tie (Util.compare_value left.v right.v) (tie (compare left.e right.e) (compare left.tx right.tx)))
+        (tie (compare left.v right.v) (tie (compare left.e right.e) (compare left.tx right.tx)))
 
 let test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs () =
   if not (sqlite3_available ()) then
@@ -2714,7 +2703,9 @@ let test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs () =
          cli-sync-stress (Tempids used only as value). *)
       let uuid i = Printf.sprintf "0000000%d-000e-0000-0000-000000000000" i in
       let tx = 536870913 in
-      let datom e a v : Datascript.datom = { e; a; v; tx; added = true } in
+      let datom e a v : Datascript.datom =
+        { e = eid (Int64.of_int e); a; v; tx = txid (Int64.of_int tx); added = true }
+      in
       let datoms : Datascript.datom list =
         List.init 5 (fun i -> datom (100 + i) "block/aaa" (Int64 (Int64.of_int i)))
         @ List.init 5 (fun i -> datom (100 + i) "block/uuid" (Uuid (uuid i)))
@@ -2758,7 +2749,7 @@ let test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs () =
         ; 3, leaf Aevt
         ; 4, leaf Avet
         ];
-      let storage = Sqlite_storage.storage db_path in
+      let storage = sqlite_storage db_path in
       (match restore_conn storage with
        | None -> failwith "cljs-ordered sqlite store should restore conn"
        | Some conn ->
@@ -2772,7 +2763,7 @@ let test_logseq_sqlite_cljs_ordered_leaves_resolve_lookup_refs () =
                       "lookup ref [:block/uuid %s] should resolve inside a cljs-ordered avet leaf"
                       (uuid i))
              [ 0; 1; 2; 3; 4 ];
-           let avet_datoms = List.of_seq (datoms_seq db Avet ~a:"block/uuid" ()) in
+           let avet_datoms = List.of_seq (datoms_seq ~a:"block/uuid" db Avet) in
            if List.length avet_datoms <> 5 then
              failf
                "avet slice on :block/uuid should return 5 datoms, got %d"
@@ -2869,16 +2860,16 @@ let test_existing_logseq_graph_schema_supports_query_and_transact () =
     prerr_endline "Skipping Logseq graph query/transact smoke: sqlite3 or demo graph is unavailable"
   else
     let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
-    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let schema = logseq_schema ~read_only:true default_logseq_graph_db in
     let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
     let block_name_schema =
       match List.assoc_opt "block/name" schema with
       | Some schema -> schema
       | None -> failwith "Logseq graph schema should expose :block/name"
     in
-    if not block_name_schema.indexed then failwith ":block/name should be indexed in Logseq schema";
+    if not (Schema.indexed block_name_schema) then failwith ":block/name should be indexed in Logseq schema";
     let db = empty_db ~schema () in
-    let report = transact db [ Add (Entity_id 1, "block/name", String "from-logseq-schema") ] in
+    let report = transact db [ Add (Entity_id (eid 1L), "block/name", String "from-logseq-schema") ] in
     assert_equal_int
       "query synthetic datom with Logseq schema"
       1
@@ -2890,17 +2881,17 @@ let test_existing_logseq_graph_schema_supports_query_and_transact () =
 
 let assert_logseq_schema_query_and_transact db_path =
   let before = (Unix.stat db_path).Unix.st_mtime in
-  let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true db_path in
+  let schema = logseq_schema ~read_only:true db_path in
   let after_schema = (Unix.stat db_path).Unix.st_mtime in
   let block_name_schema =
     match List.assoc_opt "block/name" schema with
     | Some schema -> schema
     | None -> failf "%s schema should expose :block/name" db_path
   in
-  if not block_name_schema.indexed then failf "%s :block/name should be indexed" db_path;
+  if not (Schema.indexed block_name_schema) then failf "%s :block/name should be indexed" db_path;
   let db = empty_db ~schema () in
   let report =
-    transact db [ Add (Entity_id 9_999_998, "block/name", String "from-logseq-schema") ]
+    transact db [ Add (Entity_id (eid (Int64.of_int 9_999_998)), "block/name", String "from-logseq-schema") ]
   in
   assert_equal_int
     ("query synthetic datom with Logseq schema in " ^ db_path)
@@ -2924,10 +2915,10 @@ let test_existing_logseq_graph_datoms_support_query_and_transact () =
     prerr_endline "Skipping Logseq graph datom query/transact smoke: sqlite3 or demo graph is unavailable"
   else
     let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
-    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
-    let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true ~limit:1 default_logseq_graph_db in
+    let schema = logseq_schema ~read_only:true default_logseq_graph_db in
+    let datoms = logseq_datoms ~read_only:true ~limit:1 default_logseq_graph_db in
     let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
-    if not (List.exists (fun datom -> datom.e = 1 && datom.a = "block/name" && datom.v = String "root tag") datoms)
+    if not (List.exists (fun datom -> datom.e = eid 1L && datom.a = "block/name" && datom.v = String "root tag") datoms)
     then failwith "Logseq graph datoms should include the root tag page name";
     let db = init_db ~schema datoms in
     assert_equal_int
@@ -2935,7 +2926,7 @@ let test_existing_logseq_graph_datoms_support_query_and_transact () =
       1
       (List.length (q_string db "[:find ?e :where [?e :block/name \"root tag\"]]"));
     let report =
-      transact db [ Add (Entity_id 9_999_999, "block/name", String "ocaml local graph smoke") ]
+      transact db [ Add (Entity_id (eid (Int64.of_int 9_999_999)), "block/name", String "ocaml local graph smoke") ]
     in
     assert_equal_int
       "transact against decoded Logseq graph schema"
@@ -2950,23 +2941,24 @@ let assert_logseq_timestamp_attrs_are_not_refs schema =
   List.iter
     (fun attr ->
       match List.assoc_opt attr schema with
-      | Some { value_type = Some RefType; _ } ->
+      | Some spec when Schema.value_type spec = Some RefType ->
         failf "%s should not decode as a ref schema attr" attr
       | Some _ -> ()
       | None -> failf "Logseq graph schema should expose :%s" attr)
     [ "block/created-at"; "block/updated-at" ]
 
-let max_supported_entity_id = 2_147_483_647
+let max_supported_entity_id = 2_147_483_647L
 
 let unsupported_entity_id entity_id =
-  entity_id < 0 || entity_id > max_supported_entity_id
+  let id = Entity_id.to_int64 entity_id in
+  id < 0L || id > max_supported_entity_id
 
 let datom_has_unsupported_entity_id schema datom =
   unsupported_entity_id datom.e
   ||
   match List.assoc_opt datom.a schema, datom.v with
   | _, Ref entity_id -> unsupported_entity_id entity_id
-  | Some { value_type = Some RefType; _ }, Int64 _
+  | Some spec, Int64 _ when Schema.value_type spec = Some RefType -> false
   | _ -> false
 
 let find_unsupported_entity_id_datoms schema datoms =
@@ -2977,15 +2969,15 @@ let test_existing_logseq_graph_full_datoms_support_query () =
     prerr_endline "Skipping full Logseq graph datom query smoke: sqlite3 or demo graph is unavailable"
   else
     let before = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
-    let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let schema = logseq_schema ~read_only:true default_logseq_graph_db in
     assert_logseq_timestamp_attrs_are_not_refs schema;
-    let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true default_logseq_graph_db in
+    let datoms = logseq_datoms ~read_only:true default_logseq_graph_db in
     let after = (Unix.stat default_logseq_graph_db).Unix.st_mtime in
     (match find_unsupported_entity_id_datoms schema datoms with
      | Some datom ->
        Printf.eprintf
-         "Skipping full Logseq graph datom query smoke: datom entity id %d or ref value exceeds supported max %d\n"
-         datom.e
+         "Skipping full Logseq graph datom query smoke: datom entity id %Ld or ref value exceeds supported max %Ld\n"
+         (Entity_id.to_int64 datom.e)
          max_supported_entity_id
      | None ->
        let db = init_db ~schema datoms in
@@ -2996,12 +2988,12 @@ let test_existing_logseq_graph_full_datoms_support_query () =
     if before <> after then failwith "read-only full datom loading should not modify the graph file"
 
 let query_for_datom datom =
-  Printf.sprintf "[:find ?v :where [%d :%s ?v]]" datom.e datom.a
+  Printf.sprintf "[:find ?v :where [%Ld :%s ?v]]" (Entity_id.to_int64 datom.e) datom.a
 
 let assert_logseq_datoms_query_and_transact db_path =
   let before = (Unix.stat db_path).Unix.st_mtime in
-  let schema = Sqlite_storage.schema_of_logseq_graph ~read_only:true db_path in
-  let datoms = Sqlite_storage.datoms_of_logseq_graph ~read_only:true ~limit:1 db_path in
+  let schema = logseq_schema ~read_only:true db_path in
+  let datoms = logseq_datoms ~read_only:true ~limit:1 db_path in
   let after = (Unix.stat db_path).Unix.st_mtime in
   let first_datom =
     match datoms with
@@ -3020,7 +3012,7 @@ let assert_logseq_datoms_query_and_transact db_path =
   then
     failf "%s should query the first decoded Logseq datom" db_path;
   let report =
-    transact db [ Add (Entity_id 9_999_999, "block/name", String "ocaml local graph smoke") ]
+    transact db [ Add (Entity_id (eid (Int64.of_int 9_999_999)), "block/name", String "ocaml local graph smoke") ]
   in
   assert_equal_int
     ("transact against decoded Logseq graph schema in " ^ db_path)

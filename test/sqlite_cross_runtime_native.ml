@@ -1,4 +1,6 @@
 open Datascript
+module DT = Internal.Datascript_types
+open DT
 
 module Json = Yojson.Safe
 
@@ -104,8 +106,8 @@ let rec value_of_json = function
   | `Assoc entries -> Map (List.map (fun (key, value) -> String key, value_of_json value) entries)
 
 let entity_ref_of_json = function
-  | `Int entity_id -> Entity_id entity_id
-  | `Intlit value -> Entity_id (int_of_string value)
+  | `Int i -> Entity_id (Int64.of_int i)
+  | `Intlit value -> Entity_id (Int64.of_string value)
   | json -> failf "unsupported entity ref: %s" (Json.to_string json)
 
 let tx_op_of_json = function
@@ -133,13 +135,13 @@ let string_of_value = function
   | Uuid value -> "uuid:" ^ value
   | Instant value -> "instant:" ^ Int64.to_string value
   | Regex value -> "regex:" ^ value
-  | Ref entity_id -> "ref:" ^ string_of_int entity_id
+  | Ref entity_id -> "ref:" ^ Int64.to_string entity_id
   | List _ | Vector _ | Set _ | Map _ | Tuple _ -> "compound"
   | TxRef -> "tx-ref"
   | Ref_to _ -> "ref-to"
 
 let canonical_datom_line datom =
-  Printf.sprintf "datom\t%d\t%s\t%s\t%d\t%b" datom.e datom.a (string_of_value datom.v) datom.tx datom.added
+  Printf.sprintf "datom\t%Ld\t%s\t%s\t%Ld\t%b" datom.e datom.a (string_of_value datom.v) datom.tx datom.added
 
 let write_lines path lines =
   let channel = open_out path in
@@ -209,10 +211,10 @@ let () =
       schema, batches
     | _ -> failwith "input must be an object"
   in
-  let conn = create_conn ~schema () in
-  List.iter (fun batch -> ignore (transact_conn conn batch)) batches;
+  let conn = Internal.create_conn ~schema () in
+  List.iter (fun batch -> ignore (Internal.transact_conn conn batch)) batches;
   let lines =
-    datoms (conn_db conn) Eavt ()
+    Internal.datoms (Internal.conn_db conn) Eavt ()
     |> List.of_seq
     |> List.map canonical_datom_line
     |> List.sort String.compare

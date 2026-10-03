@@ -1,6 +1,8 @@
 open Datascript
+module DT = Internal.Datascript_types
+open DT
 
-let datoms_seq = datoms
+let datoms_seq = Internal.datoms
 
 let datoms db index ?e ?a ?v ?tx () =
   datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
@@ -64,7 +66,7 @@ let schema_attr_json attr =
 
 let schema_json db =
   db
-  |> schema
+  |> Internal.schema
   |> List.sort (fun (left, _) (right, _) -> String.compare left right)
   |> List.map (fun (attr, spec) -> json_list [ json_string attr; schema_attr_json spec ])
   |> json_list
@@ -80,7 +82,7 @@ let rec value_json = function
   | Uuid value -> json_string value
   | Instant value -> Int64.to_string value
   | Regex value -> json_string value
-  | Ref value -> json_int value
+  | Ref value -> json_int (Int64.to_int value)
   | List values | Vector values | Set values -> json_list (List.map value_json values)
   | Map entries ->
     entries
@@ -102,10 +104,10 @@ and value_key = function
 
 let datom_json datom =
   json_list
-    [ json_int datom.e
+    [ json_int (Int64.to_int datom.e)
     ; json_string datom.a
     ; value_json datom.v
-    ; json_int datom.tx
+    ; json_int (Int64.to_int datom.tx)
     ; json_bool datom.added
     ]
 
@@ -113,7 +115,7 @@ let datoms_json datoms =
   datoms |> List.map datom_json |> json_list
 
 let rec result_json = function
-  | Result_entity entity_id -> json_int entity_id
+  | Result_entity entity_id -> json_int (Int64.to_int entity_id)
   | Result_attr attr -> json_string attr
   | Result_value value -> value_json value
   | Result_pull entity -> pulled_entity_json entity
@@ -140,7 +142,7 @@ let tempids_json tempids =
   tempids
   |> List.map (fun (tempid, entity_id) -> (if String.length tempid > 0 && tempid.[0] = ':' then String.sub tempid 1 (String.length tempid - 1) else tempid), entity_id)
   |> List.sort (fun (left, _) (right, _) -> String.compare left right)
-  |> List.map (fun (tempid, entity_id) -> tempid, json_int entity_id)
+  |> List.map (fun (tempid, entity_id) -> tempid, json_int (Int64.to_int entity_id))
   |> json_obj
 
 let normalize_error f =
@@ -207,12 +209,12 @@ let fuzz_generated_batch i =
   else ops
 
 let run_fuzz_parity () =
-  let conn = create_conn () in
+  let conn = Internal.create_conn () in
   ignore
-    (transact_conn
+    (Internal.transact_conn
        conn
        [ Entity
-           { db_id = Some (Entity_id 100)
+           { db_id = Some (Entity_id 100L)
            ; attrs =
                [ "db/ident", One_value (Keyword "email")
                ; "db/cardinality", One_value (Keyword "db.cardinality/one")
@@ -221,14 +223,14 @@ let run_fuzz_parity () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 101)
+           { db_id = Some (Entity_id 101L)
            ; attrs =
                [ "db/ident", One_value (Keyword "tag")
                ; "db/cardinality", One_value (Keyword "db.cardinality/many")
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 102)
+           { db_id = Some (Entity_id 102L)
            ; attrs =
                [ "db/ident", One_value (Keyword "friend")
                ; "db/valueType", One_value (Keyword "db.type/ref")
@@ -236,7 +238,7 @@ let run_fuzz_parity () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 103)
+           { db_id = Some (Entity_id 103L)
            ; attrs =
                [ "db/ident", One_value (Keyword "links")
                ; "db/valueType", One_value (Keyword "db.type/ref")
@@ -244,7 +246,7 @@ let run_fuzz_parity () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 104)
+           { db_id = Some (Entity_id 104L)
            ; attrs =
                [ "db/ident", One_value (Keyword "kind")
                ; "db/cardinality", One_value (Keyword "db.cardinality/one")
@@ -252,7 +254,7 @@ let run_fuzz_parity () =
            }
        ]);
   ignore
-    (transact_conn
+    (Internal.transact_conn
        conn
        [ Entity
            { db_id = Some (Temp_id "-1")
@@ -294,10 +296,10 @@ let run_fuzz_parity () =
            }
        ]);
   ignore
-    (transact_conn
+    (Internal.transact_conn
        conn
        [ Entity
-           { db_id = Some (Entity_id 200)
+           { db_id = Some (Entity_id 200L)
            ; attrs =
                [ "db/ident", One_value (Keyword "score")
                ; "db/cardinality", One_value (Keyword "db.cardinality/one")
@@ -306,17 +308,17 @@ let run_fuzz_parity () =
            }
        ]);
   for i = 0 to fuzz_batch_count - 1 do
-    ignore (transact_conn conn (fuzz_generated_batch i))
+    ignore (Internal.transact_conn conn (fuzz_generated_batch i))
   done;
-  let db = db conn in
+  let db = Internal.Conn.db conn in
   emit "fuzz.final.schema" (schema_json db);
   emit "fuzz.final.datoms" (datoms_json (datoms db Eavt ()))
 
 let () =
   let schema = [ "name", unique_identity; "age", indexed; "friend", ref_attr; "aka", many ] in
-  let conn = create_conn ~schema () in
+  let conn = Internal.create_conn ~schema () in
   let first_report =
-    transact_conn
+    Internal.transact_conn
       conn
       [ Entity
           { db_id = Some (Temp_id "-1")
@@ -338,14 +340,14 @@ let () =
   emit "tx.first.tempids" (tempids_json first_report.tempids);
   emit "tx.first.datoms" (datoms_json first_report.tx_data);
   emit "datoms.eavt.after_first" (datoms_json (datoms first_db Eavt ()));
-  emit "query.names_ages" (query_rows_json (q_string first_db "[:find ?n ?a :where [?e :name ?n] [?e :age ?a]]"));
-  (match pull first_db [ Pull_attr "name"; Pull_ref ("friend", [ Pull_attr "name" ]) ] (Entity_id 1) with
+  emit "query.names_ages" (query_rows_json (Internal.q_string first_db "[:find ?n ?a :where [?e :name ?n] [?e :age ?a]]"));
+  (match Internal.pull first_db [ Pull_attr "name"; Pull_ref ("friend", [ Pull_attr "name" ]) ] (Entity_id 1L) with
    | Some entity -> emit "pull.friend" (pulled_entity_json entity)
    | None -> emit "pull.friend" json_null);
   let second_report =
-    transact_conn
+    Internal.transact_conn
       conn
-      [ Add (Entity_id 1, "age", Int64 32L); Retract (Entity_id 1, "aka", Some (String "I")) ]
+      [ Add (Entity_id 1L, "age", Int64 32L); Retract (Entity_id 1L, "aka", Some (String "I")) ]
   in
   let second_db = second_report.db_after in
   emit "tx.second.datoms" (datoms_json second_report.tx_data);
@@ -353,11 +355,12 @@ let () =
   emit
     "error.unique_value"
     (normalize_error (fun () ->
-       let error_conn = create_conn ~schema:[ "email", unique_value ] () in
+       let error_conn = Internal.create_conn ~schema:[ "email", unique_value ] () in
        ignore
-       (transact_conn
+       (Internal.transact_conn
           error_conn
-          [ Entity { db_id = Some (Entity_id 1); attrs = [ "email", One_value (String "a@example.test") ] }
-          ; Entity { db_id = Some (Entity_id 2); attrs = [ "email", One_value (String "a@example.test") ] }
+          [ Entity { db_id = Some (Entity_id 1L); attrs = [ "email", One_value (String "a@example.test") ] }
+          ; Entity { db_id = Some (Entity_id 2L); attrs = [ "email", One_value (String "a@example.test") ] }
             ])));
   run_fuzz_parity ()
+

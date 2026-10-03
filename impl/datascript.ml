@@ -1,7 +1,6 @@
 include Datascript_types
 
 module Built_ins = Built_ins
-module Conn = Conn
 module Db_impl = Db
 
 type conn = Conn.t
@@ -21,19 +20,16 @@ let db_core_context : Db_impl.core_context =
 
 let refresh_db_identity db = Db_impl.refresh_identity db_core_context db
 
-module Entity = Entity
 module Lru = Lru
 module Lookup_refs = Lookup_refs
-module Schema = Schema
 module Serialize = Serialize
-module Storage = Storage
 module Util = Util
 module Upsert = Upsert
 module PSet = Persistent_sorted_set
 
 let validate_entity_id = Db_impl.validate_entity_id
 
-let datom = Db_impl.datom
+let datom ?tx ?added e a v = Db_impl.datom ?tx ?added ~e ~a ~v ()
 
 let is_datom = Db_impl.is_datom
 
@@ -57,7 +53,7 @@ let refresh_db_indexes_with_added_datoms = Db_impl.refresh_indexes_with_added_da
    memo-aware refresh_db_indexes_with_tx_data below and consulted by
    add_active_datom_with_report_db.  Only read while apply_tx has it active. *)
 let transact_tx_memo : Transact.tx_memo =
-  { active = false; base_max_eid = 0; datoms = Hashtbl.create 8 }
+  { active = false; base_max_eid = 0L; datoms = Hashtbl.create 8 }
 
 let tx_memo_apply tx_data =
   if transact_tx_memo.active then
@@ -201,7 +197,7 @@ module Transact_datoms_impl = Transact_datoms.Make (struct
   let reverse_ref = reverse_ref
   let value_equal = value_equal
   let same_fact = same_fact
-  let datom = datom
+  let datom = Db_impl.datom
   let normalize_value = normalize_value
   let validate_entity_id = validate_entity_id
   let max_allocatable_entity_id = max_allocatable_entity_id
@@ -223,7 +219,7 @@ let rec edn_string_of_value = function
   | Uuid value -> "#uuid \"" ^ value ^ "\""
   | Instant millis -> "#inst \"" ^ Util.string_of_instant_millis millis ^ "\""
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string entity_id
   | TxRef -> ":db/current-tx"
   | Ref_to entity_ref -> edn_string_of_entity_ref entity_ref
   | List values -> "(" ^ String.concat " " (List.map edn_string_of_value values) ^ ")"
@@ -241,7 +237,7 @@ let rec edn_string_of_value = function
     ^ "}"
 
 and edn_string_of_entity_ref = function
-  | Entity_id entity_id -> string_of_int entity_id
+  | Entity_id entity_id -> Int64.to_string entity_id
   | Temp_id tempid -> tempid
   | CurrentTx -> ":db/current-tx"
   | Ident ident -> ":" ^ ident
@@ -266,7 +262,7 @@ let unresolved_entity_ref_message = function
   | _ -> "lookup ref did not resolve"
 
 let find_avet_exact db attr value =
-  let bound = datom ~e:0 ~a:attr ~v:value () in
+  let bound = Db_impl.datom ~e:0L ~a:attr ~v:value () in
   let compare_prefix left right =
     let cmp = Util.compare_attr left.a right.a in
     if cmp <> 0 then cmp else compare_value left.v right.v
@@ -287,7 +283,7 @@ let find_avet_exact db attr value =
   | [] -> None
 
 let find_eavt_exact db entity_id attr value =
-  let bound = datom ~e:entity_id ~a:attr ~v:value () in
+  let bound = Db_impl.datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
     let cmp = compare left.e right.e in
     if cmp <> 0 then cmp
@@ -322,7 +318,7 @@ let rec coerce_tuple_lookup_value_db db attr value =
       match value with
       | Nil -> None
       | Int64 entity_id when is_ref_attr db source_attr ->
-        Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
+        Some (Ref (validate_entity_id entity_id))
       | (List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) when is_ref_attr db source_attr ->
         (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
          | Some entity_id -> Some (Ref entity_id)
@@ -340,7 +336,7 @@ let rec coerce_tuple_lookup_value_db db attr value =
       | None -> None
       | Some Nil -> None
       | Some (Int64 entity_id) when is_ref_attr db source_attr ->
-        Some (Ref (validate_entity_id (Util.int64_to_int_exn "tuple component entity id" entity_id)))
+        Some (Ref (validate_entity_id entity_id))
       | Some ((List [ lookup_attr; lookup_value ] | Vector [ lookup_attr; lookup_value ]) as lookup_ref) when is_ref_attr db source_attr ->
         (match Option.bind (lookup_attr_name lookup_attr) (fun attr -> entid_db db attr lookup_value) with
          | Some entity_id -> Some (Ref entity_id)
@@ -648,7 +644,7 @@ and refresh_tuple_attrs_for_source_db schema_db tx db e source_attr tx_data =
   tuple_attrs_for_source schema_db source_attr
   |> List.fold_left
        (fun (db, tx_data) (tuple_attr, source_attrs) ->
-         let datom = datom ~tx ~e ~a:tuple_attr ~v:(tuple_value_db db e source_attrs) () in
+         let datom = Db_impl.datom ~tx ~e ~a:tuple_attr ~v:(tuple_value_db db e source_attrs) () in
          let db, tuple_tx_data =
            add_active_datom_with_report_db ~allow_tuple:true schema_db tx db datom
          in
@@ -661,7 +657,7 @@ let add_user_datom_with_report_db schema_db tx db d =
 
 let add_entity_attr_value_db schema_db tx db e attr value =
   let e, attr, value = normalize_entity_attr_value schema_db e attr value in
-  add_user_datom_with_report_db schema_db tx db (datom ~tx ~e ~a:attr ~v:value ())
+  add_user_datom_with_report_db schema_db tx db (Db_impl.datom ~tx ~e ~a:attr ~v:value ())
 
 let compare_and_set_matches_db db e a expected =
   match cardinality db a, expected with
@@ -691,7 +687,7 @@ let cas_current_value_string_db db e a =
 
 let compare_and_set_failure_message_db db e a expected =
   ":db.fn/cas failed on datom ["
-  ^ string_of_int e
+  ^ Int64.to_string e
   ^ " :"
   ^ a
   ^ " "
@@ -784,7 +780,7 @@ let transact_apply_context : Transact_impl.apply_context =
   ; retract_entity_with_report = retract_entity_with_report_db
   ; compare_and_set_matches = compare_and_set_matches_db
   ; compare_and_set_failure_message = compare_and_set_failure_message_db
-  ; datom
+  ; datom = Db_impl.datom
   ; normalize_datom_for_schema
   ; add_active_datom_with_report = add_active_datom_with_report_db
   ; validate_explicit_upsert_target = validate_explicit_upsert_target_db
@@ -956,8 +952,8 @@ let last_tempid = ref 0
 let tempid ?part ?value () =
   match part, value with
   | Some "db.part/tx", _ | Some ":db.part/tx", _ -> CurrentTx
-  | _, Some value when value > 0 -> Entity_id (validate_entity_id value)
-  | _, Some value -> Temp_id (string_of_int value)
+  | _, Some value when value > 0L -> Entity_id (validate_entity_id value)
+  | _, Some value -> Temp_id (Int64.to_string value)
   | _ ->
     decr last_tempid;
     Temp_id (string_of_int !last_tempid)
@@ -965,19 +961,30 @@ let tempid ?part ?value () =
 let resolve_tempid ?db:_ tempids tempid = List.assoc_opt tempid tempids
 
 let entid_ref = Db_access_impl.entid_ref
-let datoms = Db_access_impl.datoms
-let fold_datoms = Db_access_impl.fold_datoms
-let datoms_ref = Db_access_impl.datoms_ref
-let datoms_list db index ?e ?a ?v ?tx () =
-  Db_access_impl.datoms_list db index ?e ?a ?v ?tx ()
+let datoms ?e ?a ?v ?tx db index = Db_access_impl.datoms db index ?e ?a ?v ?tx ()
 
-let find_datom = Db_access_impl.find_datom
-let find_datom_ref = Db_access_impl.find_datom_ref
-let seek_datoms = Db_access_impl.seek_datoms
-let seek_datoms_ref = Db_access_impl.seek_datoms_ref
-let rseek_datoms = Db_access_impl.rseek_datoms
-let rseek_datoms_ref = Db_access_impl.rseek_datoms_ref
-let index_range = Db_access_impl.index_range
+let fold_datoms ?e ?a ?v ?tx f init db index =
+  Db_access_impl.fold_datoms f init db index ?e ?a ?v ?tx ()
+
+let datoms_ref ?e ?a ?v ?tx db index = Db_access_impl.datoms_ref db index ?e ?a ?v ?tx ()
+
+let find_datom ?e ?a ?v ?tx db index = Db_access_impl.find_datom db index ?e ?a ?v ?tx ()
+
+let find_datom_ref ?e ?a ?v ?tx db index =
+  Db_access_impl.find_datom_ref db index ?e ?a ?v ?tx ()
+
+let seek_datoms ?e ?a ?v ?tx db index = Db_access_impl.seek_datoms db index ?e ?a ?v ?tx ()
+
+let seek_datoms_ref ?e ?a ?v ?tx db index =
+  Db_access_impl.seek_datoms_ref db index ?e ?a ?v ?tx ()
+
+let rseek_datoms ?e ?a ?v ?tx db index =
+  Db_access_impl.rseek_datoms db index ?e ?a ?v ?tx ()
+
+let rseek_datoms_ref ?e ?a ?v ?tx db index =
+  Db_access_impl.rseek_datoms_ref db index ?e ?a ?v ?tx ()
+
+let index_range ?start ?stop db attr = Db_access_impl.index_range db attr ?start ?stop ()
 
 let diff = Db_impl.diff
 
@@ -991,7 +998,7 @@ let squuid_time_millis = Db_impl.squuid_time_millis
 
 let reset_conn ?(tx_meta = []) conn db =
   let context : Conn.reset_context =
-    { store; datoms = (fun db -> datoms_list db Eavt ()) }
+    { store; datoms = (fun db -> Db_access_impl.datoms_list db Eavt ()) }
   in
   Conn.reset context ~tx_meta conn db
 
@@ -1015,9 +1022,9 @@ let values_compare_equal_fast left right =
   | Ref left, Ref right ->
     left = right
   | Int64 left, Ref right ->
-    left = Int64.of_int right
+    left = right
   | Ref left, Int64 right ->
-    Int64.of_int left = right
+    left = right
   | String left, String right
   | Symbol left, Symbol right
   | Keyword left, Keyword right
@@ -1039,9 +1046,9 @@ let search_attr_value db attr value =
     |> Seq.filter (fun datom -> values_compare_equal_fast datom.v value)
 
 let entity_context =
-  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  { Entity.datoms_by_entity = (fun db entity_id -> Db_access_impl.datoms db Eavt ~e:entity_id ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
-  ; all_datoms = (fun db -> datoms db Eavt ())
+  ; all_datoms = (fun db -> Db_access_impl.datoms db Eavt ())
   ; compare_value
   ; cardinality
   ; is_ref_attr
@@ -1079,8 +1086,8 @@ let pull_api_context : Pull_api_impl.context =
   ; entity
   ; entity_attr_raw
   ; entity_attrs
-  ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; all_datoms = (fun db -> datoms db Eavt ())
+  ; datoms_by_entity = (fun db entity_id -> Db_access_impl.datoms db Eavt ~e:entity_id ())
+  ; all_datoms = (fun db -> Db_access_impl.datoms db Eavt ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; cardinality
   ; is_ref_attr
@@ -1110,7 +1117,7 @@ let data_readers_context : Data_readers_impl.context =
   { tx0
   ; read_edn
   ; query_value_of_form
-  ; datom
+  ; datom = Db_impl.datom
   ; validate_schema
   ; empty_db = (fun ?(schema = []) () -> empty_db ~schema ())
   ; max_eid_with_entity_id = Db_impl.max_eid_with_entity_id
@@ -1126,24 +1133,19 @@ let data_readers_context : Data_readers_impl.context =
   ; init_db = (fun ?(schema = []) datoms -> init_db ~schema datoms)
   }
 
-module Data_readers = struct
-  let attr_of_edn_key = Data_readers_impl.attr_of_edn_key
-  let tx_attr_of_edn_key = Data_readers_impl.tx_attr_of_edn_key
-  let tx_op_name_of_edn_form = Data_readers_impl.tx_op_name_of_edn_form
-  let is_edn_attr_key = Data_readers_impl.is_edn_attr_key
-  let keyword_name_of_form = Data_readers_impl.keyword_name_of_form
-  let entity_ref_of_edn_form form = Data_readers_impl.entity_ref_of_edn_form data_readers_context form
-  let tx_data_of_edn_form form = Data_readers_impl.tx_data_of_edn_form data_readers_context form
-  let parse_tx_data_string input = Data_readers_impl.parse_tx_data_string data_readers_context input
-  let schema_of_edn_form form = Data_readers_impl.schema_of_edn_form data_readers_context form
-  let schema_of_edn_string input = Data_readers_impl.schema_of_edn_string data_readers_context input
-  let db_from_reader_form form = Data_readers_impl.db_from_reader_form data_readers_context form
-  let db_from_reader_string input = Data_readers_impl.db_from_reader_string data_readers_context input
-end
 
-let parse_tx_data_string = Data_readers.parse_tx_data_string
-let schema_of_edn_string = Data_readers.schema_of_edn_string
-let db_from_reader_string = Data_readers.db_from_reader_string
+let parse_tx_data_string input = Data_readers_impl.parse_tx_data_string data_readers_context input
+let schema_of_edn_string input = Data_readers_impl.schema_of_edn_string data_readers_context input
+let db_from_reader_string input = Data_readers_impl.db_from_reader_string data_readers_context input
+let attr_of_edn_key = Data_readers_impl.attr_of_edn_key
+let tx_attr_of_edn_key = Data_readers_impl.tx_attr_of_edn_key
+let tx_op_name_of_edn_form = Data_readers_impl.tx_op_name_of_edn_form
+let is_edn_attr_key = Data_readers_impl.is_edn_attr_key
+let keyword_name_of_form = Data_readers_impl.keyword_name_of_form
+let entity_ref_of_edn_form = Data_readers_impl.entity_ref_of_edn_form data_readers_context
+let tx_data_of_edn_form = Data_readers_impl.tx_data_of_edn_form data_readers_context
+let schema_of_edn_form = Data_readers_impl.schema_of_edn_form data_readers_context
+let db_from_reader_form = Data_readers_impl.db_from_reader_form data_readers_context
 
 let db_with_string input db =
   db_with (parse_tx_data_string input) db
@@ -1223,7 +1225,7 @@ let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
    the pattern unsatisfiable — upstream `-search` finds no datoms. A term
    carrying no binding (variable, wildcard) imposes no constraint. *)
 type entity_term_resolution =
-  | Resolved_eid of int
+  | Resolved_eid of entity_id
   | Unresolved_eid
   | No_eid_constraint
 
@@ -1233,10 +1235,7 @@ let query_entity_id_term db = function
     (match entid db ident_attr (Keyword ident) with
      | Some entity_id -> Resolved_eid entity_id
      | None -> Unresolved_eid)
-  | QValue (Int64 entity_id) ->
-    (match Util.int64_to_int entity_id with
-     | Some entity_id -> Resolved_eid entity_id
-     | None -> Unresolved_eid)
+  | QValue (Int64 entity_id) -> Resolved_eid entity_id
   | QValue value ->
     (match Query.query_result_entity_id (query_result_context db) (Result_value value) with
      | Some entity_id -> Resolved_eid entity_id
@@ -1258,7 +1257,7 @@ let query_value_term = function
   | _ -> None
 
 let query_tx_term = function
-  | Some (QValue (Int64 tx)) -> Util.int64_to_int tx
+  | Some (QValue (Int64 tx)) -> Some tx
   | _ -> None
 
 let query_attr_uses_avet db attr =
@@ -1297,9 +1296,9 @@ let datoms_by_attr_value db attr value =
       | None -> false
     in
     if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms_list db Avet ~a:attr ~v:value ()
+      Db_access_impl.datoms_list db Avet ~a:attr ~v:value ()
     else
-      datoms_list db Aevt ~a:attr ()
+      Db_access_impl.datoms_list db Aevt ~a:attr ()
       |> List.filter datom_value_matches
 
 let pattern_value_needs_attr_resolution db attr value =
@@ -1314,7 +1313,7 @@ let pattern_value_needs_attr_resolution db attr value =
 
 let primary_attr_datoms db index attr =
   let attr_prefix_datoms index index_set =
-    let bound = datom ~e:0 ~a:attr ~v:Nil () in
+    let bound = Db_impl.datom ~e:0L ~a:attr ~v:Nil () in
     let compare_prefix left right = Util.compare_attr left.a right.a in
     let cmp left right =
       if right == bound then compare_prefix left right
@@ -1362,7 +1361,7 @@ let primary_attr_datoms_seq db index ?e ~a ?v ?tx () =
 
 let query_attr_datoms_seq db index ?e ~a ?v ?tx () =
   match db.duplicate_datoms with
-  | [] -> datoms db index ?e ~a ?v ?tx ()
+  | [] -> Db_access_impl.datoms db index ?e ~a ?v ?tx ()
   | _ -> primary_attr_datoms_seq db index ?e ~a ?v ?tx ()
 
 let pattern_datoms db e_term a_term v_term tx_term =
@@ -1399,7 +1398,7 @@ let pattern_datoms db e_term a_term v_term tx_term =
     |> Seq.filter matches_optional_e_tx
   | QAttr attr, _ ->
     query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ()
-  | _ -> datoms db Eavt ?e ?v ?tx ()
+  | _ -> Db_access_impl.datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
   match query_entity_id_term db e_term with
@@ -1423,18 +1422,18 @@ let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
   in
   match a_term, v with
   | QAttr attr, _ when is_reverse_ref attr ->
-    fold_datoms f init db Aevt ~a:(reverse_ref attr) ?tx ()
+    Db_access_impl.fold_datoms f init db Aevt ~a:(reverse_ref attr) ?tx ()
   | QAttr attr, Some value when not (pattern_value_needs_attr_resolution db attr value) ->
     if query_value_uses_avet value && query_attr_uses_avet db attr then
-      fold_datoms f init db Avet ?e ~a:attr ~v:value ?tx ()
+      Db_access_impl.fold_datoms f init db Avet ?e ~a:attr ~v:value ?tx ()
     else
-      fold_datoms f init db Aevt ?e ~a:attr ~v:value ?tx ()
+      Db_access_impl.fold_datoms f init db Aevt ?e ~a:attr ~v:value ?tx ()
   | QAttr attr, Some value ->
     datoms_by_attr_value db attr value
     |> List.fold_left (fun acc datom -> if matches_optional_e_tx datom then f acc datom else acc) init
   | QAttr attr, _ ->
-    fold_datoms f init db Aevt ?e ~a:attr ?tx ()
-  | _ -> fold_datoms f init db Eavt ?e ?v ?tx ()
+    Db_access_impl.fold_datoms f init db Aevt ?e ~a:attr ?tx ()
+  | _ -> Db_access_impl.fold_datoms f init db Eavt ?e ?v ?tx ()
 
 let pattern_comparison_datoms db terms predicate threshold =
   let attr =
@@ -1447,8 +1446,8 @@ let pattern_comparison_datoms db terms predicate threshold =
     | _ -> None
   in
   match attr, predicate with
-  | Some attr, GreaterThan | Some attr, GreaterOrEqual -> Some (index_range db attr ~start:threshold ())
-  | Some attr, LessThan | Some attr, LessOrEqual -> Some (index_range db attr ~stop:threshold ())
+  | Some attr, GreaterThan | Some attr, GreaterOrEqual -> Some (Db_access_impl.index_range db attr ~start:threshold ())
+  | Some attr, LessThan | Some attr, LessOrEqual -> Some (Db_access_impl.index_range db attr ~stop:threshold ())
   | _ -> None
 
 let match_data_pattern db bindings e_term a_term v_term datom =
@@ -1490,7 +1489,7 @@ let collect_query_terms_exn db bindings terms =
 let query_evaluator_context : Query_eval.evaluator_context =
   { result_resolution_context = query_result_context
   ; match_context = query_match_context
-  ; datoms
+  ; datoms = Db_access_impl.datoms
   ; is_reverse_ref
   ; reverse_ref
   ; compare_value
@@ -1610,10 +1609,283 @@ let parser_query_context : Parser_impl.query_context =
 
 let parse_find form = Parser_impl.parse_find parser_query_context form
 
+let normalize_var (name : var) : var =
+  if String.length name > 0 && name.[0] = '?' then String.sub name 1 (String.length name - 1) else name
+
+let normalize_source (name : source_var) : source_var =
+  if String.equal name "$" then
+    name
+  else if String.length name > 1 && name.[0] = '$' then
+    String.sub name 1 (String.length name - 1)
+  else
+    name
+
+(* Boundary normalization: [?e]/[e] denote the same var, [$x]/[x] the
+   same source.  Public [string] domains are interned here so queries
+   built either way are equivalent. *)
+
+let norm_term = function
+  | QVar name -> QVar (normalize_var name)
+  | QSource name -> QSource (normalize_source name)
+  | term -> term
+
+let norm_terms = List.map norm_term
+
+let rec norm_binding = function
+  | Bind_scalar name -> Bind_scalar (normalize_var name)
+  | Bind_collection binding -> Bind_collection (norm_binding binding)
+  | Bind_tuple bindings -> Bind_tuple (List.map norm_binding bindings)
+  | binding -> binding
+
+let norm_vars = List.map normalize_var
+
+let rec norm_clause = function
+  | Pattern (e, a, v) -> Pattern (norm_term e, norm_term a, norm_term v)
+  | PatternTx (e, a, v, tx) ->
+    PatternTx (norm_term e, norm_term a, norm_term v, norm_term tx)
+  | PatternTxOp (e, a, v, tx, op) ->
+    PatternTxOp (norm_term e, norm_term a, norm_term v, norm_term tx, norm_term op)
+  | SourcePattern (src, e, a, v) ->
+    SourcePattern (normalize_source src, norm_term e, norm_term a, norm_term v)
+  | SourcePatternTx (src, e, a, v, tx) ->
+    SourcePatternTx (normalize_source src, norm_term e, norm_term a, norm_term v, norm_term tx)
+  | SourcePatternTxOp (src, e, a, v, tx, op) ->
+    SourcePatternTxOp
+      (normalize_source src, norm_term e, norm_term a, norm_term v, norm_term tx, norm_term op)
+  | SourceRelationPattern (src, terms) ->
+    SourceRelationPattern (normalize_source src, norm_terms terms)
+  | Missing (e, a) -> Missing (norm_term e, norm_term a)
+  | SourceMissing (src, e, a) -> SourceMissing (normalize_source src, norm_term e, norm_term a)
+  | GetElse (e, a, default, out) ->
+    GetElse (norm_term e, norm_term a, norm_term default, normalize_var out)
+  | SourceGetElse (src, e, a, default, out) ->
+    SourceGetElse
+      (normalize_source src, norm_term e, norm_term a, norm_term default, normalize_var out)
+  | GetSome (e, attrs, attr_var, value_var) ->
+    GetSome
+      (norm_term e, norm_terms attrs, normalize_var attr_var, normalize_var value_var)
+  | SourceGetSome (src, e, attrs, attr_var, value_var) ->
+    SourceGetSome
+      ( normalize_source src
+      , norm_term e
+      , norm_terms attrs
+      , normalize_var attr_var
+      , normalize_var value_var )
+  | GetValue (e, a, out) -> GetValue (norm_term e, norm_term a, normalize_var out)
+  | GetDefaultValue (e, a, default, out) ->
+    GetDefaultValue (norm_term e, norm_term a, norm_term default, normalize_var out)
+  | CountValue (e, out) -> CountValue (norm_term e, normalize_var out)
+  | EmptyValue e -> EmptyValue (norm_term e)
+  | NotEmptyValue e -> NotEmptyValue (norm_term e)
+  | ContainsValue (e, needle) -> ContainsValue (norm_term e, norm_term needle)
+  | ValuePredicate (pred, e) -> ValuePredicate (pred, norm_term e)
+  | NumericPredicate (pred, e) -> NumericPredicate (pred, norm_term e)
+  | ComparisonPredicate (pred, l, r) ->
+    ComparisonPredicate (pred, norm_term l, norm_term r)
+  | ComparisonPredicateN (pred, terms) -> ComparisonPredicateN (pred, norm_terms terms)
+  | EqualityPredicate (pred, terms) -> EqualityPredicate (pred, norm_terms terms)
+  | ArithmeticValue (op, terms, out) ->
+    ArithmeticValue (op, norm_terms terms, normalize_var out)
+  | CompareValue (a, b, out) -> CompareValue (norm_term a, norm_term b, normalize_var out)
+  | ExtremumValue (op, terms, out) ->
+    ExtremumValue (op, norm_terms terms, normalize_var out)
+  | BooleanPredicate (pred, e) -> BooleanPredicate (pred, norm_term e)
+  | BooleanNotPredicate e -> BooleanNotPredicate (norm_term e)
+  | BooleanNotValue (e, out) -> BooleanNotValue (norm_term e, normalize_var out)
+  | IdentityValue (e, out) -> IdentityValue (norm_term e, normalize_var out)
+  | BooleanAndPredicate terms -> BooleanAndPredicate (norm_terms terms)
+  | BooleanAndValue (terms, out) -> BooleanAndValue (norm_terms terms, normalize_var out)
+  | BooleanOrPredicate terms -> BooleanOrPredicate (norm_terms terms)
+  | BooleanOrValue (terms, out) -> BooleanOrValue (norm_terms terms, normalize_var out)
+  | RandomValue out -> RandomValue (normalize_var out)
+  | RandomIntValue (e, out) -> RandomIntValue (norm_term e, normalize_var out)
+  | DifferPredicate terms -> DifferPredicate (norm_terms terms)
+  | IdenticalPredicate (a, b) -> IdenticalPredicate (norm_term a, norm_term b)
+  | TypeValue (e, out) -> TypeValue (norm_term e, normalize_var out)
+  | MetaValue (e, out) -> MetaValue (norm_term e, normalize_var out)
+  | NameValue (e, out) -> NameValue (norm_term e, normalize_var out)
+  | NamespaceValue (e, out) -> NamespaceValue (norm_term e, normalize_var out)
+  | KeywordFromName (e, out) -> KeywordFromName (norm_term e, normalize_var out)
+  | KeywordFromNamespaceName (e, ns, out) ->
+    KeywordFromNamespaceName (norm_term e, norm_term ns, normalize_var out)
+  | StringIncludesValue (s, sub) -> StringIncludesValue (norm_term s, norm_term sub)
+  | StringStartsWithValue (s, sub) -> StringStartsWithValue (norm_term s, norm_term sub)
+  | StringEndsWithValue (s, sub) -> StringEndsWithValue (norm_term s, norm_term sub)
+  | StringLowerCaseValue (s, out) -> StringLowerCaseValue (norm_term s, normalize_var out)
+  | StringUpperCaseValue (s, out) -> StringUpperCaseValue (norm_term s, normalize_var out)
+  | StringCapitalizeValue (s, out) ->
+    StringCapitalizeValue (norm_term s, normalize_var out)
+  | StringReverseValue (s, out) -> StringReverseValue (norm_term s, normalize_var out)
+  | StringTrimValue (s, out) -> StringTrimValue (norm_term s, normalize_var out)
+  | StringTrimLeftValue (s, out) -> StringTrimLeftValue (norm_term s, normalize_var out)
+  | StringTrimRightValue (s, out) ->
+    StringTrimRightValue (norm_term s, normalize_var out)
+  | StringTrimNewlineValue (s, out) ->
+    StringTrimNewlineValue (norm_term s, normalize_var out)
+  | StringIndexOfValue (s, sub, out) ->
+    StringIndexOfValue (norm_term s, norm_term sub, normalize_var out)
+  | StringLastIndexOfValue (s, sub, out) ->
+    StringLastIndexOfValue (norm_term s, norm_term sub, normalize_var out)
+  | StringSubstringValue (s, start, stop, out) ->
+    StringSubstringValue
+      (norm_term s, norm_term start, Option.map norm_term stop, normalize_var out)
+  | StringBuildValue (terms, out) -> StringBuildValue (norm_terms terms, normalize_var out)
+  | PrintStringValue (terms, out) -> PrintStringValue (norm_terms terms, normalize_var out)
+  | PrintLineStringValue (terms, out) ->
+    PrintLineStringValue (norm_terms terms, normalize_var out)
+  | PrStringValue (terms, out) -> PrStringValue (norm_terms terms, normalize_var out)
+  | PrnStringValue (terms, out) -> PrnStringValue (norm_terms terms, normalize_var out)
+  | StringJoinPlainValue (s, out) -> StringJoinPlainValue (norm_term s, normalize_var out)
+  | StringJoinValue (s, sep, out) ->
+    StringJoinValue (norm_term s, norm_term sep, normalize_var out)
+  | StringReplaceValue (s, pat, rep, out) ->
+    StringReplaceValue (norm_term s, norm_term pat, norm_term rep, normalize_var out)
+  | StringReplaceFirstValue (s, pat, rep, out) ->
+    StringReplaceFirstValue (norm_term s, norm_term pat, norm_term rep, normalize_var out)
+  | StringEscapeValue (s, pat, out) ->
+    StringEscapeValue (norm_term s, norm_term pat, normalize_var out)
+  | RePatternValue (s, out) -> RePatternValue (norm_term s, normalize_var out)
+  | ReFindValue (re, s, out) -> ReFindValue (norm_term re, norm_term s, normalize_var out)
+  | ReMatchesValue (re, s, out) ->
+    ReMatchesValue (norm_term re, norm_term s, normalize_var out)
+  | ReSeqValue (re, s, out) -> ReSeqValue (norm_term re, norm_term s, normalize_var out)
+  | ReFindPredicate (re, s) -> ReFindPredicate (norm_term re, norm_term s)
+  | ReMatchesPredicate (re, s) -> ReMatchesPredicate (norm_term re, norm_term s)
+  | StringBlankValue s -> StringBlankValue (norm_term s)
+  | StringSplitValue (s, pat, out) ->
+    StringSplitValue (norm_term s, norm_term pat, normalize_var out)
+  | StringSplitLimitValue (s, pat, n, out) ->
+    StringSplitLimitValue (norm_term s, norm_term pat, norm_term n, normalize_var out)
+  | StringSplitLinesValue (s, out) ->
+    StringSplitLinesValue (norm_term s, normalize_var out)
+  | Ground (v, out) -> Ground (v, normalize_var out)
+  | GroundCollection (v, out) -> GroundCollection (v, normalize_var out)
+  | GroundTuple (v, vars) -> GroundTuple (v, norm_vars vars)
+  | GroundRelation (v, vars) -> GroundRelation (v, norm_vars vars)
+  | GroundTerm (t, out) -> GroundTerm (norm_term t, normalize_var out)
+  | GroundTermCollection (t, out) -> GroundTermCollection (norm_term t, normalize_var out)
+  | GroundTermTuple (t, vars) -> GroundTermTuple (norm_term t, norm_vars vars)
+  | GroundTermRelation (t, vars) -> GroundTermRelation (norm_term t, norm_vars vars)
+  | VectorValue (terms, out) -> VectorValue (norm_terms terms, normalize_var out)
+  | ListValue (terms, out) -> ListValue (norm_terms terms, normalize_var out)
+  | SetValue (terms, out) -> SetValue (norm_terms terms, normalize_var out)
+  | HashMapValue (terms, out) -> HashMapValue (norm_terms terms, normalize_var out)
+  | ArrayMapValue (terms, out) -> ArrayMapValue (norm_terms terms, normalize_var out)
+  | RangeEndValue (e, out) -> RangeEndValue (norm_term e, normalize_var out)
+  | RangeValue (a, b, out) -> RangeValue (norm_term a, norm_term b, normalize_var out)
+  | RangeStepValue (a, b, step, out) ->
+    RangeStepValue (norm_term a, norm_term b, norm_term step, normalize_var out)
+  | TupleFunction (terms, out) -> TupleFunction (norm_terms terms, normalize_var out)
+  | UntupleFunction (t, vars) -> UntupleFunction (norm_term t, norm_vars vars)
+  | Predicate (name, terms, f) -> Predicate (name, norm_terms terms, f)
+  | Function (name, terms, outs, f) -> Function (name, norm_terms terms, norm_vars outs, f)
+  | DynamicPredicate (name, terms) -> DynamicPredicate (name, norm_terms terms)
+  | DynamicFunction (name, terms, outs) ->
+    DynamicFunction (name, norm_terms terms, norm_vars outs)
+  | DynamicFunctionCollection (name, terms, out) ->
+    DynamicFunctionCollection (name, norm_terms terms, normalize_var out)
+  | DynamicFunctionRelation (name, terms, outs) ->
+    DynamicFunctionRelation (name, norm_terms terms, norm_vars outs)
+  | SourceClause (src, clause) ->
+    SourceClause (normalize_source src, norm_clause clause)
+  | Not clauses -> Not (List.map norm_clause clauses)
+  | SourceNot (src, clauses) -> SourceNot (normalize_source src, List.map norm_clause clauses)
+  | NotJoin (vars, clauses) -> NotJoin (norm_vars vars, List.map norm_clause clauses)
+  | SourceNotJoin (src, vars, clauses) ->
+    SourceNotJoin (normalize_source src, norm_vars vars, List.map norm_clause clauses)
+  | Or branches -> Or (List.map (List.map norm_clause) branches)
+  | SourceOr (src, branches) ->
+    SourceOr (normalize_source src, List.map (List.map norm_clause) branches)
+  | OrJoin (vars, branches) ->
+    OrJoin (norm_vars vars, List.map (List.map norm_clause) branches)
+  | SourceOrJoin (src, vars, branches) ->
+    SourceOrJoin (normalize_source src, norm_vars vars, List.map (List.map norm_clause) branches)
+  | OrJoinRequired (required, vars, branches) ->
+    OrJoinRequired (norm_vars required, norm_vars vars, List.map (List.map norm_clause) branches)
+  | SourceOrJoinRequired (src, required, vars, branches) ->
+    SourceOrJoinRequired
+      ( normalize_source src
+      , norm_vars required
+      , norm_vars vars
+      , List.map (List.map norm_clause) branches )
+  | Rule (name, args) -> Rule (name, norm_terms args)
+  | SourceRule (src, name, args) -> SourceRule (normalize_source src, name, norm_terms args)
+
+let norm_rule (rule : query_rule) : query_rule =
+  { rule with
+    rule_params = norm_vars rule.rule_params
+  ; rule_body = List.map norm_clause rule.rule_body
+  }
+
+let norm_spec = function
+  | Spec_source src -> Spec_source (normalize_source src)
+  | Spec_scalar v -> Spec_scalar (normalize_var v)
+  | Spec_collection v -> Spec_collection (normalize_var v)
+  | Spec_nested_collection binding -> Spec_nested_collection (norm_binding binding)
+  | Spec_tuple vars -> Spec_tuple (norm_vars vars)
+  | Spec_relation vars -> Spec_relation (norm_vars vars)
+  | Spec_nested_tuple bindings -> Spec_nested_tuple (List.map norm_binding bindings)
+  | Spec_nested_relation bindings -> Spec_nested_relation (List.map norm_binding bindings)
+  | spec -> spec
+
+let norm_aggregate = function
+  | MinNVar v -> MinNVar (normalize_var v)
+  | MaxNVar v -> MaxNVar (normalize_var v)
+  | RandNVar v -> RandNVar (normalize_var v)
+  | SampleVar v -> SampleVar (normalize_var v)
+  | CustomVar v -> CustomVar (normalize_var v)
+  | agg -> agg
+
+let norm_find = function
+  | Find_var v -> Find_var (normalize_var v)
+  | Find_pull (v, p) -> Find_pull (normalize_var v, p)
+  | Find_pull_form (v, form) -> Find_pull_form (normalize_var v, form)
+  | Find_pull_var (v, alias) -> Find_pull_var (normalize_var v, normalize_var alias)
+  | Find_pull_source (src, v, p) ->
+    Find_pull_source (normalize_source src, normalize_var v, p)
+  | Find_pull_source_form (src, v, form) ->
+    Find_pull_source_form (normalize_source src, normalize_var v, form)
+  | Find_pull_source_var (src, v, alias) ->
+    Find_pull_source_var (normalize_source src, normalize_var v, normalize_var alias)
+  | Find_aggregate (agg, terms) -> Find_aggregate (norm_aggregate agg, norm_terms terms)
+
 let validate_rule_arities = Parser_impl.validate_rule_arities
 
+(* Declaration-only :in specs <-> the internal query_input constructors. *)
+
+let query_input_of_spec = function
+  | Spec_source name -> Input_source_decl name
+  | Spec_scalar name -> Input_scalar_decl name
+  | Spec_collection name -> Input_collection_decl name
+  | Spec_collection_ignore -> Input_collection_ignore_decl
+  | Spec_nested_collection binding -> Input_nested_collection_decl binding
+  | Spec_tuple vars -> Input_tuple_decl vars
+  | Spec_relation vars -> Input_relation_decl vars
+  | Spec_nested_tuple bindings -> Input_nested_tuple_decl bindings
+  | Spec_nested_relation bindings -> Input_nested_relation_decl bindings
+  | Spec_rules -> Input_rules_decl
+  | Spec_ignore -> Input_ignore_decl
+
+let spec_of_query_input = function
+  | Input_source_decl name -> Spec_source name
+  | Input_scalar_decl name -> Spec_scalar name
+  | Input_collection_decl name -> Spec_collection name
+  | Input_collection_ignore_decl -> Spec_collection_ignore
+  | Input_nested_collection_decl binding -> Spec_nested_collection binding
+  | Input_tuple_decl vars -> Spec_tuple vars
+  | Input_relation_decl vars -> Spec_relation vars
+  | Input_nested_tuple_decl bindings -> Spec_nested_tuple bindings
+  | Input_nested_relation_decl bindings -> Spec_nested_relation bindings
+  | Input_rules_decl -> Spec_rules
+  | Input_ignore_decl | Input_ignore -> Spec_ignore
+  | Input_scalar _ | Input_entity_ref _ | Input_collection _ | Input_collection_ignore _
+  | Input_nested_collection _ | Input_tuple _ | Input_relation _ | Input_nested_tuple _
+  | Input_nested_relation _ | Input_predicate _ | Input_function _ | Input_aggregate _
+  | Input_rules _ ->
+    invalid_arg "query input specs are declaration-only"
+
 let parse_binding = Parser_impl.parse_binding
-let parse_in = Parser_impl.parse_in
+let parse_in form = List.map spec_of_query_input (Parser_impl.parse_in form)
 let parse_with = Parser_impl.parse_with
 
 
@@ -1621,6 +1893,7 @@ let parse_query_return form = Parser_impl.parse_query_return parser_query_contex
 let parse_query_return_map form = Parser_impl.parse_query_return_map parser_query_context form
 let parse_query form = Parser_impl.parse_query parser_query_context form
 let parse_query_string input = Parser_impl.parse_query_string parser_query_context input
+let parse_rules_string input = Parser_impl.parse_rules parser_query_context (Some (read_edn input))
 let parse_query_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   Parser_impl.parse_query_string_with_pull_context parser_query_context ?default_pull_db ?pull_db_for_source input
 let parse_query_return_string input = Parser_impl.parse_query_return_string parser_query_context input
@@ -1630,91 +1903,7 @@ let parse_query_return_map_string input = Parser_impl.parse_query_return_map_str
 let parse_query_return_map_string_with_pull_context ?default_pull_db ?pull_db_for_source input =
   Parser_impl.parse_query_return_map_string_with_pull_context parser_query_context ?default_pull_db ?pull_db_for_source input
 
-module Pull_parser = struct
-  let parse_pattern = parse_pull_pattern
-  let parse_pattern_string = parse_pull_pattern_string
-end
 
-module Parser = struct
-  let read_edn = read_edn
-  let section_forms = Parser_impl.section_forms
-  let query_form_section = Parser_impl.query_form_section
-  let query_form_sections = Parser_impl.query_form_sections
-  let query_form_map = Parser_impl.query_form_map
-  let query_form_sequence = Parser_impl.query_form_sequence
-  let query_symbol_name = Parser_impl.query_symbol_name
-  let query_callable_name = Parser_impl.query_callable_name
-  let is_plain_input_symbol = Parser_impl.is_plain_input_symbol
-  let is_query_input_symbol = Parser_impl.is_query_input_symbol
-  let query_input_name = Parser_impl.query_input_name
-  let query_source_name = Parser_impl.query_source_name
-  let is_query_source_symbol = Parser_impl.is_query_source_symbol
-  let is_plain_rule_symbol = Parser_impl.is_plain_rule_symbol
-  let aggregate_of_symbol = Parser_impl.aggregate_of_symbol
-  let amount_aggregate_of_symbol = Parser_impl.amount_aggregate_of_symbol
-  let dynamic_amount_aggregate_of_symbol = Parser_impl.dynamic_amount_aggregate_of_symbol
-  let parse_find_arg = Parser_impl.parse_find_arg
-  let parse_find_args = Parser_impl.parse_find_args
-  let parse_output_var = Parser_impl.parse_output_var
-  let parse_output_vars = Parser_impl.parse_output_vars
-  let parse_flat_output_vars = Parser_impl.parse_flat_output_vars
-  let parse_collection_output_var = Parser_impl.parse_collection_output_var
-  let parse_relation_output_vars = Parser_impl.parse_relation_output_vars
-  let nonempty_input_vars = Parser_impl.nonempty_input_vars
-  let input_relation_vars = Parser_impl.input_relation_vars
-  let input_var_of_form = Parser_impl.input_var_of_form
-  let flat_input_vars = Parser_impl.flat_input_vars
-  let parse_nested_input_binding = Parser_impl.parse_nested_input_binding
-  let nested_relation_binding = Parser_impl.nested_relation_binding
-  let parse_input_binding = Parser_impl.parse_input_binding
-  let parse_inputs = Parser_impl.parse_inputs
-  let input_declares_rules_var = Parser_impl.input_declares_rules_var
-  let ensure_distinct_input_rules_var = Parser_impl.ensure_distinct_input_rules_var
-  let parse_with_var = Parser_impl.parse_with_var
-  let parse_with_section = Parser_impl.parse_with_section
-  let parse_return_map_labels = Parser_impl.parse_return_map_labels
-  let parse_return_map_section = Parser_impl.parse_return_map_section
-  let lookup_ref_of_form = Parser_impl.lookup_ref_of_form
-  let parse_pattern_term = Parser_impl.parse_pattern_term
-  let comparison_predicate_of_symbol = Parser_impl.comparison_predicate_of_symbol
-  let value_predicate_of_symbol = Parser_impl.value_predicate_of_symbol
-  let numeric_predicate_of_symbol = Parser_impl.numeric_predicate_of_symbol
-  let boolean_predicate_of_symbol = Parser_impl.boolean_predicate_of_symbol
-  let unary_string_predicate_clause_of_symbol = Parser_impl.unary_string_predicate_clause_of_symbol
-  let binary_string_predicate_clause_of_symbol = Parser_impl.binary_string_predicate_clause_of_symbol
-  let equality_predicate_of_symbol = Parser_impl.equality_predicate_of_symbol
-  let arithmetic_op_of_symbol = Parser_impl.arithmetic_op_of_symbol
-  let query_attr_name = Parser_impl.query_attr_name
-  let parse_data_pattern_clause = Parser_impl.parse_data_pattern_clause
-  let parse_rule_expr = Parser_impl.parse_rule_expr
-  let parse_source_pattern_clause = Parser_impl.parse_source_pattern_clause
-  let parse_missing_clause = Parser_impl.parse_missing_clause
-  let parse_get_else_clause = Parser_impl.parse_get_else_clause
-  let parse_two_output_vars = Parser_impl.parse_two_output_vars
-  let parse_get_some_clause = Parser_impl.parse_get_some_clause
-  let parse_get_clause = Parser_impl.parse_get_clause
-  let parse_core_value_function = Parser_impl.parse_core_value_function
-  let parse_collection_function = Parser_impl.parse_collection_function
-  let parse_flat_value_function = Parser_impl.parse_flat_value_function
-  let ground_values_of_form = Parser_impl.ground_values_of_form
-  let ground_relation_rows_of_form = Parser_impl.ground_relation_rows_of_form
-  let dynamic_ground_term = Parser_impl.dynamic_ground_term
-  let parse_ground_function = Parser_impl.parse_ground_function
-  let parse_value_metadata_function = Parser_impl.parse_value_metadata_function
-  let parse_string_transform_function = Parser_impl.parse_string_transform_function
-  let parse_binding = parse_binding
-  let parse_in = parse_in
-  let parse_with = parse_with
-  let parse_find = parse_find
-  let parse_clause form = Parser_impl.parse_pattern_clause parser_query_context form
-  let parse_rules form = Parser_impl.parse_rules parser_query_context (Some form)
-  let parse_query = parse_query
-  let parse_query_string = parse_query_string
-  let parse_query_return = parse_query_return
-  let parse_query_return_string = parse_query_return_string
-  let parse_query_return_map = parse_query_return_map
-  let parse_query_return_map_string = parse_query_return_map_string
-end
 
 let pull_string ?visitor db input entity_ref =
   pull ?visitor db (parse_pull_pattern_string db input) entity_ref
@@ -1722,12 +1911,6 @@ let pull_string ?visitor db input entity_ref =
 let pull_many_string ?visitor db input entity_refs =
   pull_many ?visitor db (parse_pull_pattern_string db input) entity_refs
 
-module Pull_api = struct
-  let pull = pull
-  let pull_string = pull_string
-  let pull_many = pull_many
-  let pull_many_string = pull_many_string
-end
 
 module Query_api_impl = Query_api.Make (struct
   let empty_db () = empty_db ()
@@ -1750,98 +1933,8 @@ module Query_impl = Query
 
 let query_context = Query_api_impl.query_context
 
-module Query = struct
-  type closure_index = Query_impl.closure_index =
-    { up : (int, value list) Hashtbl.t
-    ; down : (int, int list) Hashtbl.t
-    ; leaf_up : (int, value list) Hashtbl.t
-    ; leaf_down : (value, int list) Hashtbl.t
-    ; anc : (int, value list) Hashtbl.t
-    ; desc : (int, int list) Hashtbl.t
-    }
 
-  type query_closure_cache = Query_impl.query_closure_cache =
-    { closures : (string * string, closure_index) Hashtbl.t
-    }
 
-  type query_callables = Query_impl.query_callables =
-    { callable_predicates : (string * (query_result list -> bool)) list
-    ; callable_functions : (string * (query_result list -> query_result list option)) list
-    ; callable_aggregates : (string * (query_result list -> query_result)) list
-    ; callable_aliases : (string * string) list
-    ; closure_cache : query_closure_cache option
-    }
-
-  type result_resolution_context = Query_impl.result_resolution_context =
-    { validate_entity_id : int -> entity_id
-    ; resolve_query_value : value -> value option
-    ; lookup_ref_entity_id : attr -> value -> entity_id option
-    }
-
-  type match_context = Query_impl.match_context =
-    { result_resolution_context : result_resolution_context
-    ; source_db : db
-    ; ident_entity_id : string -> entity_id option
-    ; unresolved_lookup_ref_message : attr -> value -> string
-    ; value_equal : value -> value -> bool
-    ; coerce_tuple_lookup_value : attr -> value -> value
-    }
-
-  type source_context = Query_impl.source_context =
-    { match_context : match_context
-    ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
-    ; fold_pattern_datoms :
-        'a.
-        db ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term option ->
-        init:'a ->
-        f:('a -> datom -> 'a) ->
-        'a
-    ; pattern_comparison_datoms :
-        db -> query_term list -> comparison_predicate -> value -> datom Seq.t option
-    ; match_data_pattern :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    ; match_data_pattern_tx :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    ; match_data_pattern_tx_op :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    }
-
-  type input_context = Query_impl.input_context =
-    { resolve_query_input_result : query_result -> query_result option
-    ; bind_var :
-        string ->
-        query_result ->
-        (string * query_result) list ->
-        (string * query_result) list option
-    ; entity_id_of_ref : entity_ref -> entity_id option
-  }
-
-  let empty_query_callables = Query_impl.empty_query_callables
 
   type simple_row_slot =
     | Simple_entity_slot
@@ -1849,7 +1942,7 @@ module Query = struct
 
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in
-    match db.max_datom_e > 50_000, inputs, query.rules, query.with_vars with
+    match db.max_datom_e > 50_000L, inputs, query.rules, query.with_vars with
     | true, _, _, _ -> None
     | false, Some _, _, _ | false, _, _ :: _, _ | false, _, _, _ :: _ -> None
     | false, None, [], [] ->
@@ -1919,11 +2012,11 @@ module Query = struct
             let value_tables =
               value_var_attrs
               |> List.map (fun (value_var, attr) ->
-                let values = Array.make (db.max_datom_e + 1) None in
+                let values = Array.make (Int64.to_int db.max_datom_e + 1) None in
                 primary_attr_datoms db Aevt attr
                 |> List.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
+                  if datom.e >= 0L && datom.e < Int64.of_int (Array.length values) then
+                    values.(Int64.to_int datom.e) <- Some (Query_impl.result_of_datom_v datom));
                 value_var, values)
             in
             let slot_for_find_var var =
@@ -1947,11 +2040,11 @@ module Query = struct
             let constant_sets =
               constant_datoms
               |> List.map (fun (_, datoms) ->
-                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+                let entities = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
                 List.iter
                   (fun datom ->
-                    if datom.e >= 0 && datom.e < Bytes.length entities then
-                      Bytes.set entities datom.e '\001')
+                    if datom.e >= 0L && datom.e < Int64.of_int (Bytes.length entities) then
+                      Bytes.set entities (Int64.to_int datom.e) '\001')
                   datoms;
                 entities)
             in
@@ -1963,14 +2056,14 @@ module Query = struct
             let entity_allowed entity_id =
               constant_sets
               |> List.for_all (fun entities ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001')
+                entity_id >= 0L
+                && entity_id < Int64.of_int (Bytes.length entities)
+                && Bytes.get entities (Int64.to_int entity_id) = '\001')
             in
             let value_of_slot entity_id = function
               | Simple_entity_slot -> Some (Result_entity entity_id)
               | Simple_value_slot values ->
-                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+                if entity_id >= 0L && entity_id < Int64.of_int (Array.length values) then values.(Int64.to_int entity_id) else None
             in
             let row_for_entity entity_id =
               row_slots
@@ -2036,7 +2129,7 @@ module Query = struct
     | None -> []
     | Some value ->
       if query_attr_uses_avet db attr then
-        datoms db Avet ~a:attr ~v:value ()
+        Db_access_impl.datoms db Avet ~a:attr ~v:value ()
         |> Seq.map (fun datom -> datom.e)
         |> List.of_seq
         |> List.sort_uniq compare
@@ -2169,14 +2262,14 @@ module Query = struct
         Some (Pulled_scalar value)
     in
     let simple_pull_values attrs entity_ids =
-      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      let wanted = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
       List.iter
         (fun entity_id ->
-          if entity_id >= 0 && entity_id < Bytes.length wanted then
-            Bytes.set wanted entity_id '\001')
+          if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) then
+            Bytes.set wanted (Int64.to_int entity_id) '\001')
         entity_ids;
       let wanted_entity entity_id =
-        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+        entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) && Bytes.get wanted (Int64.to_int entity_id) = '\001'
       in
       let attr_tables =
         attrs
@@ -2184,7 +2277,7 @@ module Query = struct
         |> List.sort_uniq compare
         |> List.map (fun attr ->
           let table = Hashtbl.create (List.length entity_ids) in
-          datoms db Aevt ~a:attr ()
+          Db_access_impl.datoms db Aevt ~a:attr ()
           |> Seq.iter (fun datom ->
             if wanted_entity datom.e then
               let values = Option.value (Hashtbl.find_opt table datom.e) ~default:[] in
@@ -2197,7 +2290,7 @@ module Query = struct
           attrs
           |> List.filter_map (fun attr ->
             if attr = "db/id" then
-              Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
+              Some (Keyword "db/id", Pulled_scalar (Int64 entity_id))
             else
               let values =
                 Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
@@ -2218,7 +2311,7 @@ module Query = struct
       let wanted_attr attr = List.mem attr wanted_attrs in
       let values_for_entity entity_id =
         let tables =
-          datoms db Eavt ~e:entity_id ()
+          Db_access_impl.datoms db Eavt ~e:entity_id ()
           |> Seq.fold_left
                (fun tables datom ->
                  if wanted_attr datom.a then
@@ -2231,7 +2324,7 @@ module Query = struct
         attrs
         |> List.filter_map (fun attr ->
           if attr = "db/id" then
-            Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
+            Some (Keyword "db/id", Pulled_scalar (Int64 entity_id))
           else
             let values = Option.value (List.assoc_opt attr tables) ~default:[] in
             Option.map (fun value -> Keyword attr, value) (pulled_value attr values))
@@ -2245,20 +2338,20 @@ module Query = struct
       |> fun values -> Query_collection values
     in
     let entity_id_set entity_ids =
-      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      let wanted = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
       List.iter
         (fun entity_id ->
-          if entity_id >= 0 && entity_id < Bytes.length wanted then
-            Bytes.set wanted entity_id '\001')
+          if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) then
+            Bytes.set wanted (Int64.to_int entity_id) '\001')
         entity_ids;
       wanted
     in
     let attr_value_table attr entity_ids wanted =
       let wanted_entity entity_id =
-        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+        entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) && Bytes.get wanted (Int64.to_int entity_id) = '\001'
       in
       let table = Hashtbl.create (List.length entity_ids) in
-      datoms db Aevt ~a:attr ()
+      Db_access_impl.datoms db Aevt ~a:attr ()
       |> Seq.iter (fun datom ->
         if wanted_entity datom.e then
           let values = Option.value (Hashtbl.find_opt table datom.e) ~default:[] in
@@ -2267,7 +2360,7 @@ module Query = struct
     in
     let ref_id_of_value attr = function
       | Ref entity_id -> Some entity_id
-      | Int64 entity_id when is_ref_attr_cached attr -> Util.int64_to_int entity_id
+      | Int64 entity_id when is_ref_attr_cached attr -> Some entity_id
       | _ -> None
     in
     let batch_nested_pull_values selector entity_ids =
@@ -2347,7 +2440,7 @@ module Query = struct
             attrs
             |> List.filter_map (fun attr ->
               if attr = "db/id" then
-                Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
+                Some (Keyword "db/id", Pulled_scalar (Int64 entity_id))
               else
                 Option.map
                   (fun value -> Keyword attr, value)
@@ -2372,7 +2465,7 @@ module Query = struct
           let pulled_attrs =
             roots
             |> List.filter_map (function
-              | `Attr "db/id" -> Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
+              | `Attr "db/id" -> Some (Keyword "db/id", Pulled_scalar (Int64 entity_id))
               | `Attr attr ->
                 Option.map (fun value -> Keyword attr, value) (pulled_value attr (root_values attr entity_id))
             | `Ref (attr, nested) ->
@@ -2399,7 +2492,7 @@ module Query = struct
           | Some value -> value
           | None ->
             let value =
-              datoms db Eavt ~e:entity_id ~a:"db/ident" ()
+              Db_access_impl.datoms db Eavt ~e:entity_id ~a:"db/ident" ()
               |> Seq.find_map (fun datom -> Some datom.v)
             in
             Hashtbl.replace ident_cache entity_id value;
@@ -2420,7 +2513,7 @@ module Query = struct
           |> List.map (fun entity_id ->
             let title = ref None in
             let tags = ref [] in
-            datoms db Eavt ~e:entity_id ()
+            Db_access_impl.datoms db Eavt ~e:entity_id ()
             |> Seq.iter (fun datom ->
               match datom.a, datom.v with
               | "block/title", value -> title := Some value
@@ -2518,7 +2611,7 @@ module Query = struct
       | _ -> None
     in
     let entity_has_attr entity_id attr =
-      Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ()))
+      Option.is_some (Seq.uncons (Db_access_impl.datoms db Eavt ~e:entity_id ~a:attr ()))
     in
     match find_pull, query.rules, query.with_vars, only_source_inputs query.inputs with
     | Some (find_var, [ Pull_wildcard ]), [], [], true ->
@@ -2529,15 +2622,15 @@ module Query = struct
          let required_attrs = List.filter_map (required_pattern source_var) query.where in
          (match required_attrs with
           | [ required_attr ] ->
-            let source_entities = Bytes.make (db.max_datom_e + 1) '\000' in
+            let source_entities = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
             entity_ids_with_attr db required_attr
             |> List.iter (fun entity_id ->
-              if entity_id >= 0 && entity_id < Bytes.length source_entities then
-                Bytes.set source_entities entity_id '\001');
+              if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length source_entities) then
+                Bytes.set source_entities (Int64.to_int entity_id) '\001');
             let source_has_required entity_id =
-              entity_id >= 0
-              && entity_id < Bytes.length source_entities
-              && Bytes.get source_entities entity_id = '\001'
+              entity_id >= 0L
+              && entity_id < Int64.of_int (Bytes.length source_entities)
+              && Bytes.get source_entities (Int64.to_int entity_id) = '\001'
             in
             let target_ids =
               primary_attr_datoms db Aevt ref_attr
@@ -2582,7 +2675,7 @@ module Query = struct
       | [], _ -> Some []
       | Input_source_decl _ :: rest, _ -> collect rest args
       | Input_rules_decl :: rest, Arg_rules rules :: args ->
-        Option.map (fun rest_rules -> rules @ rest_rules) (collect rest args)
+        Option.map (fun rest_rules -> List.map norm_rule rules @ rest_rules) (collect rest args)
       | (_ :: rest), (_ :: args) -> collect rest args
       | _ :: _, [] -> None
     in
@@ -2662,7 +2755,7 @@ module Query = struct
        | Some input, [ attr ] ->
          (match query_result_entity_id db input with
           | Some entity_id ->
-            let has_attr = Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ())) in
+            let has_attr = Option.is_some (Seq.uncons (Db_access_impl.datoms db Eavt ~e:entity_id ~a:attr ())) in
             if has_attr then
               let rows =
                 pull db selector (Entity_id entity_id)
@@ -2712,15 +2805,15 @@ module Query = struct
       | _ -> None
     in
     let entity_set_for_attr attr =
-      let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+      let entities = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
       entity_ids_with_attr db attr
       |> List.iter (fun entity_id ->
-        if entity_id >= 0 && entity_id < Bytes.length entities then
-          Bytes.set entities entity_id '\001');
+        if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length entities) then
+          Bytes.set entities (Int64.to_int entity_id) '\001');
       entities
     in
     let entity_in_set entities entity_id =
-      entity_id >= 0 && entity_id < Bytes.length entities && Bytes.get entities entity_id = '\001'
+      entity_id >= 0L && entity_id < Int64.of_int (Bytes.length entities) && Bytes.get entities (Int64.to_int entity_id) = '\001'
     in
     let simple_pull_attrs selector =
       let rec collect acc = function
@@ -2733,14 +2826,14 @@ module Query = struct
       collect [] selector
     in
     let simple_pulled_rows attrs entity_ids =
-      let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+      let wanted = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
       List.iter
         (fun entity_id ->
-          if entity_id >= 0 && entity_id < Bytes.length wanted then
-            Bytes.set wanted entity_id '\001')
+          if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) then
+            Bytes.set wanted (Int64.to_int entity_id) '\001')
         entity_ids;
       let wanted_entity entity_id =
-        entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+        entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) && Bytes.get wanted (Int64.to_int entity_id) = '\001'
       in
       let attr_tables =
         attrs
@@ -2748,7 +2841,7 @@ module Query = struct
         |> List.sort_uniq compare
         |> List.map (fun attr ->
           let table = Hashtbl.create (List.length entity_ids) in
-          datoms db Aevt ~a:attr ()
+          Db_access_impl.datoms db Aevt ~a:attr ()
           |> Seq.iter (fun datom ->
             if wanted_entity datom.e then
               Hashtbl.replace table datom.e datom.v);
@@ -2760,7 +2853,7 @@ module Query = struct
           attrs
           |> List.filter_map (fun attr ->
             if attr = "db/id" then
-              Some (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity_id)))
+              Some (Keyword "db/id", Pulled_scalar (Int64 entity_id))
             else
               Option.bind (List.assoc_opt attr attr_tables) (fun table -> Hashtbl.find_opt table entity_id)
               |> Option.map (fun value -> Keyword attr, Pulled_scalar value))
@@ -2846,13 +2939,13 @@ module Query = struct
                 search_attr_value db timestamp_attr lower
               | Some lower, _ ->
                 if Db_access_impl.is_avet_accessible db timestamp_attr then
-                  index_range db timestamp_attr ~start:lower ()
+                  Db_access_impl.index_range db timestamp_attr ~start:lower ()
                 else
                   Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
                   |> Seq.filter (fun datom -> compare_value datom.v lower >= 0)
               | _, Some upper ->
                 if Db_access_impl.is_avet_accessible db timestamp_attr then
-                  index_range db timestamp_attr ~stop:upper ()
+                  Db_access_impl.index_range db timestamp_attr ~stop:upper ()
                 else
                   Db_access_impl.search_datoms db Aevt ~a:timestamp_attr ()
                   |> Seq.filter (fun datom -> compare_value datom.v upper <= 0)
@@ -3018,17 +3111,17 @@ module Query = struct
                     |> List.of_seq
                     |> List.sort_uniq compare
                   in
-                  let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+                  let wanted = Bytes.make (Int64.to_int db.max_datom_e + 1) '\000' in
                   List.iter
                     (fun entity_id ->
-                      if entity_id >= 0 && entity_id < Bytes.length wanted then
-                        Bytes.set wanted entity_id '\001')
+                      if entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) then
+                        Bytes.set wanted (Int64.to_int entity_id) '\001')
                     tagged;
                   let wanted_entity entity_id =
-                    entity_id >= 0 && entity_id < Bytes.length wanted && Bytes.get wanted entity_id = '\001'
+                    entity_id >= 0L && entity_id < Int64.of_int (Bytes.length wanted) && Bytes.get wanted (Int64.to_int entity_id) = '\001'
                   in
                   let entity_ids =
-                    datoms db Aevt ~a:"block/title" ()
+                    Db_access_impl.datoms db Aevt ~a:"block/title" ()
                     |> Seq.filter_map (fun datom ->
                       match datom.v with
                       | String title when wanted_entity datom.e && string_includes_prefilter (String.lowercase_ascii title) query_text ->
@@ -3175,147 +3268,7 @@ module Query = struct
     match return_map with
     | Some return_map -> q_return_map ?inputs db return return_map query
     | None -> q_return ?inputs db return query
-  let return_map_label_count = Query_impl.return_map_label_count
-  let return_map_name = Query_impl.return_map_name
-  let validate_query_return_map = Query_impl.validate_query_return_map
-  let has_aggregates = Query_impl.has_aggregates
-  let collect_find_vars = Query_impl.collect_find_vars
-  let group_by_key = Query_impl.group_by_key
-  let grouping_vars_of_find = Query_impl.grouping_vars_of_find
-  let aggregate_amount_value = Query_impl.aggregate_amount_value
-  let resolve_dynamic_aggregate = Query_impl.resolve_dynamic_aggregate
-  let aggregate_param_vars = Query_impl.aggregate_param_vars
-  let aggregate_callable_vars = Query_impl.aggregate_callable_vars
-  let split_aggregate_terms = Query_impl.split_aggregate_terms
-  let aggregate_input_values = Query_impl.aggregate_input_values
-  let resolve_callable_name = Query_impl.resolve_callable_name
-  let callable_predicate = Query_impl.callable_predicate
-  let callable_function = Query_impl.callable_function
-  let callable_aggregate = Query_impl.callable_aggregate
-  let has_callable = Query_impl.has_callable
-  let alias_callable = Query_impl.alias_callable
-  let resolve_callable_aggregate = Query_impl.resolve_callable_aggregate
-  let result_of_datom_e = Query_impl.result_of_datom_e
-  let result_of_datom_a = Query_impl.result_of_datom_a
-  let result_of_datom_v = Query_impl.result_of_datom_v
-  let result_of_datom_tx = Query_impl.result_of_datom_tx
-  let result_of_datom_op = Query_impl.result_of_datom_op
-  let result_of_ref = Query_impl.result_of_ref
-  let entity_id_of_resolved_query_result = Query_impl.entity_id_of_resolved_query_result
-  let resolved_query_result = Query_impl.resolved_query_result
-  let lookup_ref_entity_id_of_value = Query_impl.lookup_ref_entity_id_of_value
-  let query_result_entity_id = Query_impl.query_result_entity_id
-  let query_results_equivalent = Query_impl.query_results_equivalent
-  let bind_var = Query_impl.bind_var
-  let result_matches_entity = Query_impl.result_matches_entity
-  let match_query_term = Query_impl.match_query_term
-  let match_value_term_for_datom_attr = Query_impl.match_value_term_for_datom_attr
-  let match_pattern_clause = Query_impl.match_pattern_clause
-  let match_pattern_tx_clause = Query_impl.match_pattern_tx_clause
-  let match_reverse_pattern_clause = Query_impl.match_reverse_pattern_clause
-  let eval_query_term = Query_impl.eval_query_term
-  let collect_query_terms = Query_impl.collect_query_terms
-  let collect_query_terms_exn = Query_impl.collect_query_terms_exn
-  let query_term_entity_id = Query_impl.query_term_entity_id
-  let source = Query_impl.source
-  let sources_with_root_default = Query_impl.sources_with_root_default
-  let source_db = Query_impl.source_db
-  let query_source_db = Query_impl.query_source_db
-  let match_relation_row = Query_impl.match_relation_row
-  let match_query_source_pattern = Query_impl.match_query_source_pattern
-  let match_source_pattern = Query_impl.match_source_pattern
-  let match_relation_source_pattern = Query_impl.match_relation_source_pattern
-  let eval_query_term_with_sources = Query_impl.eval_query_term_with_sources
-  let collect_dynamic_query_terms_exn = Query_impl.collect_dynamic_query_terms_exn
-  let aggregate_extra_args = Query_impl.aggregate_extra_args
-  let aggregate_values = Query_impl.aggregate_values
-  let query_callables_of_inputs = Query_impl.query_callables_of_inputs
-  let query_rules_of_inputs = Query_impl.query_rules_of_inputs
-  let matching_rules = Query_impl.matching_rules
-  let matching_rules_exn = Query_impl.matching_rules_exn
-  let project_binding = Query_impl.project_binding
-  let rule_invocation_callables = Query_impl.rule_invocation_callables
-  let vars_of_query_term = Query_impl.vars_of_query_term
-  let vars_of_query_terms = Query_impl.vars_of_query_terms
-  let vars_of_clause = Query_impl.vars_of_clause
-  let named_source = Query_impl.named_source
-  let sources_of_query_term = Query_impl.sources_of_query_term
-  let sources_of_query_terms = Query_impl.sources_of_query_terms
-  let sources_of_optional_query_term = Query_impl.sources_of_optional_query_term
-  let sources_of_clause = Query_impl.sources_of_clause
-  let sources_of_find_spec = Query_impl.sources_of_find_spec
-  let has_rule_clause = Query_impl.has_rule_clause
-  let rule_names = Query_impl.rule_names
-  let resolve_dynamic_rule_clause = Query_impl.resolve_dynamic_rule_clause
-  let resolve_dynamic_rule = Query_impl.resolve_dynamic_rule
-  let find_spec_uses_default_source = Query_impl.find_spec_uses_default_source
-  let clause_uses_default_source = Query_impl.clause_uses_default_source
-  let infer_default_inputs = Query_impl.infer_default_inputs
-  let query_term_vars = Query_impl.query_term_vars
-  let vars_of_find_spec = Query_impl.vars_of_find_spec
-  let vars_of_input_binding = Query_impl.vars_of_input_binding
-  let vars_of_input = Query_impl.vars_of_input
-  let source_of_input = Query_impl.source_of_input
-  let ensure_distinct_input_vars = Query_impl.ensure_distinct_input_vars
-  let ensure_distinct_input_sources = Query_impl.ensure_distinct_input_sources
-  let format_query_vars = Query_impl.format_query_vars
-  let format_source_vars = Query_impl.format_source_vars
-  let validate_query = Query_impl.validate_query
-  let query_input_var_label = Query_impl.query_input_var_label
-  let query_term_string = Query_impl.query_term_string
-  let query_output_var_string = Query_impl.query_output_var_string
-  let query_output_binding_string = Query_impl.query_output_binding_string
-  let query_call_string = Query_impl.query_call_string
-  let numeric_predicate_symbol = Query_impl.numeric_predicate_symbol
-  let arithmetic_op_symbol = Query_impl.arithmetic_op_symbol
-  let query_clause_string = Query_impl.query_clause_string
-  let query_not_clause_string = Query_impl.query_not_clause_string
-  let query_or_clause_string = Query_impl.query_or_clause_string
-  let query_or_join_vars_string = Query_impl.query_or_join_vars_string
-  let query_or_join_clause_string = Query_impl.query_or_join_clause_string
-  let query_var_set_string = Query_impl.query_var_set_string
-  let query_var_sets_string = Query_impl.query_var_sets_string
-  let unbound_vars_of_terms = Query_impl.unbound_vars_of_terms
-  let ensure_query_terms_bound = Query_impl.ensure_query_terms_bound
-  let ensure_not_has_outer_binding = Query_impl.ensure_not_has_outer_binding
-  let vars_of_branch = Query_impl.vars_of_branch
-  let free_vars_of_branch = Query_impl.free_vars_of_branch
-  let ensure_or_branch_vars_match = Query_impl.ensure_or_branch_vars_match
-  let ensure_join_vars_bound = Query_impl.ensure_join_vars_bound
-  let ensure_join_vars_bound_in_clause = Query_impl.ensure_join_vars_bound_in_clause
-  let ensure_or_join_branches_cover_listed_vars = Query_impl.ensure_or_join_branches_cover_listed_vars
-  let clause_calls_rule = Query_impl.clause_calls_rule
-  let matching_rules_for_call = Query_impl.matching_rules_for_call
-  let query_input_binding_string = Query_impl.query_input_binding_string
-  let query_input_decl_binding_string = Query_impl.query_input_decl_binding_string
-  let query_input_binding_label = Query_impl.query_input_binding_label
-  let query_input_consumes_argument = Query_impl.query_input_consumes_argument
-  let values_of_collection_result = Query_impl.values_of_collection_result
-  let row_of_collection_result = Query_impl.row_of_collection_result
-  let row_of_scalar_sequence = Query_impl.row_of_scalar_sequence
-  let rows_of_map_entries = Query_impl.rows_of_map_entries
-  let bind_relation_row = Query_impl.bind_relation_row
-  let resolve_query_input_row = Query_impl.resolve_query_input_row
-  let collection_values_of_input = Query_impl.collection_values_of_input
-  let row_values_of_input = Query_impl.row_values_of_input
-  let eval_ground_term_tuple = Query_impl.eval_ground_term_tuple
-  let eval_ground_term_relation = Query_impl.eval_ground_term_relation
-  let bind_input_binding = Query_impl.bind_input_binding
-  let bind_nested_input_tuple = Query_impl.bind_nested_input_tuple
-  let apply_query_input = Query_impl.apply_query_input
-  let bind_query_inputs = Query_impl.bind_query_inputs
-end
 
-let q = Query.q
-let q_string = Query.q_string
-let q_with = Query.q_with
-let q_with_string = Query.q_with_string
-let q_sources = Query.q_sources
-let q_sources_string = Query.q_sources_string
-let q_return = Query.q_return
-let q_return_string = Query.q_return_string
-let q_return_map = Query.q_return_map
-let q_return_map_string = Query.q_return_map_string
 
 let db_datoms = datoms
 let db_fold_datoms = fold_datoms
@@ -3328,7 +3281,7 @@ let db_rseek_datoms = rseek_datoms
 let db_rseek_datoms_ref = rseek_datoms_ref
 let db_index_range = index_range
 
-module Db = struct
+module Db_base = struct
   include Db_impl
 
   let datoms = db_datoms
@@ -3341,4 +3294,851 @@ module Db = struct
   let rseek_datoms = db_rseek_datoms
   let rseek_datoms_ref = db_rseek_datoms_ref
   let index_range = db_index_range
+end
+
+(* ====================================================================== *)
+(* Public API layer                                                        *)
+(*                                                                       *)
+(* The modules below are the curated public surface. They wrap or shadow  *)
+(* the implementation-level aliases defined earlier in this file; the     *)
+(* full implementation modules remain reachable under [Internal].         *)
+(* ====================================================================== *)
+
+module Internal = struct
+  module Datascript_types = Datascript_types
+  module PSet = PSet
+  module Built_ins = Built_ins
+  module Util = Util
+  module Lru = Lru
+  module Lookup_refs = Lookup_refs
+  module Schema = Schema
+  module Schema_access = Schema_access
+  module Serialize = Serialize
+  module Conn = Conn
+  module Db = Db_impl
+  module Entity = Entity
+  module Storage = Storage
+  module Transact = Transact
+  module Transact_datoms = Transact_datoms
+  module Db_access = Db_access
+  module Entity_refs = Entity_refs
+  module Query = Query_impl
+  module Query_runtime = Query_runtime
+  module Query_where = Query_where
+  module Query_api = Query_api
+  module Query_eval = Query_eval
+  module Parser = Parser_impl
+  module Pull_parser = Pull_parser_impl
+  module Pull_api = Pull_api_impl
+  module Data_readers = Data_readers_impl
+  module Upsert = Upsert
+
+  let default_parser_context = parser_query_context
+  let default_pull_parser_context = pull_parser_context
+  let default_pull_api_context = pull_api_context
+  let default_data_readers_context = data_readers_context
+  let default_entity_context = entity_context
+  let default_storage_tail_context = storage_tail_context
+  let default_storage_restore_context = storage_restore_context
+  let empty_db ?(schema = []) ?storage () = empty_db ~schema ?storage ()
+  let init_db ?(schema = []) ?storage datoms = init_db ~schema ?storage datoms
+  let db_with tx_ops db = db_with tx_ops db
+  let create_conn ?(schema = []) ?storage () = create_conn ~schema ?storage ()
+  let conn_from_datoms ?(schema = []) ?storage datoms = conn_from_datoms ~schema ?storage datoms
+  let conn_db = db
+  let db_hash = db_hash
+  let q = q
+  let q_string = q_string
+  let q_with = q_with
+  let q_with_string = q_with_string
+  let q_sources = q_sources
+  let q_sources_string = q_sources_string
+  let q_return = q_return
+  let q_return_string = q_return_string
+  let q_return_map = q_return_map
+  let q_return_map_string = q_return_map_string
+  let datoms = Db_access_impl.datoms
+  let entid = entid
+  let entid_ref = entid_ref
+  let schema = schema
+  let with_tx = with_tx
+  let transact = transact
+  let transact_conn = transact_conn
+  let pull = pull
+  let pull_many = pull_many
+  let entity = entity
+  let parse_query = parse_query
+  let parse_query_string = parse_query_string
+  let serializable = serializable
+  let from_serializable = from_serializable
+  let store = store
+  let store_tail = store_tail
+  let memory_storage = memory_storage
+  let file_storage = file_storage
+  let storage_addresses = storage_addresses
+  let restore = restore
+  let tail_compaction_threshold = Storage.tail_compaction_threshold
+  let tail_datom_count = Storage.tail_datom_count
+  let restore_root_snapshot = Storage.restore_root_snapshot
+  let restore_tail_groups = restore_tail_groups
+  let db_with_tail = db_with_tail
+  let collect_garbage = collect_garbage
+  let datom = Db_impl.datom
+  let filter = filter
+  let is_reverse_ref = is_reverse_ref
+  let reverse_ref = reverse_ref
+  let settings = settings
+  let restore_conn = restore_conn
+  let conn_from_db = conn_from_db
+end
+
+(* Semantic wrapper types: inside the library every domain is a plain
+   [int]/[string]; the private declarations live in the interface. *)
+
+module Entity_id = struct
+  type t = int64
+
+  let of_int64 (x : int64) : t = x
+  let to_int64 (x : t) : int64 = x
+  let of_int = Int64.of_int
+  let to_int = Int64.to_int
+  let equal = Int64.equal
+  let compare = Int64.compare
+end
+
+module Tx_id = struct
+  type t = int64
+
+  let of_int64 (x : int64) : t = x
+  let to_int64 (x : t) : int64 = x
+  let of_int = Int64.of_int
+  let to_int = Int64.to_int
+  let equal = Int64.equal
+  let compare = Int64.compare
+end
+
+let eid = Entity_id.of_int64
+let txid = Tx_id.of_int64
+
+let var_sigil_string name = "?" ^ normalize_var name
+let source_sigil_string name =
+  let name = normalize_source name in
+  if name = "$" then "$" else "$" ^ name
+
+let query_form_of_term = function
+  | QVar name -> QueryFormSymbol (var_sigil_string name)
+  | QEntity id -> QueryFormInt id
+  | QIdent name -> QueryFormKeyword name
+  | QAttr name -> QueryFormKeyword name
+  | QValue value -> Parser_impl.query_form_of_value value
+  | QLookupRef (attr, value) ->
+    QueryFormVector [ QueryFormKeyword attr; Parser_impl.query_form_of_value value ]
+  | QSource name -> QueryFormSymbol (source_sigil_string name)
+  | QWildcard -> QueryFormSymbol "_"
+
+let rec query_form_of_binding = function
+  | Bind_scalar name -> QueryFormSymbol (var_sigil_string name)
+  | Bind_ignore -> QueryFormSymbol "_"
+  | Bind_collection binding ->
+    QueryFormVector [ query_form_of_binding binding; QueryFormSymbol "..." ]
+  | Bind_tuple bindings -> QueryFormVector (List.map query_form_of_binding bindings)
+
+module Clause = struct
+  type t = query_clause
+
+  let of_form form = Parser_impl.parse_pattern_clause parser_query_context form
+
+  let binding_of_out_vars = function
+    | [ var ] -> Bind_scalar var
+    | vars -> Bind_tuple (List.map (fun var -> Bind_scalar var) vars)
+
+  let scalar_binding var = Bind_scalar var
+
+  let scalar_pred name args = Pred_view { call_fn = name; call_args = args }
+  let scalar_fn name args out = Fn_view ({ call_fn = name; call_args = args }, scalar_binding out)
+
+  let value_predicate_name = function
+    | NumberValue -> "number?"
+    | IntegerValue -> "integer?"
+    | StringValue -> "string?"
+    | BooleanValue -> "boolean?"
+    | KeywordValue -> "keyword?"
+
+  let numeric_predicate_name = function
+    | ZeroNumber -> "zero?"
+    | PositiveNumber -> "pos?"
+    | NegativeNumber -> "neg?"
+    | EvenInteger -> "even?"
+    | OddInteger -> "odd?"
+
+  let comparison_predicate_name = function
+    | LessThan -> "<"
+    | GreaterThan -> ">"
+    | LessOrEqual -> "<="
+    | GreaterOrEqual -> ">="
+
+  let arithmetic_op_name = function
+    | AddNumbers -> "+"
+    | SubtractNumbers -> "-"
+    | MultiplyNumbers -> "*"
+    | DivideNumbers -> "/"
+    | QuotientNumbers -> "quot"
+    | RemainderNumbers -> "rem"
+    | ModuloNumbers -> "mod"
+    | IncrementNumber -> "inc"
+    | DecrementNumber -> "dec"
+
+  let boolean_predicate_name = function
+    | TrueValue -> "true?"
+    | FalseValue -> "false?"
+    | NilValue -> "nil?"
+    | SomeValue -> "some?"
+
+  let view clause =
+    match (clause : t) with
+    | Pattern (e, a, v) ->
+      Pattern_view { pattern_e = e; pattern_a = a; pattern_v = v; pattern_tx = None; pattern_op = None }
+    | PatternTx (e, a, v, tx) ->
+      Pattern_view
+        { pattern_e = e; pattern_a = a; pattern_v = v; pattern_tx = Some tx; pattern_op = None }
+    | PatternTxOp (e, a, v, tx, op) ->
+      Pattern_view
+        { pattern_e = e
+        ; pattern_a = a
+        ; pattern_v = v
+        ; pattern_tx = Some tx
+        ; pattern_op = Some op
+        }
+    | SourcePattern (source, e, a, v) -> Source_view (source, Pattern (e, a, v))
+    | SourcePatternTx (source, e, a, v, tx) -> Source_view (source, PatternTx (e, a, v, tx))
+    | SourcePatternTxOp (source, e, a, v, tx, op) ->
+      Source_view (source, PatternTxOp (e, a, v, tx, op))
+    | SourceRelationPattern ("$", terms) -> Relation_view terms
+    | SourceRelationPattern (source, terms) ->
+      Source_view (source, SourceRelationPattern ("$", terms))
+    | Missing (e, a) -> scalar_pred "missing?" [ e; a ]
+    | SourceMissing (source, e, a) -> Source_view (source, Missing (e, a))
+    | GetElse (e, a, default, out) -> scalar_fn "get-else" [ e; a; default ] out
+    | SourceGetElse (source, e, a, default, out) ->
+      Source_view (source, GetElse (e, a, default, out))
+    | GetSome (e, attrs, attr_var, value_var) ->
+      Fn_view
+        ( { call_fn = "get-some"; call_args = e :: attrs }
+        , Bind_tuple [ Bind_scalar attr_var; Bind_scalar value_var ] )
+    | SourceGetSome (source, e, attrs, attr_var, value_var) ->
+      Source_view (source, GetSome (e, attrs, attr_var, value_var))
+    | GetValue (m, k, out) -> scalar_fn "get" [ m; k ] out
+    | GetDefaultValue (m, k, default, out) -> scalar_fn "get" [ m; k; default ] out
+    | CountValue (term, out) -> scalar_fn "count" [ term ] out
+    | EmptyValue term -> scalar_pred "empty?" [ term ]
+    | NotEmptyValue term -> scalar_pred "not-empty?" [ term ]
+    | ContainsValue (collection, key) -> scalar_pred "contains?" [ collection; key ]
+    | ValuePredicate (predicate, term) -> scalar_pred (value_predicate_name predicate) [ term ]
+    | NumericPredicate (predicate, term) -> scalar_pred (numeric_predicate_name predicate) [ term ]
+    | ComparisonPredicate (predicate, left, right) ->
+      scalar_pred (comparison_predicate_name predicate) [ left; right ]
+    | ComparisonPredicateN (predicate, terms) ->
+      scalar_pred (comparison_predicate_name predicate) terms
+    | EqualityPredicate (EqualValues, terms) -> scalar_pred "=" terms
+    | EqualityPredicate (NotEqualValues, terms) -> scalar_pred "!=" terms
+    | ArithmeticValue (op, terms, out) -> scalar_fn (arithmetic_op_name op) terms out
+    | CompareValue (left, right, out) -> scalar_fn "compare" [ left; right ] out
+    | ExtremumValue (MinimumValue, terms, out) -> scalar_fn "min" terms out
+    | ExtremumValue (MaximumValue, terms, out) -> scalar_fn "max" terms out
+    | BooleanPredicate (predicate, term) ->
+      scalar_pred (boolean_predicate_name predicate) [ term ]
+    | BooleanNotPredicate term -> scalar_pred "not" [ term ]
+    | BooleanNotValue (term, out) -> scalar_fn "not" [ term ] out
+    | IdentityValue (term, out) -> scalar_fn "identity" [ term ] out
+    | BooleanAndPredicate terms -> scalar_pred "and" terms
+    | BooleanAndValue (terms, out) -> scalar_fn "and" terms out
+    | BooleanOrPredicate terms -> scalar_pred "or" terms
+    | BooleanOrValue (terms, out) -> scalar_fn "or" terms out
+    | RandomValue out -> scalar_fn "rand" [] out
+    | RandomIntValue (bound, out) -> scalar_fn "rand-int" [ bound ] out
+    | DifferPredicate terms -> scalar_pred "-differ?" terms
+    | IdenticalPredicate (left, right) -> scalar_pred "identical?" [ left; right ]
+    | TypeValue (term, out) -> scalar_fn "type" [ term ] out
+    | MetaValue (term, out) -> scalar_fn "meta" [ term ] out
+    | NameValue (term, out) -> scalar_fn "name" [ term ] out
+    | NamespaceValue (term, out) -> scalar_fn "namespace" [ term ] out
+    | KeywordFromName (term, out) -> scalar_fn "keyword" [ term ] out
+    | KeywordFromNamespaceName (namespace, name, out) ->
+      scalar_fn "keyword" [ namespace; name ] out
+    | StringIncludesValue (left, right) -> scalar_pred "clojure.string/includes?" [ left; right ]
+    | StringStartsWithValue (left, right) ->
+      scalar_pred "clojure.string/starts-with?" [ left; right ]
+    | StringEndsWithValue (left, right) -> scalar_pred "clojure.string/ends-with?" [ left; right ]
+    | StringLowerCaseValue (term, out) -> scalar_fn "clojure.string/lower-case" [ term ] out
+    | StringUpperCaseValue (term, out) -> scalar_fn "clojure.string/upper-case" [ term ] out
+    | StringCapitalizeValue (term, out) -> scalar_fn "clojure.string/capitalize" [ term ] out
+    | StringReverseValue (term, out) -> scalar_fn "clojure.string/reverse" [ term ] out
+    | StringTrimValue (term, out) -> scalar_fn "clojure.string/trim" [ term ] out
+    | StringTrimLeftValue (term, out) -> scalar_fn "clojure.string/triml" [ term ] out
+    | StringTrimRightValue (term, out) -> scalar_fn "clojure.string/trimr" [ term ] out
+    | StringTrimNewlineValue (term, out) -> scalar_fn "clojure.string/trim-newline" [ term ] out
+    | StringIndexOfValue (value, needle, out) ->
+      scalar_fn "clojure.string/index-of" [ value; needle ] out
+    | StringLastIndexOfValue (value, needle, out) ->
+      scalar_fn "clojure.string/last-index-of" [ value; needle ] out
+    | StringSubstringValue (value, start, None, out) -> scalar_fn "subs" [ value; start ] out
+    | StringSubstringValue (value, start, Some end_, out) ->
+      scalar_fn "subs" [ value; start; end_ ] out
+    | StringBuildValue (terms, out) -> scalar_fn "str" terms out
+    | PrintStringValue (terms, out) -> scalar_fn "print-str" terms out
+    | PrintLineStringValue (terms, out) -> scalar_fn "println-str" terms out
+    | PrStringValue (terms, out) -> scalar_fn "pr-str" terms out
+    | PrnStringValue (terms, out) -> scalar_fn "prn-str" terms out
+    | StringJoinPlainValue (collection, out) ->
+      scalar_fn "clojure.string/join" [ collection ] out
+    | StringJoinValue (separator, collection, out) ->
+      scalar_fn "clojure.string/join" [ separator; collection ] out
+    | StringReplaceValue (value, pattern, replacement, out) ->
+      scalar_fn "clojure.string/replace" [ value; pattern; replacement ] out
+    | StringReplaceFirstValue (value, pattern, replacement, out) ->
+      scalar_fn "clojure.string/replace-first" [ value; pattern; replacement ] out
+    | StringEscapeValue (value, replacements, out) ->
+      scalar_fn "clojure.string/escape" [ value; replacements ] out
+    | RePatternValue (pattern, out) -> scalar_fn "re-pattern" [ pattern ] out
+    | ReFindValue (pattern, value, out) -> scalar_fn "re-find" [ pattern; value ] out
+    | ReMatchesValue (pattern, value, out) -> scalar_fn "re-matches" [ pattern; value ] out
+    | ReSeqValue (pattern, value, out) -> scalar_fn "re-seq" [ pattern; value ] out
+    | ReFindPredicate (pattern, value) -> scalar_pred "re-find" [ pattern; value ]
+    | ReMatchesPredicate (pattern, value) -> scalar_pred "re-matches" [ pattern; value ]
+    | StringBlankValue term -> scalar_pred "clojure.string/blank?" [ term ]
+    | StringSplitValue (value, separator, out) ->
+      scalar_fn "clojure.string/split" [ value; separator ] out
+    | StringSplitLimitValue (value, separator, limit, out) ->
+      scalar_fn "clojure.string/split" [ value; separator; limit ] out
+    | StringSplitLinesValue (value, out) -> scalar_fn "clojure.string/split-lines" [ value ] out
+    | Ground (value, out) -> scalar_fn "ground" [ QValue value ] out
+    | GroundCollection (values, out) -> scalar_fn "ground" [ QValue (Vector values) ] out
+    | GroundTuple (values, outs) ->
+      Fn_view
+        ( { call_fn = "ground"; call_args = [ QValue (Vector values) ] }
+        , binding_of_out_vars outs )
+    | GroundRelation (rows, outs) ->
+      Fn_view
+        ( { call_fn = "ground"; call_args = [ QValue (Vector (List.map (fun row -> Vector row) rows)) ] }
+        , Bind_collection (Bind_tuple (List.map (fun var -> Bind_scalar var) outs)) )
+    | GroundTerm (term, out) -> scalar_fn "ground" [ term ] out
+    | GroundTermCollection (term, out) ->
+      Fn_view
+        ( { call_fn = "ground"; call_args = [ term ] }
+        , Bind_collection (scalar_binding out) )
+    | GroundTermTuple (term, outs) ->
+      Fn_view ({ call_fn = "ground"; call_args = [ term ] }, binding_of_out_vars outs)
+    | GroundTermRelation (term, outs) ->
+      Fn_view
+        ( { call_fn = "ground"; call_args = [ term ] }
+        , Bind_collection (Bind_tuple (List.map (fun var -> Bind_scalar var) outs)) )
+    | VectorValue (terms, out) -> scalar_fn "vector" terms out
+    | ListValue (terms, out) -> scalar_fn "list" terms out
+    | SetValue (terms, out) -> scalar_fn "set" terms out
+    | HashMapValue (terms, out) -> scalar_fn "hash-map" terms out
+    | ArrayMapValue (terms, out) -> scalar_fn "array-map" terms out
+    | RangeEndValue (end_, out) -> scalar_fn "range" [ end_ ] out
+    | RangeValue (start, end_, out) -> scalar_fn "range" [ start; end_ ] out
+    | RangeStepValue (start, end_, step, out) -> scalar_fn "range" [ start; end_; step ] out
+    | TupleFunction (terms, out) -> scalar_fn "tuple" terms out
+    | UntupleFunction (term, outs) ->
+      Fn_view ({ call_fn = "untuple"; call_args = [ term ] }, binding_of_out_vars outs)
+    | Predicate (name, terms, _) -> scalar_pred name terms
+    | Function (name, terms, outs, _) ->
+      Fn_view ({ call_fn = name; call_args = terms }, binding_of_out_vars outs)
+    | DynamicPredicate (name, terms) -> scalar_pred name terms
+    | DynamicFunction (name, terms, outs) ->
+      Fn_view ({ call_fn = name; call_args = terms }, binding_of_out_vars outs)
+    | DynamicFunctionCollection (name, terms, out) ->
+      Fn_view
+        ( { call_fn = name; call_args = terms }
+        , Bind_collection (scalar_binding out) )
+    | DynamicFunctionRelation (name, terms, outs) ->
+      Fn_view
+        ( { call_fn = name; call_args = terms }
+        , Bind_collection (Bind_tuple (List.map (fun var -> Bind_scalar var) outs)) )
+    | SourceClause (source, clause) -> Source_view (source, clause)
+    | Not clauses -> Not_view clauses
+    | SourceNot (source, clauses) -> Source_view (source, Not clauses)
+    | NotJoin (vars, clauses) -> Not_join_view (vars, clauses)
+    | SourceNotJoin (source, vars, clauses) -> Source_view (source, NotJoin (vars, clauses))
+    | Or branches -> Or_view branches
+    | SourceOr (source, branches) -> Source_view (source, Or branches)
+    | OrJoin (vars, branches) -> Or_join_view (vars, branches)
+    | SourceOrJoin (source, vars, branches) -> Source_view (source, OrJoin (vars, branches))
+    | OrJoinRequired (required, vars, branches) ->
+      Or_join_required_view (required, vars, branches)
+    | SourceOrJoinRequired (source, required, vars, branches) ->
+      Source_view (source, OrJoinRequired (required, vars, branches))
+    | Rule (name, args) -> Rule_view (name, args)
+    | SourceRule (source, name, args) -> Source_view (source, Rule (name, args))
+
+  let pattern ?tx ?op ?src e a v =
+    match tx, op, src with
+    | None, None, None -> Pattern (e, a, v)
+    | Some tx, None, None -> PatternTx (e, a, v, tx)
+    | Some tx, Some op, None -> PatternTxOp (e, a, v, tx, op)
+    | None, Some _, None -> invalid_arg "pattern: ?op requires ?tx"
+    | None, None, Some source -> SourcePattern (source, e, a, v)
+    | Some tx, None, Some source -> SourcePatternTx (source, e, a, v, tx)
+    | Some tx, Some op, Some source -> SourcePatternTxOp (source, e, a, v, tx, op)
+    | None, Some _, Some _ -> invalid_arg "pattern: ?op requires ?tx"
+
+  let relation ?src terms =
+    match src with
+    | None -> SourceRelationPattern ("$", terms)
+    | Some source -> SourceRelationPattern (source, terms)
+
+  let rule_call ?src name args =
+    match src with
+    | None -> Rule (name, args)
+    | Some source -> SourceRule (source, name, args)
+
+  let call ?src ?binding name args =
+    let call_form = QueryFormList (QueryFormSymbol name :: List.map query_form_of_term args) in
+    let binding_form = Option.map query_form_of_binding binding in
+    let form =
+      match src, binding_form with
+      | None, None -> QueryFormVector [ call_form ]
+      | None, Some binding -> QueryFormVector [ call_form; binding ]
+      | Some source, None ->
+        QueryFormVector [ QueryFormSymbol (source_sigil_string source); call_form ]
+      | Some source, Some binding ->
+        QueryFormVector
+          [ QueryFormSymbol (source_sigil_string source); call_form; binding ]
+    in
+    of_form form
+
+  let pred ?src name args = call ?src name args
+  let fn ?src name args binding = call ?src ~binding name args
+
+  let not_ ?src clauses =
+    match clauses, src with
+    | [], _ -> invalid_arg "not requires at least one clause"
+    | clauses, None -> Not clauses
+    | clauses, Some source -> SourceNot (source, clauses)
+
+  let not_join ?src vars clauses =
+    match clauses, src with
+    | [], _ -> invalid_arg "not-join requires at least one clause"
+    | clauses, None -> NotJoin (vars, clauses)
+    | clauses, Some source -> SourceNotJoin (source, vars, clauses)
+
+  let or_ ?src branches =
+    match branches, src with
+    | [], _ -> invalid_arg "or requires at least one branch"
+    | branches, None -> Or branches
+    | branches, Some source -> SourceOr (source, branches)
+
+  let or_join ?src vars branches =
+    match vars, branches, src with
+    | [], _, _ -> invalid_arg "or-join requires join variables"
+    | _, [], _ -> invalid_arg "or-join requires at least one branch"
+    | vars, branches, None -> OrJoin (vars, branches)
+    | vars, branches, Some source -> SourceOrJoin (source, vars, branches)
+
+  let or_join_required ?src ~required vars branches =
+    match vars, branches, src with
+    | [], _, _ -> invalid_arg "or-join requires join variables"
+    | _, [], _ -> invalid_arg "or-join requires at least one branch"
+    | vars, branches, None -> OrJoinRequired (required, vars, branches)
+    | vars, branches, Some source -> SourceOrJoinRequired (source, required, vars, branches)
+
+  let missing ?src e a =
+    match src with
+    | None -> Missing (e, a)
+    | Some source -> SourceMissing (source, e, a)
+
+  let with_src ?src clause =
+    match src with
+    | None -> clause
+    | Some source -> SourceClause (source, clause)
+
+  let get_else ?src e a default out =
+    match src with
+    | None -> GetElse (e, a, default, out)
+    | Some source -> SourceGetElse (source, e, a, default, out)
+
+  let get_some ?src e attrs attr_var value_var =
+    match src with
+    | None -> GetSome (e, attrs, attr_var, value_var)
+    | Some source ->
+      SourceGetSome (source, e, attrs, attr_var, value_var)
+
+  let get_value ?src e a out =
+    with_src ?src (GetValue (e, a, out))
+
+  let get_default_value ?src e a default out =
+    with_src ?src (GetDefaultValue (e, a, default, out))
+
+  let count_value ?src e out = with_src ?src (CountValue (e, out))
+
+  let empty_value ?src e = with_src ?src (EmptyValue e)
+
+  let not_empty_value ?src e = with_src ?src (NotEmptyValue e)
+
+  let contains_value ?src e v = with_src ?src (ContainsValue (e, v))
+
+  let value_pred ?src p term = with_src ?src (ValuePredicate (p, term))
+
+  let numeric_pred ?src p term = with_src ?src (NumericPredicate (p, term))
+
+  let boolean_pred ?src p term = with_src ?src (BooleanPredicate (p, term))
+
+  let boolean_not_pred ?src term = with_src ?src (BooleanNotPredicate term)
+
+  let boolean_and_pred ?src terms = with_src ?src (BooleanAndPredicate terms)
+
+  let boolean_or_pred ?src terms = with_src ?src (BooleanOrPredicate terms)
+
+  let differ_pred ?src terms = with_src ?src (DifferPredicate terms)
+
+  let identical_pred ?src left right = with_src ?src (IdenticalPredicate (left, right))
+
+  let comparison ?src p left right = with_src ?src (ComparisonPredicate (p, left, right))
+
+  let comparison_n ?src p terms = with_src ?src (ComparisonPredicateN (p, terms))
+
+  let equality ?src p terms = with_src ?src (EqualityPredicate (p, terms))
+
+  let arithmetic ?src op terms out =
+    with_src ?src (ArithmeticValue (op, terms, out))
+
+  let custom_pred ?src name args f =
+    with_src ?src (Predicate (name, args, f))
+
+  let custom_fn ?src name args out_vars f =
+    with_src ?src (Function (name, args, out_vars, f))
+end
+
+module Query = struct
+  type t = query
+
+  let q = q
+  let q_string = q_string
+  let q_with = q_with
+  let q_with_string = q_with_string
+  let q_sources = q_sources
+  let q_sources_string = q_sources_string
+  let q_return = q_return
+  let q_return_string = q_return_string
+  let q_return_map = q_return_map
+  let q_return_map_string = q_return_map_string
+
+  let v ?(in_ = []) ?(with_ = []) ?(rules = []) find where : t =
+    let find = List.map norm_find find in
+    let where = List.map norm_clause where in
+    let inputs = List.map query_input_of_spec (List.map norm_spec in_) in
+    let inputs = Query_impl.infer_default_inputs None find where inputs in
+    Query_impl.validate_query
+      { find
+      ; inputs
+      ; with_vars = norm_vars with_
+      ; rules = List.map norm_rule rules
+      ; where
+      }
+
+  let find (q : t) = q.find
+  let where (q : t) = q.where
+  let inputs (q : t) = List.map spec_of_query_input q.inputs
+  let with_ (q : t) = q.with_vars
+  let rules (q : t) = q.rules
+
+  let of_form form = parse_query form
+  let of_string input = parse_query_string input
+end
+
+module Tx = struct
+  let add entity attr value = Add (entity, attr, value)
+  let retract entity attr value = Retract (entity, attr, Some value)
+  let retract_attr entity attr = RetractAttr (entity, attr)
+  let retract_entity entity = RetractEntity entity
+  let compare_and_set entity attr expected value = CompareAndSet (entity, attr, expected, value)
+  let entity attrs = Entity attrs
+  let raw_datom datom = Raw_datom datom
+  let install_tx_fn entity f = InstallTxFn (entity, f)
+  let call_ident entity args = CallIdent (entity, args)
+  let call f = Call f
+end
+
+module Pull = struct
+  type pattern = pull_selector list
+
+  let parse = parse_pull_pattern
+  let parse_string = parse_pull_pattern_string
+  let pull = pull
+  let pull_string = pull_string
+  let pull_many = pull_many
+  let pull_many_string = pull_many_string
+end
+
+(* The flat wrappers are captured here because [include Db] inside the
+   curated [Db] module shadows some of them with the context-taking
+   implementation versions. *)
+let flat_datom = datom
+let flat_empty_db = empty_db
+let flat_init_db = init_db
+let flat_filter = filter
+let flat_unfiltered_db = unfiltered_db
+let flat_schema = schema
+
+module Db = struct
+  include Db_base
+
+  type t = db
+
+  let datom = flat_datom
+
+  let empty ?(schema = []) ?storage () = flat_empty_db ~schema ?storage ()
+  let init ?(schema = []) ?storage datoms = flat_init_db ~schema ?storage datoms
+  let serializable = serializable
+  let from_serializable = from_serializable
+  let db_from_reader_string = db_from_reader_string
+  let filter = flat_filter
+  let unfiltered = flat_unfiltered_db
+  let with_ = db_with
+  let with_string = db_with_string
+  let with_tx = with_tx
+  let with_tx_string = with_tx_string
+  let schema = flat_schema
+  let with_schema = with_schema
+  let entid = entid
+  let entid_ref = entid_ref
+  let hash = db_hash
+  let hash_cache_size = db_hash_cache_size
+  let diff = diff
+  let squuid = squuid
+  let squuid_time_millis = squuid_time_millis
+  let is_unique = is_unique
+  let is_unique_identity = is_unique_identity
+  let is_indexed = is_indexed
+  let is_component = is_component
+  let is_ref = is_ref_attr
+  let is_tuple = is_tuple_attr
+  let tuple_attrs = tuple_attrs
+  let reverse_ref = reverse_ref
+  let tx0 = tx0
+  let is_datom = is_datom
+  let value_equal = value_equal
+  let same_fact = same_fact
+end
+
+module Conn = struct
+  type t = conn
+
+  let create ?(schema = []) ?storage () = create_conn ~schema ?storage ()
+  let from_db = conn_from_db
+  let from_datoms ?(schema = []) ?storage datoms = conn_from_datoms ~schema ?storage datoms
+  let restore = restore_conn
+  let db = db
+  let update_db = Conn.update_db
+  let storage_tail = Conn.storage_tail
+  let listen = listen
+  let listen_auto = listen_auto
+  let unlisten = unlisten
+  let reset ?tx_meta conn db = reset_conn ?tx_meta conn db
+  let reset_schema = reset_schema
+  let apply_report = apply_report
+  let transact ?tx_meta conn tx_ops = transact_conn ?tx_meta conn tx_ops
+  let transact_string ?tx_meta conn input = transact_conn_string ?tx_meta conn input
+  let transact_async ?tx_meta conn tx_ops = transact_async ?tx_meta conn tx_ops
+end
+
+module Entity = struct
+  type t = entity
+
+  let id (e : entity) : entity_id = e.id
+  let of_ref = entity
+  let attr = entity_attr
+  let attr_raw = entity_attr_raw
+  let attrs = entity_attrs
+  let db = entity_db
+  let equal = entity_equal
+  let hash = entity_hash
+  let touch = touch
+  let is_entity = is_entity
+end
+
+module Storage = struct
+  type t = storage
+
+  module type S = sig
+    type t
+
+    val write : t -> (storage_address * string) list -> unit
+    val read : t -> storage_address list -> (storage_address * string) list
+    val list : t -> storage_address list
+    val delete : t -> storage_address list -> unit
+  end
+
+  let make (type s) (module Backend : S with type t = s) (backend : s) : t =
+    Platform.make_storage
+      ~write:(Backend.write backend)
+      ~read:(Backend.read backend)
+      ~list:(fun () -> Backend.list backend)
+      ~delete:(Backend.delete backend)
+
+  let memory = memory_storage
+  let file = file_storage
+  let root_address = Storage.root_address
+  let tail_address = Storage.tail_address
+  let store = store
+  let store_tail = store_tail
+  let tail_compaction_threshold = Storage.tail_compaction_threshold
+  let tail_datom_count = Storage.tail_datom_count
+  let restore_root_snapshot = Storage.restore_root_snapshot
+  let restore_tail_groups = restore_tail_groups
+  let db_with_tail = db_with_tail
+  let restore = restore
+  let addresses = addresses
+  let of_db = storage
+  let settings = settings
+  let collect_garbage = collect_garbage
+end
+
+module Schema = struct
+  type t = schema_attr
+
+  (** Smart constructor for [schema_attr]. Tuple attributes and tuple
+      types are expressed through {!tuple_spec}, so the invalid
+      combinations of the flat record cannot be constructed: a tuple
+      spec implies [valueType TupleType], and [tupleAttrs] and
+      [tupleTypes] are mutually exclusive. *)
+  let spec
+      ?(indexed = false)
+      ?value_type
+      ?(cardinality = One)
+      ?unique
+      ?(is_component = false)
+      ?(no_history = false)
+      ?doc
+      ?tuple
+      () : t =
+    let tuple_attrs, tuple_types =
+      match tuple with
+      | None -> None, None
+      | Some (Tuple_attrs attrs) -> Some attrs, None
+      | Some (Tuple_types types) -> None, Some types
+    in
+    let value_type =
+      match value_type, tuple with
+      | Some given, Some _ ->
+        if given <> TupleType then
+          invalid_arg "Schema.spec: a tuple spec implies valueType TupleType";
+        Some given
+      | Some given, None -> Some given
+      | None, Some _ -> Some TupleType
+      | None, None -> None
+    in
+    { cardinality; unique; indexed; is_component; no_history; doc; value_type
+    ; tuple_attrs; tuple_types
+    }
+
+  let validate = validate_schema
+  let fields = schema_fields
+  let attr_by_name = Schema.schema_attr_by_name
+  let cardinality (a : t) = a.cardinality
+  let unique (a : t) = a.unique
+  let indexed (a : t) = a.indexed
+  let is_component (a : t) = a.is_component
+  let no_history (a : t) = a.no_history
+  let doc (a : t) = a.doc
+  let value_type (a : t) = a.value_type
+  let tuple_attrs (a : t) = a.tuple_attrs
+  let tuple_types (a : t) = a.tuple_types
+  let tuple (a : t) : tuple_spec option =
+    match a.tuple_attrs, a.tuple_types with
+    | Some attrs, _ -> Some (Tuple_attrs attrs)
+    | None, Some types -> Some (Tuple_types types)
+    | None, None -> None
+  let is_ref = Schema.schema_attr_is_ref
+  let is_tuple = Schema.schema_attr_is_tuple
+  let is_avet_accessible = Schema.schema_attr_is_avet_accessible
+  let has_no_history = Schema.schema_has_no_history
+  let folded_datoms = Schema.folded_datoms
+  let split_namespaced = Schema.split_namespaced_attr
+  let join_namespaced = Schema.join_namespaced_attr
+  let is_reverse_ref = is_reverse_ref
+  let reverse_ref = reverse_ref
+end
+
+module Edn = struct
+  type t = query_form
+
+  let read = read_edn
+  let read_string = read_edn
+  let attr_of_key = attr_of_edn_key
+  let tx_attr_of_key = tx_attr_of_edn_key
+  let tx_op_name = tx_op_name_of_edn_form
+  let is_attr_key = is_edn_attr_key
+  let keyword_name = keyword_name_of_form
+  let entity_ref = entity_ref_of_edn_form
+  let to_tx_data = tx_data_of_edn_form
+  let to_schema = schema_of_edn_form
+  let to_db = db_from_reader_form
+end
+
+(** Deprecated entry points kept for source compatibility; the
+    module-level API ([Db], [Conn], [Entity], ...) is the supported
+    surface. *)
+module Compat = struct
+  let is_datom = is_datom
+  let is_db = is_db
+  let is_conn = is_conn
+  let is_entity = is_entity
+  let is_filtered = is_filtered
+  let listen_bang = listen_bang
+  let listen_bang_auto = listen_bang_auto
+  let unlisten_bang = unlisten_bang
+  let reset_conn_bang = reset_conn_bang
+  let reset_schema_bang = reset_schema_bang
+  let transact_bang = transact_bang
+  let transact_bang_string = transact_bang_string
+  let transact_async = transact_async
+  let transact_async_string = transact_async_string
+end
+
+module Internal_convert = struct
+  (* Boundary coercions: the public types share their representation with
+     the implementation types (this file [include]s
+     [Datascript_types]); the mli seals them apart, so these are
+     identities. *)
+  let internalize_db (x : db) : Datascript_types.db = x
+  let externalize_db (x : Datascript_types.db) : db = x
+  let internalize_storage (x : storage) : Datascript_types.storage = x
+  let externalize_storage (x : Datascript_types.storage) : storage = x
+  let internalize_entity (x : entity) : Datascript_types.entity = x
+  let externalize_entity (x : Datascript_types.entity) : entity = x
+  let internalize_conn (x : conn) : Conn.t = x
+  let externalize_conn (x : Conn.t) : conn = x
+  let internalize_query (x : query) : Datascript_types.query = x
+  let externalize_query (x : Datascript_types.query) : query = x
+  let internalize_query_input (x : query_input) : Datascript_types.query_input = x
+  let externalize_query_input (x : Datascript_types.query_input) : query_input = x
+  let internalize_schema_attr (x : schema_attr) : Datascript_types.schema_attr = x
+  let externalize_schema_attr (x : Datascript_types.schema_attr) : schema_attr = x
+  let internalize_value (x : value) : Datascript_types.value = x
+  let externalize_value (x : Datascript_types.value) : value = x
+  let internalize_datom (x : datom) : Datascript_types.datom = x
+  let externalize_datom (x : Datascript_types.datom) : datom = x
+  let internalize_entity_ref (x : entity_ref) : Datascript_types.entity_ref = x
+  let externalize_entity_ref (x : Datascript_types.entity_ref) : entity_ref = x
+  let internalize_entity_id (x : entity_id) : Datascript_types.entity_id = x
+  let externalize_entity_id (x : Datascript_types.entity_id) : entity_id = x
+  let internalize_tx (x : tx) : Datascript_types.tx = x
+  let externalize_tx (x : Datascript_types.tx) : tx = x
+  let internalize_tx_op (x : tx_op) : Datascript_types.tx_op = x
+  let externalize_tx_op (x : Datascript_types.tx_op) : tx_op = x
+  let internalize_query_result (x : query_result) : Datascript_types.query_result = x
+  let externalize_query_result (x : Datascript_types.query_result) : query_result = x
+  let internalize_query_rule (x : query_rule) : Datascript_types.query_rule = x
+  let externalize_query_rule (x : Datascript_types.query_rule) : query_rule = x
+  let internalize_query_form (x : query_form) : Datascript_types.query_form = x
+  let externalize_query_form (x : Datascript_types.query_form) : query_form = x
+  let internalize_input_binding (x : input_binding) : Datascript_types.input_binding = x
+  let externalize_input_binding (x : Datascript_types.input_binding) : input_binding = x
+  let internalize_query_output (x : query_output) : Datascript_types.query_output = x
+  let externalize_query_output (x : Datascript_types.query_output) : query_output = x
+  let internalize_tx_report (x : tx_report) : Datascript_types.tx_report = x
+  let externalize_tx_report (x : Datascript_types.tx_report) : tx_report = x
 end

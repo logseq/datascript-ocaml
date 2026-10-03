@@ -409,7 +409,7 @@ let rec clojure_hasheq = function
     values
     |> List.map (function None -> 0 | Some value -> clojure_hasheq value)
     |> murmur3_hash_ordered
-  | Ref value -> murmur3_hash_long (Int64.of_int value)
+  | Ref value -> murmur3_hash_long value
   | Uuid value -> java_uuid_hash value
   | Instant value -> murmur3_hash_long value
   | Regex value -> Hashtbl.hash value
@@ -441,14 +441,14 @@ let rec compare_value left right =
   | Int64 left, Float right -> compare (Int64.to_float left) right
   | Float left, Int64 right -> compare left (Int64.to_float right)
   | Ref left, Ref right -> compare left right
-  | Int64 left, Ref right -> Int64.compare left (Int64.of_int right)
-  | Ref left, Int64 right -> Int64.compare (Int64.of_int left) right
-  | Float left, Ref right -> compare left (float_of_int right)
-  | Ref left, Float right -> compare (float_of_int left) right
+  | Int64 left, Ref right -> Int64.compare left right
+  | Ref left, Int64 right -> Int64.compare left right
+  | Float left, Ref right -> compare left (Int64.to_float right)
+  | Ref left, Float right -> compare (Int64.to_float left) right
   | Instant left, Int64 right -> Int64.compare left right
   | Int64 left, Instant right -> Int64.compare left right
-  | Instant left, Ref right -> Int64.compare left (Int64.of_int right)
-  | Ref left, Instant right -> Int64.compare (Int64.of_int left) right
+  | Instant left, Ref right -> Int64.compare left right
+  | Ref left, Instant right -> Int64.compare left right
   | Instant left, Float right -> compare (Int64.to_float left) right
   | Float left, Instant right -> compare left (Int64.to_float right)
   | String left, String right -> compare left right

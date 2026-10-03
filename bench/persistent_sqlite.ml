@@ -1,4 +1,6 @@
 open Datascript
+module DT = Internal.Datascript_types
+open DT
 
 type timing = { label : string; elapsed_ms : float }
 
@@ -13,19 +15,9 @@ let print_timing { label; elapsed_ms } =
   Printf.printf "%s\t%.2f\n%!" label elapsed_ms
 
 let indexed =
-  {
-    cardinality = One;
-    unique = None;
-    indexed = true;
-    is_component = false;
-    no_history = false;
-    doc = None;
-    value_type = None;
-    tuple_attrs = None;
-    tuple_types = None;
-  }
+  { DT.cardinality = DT.One; unique = None; indexed = true; is_component = false; no_history = false; doc = None; value_type = None; tuple_attrs = None; tuple_types = None }
 
-let unique_identity = { indexed with unique = Some Identity }
+let unique_identity = { indexed with DT.unique = Some DT.Identity }
 
 let schema =
   [
@@ -96,20 +88,20 @@ let run_size size =
   Printf.printf "size\t%d\n%!" size;
   let tx = block_tx size in
   let memory_build, memory_db =
-    time "memory-build" (fun () -> db_with tx (empty_db ~schema ()))
+    time "memory-build" (fun () -> Internal.db_with tx (Internal.empty_db ~schema ()))
   in
   print_timing memory_build;
   let memory_add, memory_db =
     time "memory-add-one" (fun () ->
-        db_with (add_block_tx "memory-new" (Float.of_int (size + 1))) memory_db)
+        Internal.db_with (add_block_tx "memory-new" (Float.of_int (size + 1))) memory_db)
   in
   print_timing memory_add;
   let memory_update, memory_db =
     time "memory-update-one" (fun () ->
-        db_with (update_content_tx "block-00001" "Edited") memory_db)
+        Internal.db_with (update_content_tx "block-00001" "Edited") memory_db)
   in
   print_timing memory_update;
-  Printf.printf "memory-datoms\t%d\n%!" (seq_length (datoms memory_db Eavt ()));
+  Printf.printf "memory-datoms\t%d\n%!" (seq_length (Internal.datoms memory_db Eavt ()));
   let db_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
@@ -125,14 +117,14 @@ let run_size size =
       let storage = Datascript_sqlite.storage session in
       let persistent_build, persistent_db =
         time "snapshot-build-and-store" (fun () ->
-            let db = db_with tx (empty_db ~schema ~storage ()) in
-            ignore (store db);
+            let db = Internal.db_with tx (Internal.empty_db ~schema ~storage ()) in
+            ignore (Internal.store db);
             db)
       in
       print_timing persistent_build;
       Printf.printf
         "snapshot-build-datoms\t%d\n%!"
-        (seq_length (datoms persistent_db Eavt ()));
+        (seq_length (Internal.datoms persistent_db Eavt ()));
       let persistent_rows =
         sqlite_count db_path "select count(*) from kvs;"
       in
@@ -140,7 +132,7 @@ let run_size size =
       Printf.printf "snapshot-file-size-after-build\t%d\n%!" (file_size db_path);
       let restore_timing, restored_db =
         time "snapshot-restore" (fun () ->
-            match restore storage with
+            match Internal.restore storage with
             | Some db -> db
             | None -> failwith "persistent db should restore")
       in
@@ -148,11 +140,11 @@ let run_size size =
       let persistent_add, restored_db =
         time "snapshot-add-one-and-store-after-restore" (fun () ->
             let db =
-              db_with
+              Internal.db_with
                 (add_block_tx "persistent-new" (Float.of_int (size + 1)))
                 restored_db
             in
-            ignore (store db);
+            ignore (Internal.store db);
             db)
       in
       print_timing persistent_add;
@@ -162,8 +154,8 @@ let run_size size =
       Printf.printf "snapshot-file-size-after-add\t%d\n%!" (file_size db_path);
       let persistent_update, restored_db =
         time "snapshot-update-one-and-store-after-add" (fun () ->
-            let db = db_with (update_content_tx "block-00001" "Edited") restored_db in
-            ignore (store db);
+            let db = Internal.db_with (update_content_tx "block-00001" "Edited") restored_db in
+            ignore (Internal.store db);
             db)
       in
       print_timing persistent_update;
@@ -175,7 +167,7 @@ let run_size size =
         (file_size db_path);
       Printf.printf
         "snapshot-datoms\t%d\n%!"
-        (seq_length (datoms restored_db Eavt ())));
+        (seq_length (Internal.datoms restored_db Eavt ())));
   let conn_db_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
@@ -191,26 +183,26 @@ let run_size size =
       let storage = Datascript_sqlite.storage session in
       let conn_build, conn =
         time "conn-build" (fun () ->
-            let conn = create_conn ~schema ~storage () in
-            ignore (transact_conn conn tx);
+            let conn = Internal.create_conn ~schema ~storage () in
+            ignore (Internal.transact_conn conn tx);
             conn)
       in
       print_timing conn_build;
-      Printf.printf "conn-build-datoms\t%d\n%!" (seq_length (datoms (db conn) Eavt ()));
+      Printf.printf "conn-build-datoms\t%d\n%!" (seq_length (Internal.datoms (Internal.conn_db conn) Eavt ()));
       Printf.printf
         "conn-kvs-rows-after-build\t%d\n%!"
         (sqlite_count conn_db_path "select count(*) from kvs;");
       Printf.printf "conn-file-size-after-build\t%d\n%!" (file_size conn_db_path);
       let conn_restore, conn =
         time "conn-restore" (fun () ->
-            match restore_conn storage with
+            match Internal.restore_conn storage with
             | Some conn -> conn
             | None -> failwith "persistent conn should restore")
       in
       print_timing conn_restore;
       let conn_add, _report =
         time "conn-add-one-after-restore" (fun () ->
-            transact_conn conn (add_block_tx "conn-new" (Float.of_int (size + 1))))
+            Internal.transact_conn conn (add_block_tx "conn-new" (Float.of_int (size + 1))))
       in
       print_timing conn_add;
       Printf.printf
@@ -219,14 +211,14 @@ let run_size size =
       Printf.printf "conn-file-size-after-add\t%d\n%!" (file_size conn_db_path);
       let conn_update, _report =
         time "conn-update-one-after-add" (fun () ->
-            transact_conn conn (update_content_tx "block-00001" "Edited"))
+            Internal.transact_conn conn (update_content_tx "block-00001" "Edited"))
       in
       print_timing conn_update;
       Printf.printf
         "conn-kvs-rows-after-update\t%d\n%!"
         (sqlite_count conn_db_path "select count(*) from kvs;");
       Printf.printf "conn-file-size-after-update\t%d\n%!" (file_size conn_db_path);
-      Printf.printf "conn-datoms\t%d\n%!" (seq_length (datoms (db conn) Eavt ())))
+      Printf.printf "conn-datoms\t%d\n%!" (seq_length (Internal.datoms (Internal.conn_db conn) Eavt ())))
 
 let parse_sizes () =
   let rec loop sizes = function

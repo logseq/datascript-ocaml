@@ -1,7 +1,7 @@
 open Datascript_types
 
 type context =
-  { validate_entity_id : int -> entity_id
+  { validate_entity_id : int64 -> entity_id
   ; entid : db -> attr -> value -> entity_id option
   ; ident_attr : attr
   ; allocate_entity_id : entity_id -> entity_id
@@ -13,8 +13,8 @@ type context =
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
   ; is_unique_identity : db -> attr -> bool
-  ; max_eid_with_entity_id : int -> entity_id -> entity_id
-  ; max_eid_in_value : int -> value -> int
+  ; max_eid_with_entity_id : int64 -> entity_id -> entity_id
+  ; max_eid_in_value : int64 -> value -> int64
   }
 
 module String_map = Map.Make (String)
@@ -94,10 +94,10 @@ let remember_current_tx_alias tempids tx alias =
 exception Unresolved_lookup_ref of attr * value
 
 let rec resolve_entity_ref context db datoms tx max_eid tempids = function
-  | Entity_id e when e < 0 ->
+  | Entity_id e when e < 0L ->
     (* upstream datascript: a negative integer :db/id is a tempid *)
     resolve_entity_ref context db datoms tx max_eid tempids
-      (Temp_id (string_of_int e))
+      (Temp_id (Int64.to_string e))
   | Entity_id e ->
     let e = context.validate_entity_id e in
     e, context.max_eid_with_entity_id max_eid e, tempids
@@ -195,7 +195,7 @@ let entity_ref_of_ref_attr_value = function
   | Ref_to entity_ref -> Some entity_ref
   | Int64 entity_id when entity_id < 0L -> Some (Temp_id (Int64.to_string entity_id))
   | Int64 entity_id ->
-    Option.map (fun entity_id -> Entity_id entity_id) (Util.int64_to_int entity_id)
+    Some (Entity_id entity_id)
   | String tempid -> Some (Temp_id tempid)
   | Keyword "db/current-tx" -> Some CurrentTx
   | Keyword ident -> Some (Ident ident)
@@ -288,7 +288,7 @@ and map_entries_of_tx_entity (entity : tx_entity) : (value * value) list =
   | None -> entries
 
 and value_of_entity_ref = function
-  | Entity_id entity_id -> Int64 (Int64.of_int entity_id)
+  | Entity_id entity_id -> Int64 entity_id
   | Temp_id tempid ->
     (* digits-only check first: of_string_opt raises internally on
        non-numeric tempids, and this runs per entity-ref in tx output *)
@@ -508,7 +508,7 @@ let apply_tx context tx_ops db =
       datom_tx_data;
     List.rev_append datom_tx_data tx_data_rev
   in
-  let tx = db.max_tx + 1 in
+  let tx = Int64.add db.max_tx 1L in
   let current_schema = ref db.schema in
   let current_tx_fns = ref db.tx_fns in
   let removed_schema_attrs = ref [] in
@@ -609,7 +609,7 @@ let apply_tx context tx_ops db =
      tempids sequentially and lets forward value refs point at eids minted
      later in the same tx *)
   let rec max_explicit_entity_ref max_eid = function
-    | Entity_id e when e < 0 -> max_eid
+    | Entity_id e when e < 0L -> max_eid
     | Entity_id e -> context.resolve_context.max_eid_with_entity_id max_eid e
     | Lookup_ref (_, value) -> max_explicit_lookup_value max_eid value
     | _ -> max_eid
@@ -750,9 +750,9 @@ let apply_tx context tx_ops db =
         ("Conflicting upsert: "
          ^ tempid
          ^ " resolves both to "
-         ^ string_of_int old_e
+         ^ Int64.to_string old_e
          ^ " and "
-         ^ string_of_int target_e);
+         ^ Int64.to_string target_e);
     let old_datoms = context.existing_entity_datoms datoms old_e in
     let referring_datoms =
       context.datoms_referencing_entity datoms old_e
@@ -1053,9 +1053,9 @@ let apply_tx context tx_ops db =
       in
       let db_id_ref =
         match entity.db_id with
-        | Some (Entity_id e) when e < 0 ->
+        | Some (Entity_id e) when e < 0L ->
           (* upstream datascript: a negative integer :db/id is a tempid *)
-          Some (Temp_id (string_of_int e))
+          Some (Temp_id (Int64.to_string e))
         | db_id -> db_id
       in
       let e, datoms, max_eid, tempids, tx_data =
@@ -1695,9 +1695,9 @@ let apply_tx context tx_ops db =
                        ("Conflicting upsert: "
                         ^ tempid
                         ^ " resolves both to "
-                        ^ string_of_int old_e
+                        ^ Int64.to_string old_e
                         ^ " and "
-                        ^ string_of_int target_e)
+                        ^ Int64.to_string target_e)
                    | Some entity_id, _ ->
                      (* unique-identity upsert hit: cljs emits
                         ::tx-redundant which clears value tempids *)
@@ -1744,9 +1744,9 @@ let apply_tx context tx_ops db =
                      ("Conflicting upsert: "
                       ^ tempid
                       ^ " resolves both to "
-                      ^ string_of_int old_e
+                      ^ Int64.to_string old_e
                       ^ " and "
-                      ^ string_of_int target_e)
+                      ^ Int64.to_string target_e)
                  | Some entity_id, _ ->
                    mark_materialized entity_id;
                    entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id

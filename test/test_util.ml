@@ -1,130 +1,117 @@
 open Datascript
+module V = Internal.Datascript_types
 
 let failf fmt = Printf.ksprintf failwith fmt
 
 let datoms_seq = datoms
 
-let datoms db index ?e ?a ?v ?tx () =
-  datoms_seq db index ?e ?a ?v ?tx () |> List.of_seq
-
-let assert_equal_value message expected actual =
-  if not (Db.value_equal expected actual) then failf "%s" message
+let datoms ?e ?a ?v ?tx db index =
+  datoms_seq ?e ?a ?v ?tx db index |> List.of_seq
 
 let assert_equal_triples message expected actual =
   let actual = List.map (fun d -> d.e, d.a, d.v) actual in
   if actual <> expected then failf "%s" message
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let test_util__value_semantics () =
   let nested =
-    Map
-      [ Keyword "b", Vector [ String "x"; String "y" ]
-      ; Keyword "a", Set [ Int64 2L; Int64 1L; Int64 1L ]
+    V.Map
+      [ V.Keyword "b", V.Vector [ V.String "x"; V.String "y" ]
+      ; V.Keyword "a", V.Set [ V.Int64 2L; V.Int64 1L; V.Int64 1L ]
       ]
   in
   let normalized =
-    Map
-      [ Keyword "a", Set [ Int64 1L; Int64 2L ]
-      ; Keyword "b", Vector [ String "x"; String "y" ]
+    V.Map
+      [ V.Keyword "a", V.Set [ V.Int64 1L; V.Int64 2L ]
+      ; V.Keyword "b", V.Vector [ V.String "x"; V.String "y" ]
       ]
   in
-  assert_equal_value
-    "Util.normalize_value normalizes unordered values without losing vector shape"
-    normalized
-    (Util.normalize_value nested);
-  if Util.compare_value (Vector [ Int64 1L; Int64 2L ]) (List [ Int64 1L; Int64 2L ]) = 0 then
+  if normalized <> Internal.Util.normalize_value nested then
+    failf "Util.normalize_value normalizes unordered values without losing vector shape";
+  if Internal.Util.compare_value (V.Vector [ V.Int64 1L; V.Int64 2L ]) (V.List [ V.Int64 1L; V.Int64 2L ]) = 0 then
     failf "vectors and lists must remain distinct values"
 
 let test_util__keyword_order_matches_upstream () =
-  let normal = Map [ Keyword "id", String "robot_face"; Keyword "type", Keyword "emoji" ] in
-  let inverted = Map [ Keyword "id", String "robot_face"; Keyword "emoji", Keyword "type" ] in
+  let normal = V.Map [ V.Keyword "id", V.String "robot_face"; V.Keyword "type", V.Keyword "emoji" ] in
+  let inverted = V.Map [ V.Keyword "id", V.String "robot_face"; V.Keyword "emoji", V.Keyword "type" ] in
   let tabler =
-    Map
-      [ Keyword "color", String "inherit"
-      ; Keyword "id", String "ListNumbers"
-      ; Keyword "name", String "ListNumbers"
-      ; Keyword "type", Keyword "tabler-icon"
+    V.Map
+      [ V.Keyword "color", V.String "inherit"
+      ; V.Keyword "id", V.String "ListNumbers"
+      ; V.Keyword "name", V.String "ListNumbers"
+      ; V.Keyword "type", V.Keyword "tabler-icon"
       ]
   in
   let inverted_tabler =
-    Map
-      [ Keyword "color", String "inherit"
-      ; Keyword "id", String "ListNumbers"
-      ; Keyword "name", String "ListNumbers"
-      ; Keyword "tabler-icon", Keyword "type"
+    V.Map
+      [ V.Keyword "color", V.String "inherit"
+      ; V.Keyword "id", V.String "ListNumbers"
+      ; V.Keyword "name", V.String "ListNumbers"
+      ; V.Keyword "tabler-icon", V.Keyword "type"
       ]
   in
-  let filters = Map [ Keyword "or?", Bool false; Keyword "filters", Vector [] ] in
-  let status_filters = Map [ Keyword "or?", Bool false; Keyword "logseq.property/status", Vector [] ] in
-  let filter_uuid = Uuid "00000002-1827-5820-8200-000000000000" in
+  let filters = V.Map [ V.Keyword "or?", V.Bool false; V.Keyword "filters", V.Vector [] ] in
+  let status_filters = V.Map [ V.Keyword "or?", V.Bool false; V.Keyword "logseq.property/status", V.Vector [] ] in
+  let filter_uuid = V.Uuid "00000002-1827-5820-8200-000000000000" in
   let nested_filters =
-    Map
-      [ Keyword "or?", Bool false
-      ; Keyword "filters"
-        , Vector
-            [ Vector
-                [ Keyword "logseq.property/status"
-                ; Keyword "block/created-at"
-                ; Vector [ String "~:is-not"; Vector [ filter_uuid ] ]
+    V.Map
+      [ V.Keyword "or?", V.Bool false
+      ; V.Keyword "filters"
+        , V.Vector
+            [ V.Vector
+                [ V.Keyword "logseq.property/status"
+                ; V.Keyword "block/created-at"
+                ; V.Vector [ V.String "~:is-not"; V.Vector [ filter_uuid ] ]
                 ]
             ]
       ]
   in
   let nested_status_filters =
-    Map
-      [ Keyword "or?", Bool false
-      ; Keyword "logseq.property/status"
-        , Vector
-            [ Vector
-                [ Keyword "is-not"
-                ; Keyword "filters"
-                ; Vector [ String "^9"; Vector [ filter_uuid ] ]
+    V.Map
+      [ V.Keyword "or?", V.Bool false
+      ; V.Keyword "logseq.property/status"
+        , V.Vector
+            [ V.Vector
+                [ V.Keyword "is-not"
+                ; V.Keyword "filters"
+                ; V.Vector [ V.String "^9"; V.Vector [ filter_uuid ] ]
                 ]
             ]
       ]
   in
-  if Util.compare_value normal inverted >= 0 then
+  if Internal.Util.compare_value normal inverted >= 0 then
     failf "map value ordering should match upstream DataScript value-compare";
-  if Util.compare_value (Util.normalize_value normal) (Util.normalize_value inverted) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value normal) (Internal.Util.normalize_value inverted) >= 0 then
     failf "normalized map value ordering should match upstream DataScript value-compare";
-  if Util.compare_value (Util.normalize_value tabler) (Util.normalize_value inverted_tabler) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value tabler) (Internal.Util.normalize_value inverted_tabler) >= 0 then
     failf "normalized tabler map value ordering should match upstream DataScript value-compare";
-  if Util.compare_value (Util.normalize_value filters) (Util.normalize_value status_filters) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value filters) (Internal.Util.normalize_value status_filters) >= 0 then
     failf "normalized filter map value ordering should match upstream DataScript value-compare";
-  if Util.compare_value (Util.normalize_value nested_filters) (Util.normalize_value nested_status_filters) >= 0 then
+  if Internal.Util.compare_value (Internal.Util.normalize_value nested_filters) (Internal.Util.normalize_value nested_status_filters) >= 0 then
     failf "normalized nested filter map value ordering should match upstream DataScript value-compare"
 
 let test_util__vector_values_in_db () =
   let vector = Vector [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ] in
   let db =
     empty_db ~schema:[ "shape", indexed ] ()
-    |> db_with [ Add (Entity_id 1, "shape", vector) ]
+    |> db_with [ Add (Entity_id (eid 1L), "shape", vector) ]
   in
   assert_equal_triples
     "vector values can be stored and looked up exactly"
-    [ 1, "shape", vector ]
-    (datoms db Avet ~a:"shape" ~v:vector ());
+    [ (eid 1L), "shape", vector ]
+    (datoms ~a:"shape" ~v:vector db Avet);
   assert_equal_triples
     "list values do not match vector values with the same members"
     []
-    (datoms db Avet ~a:"shape" ~v:(List [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ]) ())
+    (datoms ~a:"shape" ~v:(List [ Int64 1L; Map [ Keyword "tags", Vector [ Keyword "a"; Keyword "b" ] ] ]) db Avet)
 
 let test_util__uuid_canonicalize () =
   let check expected input =
-    if Util.uuid_canonicalize input <> expected then
+    if Internal.Util.uuid_canonicalize input <> expected then
       failf "uuid_canonicalize %S -> %S, want %S" input
-        (Util.uuid_canonicalize input) expected
+        (Internal.Util.uuid_canonicalize input) expected
   in
   (* transit-js UUIDfromString("cli-sync-stress-user") — the case that
      produced ghost block/uuid duplicates *)

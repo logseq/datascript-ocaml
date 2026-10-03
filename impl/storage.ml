@@ -67,9 +67,7 @@ let normalize_stored_datom_with attr_by_name datom =
   let schema_attr = attr_by_name datom.a in
   match schema_attr, datom.v with
   | Some { value_type = Some RefType; _ }, Int64 entity_id ->
-    (match Util.int64_to_int entity_id with
-     | Some entity_id -> { datom with v = Ref entity_id }
-     | None -> datom)
+    { datom with v = Ref entity_id }
   | Some { value_type = Some InstantType; _ }, Int64 millis ->
     (* older databases stored plain ints under instant attrs as Instant *)
     { datom with v = Instant millis }
@@ -167,7 +165,7 @@ let root_of_stored_indexes db ~eavt_metadata ~aevt_metadata ~avet_metadata eavt_
   let settings = PSet.settings db.eavt_index in
   let schema_idents =
     (* eid -> :db/ident pairs, matching cljs's schema map entries *)
-    let first_ident = { e = 0; a = "db/ident"; v = Nil; tx = 0; added = true } in
+    let first_ident = { e = 0L; a = "db/ident"; v = Nil; tx = 0L; added = true } in
     db.aevt_index
     |> PSet.slice_seq ~from_:first_ident
     |> PSet.to_seq
@@ -317,7 +315,7 @@ let db_with_tail context db tail =
       | [] -> db
       | first :: _ ->
         let group_tx = first.tx in
-        let db_before_group = { db with max_tx = group_tx - 1 } in
+        let db_before_group = { db with max_tx = Int64.sub group_tx 1L } in
         let db_after_group =
           match context.apply_group db_before_group group with
           | db -> db

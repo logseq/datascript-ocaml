@@ -1,4 +1,5 @@
 open Datascript
+module DT = Internal.Datascript_types
 
 let failf fmt = Printf.ksprintf failwith fmt
 
@@ -6,7 +7,7 @@ let assert_rows label expected actual =
   let norm rows = List.sort compare rows in
   if norm expected <> norm actual then failf "%s" label
 
-let rules_of_string s = Parser.parse_rules (Parser.read_edn s)
+let rules_of_string = parse_rules_string
 
 (* Bug 1: recursive rules should walk the graph in the direction the body says.
    Upstream: datascript/test/query_rules.cljc test-rules *)
@@ -14,9 +15,9 @@ let test_recursive_rules_direction () =
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "follow", Ref 2)
-         ; Add (Entity_id 2, "follow", Ref 3)
-         ; Add (Entity_id 3, "follow", Ref 4)
+         [ Add (Entity_id (eid 1L), "follow", Ref (eid 2L))
+         ; Add (Entity_id (eid 2L), "follow", Ref (eid 3L))
+         ; Add (Entity_id (eid 3L), "follow", Ref (eid 4L))
          ]
   in
   let rules =
@@ -26,12 +27,12 @@ let test_recursive_rules_direction () =
   in
   assert_rows
     "recursive rule returns all follow pairs"
-    [ [ Result_entity 1; Result_entity 2 ]
-    ; [ Result_entity 1; Result_entity 3 ]
-    ; [ Result_entity 1; Result_entity 4 ]
-    ; [ Result_entity 2; Result_entity 3 ]
-    ; [ Result_entity 2; Result_entity 4 ]
-    ; [ Result_entity 3; Result_entity 4 ]
+    [ [ Result_entity (eid 1L); Result_entity (eid 2L) ]
+    ; [ Result_entity (eid 1L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 1L); Result_entity (eid 4L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 4L) ]
+    ; [ Result_entity (eid 3L); Result_entity (eid 4L) ]
     ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]")
@@ -42,12 +43,12 @@ let test_rule_branches_positional_binding () =
      datoms like upstream's datom-vector inputs. *)
   let db =
     init_db
-      [ datom ~e:5 ~a:"follow" ~v:(Ref 3) ()
-      ; datom ~e:1 ~a:"follow" ~v:(Ref 2) ()
-      ; datom ~e:2 ~a:"follow" ~v:(Ref 3) ()
-      ; datom ~e:3 ~a:"follow" ~v:(Ref 4) ()
-      ; datom ~e:4 ~a:"follow" ~v:(Ref 6) ()
-      ; datom ~e:2 ~a:"follow" ~v:(Ref 4) ()
+      [ datom (eid 5L) "follow" (Ref (eid 3L))
+      ; datom (eid 1L) "follow" (Ref (eid 2L))
+      ; datom (eid 2L) "follow" (Ref (eid 3L))
+      ; datom (eid 3L) "follow" (Ref (eid 4L))
+      ; datom (eid 4L) "follow" (Ref (eid 6L))
+      ; datom (eid 2L) "follow" (Ref (eid 4L))
       ]
   in
   let rules =
@@ -57,8 +58,8 @@ let test_rule_branches_positional_binding () =
   in
   assert_rows
     "rule head vars bind positionally, not by name"
-    [ [ Result_entity 2 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_entity 1); Arg_rules rules ] db
+    [ [ Result_entity (eid 2L) ]; [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_entity (eid 1L)); Arg_rules rules ] db
        "[:find ?e2 :in $ ?e1 % :where (follow ?e1 ?e2)]")
 
 let test_recursive_rule_swapped_args () =
@@ -67,8 +68,8 @@ let test_recursive_rule_swapped_args () =
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "follow", Ref 2)
-         ; Add (Entity_id 2, "follow", Ref 3)
+         [ Add (Entity_id (eid 1L), "follow", Ref (eid 2L))
+         ; Add (Entity_id (eid 2L), "follow", Ref (eid 3L))
          ]
   in
   let rules =
@@ -78,10 +79,10 @@ let test_recursive_rule_swapped_args () =
   in
   assert_rows
     "recursive self-call with swapped args yields symmetric pairs"
-    [ [ Result_entity 1; Result_entity 2 ]
-    ; [ Result_entity 2; Result_entity 3 ]
-    ; [ Result_entity 2; Result_entity 1 ]
-    ; [ Result_entity 3; Result_entity 2 ]
+    [ [ Result_entity (eid 1L); Result_entity (eid 2L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 1L) ]
+    ; [ Result_entity (eid 3L); Result_entity (eid 2L) ]
     ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?e1 ?e2 :in $ % :where (follow ?e1 ?e2)]")
@@ -92,19 +93,17 @@ let test_recursive_rule_swapped_args () =
 let test_logseq_parent_rule () =
   let schema =
     let base_attr =
-      { cardinality = One; unique = None; indexed = false; is_component = false
-      ; no_history = false; doc = None; value_type = None; tuple_attrs = None
-      ; tuple_types = None }
+      Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
     in
-    [ "block/parent", { base_attr with value_type = Some RefType } ]
+    [ "block/parent", Schema.spec ~cardinality:((Schema.cardinality base_attr)) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) () ]
   in
   let db =
     empty_db ~schema ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "block/parent", One_value (Ref 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "block/parent", One_value (Ref 2) ] }
-         ; Entity { db_id = Some (Entity_id 4); attrs = [ "block/parent", One_value (Ref 3) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "block/parent", One_value (Ref (eid 1L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 3L)); attrs = [ "block/parent", One_value (Ref (eid 2L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 4L)); attrs = [ "block/parent", One_value (Ref (eid 3L)) ] }
          ]
   in
   let rules =
@@ -114,12 +113,12 @@ let test_logseq_parent_rule () =
   in
   assert_rows
     "(parent 1 ?c) returns descendants of block 1"
-    [ [ Result_entity 2 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+    [ [ Result_entity (eid 2L) ]; [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?c :in $ % :where (parent 1 ?c)]");
   assert_rows
     "(parent ?p 4) returns ancestors of block 4"
-    [ [ Result_entity 1 ]; [ Result_entity 2 ]; [ Result_entity 3 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 2L) ]; [ Result_entity (eid 3L) ] ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?p :in $ % :where (parent ?p 4)]")
 
@@ -129,22 +128,20 @@ let test_logseq_parent_rule () =
 let test_recursive_rule_bound_head_arg () =
   let schema =
     let base_attr =
-      { cardinality = One; unique = None; indexed = false; is_component = false
-      ; no_history = false; doc = None; value_type = None; tuple_attrs = None
-      ; tuple_types = None }
+      Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
     in
-    [ "block/parent", { base_attr with value_type = Some RefType } ]
+    [ "block/parent", Schema.spec ~cardinality:((Schema.cardinality base_attr)) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) () ]
   in
   let db =
     empty_db ~schema ()
     |> db_with
          (* tree 1: 1 <- 2 <- 3 ; tree 2: 5 <- 6 <- 7 *)
-         [ Entity { db_id = Some (Entity_id 1); attrs = [] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "block/parent", One_value (Ref 1) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "block/parent", One_value (Ref 2) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [] }
-         ; Entity { db_id = Some (Entity_id 6); attrs = [ "block/parent", One_value (Ref 5) ] }
-         ; Entity { db_id = Some (Entity_id 7); attrs = [ "block/parent", One_value (Ref 6) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "block/parent", One_value (Ref (eid 1L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 3L)); attrs = [ "block/parent", One_value (Ref (eid 2L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 5L)); attrs = [] }
+         ; Entity { db_id = Some (Entity_id (eid 6L)); attrs = [ "block/parent", One_value (Ref (eid 5L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 7L)); attrs = [ "block/parent", One_value (Ref (eid 6L)) ] }
          ]
   in
   let rules =
@@ -154,13 +151,13 @@ let test_recursive_rule_bound_head_arg () =
   in
   assert_rows
     "(parent 1 ?c) with two trees returns only tree-1 descendants"
-    [ [ Result_entity 2 ]; [ Result_entity 3 ] ]
+    [ [ Result_entity (eid 2L) ]; [ Result_entity (eid 3L) ] ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?c :in $ % :where (parent 1 ?c)]");
   assert_rows
     "(parent ?p ?c) with :in-bound ?p returns only its descendants"
-    [ [ Result_entity 2 ]; [ Result_entity 3 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_entity 1); Arg_rules rules ] db
+    [ [ Result_entity (eid 2L) ]; [ Result_entity (eid 3L) ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_entity (eid 1L)); Arg_rules rules ] db
        "[:find ?c :in $ ?p % :where (parent ?p ?c)]")
 
 (* Bug B: Arg_scalar (Result_entity e) binds the entity as the :in input,
@@ -168,30 +165,28 @@ let test_recursive_rule_bound_head_arg () =
 let test_in_scalar_result_entity () =
   let schema =
     let base_attr =
-      { cardinality = One; unique = None; indexed = false; is_component = false
-      ; no_history = false; doc = None; value_type = None; tuple_attrs = None
-      ; tuple_types = None }
+      Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
     in
-    [ "block/parent", { base_attr with value_type = Some RefType } ]
+    [ "block/parent", Schema.spec ~cardinality:((Schema.cardinality base_attr)) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) () ]
   in
   let db =
     empty_db ~schema ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "block/parent", One_value (Ref 1) ] }
-         ; Entity { db_id = Some (Entity_id 5); attrs = [] }
-         ; Entity { db_id = Some (Entity_id 6); attrs = [ "block/parent", One_value (Ref 5) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "block/parent", One_value (Ref (eid 1L)) ] }
+         ; Entity { db_id = Some (Entity_id (eid 5L)); attrs = [] }
+         ; Entity { db_id = Some (Entity_id (eid 6L)); attrs = [ "block/parent", One_value (Ref (eid 5L)) ] }
          ]
   in
   assert_rows
-    ":in ?x bound to Arg_scalar (Result_entity 1) filters ref datoms"
-    [ [ Result_entity 2 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_entity 1) ] db
+    ":in ?x bound to Arg_scalar (Result_entity (eid 1L)) filters ref datoms"
+    [ [ Result_entity (eid 2L) ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_entity (eid 1L)) ] db
        "[:find ?c :in $ ?x :where [?c :block/parent ?x]]");
   assert_rows
-    ":in ?x bound to Arg_scalar (Result_value (Ref 1)) filters ref datoms"
-    [ [ Result_entity 2 ] ]
-    (q_string ~inputs:[ Arg_scalar (Result_value (Ref 1)) ] db
+    ":in ?x bound to Arg_scalar (Result_value (Ref (eid 1L))) filters ref datoms"
+    [ [ Result_entity (eid 2L) ] ]
+    (q_string ~inputs:[ Arg_scalar (Result_value (Ref (eid 1L))) ] db
        "[:find ?c :in $ ?x :where [?c :block/parent ?x]]")
 
 (* A var bound to a non-entity value in entity position is unsatisfiable:
@@ -201,9 +196,9 @@ let test_in_scalar_result_entity () =
 let test_bound_non_entity_in_entity_position () =
   let db =
     init_db
-      [ datom ~e:1 ~a:"title" ~v:(String "Page1") ()
-      ; datom ~e:2 ~a:"title" ~v:(String "Page A") ()
-      ; datom ~e:3 ~a:"title" ~v:(String "Page B") ()
+      [ datom (eid 1L) "title" (String "Page1")
+      ; datom (eid 2L) "title" (String "Page A")
+      ; datom (eid 3L) "title" (String "Page B")
       ]
   in
   assert_rows
@@ -231,12 +226,12 @@ let test_bound_non_entity_in_entity_position () =
 let test_mutually_recursive_rules () =
   let db =
     init_db
-      [ datom ~e:0 ~a:"f1" ~v:(Ref 1) ()
-      ; datom ~e:1 ~a:"f2" ~v:(Ref 2) ()
-      ; datom ~e:2 ~a:"f1" ~v:(Ref 3) ()
-      ; datom ~e:3 ~a:"f2" ~v:(Ref 4) ()
-      ; datom ~e:4 ~a:"f1" ~v:(Ref 5) ()
-      ; datom ~e:5 ~a:"f2" ~v:(Ref 6) ()
+      [ datom (eid 0L) "f1" (Ref (eid 1L))
+      ; datom (eid 1L) "f2" (Ref (eid 2L))
+      ; datom (eid 2L) "f1" (Ref (eid 3L))
+      ; datom (eid 3L) "f2" (Ref (eid 4L))
+      ; datom (eid 4L) "f1" (Ref (eid 5L))
+      ; datom (eid 5L) "f2" (Ref (eid 6L))
       ]
   in
   let rules =
@@ -248,15 +243,15 @@ let test_mutually_recursive_rules () =
   in
   assert_rows
     "mutually recursive rules walk alternating edge kinds"
-    [ [ Result_entity 0; Result_entity 1 ]
-    ; [ Result_entity 0; Result_entity 3 ]
-    ; [ Result_entity 0; Result_entity 5 ]
-    ; [ Result_entity 1; Result_entity 3 ]
-    ; [ Result_entity 1; Result_entity 5 ]
-    ; [ Result_entity 2; Result_entity 3 ]
-    ; [ Result_entity 2; Result_entity 5 ]
-    ; [ Result_entity 3; Result_entity 5 ]
-    ; [ Result_entity 4; Result_entity 5 ]
+    [ [ Result_entity (eid 0L); Result_entity (eid 1L) ]
+    ; [ Result_entity (eid 0L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 0L); Result_entity (eid 5L) ]
+    ; [ Result_entity (eid 1L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 1L); Result_entity (eid 5L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 3L) ]
+    ; [ Result_entity (eid 2L); Result_entity (eid 5L) ]
+    ; [ Result_entity (eid 3L); Result_entity (eid 5L) ]
+    ; [ Result_entity (eid 4L); Result_entity (eid 5L) ]
     ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?e1 ?e2 :in $ % :where (f1 ?e1 ?e2)]")
@@ -266,12 +261,12 @@ let test_mutually_recursive_rules () =
 let test_rule_joined_with_clauses () =
   let db =
     init_db
-      [ datom ~e:5 ~a:"follow" ~v:(Ref 3) ()
-      ; datom ~e:1 ~a:"follow" ~v:(Ref 2) ()
-      ; datom ~e:2 ~a:"follow" ~v:(Ref 3) ()
-      ; datom ~e:3 ~a:"follow" ~v:(Ref 4) ()
-      ; datom ~e:4 ~a:"follow" ~v:(Ref 6) ()
-      ; datom ~e:2 ~a:"follow" ~v:(Ref 4) ()
+      [ datom (eid 5L) "follow" (Ref (eid 3L))
+      ; datom (eid 1L) "follow" (Ref (eid 2L))
+      ; datom (eid 2L) "follow" (Ref (eid 3L))
+      ; datom (eid 3L) "follow" (Ref (eid 4L))
+      ; datom (eid 4L) "follow" (Ref (eid 6L))
+      ; datom (eid 2L) "follow" (Ref (eid 4L))
       ]
   in
   let rules =
@@ -279,9 +274,9 @@ let test_rule_joined_with_clauses () =
   in
   assert_rows
     "rule invocation unifies with already-bound vars"
-    [ [ Result_entity 3; Result_entity 2 ]
-    ; [ Result_entity 6; Result_entity 4 ]
-    ; [ Result_entity 4; Result_entity 2 ]
+    [ [ Result_entity (eid 3L); Result_entity (eid 2L) ]
+    ; [ Result_entity (eid 6L); Result_entity (eid 4L) ]
+    ; [ Result_entity (eid 4L); Result_entity (eid 2L) ]
     ]
     (q_string ~inputs:[ Arg_rules rules ] db
        "[:find ?y ?x :in $ % :where [_ _ ?x] (rule ?x ?y) [(even? ?x)]]")
@@ -291,13 +286,13 @@ let test_predicate_over_in_scalar () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 2L) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "attr", One_value (Int64 2L) ] }
          ]
   in
   assert_rows
     "[(= ?v ?target)] filters by :in binding"
-    [ [ Result_entity 2 ] ]
+    [ [ Result_entity (eid 2L) ] ]
     (q_string ~inputs:[ Arg_scalar (Result_value (Int64 2L)) ] db
        "[:find ?e :in $ ?target :where [?e :attr ?v] [(= ?v ?target)]]")
 
@@ -306,14 +301,14 @@ let test_collection_in_binding () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 2L) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "attr", One_value (Int64 3L) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "attr", One_value (Int64 2L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 3L)); attrs = [ "attr", One_value (Int64 3L) ] }
          ]
   in
   assert_rows
     "[?x ...] collection :in iterates elements"
-    [ [ Result_entity 1 ]; [ Result_entity 3 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ] ]
     (q_string ~inputs:[ Arg_collection [ Result_value (Int64 1L); Result_value (Int64 3L) ] ] db
        "[:find ?e :in $ [?x ...] :where [?e :attr ?x]]")
 
@@ -322,19 +317,19 @@ let test_comparison_predicates_over_in () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "d", One_value (Int64 1L) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "d", One_value (Int64 3L) ] }
-         ; Entity { db_id = Some (Entity_id 3); attrs = [ "d", One_value (Int64 5L) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [ "d", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "d", One_value (Int64 3L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 3L)); attrs = [ "d", One_value (Int64 5L) ] }
          ]
   in
   assert_rows
     "[(<= ?d ?cutoff)] filters by :in binding"
-    [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 2L) ] ]
     (q_string ~inputs:[ Arg_scalar (Result_value (Int64 3L)) ] db
        "[:find ?e :in $ ?cutoff :where [?e :d ?d] [(<= ?d ?cutoff)]]");
   assert_rows
     "[(not= ?d ?x)] filters by :in binding"
-    [ [ Result_entity 1 ]; [ Result_entity 3 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ] ]
     (q_string ~inputs:[ Arg_scalar (Result_value (Int64 3L)) ] db
        "[:find ?e :in $ ?x :where [?e :d ?d] [(not= ?d ?x)]]")
 
@@ -343,13 +338,13 @@ let test_predicate_over_collection_in () =
   let db =
     empty_db ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "attr", One_value (Int64 1L) ] }
-         ; Entity { db_id = Some (Entity_id 2); attrs = [ "attr", One_value (Int64 3L) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [ "attr", One_value (Int64 1L) ] }
+         ; Entity { db_id = Some (Entity_id (eid 2L)); attrs = [ "attr", One_value (Int64 3L) ] }
          ]
   in
   assert_rows
     "[(= ?v ?x)] sees collection :in elements"
-    [ [ Result_entity 1 ]; [ Result_entity 2 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 2L) ] ]
     (q_string ~inputs:[ Arg_collection [ Result_value (Int64 1L); Result_value (Int64 3L) ] ] db
        "[:find ?e :in $ [?x ...] :where [?e :attr ?v] [(= ?v ?x)]]")
 
@@ -357,13 +352,11 @@ let test_predicate_over_collection_in () =
    pending tx datoms, matching upstream's sequential transact-add semantics *)
 let block_schema () =
   let base_attr =
-    { cardinality = One; unique = None; indexed = false; is_component = false
-    ; no_history = false; doc = None; value_type = None; tuple_attrs = None
-    ; tuple_types = None }
+    Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   in
-  [ "block/uuid", { base_attr with unique = Some Identity; indexed = true }
-  ; "block/parent", { base_attr with value_type = Some RefType }
-  ; "block/refs", { base_attr with cardinality = Many; value_type = Some RefType }
+  [ "block/uuid", Schema.spec ~cardinality:((Schema.cardinality base_attr)) ?unique:(Some Identity) ~indexed:(true) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:((Schema.value_type base_attr)) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+  ; "block/parent", Schema.spec ~cardinality:((Schema.cardinality base_attr)) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+  ; "block/refs", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ; "block/title", base_attr
   ]
 
@@ -386,11 +379,11 @@ let test_entity_map_lookup_ref_earlier_tx_entity () =
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
-  if parent_datoms <> [ 2, Ref 1 ] then
+  if parent_datoms <> [ (eid 2L), Ref (eid 1L) ] then
     failf "lookup ref to earlier-tx entity should resolve to e=1, got %d datoms" (List.length parent_datoms);
   (* upstream test-lookup-refs-transact: "lookup refs are resolved at
      intermediate DB value" — Add ops resolve against the pending tx too *)
@@ -399,16 +392,16 @@ let test_entity_map_lookup_ref_earlier_tx_entity () =
     empty_db ~schema:(block_schema ()) ()
     |> db_with
          [ Entity { db_id = None; attrs = [ "block/uuid", One_value (Uuid u1) ] }
-         ; Add (Entity_id 3, "block/uuid", Uuid u3)
-         ; Add (Entity_id 1, "block/parent", lookup_ref "block/uuid" (Uuid u3))
+         ; Add (Entity_id (eid 3L), "block/uuid", Uuid u3)
+         ; Add (Entity_id (eid 1L), "block/parent", lookup_ref "block/uuid" (Uuid u3))
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
-  if parent_datoms <> [ 1, Ref 3 ] then failf "Add lookup ref to earlier-tx entity should resolve to e=3"
+  if parent_datoms <> [ (eid 1L), Ref (eid 3L) ] then failf "Add lookup ref to earlier-tx entity should resolve to e=3"
 
 let test_entity_map_lookup_ref_same_entity () =
   (* An entity map's earlier attrs must be visible when resolving a later
@@ -427,11 +420,11 @@ let test_entity_map_lookup_ref_same_entity () =
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
-  if parent_datoms <> [ 1, Ref 1 ] then failf "self lookup ref should resolve to the same entity e=1"
+  if parent_datoms <> [ (eid 1L), Ref (eid 1L) ] then failf "self lookup ref should resolve to the same entity e=1"
 
 let test_entity_map_lookup_ref_unresolved_raises () =
   let u1 = "11111111-1111-1111-1111-111111111111" in
@@ -457,7 +450,7 @@ let test_entity_map_lookup_ref_unresolved_raises () =
    deferred and retried as the tx datoms accumulate; a ref that never resolves
    still raises the upstream "Nothing found for entity id" error. *)
 let uuid_of_eid db e =
-  datoms db Eavt ~e ~a:"block/uuid" ()
+  datoms ~e ~a:"block/uuid" db Eavt
   |> List.of_seq
   |> (function [ d ] -> Some d.v | _ -> None)
 
@@ -478,7 +471,7 @@ let test_entity_map_lookup_ref_later_tx_entity () =
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
@@ -515,7 +508,7 @@ let test_entity_map_lookup_ref_later_tx_entity_many_values () =
          ]
   in
   let refs_datoms =
-    datoms db Aevt ~a:"block/refs" ()
+    datoms ~a:"block/refs" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
@@ -532,13 +525,13 @@ let test_add_op_lookup_ref_later_tx_entity () =
   let db =
     empty_db ~schema:(block_schema ()) ()
     |> db_with
-         [ Add (Entity_id 1, "block/uuid", Uuid u1)
-         ; Add (Entity_id 1, "block/parent", lookup_ref "block/uuid" (Uuid u2))
+         [ Add (Entity_id (eid 1L), "block/uuid", Uuid u1)
+         ; Add (Entity_id (eid 1L), "block/parent", lookup_ref "block/uuid" (Uuid u2))
          ; Entity { db_id = None; attrs = [ "block/uuid", One_value (Uuid u2) ] }
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
@@ -585,21 +578,34 @@ let test_retract_cleans_duplicate_avet_tables () =
      the lookup ref raises "Nothing found for entity id". *)
   let u1 = "11111111-1111-1111-1111-111111111111" in
   let uuid_datom =
-    { e = 1; a = "block/uuid"; v = Uuid u1; tx = 1; added = true }
+    { e = eid 1L; a = "block/uuid"; v = Uuid u1; tx = txid 1L; added = true }
   in
   let db =
     init_db ~schema:(block_schema ())
       [ uuid_datom
-      ; { e = 1; a = "block/title"; v = String "Page"; tx = 1; added = true }
+      ; { e = eid 1L; a = "block/title"; v = String "Page"; tx = txid 1L; added = true }
       ; uuid_datom ]
   in
-  (if List.length db.duplicate_datoms = 0 then
+  let dt_uuid_datom =
+    { DT.e = 1L; DT.a = "block/uuid"; DT.v = DT.Uuid u1; DT.tx = 1L; DT.added = true }
+  in
+  let impl_db =
+    Internal.init_db
+      ~schema:[ "block/uuid", { DT.cardinality = DT.One; DT.unique = Some DT.Identity
+                              ; DT.indexed = true; DT.is_component = false
+                              ; DT.no_history = false; DT.doc = None; DT.value_type = None
+                              ; DT.tuple_attrs = None; DT.tuple_types = None } ]
+      [ dt_uuid_datom
+      ; { dt_uuid_datom with DT.a = "block/title"; DT.v = DT.String "Page" }
+      ; dt_uuid_datom ]
+  in
+  (if List.length impl_db.DT.duplicate_datoms = 0 then
      failf "precondition: init_db should route the repeated fact to duplicate_datoms");
-  let db = db |> db_with [ RetractEntity (Entity_id 1) ] in
-  (match datoms db Eavt ~a:"block/uuid" () |> List.of_seq with
+  let db = db |> db_with [ RetractEntity (Entity_id (eid 1L)) ] in
+  (match datoms ~a:"block/uuid" db Eavt |> List.of_seq with
    | [] -> ()
    | datoms -> failf "retracted uuid datom still visible in eavt: %d" (List.length datoms));
-  (match datoms db Avet ~a:"block/uuid" () |> List.of_seq with
+  (match datoms ~a:"block/uuid" db Avet |> List.of_seq with
    | [] -> ()
    | datoms -> failf "retracted uuid datom still visible in avet: %d" (List.length datoms));
   (try
@@ -626,7 +632,7 @@ let test_retract_cleans_duplicate_avet_tables () =
    collection is a lookup ref only when its head names a unique-identity attr;
    otherwise it expands into individual values *)
 let refs_datoms db =
-  datoms db Aevt ~a:"block/refs" ()
+  datoms ~a:"block/refs" db Aevt
   |> List.of_seq
   |> List.map (fun d -> d.e, d.v)
 
@@ -636,12 +642,12 @@ let test_many_ref_vector_of_idents_expands () =
   let db =
     empty_db ~schema:(block_schema ()) ()
     |> db_with
-         [ Add (Entity_id 10, "db/ident", Keyword "logseq.class/Page")
-         ; Add (Entity_id 11, "db/ident", Keyword "logseq.class/Task")
+         [ Add (Entity_id (eid 10L), "db/ident", Keyword "logseq.class/Page")
+         ; Add (Entity_id (eid 11L), "db/ident", Keyword "logseq.class/Task")
          ]
     |> db_with
          [ Entity
-             { db_id = Some (Entity_id 1)
+             { db_id = Some (Entity_id (eid 1L))
              ; attrs =
                  [ "block/refs"
                  , One_value
@@ -651,17 +657,17 @@ let test_many_ref_vector_of_idents_expands () =
          ]
   in
   let refs = refs_datoms db in
-  if refs <> [ 1, Ref 10; 1, Ref 11 ] then
+  if refs <> [ (eid 1L), Ref (eid 10L); (eid 1L), Ref (eid 11L) ] then
     failf "vector of ident keywords should expand into one datom per ident, got %d"
       (List.length refs)
 
 let test_many_ref_vector_of_same_ident_idempotent () =
   let db =
     empty_db ~schema:(block_schema ()) ()
-    |> db_with [ Add (Entity_id 10, "db/ident", Keyword "logseq.class/Page") ]
+    |> db_with [ Add (Entity_id (eid 10L), "db/ident", Keyword "logseq.class/Page") ]
     |> db_with
          [ Entity
-             { db_id = Some (Entity_id 1)
+             { db_id = Some (Entity_id (eid 1L))
              ; attrs =
                  [ "block/refs"
                  , One_value
@@ -671,7 +677,7 @@ let test_many_ref_vector_of_same_ident_idempotent () =
          ]
   in
   let refs = refs_datoms db in
-  if refs <> [ 1, Ref 10 ] then
+  if refs <> [ (eid 1L), Ref (eid 10L) ] then
     failf "duplicate ident refs should yield a single datom, got %d" (List.length refs)
 
 let test_many_ref_vector_with_unique_head_is_lookup_ref () =
@@ -680,9 +686,9 @@ let test_many_ref_vector_with_unique_head_is_lookup_ref () =
   let db =
     empty_db ~schema:(block_schema ()) ()
     |> db_with
-         [ Entity { db_id = Some (Entity_id 1); attrs = [ "block/uuid", One_value (Uuid u1) ] }
+         [ Entity { db_id = Some (Entity_id (eid 1L)); attrs = [ "block/uuid", One_value (Uuid u1) ] }
          ; Entity
-             { db_id = Some (Entity_id 9)
+             { db_id = Some (Entity_id (eid 9L))
              ; attrs =
                  [ "block/refs"
                  , One_value (Vector [ Keyword "block/uuid"; Uuid u1 ])
@@ -691,7 +697,7 @@ let test_many_ref_vector_with_unique_head_is_lookup_ref () =
          ]
   in
   let refs = refs_datoms db in
-  if refs <> [ 9, Ref 1 ] then
+  if refs <> [ (eid 9L), Ref (eid 1L) ] then
     failf "2-vector headed by a unique attr should resolve as a lookup ref to e=1"
 
 let test_entity_map_lookup_ref_vector_form () =
@@ -709,11 +715,11 @@ let test_entity_map_lookup_ref_vector_form () =
          ]
   in
   let parent_datoms =
-    datoms db Aevt ~a:"block/parent" ()
+    datoms ~a:"block/parent" db Aevt
     |> List.of_seq
     |> List.map (fun d -> d.e, d.v)
   in
-  if parent_datoms <> [ 2, Ref 1 ] then
+  if parent_datoms <> [ (eid 2L), Ref (eid 1L) ] then
     failf "vector lookup ref should resolve to e=1"
 
 (* Batch 4 regression (fixed by 0645055): a tx asserting a bare :db/ident for an
@@ -726,17 +732,15 @@ let test_entity_map_lookup_ref_vector_form () =
    over a fixture whose tx includes such a bare :db/ident assert. *)
 let logseq_rule_schema () =
   let base_attr =
-    { cardinality = One; unique = None; indexed = false; is_component = false
-    ; no_history = false; doc = None; value_type = None; tuple_attrs = None
-    ; tuple_types = None }
+    Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   in
-  [ "block/tags", { base_attr with cardinality = Many; value_type = Some RefType }
+  [ "block/tags", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ; "block/title", base_attr
   ; "user.property/foo", base_attr
-  ; "user.property/number-many", { base_attr with cardinality = Many }
-  ; "user.property/page-many", { base_attr with cardinality = Many; value_type = Some RefType }
+  ; "user.property/number-many", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:((Schema.value_type base_attr)) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+  ; "user.property/page-many", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ; "logseq.property/public?", base_attr
-  ; "logseq.property.class/extends", { base_attr with cardinality = Many; value_type = Some RefType }
+  ; "logseq.property.class/extends", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique base_attr)) ~indexed:((Schema.indexed base_attr)) ~is_component:((Schema.is_component base_attr)) ~no_history:((Schema.no_history base_attr)) ?doc:((Schema.doc base_attr)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs base_attr), (Schema.tuple_types base_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ]
 
 (* Entity 10 asserts only :db/ident for block/tags — the bare-ident form whose
@@ -749,25 +753,25 @@ let logseq_rule_db () =
   empty_db ~schema:(logseq_rule_schema ()) ()
   |> db_with
        [ Entity
-           { db_id = Some (Entity_id 11)
+           { db_id = Some (Entity_id (eid 11L))
            ; attrs = [ "db/ident", One_value (Keyword "logseq.class/Property") ]
            }
        ; Entity
-           { db_id = Some (Entity_id 16)
+           { db_id = Some (Entity_id (eid 16L))
            ; attrs =
                [ "db/ident", One_value (Keyword "logseq.class/Page")
                ; "block/title", One_value (String "Page")
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 17)
+           { db_id = Some (Entity_id (eid 17L))
            ; attrs =
                [ "db/ident", One_value (Keyword "user.class/Person")
                ; "block/title", One_value (String "Person")
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 18)
+           { db_id = Some (Entity_id (eid 18L))
            ; attrs =
                [ "db/ident", One_value (Keyword "user.class/Employee")
                ; "logseq.property.class/extends"
@@ -775,32 +779,32 @@ let logseq_rule_db () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 10)
+           { db_id = Some (Entity_id (eid 10L))
            ; attrs =
                [ "db/ident", One_value (Keyword "block/tags")
                ; "block/tags", property_tag
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 13)
+           { db_id = Some (Entity_id (eid 13L))
            ; attrs = [ "db/ident", One_value (Keyword "block/title") ]
            }
        ; Entity
-           { db_id = Some (Entity_id 12)
+           { db_id = Some (Entity_id (eid 12L))
            ; attrs =
                [ "db/ident", One_value (Keyword "user.property/foo")
                ; "block/tags", property_tag
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 14)
+           { db_id = Some (Entity_id (eid 14L))
            ; attrs =
                [ "db/ident", One_value (Keyword "user.property/number-many")
                ; "block/tags", property_tag
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 15)
+           { db_id = Some (Entity_id (eid 15L))
            ; attrs =
                [ "db/ident", One_value (Keyword "user.property/page-many")
                ; "block/tags", property_tag
@@ -809,11 +813,11 @@ let logseq_rule_db () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 2)
+           { db_id = Some (Entity_id (eid 2L))
            ; attrs = [ "block/title", One_value (String "Page A") ]
            }
        ; Entity
-           { db_id = Some (Entity_id 1)
+           { db_id = Some (Entity_id (eid 1L))
            ; attrs =
                [ "block/title", One_value (String "Page1")
                ; "block/tags", Many_values [ Keyword "user.class/Person" ]
@@ -823,14 +827,14 @@ let logseq_rule_db () =
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 3)
+           { db_id = Some (Entity_id (eid 3L))
            ; attrs =
                [ "block/title", One_value (String "Page2")
                ; "block/tags", Many_values [ Keyword "user.class/Person" ]
                ]
            }
        ; Entity
-           { db_id = Some (Entity_id 4)
+           { db_id = Some (Entity_id (eid 4L))
            ; attrs =
                [ "block/title", One_value (String "Page3")
                ; "block/tags", Many_values [ Keyword "user.class/Employee" ]
@@ -892,8 +896,8 @@ let test_schema_keeps_entry_after_bare_ident_assert () =
     (fun d ->
       match d.v with
       | Ref _ -> ()
-      | _ -> failf "block/tags datom for e=%d stored as raw value, not a ref" d.e)
-    (List.of_seq (datoms db Aevt ~a:"block/tags" ()))
+      | _ -> failf "block/tags datom for e=%d stored as raw value, not a ref" (Entity_id.to_int d.e))
+    (List.of_seq (datoms ~a:"block/tags" db Aevt))
 
 let test_rule_attr_var_has_property () =
   let db = logseq_rule_db () in
@@ -917,7 +921,7 @@ let test_rule_tags_query_with_eid_input () =
      (identity ?spec) ?tag picks the eid up inside tag-spec->tag *)
   assert_rows
     "tags rule over an eid input matches subclass tags too"
-    [ [ Result_entity 1 ]; [ Result_entity 3 ]; [ Result_entity 4 ] ]
+    [ [ Result_entity (eid 1L) ]; [ Result_entity (eid 3L) ]; [ Result_entity (eid 4L) ] ]
     (q_string db
        ~inputs:
          [ Arg_rules (rules_of_string logseq_dsl_rules)
@@ -927,15 +931,15 @@ let test_rule_tags_query_with_eid_input () =
 
 (* Bug 6: EDN reader accepts ' and friends inside symbol/keyword bodies *)
 let test_edn_symbol_special_chars () =
-  (match Parser.read_edn "{:user.property/foo*+!_'?<>=- nil}" with
-   | QueryFormMap [ QueryFormKeyword "user.property/foo*+!_'?<>=-", QueryFormNil ] -> ()
+  (match Internal.Parser.read_edn "{:user.property/foo*+!_'?<>=- nil}" with
+   | QueryFormMap [ (QueryFormKeyword "user.property/foo*+!_'?<>=-"), QueryFormNil ] -> ()
    | _ -> failf "read_edn should parse keywords containing *+!_'?<>=-");
-  (match Parser.read_edn "[sym' foo*+!_'?<>=- 'quoted ?var]" with
+  (match Internal.Parser.read_edn "[sym' foo*+!_'?<>=- 'quoted ?var]" with
    | QueryFormVector
-       [ QueryFormSymbol "sym'"
-       ; QueryFormSymbol "foo*+!_'?<>=-"
-       ; QueryFormSymbol "quoted"
-       ; QueryFormSymbol "?var" ] -> ()
+       [ (QueryFormSymbol "sym'")
+       ; (QueryFormSymbol "foo*+!_'?<>=-")
+       ; (QueryFormSymbol "quoted")
+       ; (QueryFormSymbol "?var") ] -> ()
    | _ -> failf "read_edn should parse symbols containing *+!_'?<>=- and leading 'quote")
 
 (* Perf: the mid-tx schema refresh must fold only the datoms appended since
@@ -946,7 +950,7 @@ let test_edn_symbol_special_chars () =
 let test_mid_tx_schema_refresh_is_incremental () =
   let entity i =
     Entity
-      { db_id = Some (Entity_id (100 + i))
+      { db_id = Some (Entity_id (eid (Int64.of_int (100 + i))))
       ; attrs =
           [ "db/ident", One_value (Keyword (Printf.sprintf "user.property/p%d" i))
           ; "db/valueType", One_value (Keyword "db.type/string")
@@ -966,8 +970,8 @@ let test_mid_tx_schema_refresh_is_incremental () =
     Printf.ksprintf failwith
       "schema refresh folded %d datoms; expected O(n) (a full-tx_data rescan would fold ~n^2/2)"
       folded;
-  (match Schema.schema_attr_by_name db.schema "user.property/p79" with
-   | Some { indexed = true; _ } -> ()
+  (match List.assoc_opt "user.property/p79" (schema db) with
+   | Some spec when Schema.indexed spec -> ()
    | _ -> failf "schema for user.property/p79 missing or wrong after seed tx")
 
 (* Regression: with incremental mid-tx refresh, an attr removal registered by
@@ -990,19 +994,19 @@ let test_mid_tx_refresh_reapplies_removals_once () =
   let db =
     empty_db ()
     |> db_with
-         [ schema_entity 500 "prop/owner" "db.cardinality/many"
-         ; Retract (Entity_id 500, "db/ident", Some (Keyword "prop/owner"))
-         ; schema_entity 501 "prop/owner" "db.cardinality/many"
-         ; schema_entity 502 "prop/other" "db.cardinality/one"
-         ; Add (Entity_id 1, "prop/owner", String "a")
-         ; Add (Entity_id 1, "prop/owner", String "b")
+         [ schema_entity (eid 500L) "prop/owner" "db.cardinality/many"
+         ; Retract (Entity_id (eid 500L), "db/ident", Some (Keyword "prop/owner"))
+         ; schema_entity (eid 501L) "prop/owner" "db.cardinality/many"
+         ; schema_entity (eid 502L) "prop/other" "db.cardinality/one"
+         ; Add (Entity_id (eid 1L), "prop/owner", String "a")
+         ; Add (Entity_id (eid 1L), "prop/owner", String "b")
          ]
   in
-  (match Schema.schema_attr_by_name db.schema "prop/owner" with
+  (match List.assoc_opt "prop/owner" (schema db) with
    | Some _ -> ()
    | None -> failf "prop/owner schema entry lost mid-tx by stale removal");
   let vals =
-    datoms db Eavt ~e:1 ~a:"prop/owner" ()
+    datoms ~e:(eid 1L) ~a:"prop/owner" db Eavt
     |> List.of_seq
     |> List.map (fun d -> d.v)
     |> List.sort compare

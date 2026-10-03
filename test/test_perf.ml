@@ -3,19 +3,10 @@ open Datascript
 let failf fmt = Printf.ksprintf failwith fmt
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
-let unique_identity = { indexed with unique = Some Identity }
-let many = { indexed with cardinality = Many; indexed = false }
+let unique_identity = Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+let many = Schema.spec ~cardinality:(Many) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let schema =
   [ "id", unique_identity
@@ -31,14 +22,14 @@ let outliner_schema =
   ; "block/content", indexed
   ; "block/order", indexed
   ; "block/collapsed", indexed
-  ; "block/parent", { indexed with indexed = false; value_type = Some RefType }
+  ; "block/parent", Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ]
 
 let names = [| "Ivan"; "Petr"; "Sergey"; "Oleg"; "Yuri"; "Dmitry"; "Fedor"; "Denis" |]
 
 let person i =
   Entity
-    { db_id = Some (Entity_id i)
+    { db_id = Some (Entity_id (eid (Int64.of_int i)))
     ; attrs =
         [ "id", One_value (Int64 (Int64.of_int i))
         ; "name", One_value (String names.((i - 1) mod Array.length names))
@@ -54,11 +45,11 @@ let people size =
 
 let outliner_block_datoms index =
   let e = index + 1 in
-  [ datom ~e ~a:"block/id" ~v:(String (Printf.sprintf "block-%05d" e)) ()
-  ; datom ~e ~a:"block/journal-day" ~v:(String "2026-06-27") ()
-  ; datom ~e ~a:"block/content" ~v:(String (Printf.sprintf "Block %05d" e)) ()
-  ; datom ~e ~a:"block/order" ~v:(Float (float_of_int e)) ()
-  ; datom ~e ~a:"block/collapsed" ~v:(Bool false) ()
+  [ datom (eid (Int64.of_int e)) "block/id" (String (Printf.sprintf "block-%05d" e))
+  ; datom (eid (Int64.of_int e)) "block/journal-day" (String "2026-06-27")
+  ; datom (eid (Int64.of_int e)) "block/content" (String (Printf.sprintf "Block %05d" e))
+  ; datom (eid (Int64.of_int e)) "block/order" (Float (float_of_int e))
+  ; datom (eid (Int64.of_int e)) "block/collapsed" (Bool false)
   ]
 
 let build_outliner_db size =
@@ -112,25 +103,25 @@ let add_one_by_one size =
     (people size)
 
 let consume_db db =
-  consume_int (seq_length (datoms db Eavt ()))
+  consume_int (seq_length (datoms db Eavt))
 
 let consume_block_id db id =
-  consume_int (seq_length (datoms db Avet ~a:"block/id" ~v:(String id) ()))
+  consume_int (seq_length (datoms ~a:"block/id" ~v:(String id) db Avet))
 
 let first_name_entity db =
-  match Seq.uncons (datoms db Aevt ~a:"name" ()) with
-  | Some (datom, _) -> datom.e
+  match Seq.uncons (datoms ~a:"name" db Aevt) with
+  | Some (datom, _) -> Entity_id.to_int datom.e
   | None -> 0
 
 let count_name_datoms db =
-  seq_length (datoms db Aevt ~a:"name" ())
+  seq_length (datoms ~a:"name" db Aevt)
 
 let query_name_age =
   lazy (parse_query_string "[:find ?e ?a :where [?e :name \"Ivan\"] [?e :age ?a]]")
 
 let first_seek_name_entity db =
-  match Seq.uncons (seek_datoms db Avet ~a:"name" ~v:(String "Ivan") ()) with
-  | Some (datom, _) -> datom.e
+  match Seq.uncons (seek_datoms ~a:"name" ~v:(String "Ivan") db Avet) with
+  | Some (datom, _) -> Entity_id.to_int datom.e
   | None -> 0
 
 let test_incremental_explicit_entity_adds_stay_near_bulk_cost () =
@@ -158,7 +149,7 @@ let test_seek_datoms_is_lazy_to_first_match () =
   let db = build_db 10_000 in
   let iterations = 200 in
   let first_elapsed = time_repeated iterations (fun () -> first_seek_name_entity db) in
-  let count_elapsed = time_repeated iterations (fun () -> seq_length (seek_datoms db Avet ~a:"name" ~v:(String "Ivan") ())) in
+  let count_elapsed = time_repeated iterations (fun () -> seq_length (seek_datoms ~a:"name" ~v:(String "Ivan") db Avet)) in
   if first_elapsed > (count_elapsed *. 0.25) then
     failf
       "taking the first seek_datoms result should not materialize the whole seek: first=%.4fs count=%.4fs"

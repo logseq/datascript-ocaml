@@ -8,12 +8,12 @@ type core_context =
   { next_db_uid : unit -> int
   }
 
-val max_entity_id : int
-val max_allocatable_entity_id : int
-val validate_entity_id : int -> entity_id
-val max_eid_with_entity_id : int -> entity_id -> entity_id
+val max_entity_id : int64
+val max_allocatable_entity_id : int64
+val validate_entity_id : int64 -> entity_id
+val max_eid_with_entity_id : int64 -> entity_id -> entity_id
 val refresh_identity : core_context -> db -> db
-val max_eid_in_value : int -> value -> int
+val max_eid_in_value : int64 -> value -> int64
 val normalize_datom_for_schema : schema -> datom -> datom
 val refresh_indexes : db -> db
 val refresh_indexes_with_added_datoms : db -> datom list -> db

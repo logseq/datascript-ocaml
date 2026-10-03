@@ -1,7 +1,7 @@
 open Datascript_types
 
 type context =
-  { validate_entity_id : int -> entity_id
+  { validate_entity_id : int64 -> entity_id
   ; entid : db -> attr -> value -> entity_id option
   ; ident_attr : attr
   ; allocate_entity_id : entity_id -> entity_id
@@ -13,8 +13,8 @@ type context =
   ; reverse_ref : attr -> attr
   ; cardinality : db -> attr -> cardinality
   ; is_unique_identity : db -> attr -> bool
-  ; max_eid_with_entity_id : int -> entity_id -> entity_id
-  ; max_eid_in_value : int -> value -> int
+  ; max_eid_with_entity_id : int64 -> entity_id -> entity_id
+  ; max_eid_in_value : int64 -> value -> int64
   }
 
 (* tempids: persistent lookup map plus reversed insertion list; the

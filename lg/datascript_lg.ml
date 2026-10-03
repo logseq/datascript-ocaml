@@ -87,7 +87,7 @@ let of_edn value =
 
 let of_edn_exn value = or_raise (of_edn value)
 let read source = D.read_edn source
-let schema form = D.Data_readers.schema_of_edn_form form
+let schema form = D.schema_of_edn_form form
 
 let schema_spec form =
   match
@@ -96,7 +96,7 @@ let schema_spec form =
   | [ (_, spec) ] -> spec
   | _ -> invalid_arg "schema_spec expects one attribute specification"
 
-let tx form = D.Data_readers.tx_data_of_edn_form form
+let tx form = D.tx_data_of_edn_form form
 let transact conn form = D.transact_conn conn (tx form)
 let entity reference attrs = D.Entity { db_id = reference; attrs }
 
@@ -117,7 +117,7 @@ module Codec = struct
       decode =
         (function
         | D.Int64 value ->
-          (match D.Util.int64_to_int value with
+          (match D.Internal.Util.int64_to_int value with
            | Some value -> Ok value
            | None -> mismatch "int")
         | _ -> mismatch "int");
@@ -181,13 +181,13 @@ module Attribute = struct
   let schema attribute = (attribute.name, attribute.spec)
 
   let entry attribute value =
-    if attribute.spec.cardinality <> D.One then
+    if D.Schema.cardinality attribute.spec <> D.One then
       invalid_arg
         (attribute.name ^ ": use entries for a cardinality-many attribute");
     (attribute.name, D.One_value (Codec.encode attribute.codec value))
 
   let entries attribute values =
-    if attribute.spec.cardinality <> D.Many then
+    if D.Schema.cardinality attribute.spec <> D.Many then
       invalid_arg
         (attribute.name ^ ": use entry for a cardinality-one attribute");
     ( attribute.name,

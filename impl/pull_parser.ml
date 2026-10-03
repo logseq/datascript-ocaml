@@ -102,7 +102,7 @@ let pull_string_of_value = function
   | Uuid value -> value
   | Instant value -> Int64.to_string value
   | Regex value -> value
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string entity_id
   | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite pull value"
 
 let pull_name_value context = function

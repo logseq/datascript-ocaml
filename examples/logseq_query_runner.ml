@@ -1,6 +1,7 @@
 open Datascript
 
 module Storage = Logseq_sqlite_storage
+module DT = Internal.Datascript_types
 
 let json_string value =
   let buffer = Buffer.create (String.length value + 8) in
@@ -36,15 +37,15 @@ let rec edn_value = function
   | Nil -> "nil"
   | Int64 value -> Int64.to_string value
   | Float value -> string_of_float value
-  | String value -> Built_ins.print_query_value ~readably:true (String value)
+  | String value -> Internal.Built_ins.print_query_value ~readably:true (String value)
   | Symbol value -> value
   | Bool true -> "true"
   | Bool false -> "false"
   | Keyword value -> edn_keyword value
   | Uuid value -> "#uuid " ^ json_string value
-  | Instant value -> "#inst \"" ^ Util.string_of_instant_millis value ^ "\""
+  | Instant value -> "#inst \"" ^ Internal.Util.string_of_instant_millis value ^ "\""
   | Regex value -> "#\"" ^ String.escaped value ^ "\""
-  | Ref value -> string_of_int value
+  | Ref value -> string_of_int (Entity_id.to_int value)
   | List values -> "(" ^ String.concat " " (List.map edn_value values) ^ ")"
   | Vector values -> "[" ^ String.concat " " (List.map edn_value values) ^ "]"
   | Set values -> "#{" ^ String.concat " " (List.map edn_value values) ^ "}"
@@ -62,17 +63,17 @@ let edn_schema_attr attr =
   let props =
     [ Some
         ( ":db/cardinality"
-        , (match attr.cardinality with
+        , (match (Schema.cardinality attr) with
            | One -> ":db.cardinality/one"
            | Many -> ":db.cardinality/many") )
-    ; (match attr.unique with
+    ; (match (Schema.unique attr) with
        | None -> None
        | Some Identity -> Some (":db/unique", ":db.unique/identity")
        | Some Value -> Some (":db/unique", ":db.unique/value"))
-    ; (if attr.indexed then Some (":db/index", "true") else None)
-    ; (if attr.is_component then Some (":db/isComponent", "true") else None)
-    ; (if attr.no_history then Some (":db/noHistory", "true") else None)
-    ; (match attr.value_type with
+    ; (if (Schema.indexed attr) then Some (":db/index", "true") else None)
+    ; (if (Schema.is_component attr) then Some (":db/isComponent", "true") else None)
+    ; (if (Schema.no_history attr) then Some (":db/noHistory", "true") else None)
+    ; (match (Schema.value_type attr) with
        | None -> None
        | Some RefType -> Some (":db/valueType", ":db.type/ref")
        | Some TupleType -> Some (":db/valueType", ":db.type/tuple")
@@ -92,11 +93,11 @@ let edn_schema_entry (attr, spec) =
 
 let edn_datom datom =
   Printf.sprintf
-    "[%d %s %s %d %b]"
-    datom.e
+    "[%Ld %s %s %Ld %b]"
+    (Entity_id.to_int64 datom.e)
     (edn_keyword datom.a)
     (edn_value datom.v)
-    datom.tx
+    (Tx_id.to_int64 datom.tx)
     datom.added
 
 let graph_edn schema datoms =
@@ -109,7 +110,8 @@ let graph_edn schema datoms =
 let load_graph_data db_path =
   let schema = Storage.schema_of_logseq_graph ~read_only:true db_path in
   let datoms = Storage.datoms_of_logseq_graph ~read_only:true db_path in
-  schema, datoms
+  ( List.map (fun (a, spec) -> a, Internal_convert.externalize_schema_attr spec) schema
+  , List.map Internal_convert.externalize_datom datoms )
 
 let read_file path =
   let channel = open_in_bin path in
@@ -120,9 +122,9 @@ let read_file path =
       really_input_string channel length)
 
 let graph_key_label = function
-  | QueryFormKeyword key -> ":" ^ key
-  | QueryFormString key -> "\"" ^ key ^ "\""
-  | QueryFormSymbol key -> key
+  | DT.QueryFormKeyword key -> ":" ^ key
+  | DT.QueryFormString key -> "\"" ^ key ^ "\""
+  | DT.QueryFormSymbol key -> key
   | _ -> "<non-attr-key>"
 
 let graph_field name entries =
@@ -130,7 +132,7 @@ let graph_field name entries =
     entries
     |> List.find_map (fun (key, value) ->
     match key with
-    | QueryFormKeyword key when key = name -> Some value
+    | DT.QueryFormKeyword key when key = name -> Some value
     | _ -> None)
   with
   | Some value -> value
@@ -142,52 +144,53 @@ let graph_field name entries =
        ^ (entries |> List.map (fun (key, _) -> graph_key_label key) |> String.concat ", "))
 
 let schema_of_graph_edn_form = function
-  | QueryFormVector entries ->
+  | DT.QueryFormVector entries ->
     entries
     |> List.map (function
-      | QueryFormVector [ attr; spec ] | QueryFormList [ attr; spec ] -> attr, spec
+      | DT.QueryFormVector [ attr; spec ] | DT.QueryFormList [ attr; spec ] -> attr, spec
       | _ -> invalid_arg "graph EDN :schema entries must be [attr spec]")
-    |> fun entries -> Data_readers.schema_of_edn_form (QueryFormMap entries)
+    |> fun entries -> Internal.Data_readers.schema_of_edn_form Internal.default_data_readers_context (DT.QueryFormMap entries)
   | _ -> invalid_arg "graph EDN :schema must be a vector"
 
 let rec graph_value_of_form = function
-  | QueryFormNil -> Nil
-  | QueryFormBool value -> Bool value
-  | QueryFormInt value -> Int64 value
-  | QueryFormFloat value -> Float value
-  | QueryFormString value -> String value
-  | QueryFormKeyword value -> Keyword value
-  | QueryFormSymbol value -> Symbol value
-  | QueryFormVector values -> Vector (List.map graph_value_of_form values)
-  | QueryFormList values -> List (List.map graph_value_of_form values)
-  | QueryFormSet values -> Set (List.map graph_value_of_form values)
-  | QueryFormMap entries ->
+  | DT.QueryFormNil -> Nil
+  | DT.QueryFormBool value -> Bool value
+  | DT.QueryFormInt value -> Int64 value
+  | DT.QueryFormFloat value -> Float value
+  | DT.QueryFormString value -> String value
+  | DT.QueryFormKeyword value -> Keyword value
+  | DT.QueryFormSymbol value -> Symbol value
+  | DT.QueryFormVector values -> Vector (List.map graph_value_of_form values)
+  | DT.QueryFormList values -> List (List.map graph_value_of_form values)
+  | DT.QueryFormSet values -> Set (List.map graph_value_of_form values)
+  | DT.QueryFormMap entries ->
     Map (List.map (fun (key, value) -> graph_value_of_form key, graph_value_of_form value) entries)
-  | QueryFormTagged ("uuid", QueryFormString value) -> Uuid value
-  | QueryFormTagged ("regex", QueryFormString value) -> Regex value
-  | QueryFormTagged (tag, _) -> invalid_arg ("unsupported graph EDN tagged literal: " ^ tag)
+  | (DT.QueryFormTagged ("uuid", DT.QueryFormString value)) -> Uuid value
+  | (DT.QueryFormTagged ("regex", DT.QueryFormString value)) -> Regex value
+  | (DT.QueryFormTagged (tag, _)) -> invalid_arg ("unsupported graph EDN tagged literal: " ^ tag)
 
 let datom_of_graph_edn_form = function
-  | QueryFormVector [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ]
-  | QueryFormList [ QueryFormInt e; attr; value; QueryFormInt tx; QueryFormBool added ] ->
-    datom ~e:(Util.int64_to_int_exn "graph datom entity" e)
-      ~a:(Data_readers.attr_of_edn_key attr)
-      ~v:(Util.normalize_value (graph_value_of_form value))
-      ~tx:(Util.int64_to_int_exn "graph datom tx" tx)
+  | DT.QueryFormVector [ DT.QueryFormInt e; attr; value; DT.QueryFormInt tx; DT.QueryFormBool added ]
+  | DT.QueryFormList [ DT.QueryFormInt e; attr; value; DT.QueryFormInt tx; DT.QueryFormBool added ] ->
+    datom
+      ~tx:(txid tx)
       ~added
-      ()
+      (eid e)
+      (Internal.Data_readers.attr_of_edn_key attr)
+      (Internal_convert.externalize_value (Internal.Util.normalize_value (Internal_convert.internalize_value (graph_value_of_form value))))
   | _ -> invalid_arg "graph EDN :datoms entries must be [e attr value tx added]"
 
 let datoms_of_graph_edn_form = function
-  | QueryFormVector datoms | QueryFormList datoms -> List.map datom_of_graph_edn_form datoms
+  | DT.QueryFormVector datoms | DT.QueryFormList datoms -> List.map datom_of_graph_edn_form datoms
   | _ -> invalid_arg "graph EDN :datoms must be a vector"
 
 let load_graph_edn_data graph_path =
-  match read_edn (read_file graph_path) with
-  | QueryFormMap entries ->
+  match Internal.Parser.read_edn (read_file graph_path) with
+  | DT.QueryFormMap entries ->
     let schema = schema_of_graph_edn_form (graph_field "schema" entries) in
     let datoms = datoms_of_graph_edn_form (graph_field "datoms" entries) in
-    schema, datoms
+    ( List.map (fun (a, spec) -> a, Internal_convert.externalize_schema_attr spec) schema
+    , datoms )
   | _ -> invalid_arg "graph EDN root must be a map"
 
 let rec edn_pulled_value = function
@@ -204,7 +207,7 @@ and edn_pulled_entity entity =
   "{" ^ String.concat " " attrs ^ "}"
 
 let edn_query_result = function
-  | Result_entity entity_id -> string_of_int entity_id
+  | Result_entity entity_id -> Int64.to_string (Entity_id.to_int64 entity_id)
   | Result_attr attr -> edn_keyword attr
   | Result_value value -> edn_value value
   | Result_db _ -> "#datascript/DB"
@@ -217,9 +220,9 @@ let edn_query_output = function
   | Query_relation rows -> edn_list (List.map edn_result_row rows)
   | Query_collection values -> edn_list (List.map edn_query_result values)
   | Query_tuple None -> "nil"
-  | Query_tuple (Some row) -> edn_result_row row
+  | (Query_tuple (Some row)) -> edn_result_row row
   | Query_scalar None -> "nil"
-  | Query_scalar (Some value) -> edn_query_result value
+  | (Query_scalar (Some value)) -> edn_query_result value
   | Query_relation_maps rows ->
     rows
     |> List.map (fun row ->
@@ -229,7 +232,7 @@ let edn_query_output = function
       |> fun body -> "{" ^ body ^ "}")
     |> edn_list
   | Query_tuple_map None -> "nil"
-  | Query_tuple_map (Some row) ->
+  | (Query_tuple_map (Some row)) ->
     row
     |> List.map (fun (key, value) -> edn_value key ^ " " ^ edn_query_result value)
     |> String.concat " "
@@ -265,17 +268,17 @@ let json_optional_string_list_member key = function
   | _ -> invalid_arg "query input line must be a JSON object"
 
 let input_rules_of_string rules =
-  Arg_rules (Parser.parse_rules (read_edn rules))
+  Arg_rules (List.map Internal_convert.externalize_query_rule (Internal.Parser.parse_rules Internal.default_parser_context (Some (Internal.Parser.read_edn rules))))
 
 let input_scalar_of_string input =
-  Arg_scalar (Result_value (Util.normalize_value (graph_value_of_form (read_edn input))))
+  Arg_scalar (Result_value (Internal_convert.externalize_value (Internal.Util.normalize_value (Internal_convert.internalize_value (graph_value_of_form (Internal.Parser.read_edn input))))))
 
 let query_inputs_of_strings query rules inputs =
   let scalar_inputs = List.map input_scalar_of_string (Option.value ~default:[] inputs) in
   let rec collect acc scalar_inputs = function
     | [] -> List.rev acc
-    | Input_source_decl _ :: declarations -> collect acc scalar_inputs declarations
-    | Input_rules_decl :: declarations ->
+    | Spec_source _ :: declarations -> collect acc scalar_inputs declarations
+    | Spec_rules :: declarations ->
       let acc =
         match rules with
         | Some rules -> input_rules_of_string rules :: acc
@@ -287,7 +290,7 @@ let query_inputs_of_strings query rules inputs =
        | input :: scalar_inputs -> collect (input :: acc) scalar_inputs declarations
        | [] -> collect acc [] declarations)
   in
-  collect [] scalar_inputs query.inputs
+  collect [] scalar_inputs (Query.inputs query)
 
 let run_query_output db rules inputs query =
   let return, return_map, parsed_query =
@@ -385,6 +388,8 @@ let dump_query_graph db_path query out_path =
   let attrs = Storage.query_attrs parsed_query in
   let schema = Storage.schema_of_logseq_graph ~read_only:true db_path in
   let datoms = Storage.datoms_of_logseq_graph_for_attrs ~read_only:true db_path attrs in
+  let schema = List.map (fun (a, spec) -> a, Internal_convert.externalize_schema_attr spec) schema in
+  let datoms = List.map Internal_convert.externalize_datom datoms in
   let channel = open_out out_path in
   Fun.protect
     ~finally:(fun () -> close_out channel)

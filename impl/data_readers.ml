@@ -7,17 +7,17 @@ type context =
   ; datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
   ; validate_schema : schema -> schema
   ; empty_db : ?schema:schema -> unit -> db
-  ; max_eid_with_entity_id : int -> entity_id -> entity_id
-  ; max_eid_in_value : int -> value -> int
+  ; max_eid_with_entity_id : int64 -> entity_id -> entity_id
+  ; max_eid_in_value : int64 -> value -> int64
   ; resolve_value_for_attr :
       db ->
       attr ->
       datom list ->
       tx ->
-      int ->
+      int64 ->
       (string * entity_id) list ->
       value ->
-      value * int * (string * entity_id) list
+      value * int64 * (string * entity_id) list
   ; init_db : ?schema:schema -> datom list -> db
   }
 
@@ -46,9 +46,7 @@ let keyword_name_of_form = function
 let rec entity_ref_of_edn_form context = function
   | QueryFormInt entity_id when entity_id < 0L -> Temp_id (Int64.to_string entity_id)
   | QueryFormInt entity_id ->
-    (match Util.int64_to_int entity_id with
-     | Some entity_id -> Entity_id entity_id
-     | None -> invalid_arg ("entity id out of int range: " ^ Int64.to_string entity_id))
+    Entity_id entity_id
   | QueryFormString tempid -> Temp_id tempid
   | QueryFormKeyword "db/current-tx"
   | QueryFormSymbol "db/current-tx" -> CurrentTx
@@ -142,7 +140,7 @@ and tx_entity_of_edn_map context entries =
   { db_id; attrs = List.rev attrs }
 
 let explicit_tx_of_edn_form = function
-  | QueryFormInt tx -> Util.int64_to_int_exn "explicit transaction tx" tx
+  | QueryFormInt tx -> tx
   | _ -> invalid_arg "explicit transaction tx must be an integer"
 
 let entity_id_of_explicit_datom_edn_form context form =
@@ -163,7 +161,7 @@ let raw_datom_of_edn_forms context ?(added = true) entity_ref attr value tx =
 let raw_datom_of_tagged_edn_form context = function
   | QueryFormVector [ entity_ref; attr; value ]
   | QueryFormList [ entity_ref; attr; value ] ->
-    raw_datom_of_edn_forms context entity_ref attr value (QueryFormInt (Int64.of_int context.tx0))
+    raw_datom_of_edn_forms context entity_ref attr value (QueryFormInt context.tx0)
   | QueryFormVector [ entity_ref; attr; value; tx ]
   | QueryFormList [ entity_ref; attr; value; tx ] ->
     raw_datom_of_edn_forms context entity_ref attr value tx
@@ -349,7 +347,7 @@ let db_reader_datoms_of_edn_form context schema = function
     let max_eid =
       List.fold_left
         (fun max_eid datom -> context.max_eid_in_value (context.max_eid_with_entity_id max_eid datom.e) datom.v)
-        0
+        0L
         raw_datoms
     in
     List.map

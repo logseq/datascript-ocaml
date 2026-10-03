@@ -25,29 +25,20 @@ let print_summary db_path summary =
      |> String.concat ",")
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let run_roundtrip db_path =
-  let storage = Storage.storage db_path in
+  let storage = Internal_convert.externalize_storage (Storage.storage db_path) in
   let db =
     init_db
       ~schema:[ "name", indexed ]
-      [ datom ~e:1 ~a:"name" ~v:(String "SQLite example") () ]
+      [ datom (eid 1L) "name" (String "SQLite example") ]
   in
   ignore (store ~storage db);
-  match restore (Storage.storage db_path) with
+  match restore (Internal_convert.externalize_storage (Storage.storage db_path)) with
   | None -> failwith "failed to restore SQLite-backed db"
   | Some restored ->
-    let count = Seq.fold_left (fun count _ -> count + 1) 0 (datoms restored Eavt ()) in
+    let count = Seq.fold_left (fun count _ -> count + 1) 0 (datoms restored Eavt) in
     Printf.printf "stored and restored %d datom(s)\n" count
 
 let inspect_graphs graphs_dir =
@@ -61,23 +52,24 @@ let inspect_graphs graphs_dir =
       db_paths
 
 let rec edn_of_pulled_value = function
-  | Pulled_scalar value -> Built_ins.print_query_value ~readably:true value
+  | Pulled_scalar value -> Internal.Built_ins.print_query_value ~readably:true (Internal_convert.internalize_value value)
   | Pulled_many values -> "[" ^ String.concat " " (List.map edn_of_pulled_value values) ^ "]"
   | Pulled_entity entity -> edn_of_pulled_entity entity
 
 and edn_of_pulled_entity entity =
   let attrs =
-    (Keyword "db/id", Pulled_scalar (Int64 (Int64.of_int entity.pulled_id))) :: entity.pulled_attrs
+    (Internal_convert.internalize_value (Keyword "db/id"), Pulled_scalar (Int64 (Entity_id.to_int64 entity.pulled_id)))
+    :: List.map (fun (k, v) -> Internal_convert.internalize_value k, v) entity.pulled_attrs
     |> List.sort (fun (left, _) (right, _) -> compare left right)
     |> List.map (fun (key, value) ->
-      Built_ins.print_query_value ~readably:true key ^ " " ^ edn_of_pulled_value value)
+      Internal.Built_ins.print_query_value ~readably:true key ^ " " ^ edn_of_pulled_value value)
   in
   "{" ^ String.concat " " attrs ^ "}"
 
 let edn_of_query_result = function
-  | Result_entity entity_id -> string_of_int entity_id
+  | Result_entity entity_id -> Int64.to_string (Entity_id.to_int64 entity_id)
   | Result_attr attr -> ":" ^ attr
-  | Result_value value -> Built_ins.print_query_value ~readably:true value
+  | Result_value value -> Internal.Built_ins.print_query_value ~readably:true (Internal_convert.internalize_value value)
   | Result_db _ -> "#datascript/DB"
   | Result_pull entity -> edn_of_pulled_entity entity
 
@@ -91,28 +83,30 @@ let edn_of_query_output = function
   | Query_collection values ->
     edn_list (List.map edn_of_query_result values)
   | Query_tuple None -> "nil"
-  | Query_tuple (Some row) -> edn_of_result_row row
+  | (Query_tuple (Some row)) -> edn_of_result_row row
   | Query_scalar None -> "nil"
-  | Query_scalar (Some value) -> edn_of_query_result value
+  | (Query_scalar (Some value)) -> edn_of_query_result value
   | Query_relation_maps rows ->
     rows
     |> List.map (fun row ->
       row
       |> List.map (fun (key, value) ->
-        Built_ins.print_query_value ~readably:true key ^ " " ^ edn_of_query_result value)
+        Internal.Built_ins.print_query_value ~readably:true (Internal_convert.internalize_value key)
+        ^ " "
+        ^ edn_of_query_result value)
       |> String.concat " "
       |> fun body -> "{" ^ body ^ "}")
     |> edn_list
   | Query_tuple_map None -> "nil"
-  | Query_tuple_map (Some row) ->
+  | (Query_tuple_map (Some row)) ->
     row
     |> List.map (fun (key, value) ->
-      Built_ins.print_query_value ~readably:true key ^ " " ^ edn_of_query_result value)
+      Internal.Built_ins.print_query_value ~readably:true (Internal_convert.internalize_value key) ^ " " ^ edn_of_query_result value)
     |> String.concat " "
     |> fun body -> "{" ^ body ^ "}"
 
 let run_query db_path query =
-  Storage.query_logseq_graph ~read_only:true db_path query |> edn_of_query_output |> print_endline
+  Storage.query_logseq_graph ~read_only:true db_path query |> Internal_convert.externalize_query_output |> edn_of_query_output |> print_endline
 
 let usage () =
   prerr_endline "Usage:";

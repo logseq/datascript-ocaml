@@ -57,7 +57,7 @@ let seq_length seq =
   loop 0 seq
 
 let consume_db db =
-  consume_int (seq_length (datoms db Eavt ()))
+  consume_int (seq_length (datoms db Eavt))
 
 let consume_rows rows =
   consume_int (List.length rows)
@@ -88,52 +88,16 @@ let bench config name f =
   Printf.printf "%s\t%s\n%!" name (format_ms (median samples))
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let unique_identity =
-  { cardinality = One
-  ; unique = Some Identity
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(Some Identity) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_attr =
-  { cardinality = One
-  ; unique = None
-  ; indexed = false
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = Some RefType
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(Some RefType) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let many =
-  { cardinality = Many
-  ; unique = None
-  ; indexed = false
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(Many) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let schema =
   [ "id", unique_identity
@@ -202,18 +166,18 @@ let build_db size =
    avet :block/page, full entity materialization, then nesting by :block/parent
    sorted on :block/order. *)
 
-let plain = { indexed with indexed = false }
+let plain = Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let logseq_schema =
   [ "block/name", indexed
   ; "block/title", indexed
   ; "block/uuid", unique_identity
-  ; "block/page", { ref_attr with indexed = true }
-  ; "block/parent", { ref_attr with indexed = true }
+  ; "block/page", Schema.spec ~cardinality:((Schema.cardinality ref_attr)) ?unique:((Schema.unique ref_attr)) ~indexed:(true) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+  ; "block/parent", Schema.spec ~cardinality:((Schema.cardinality ref_attr)) ?unique:((Schema.unique ref_attr)) ~indexed:(true) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ; "block/order", indexed
   ; "block/journal-day", indexed
-  ; "block/refs", { ref_attr with cardinality = Many }
-  ; "block/tags", { ref_attr with cardinality = Many }
+  ; "block/refs", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique ref_attr)) ~indexed:((Schema.indexed ref_attr)) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
+  ; "block/tags", Schema.spec ~cardinality:(Many) ?unique:((Schema.unique ref_attr)) ~indexed:((Schema.indexed ref_attr)) ~is_component:((Schema.is_component ref_attr)) ~no_history:((Schema.no_history ref_attr)) ?doc:((Schema.doc ref_attr)) ?value_type:((Schema.value_type ref_attr)) ?tuple:(match ((Schema.tuple_attrs ref_attr), (Schema.tuple_types ref_attr)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
   ; "block/created-at", plain
   ; "block/updated-at", plain
   ]
@@ -313,7 +277,7 @@ let build_logseq_db size =
 let logseq_get_page_data db name =
   (* ldb/get-page via get-first-page-by-name: first avet :block/name hit *)
   let page_id =
-    match datoms db Avet ~a:"block/name" ~v:(String name) () |> Seq.uncons with
+    match datoms ~a:"block/name" ~v:(String name) db Avet |> Seq.uncons with
     | Some (d, _) -> Some d.e
     | None -> None
   in
@@ -324,7 +288,7 @@ let logseq_get_page_data db name =
      | None -> ()
      | Some page -> consume_int (List.length (entity_attrs page)));
     let block_eids =
-      datoms db Avet ~a:"block/page" ~v:(Ref page_id) ()
+      datoms ~a:"block/page" ~v:(Ref page_id) db Avet
       |> Seq.fold_left (fun acc d -> d.e :: acc) []
       |> List.rev
     in
@@ -431,7 +395,7 @@ let main () =
   bench config "add-5" (fun () -> consume_db (add_one_by_one config.size));
   bench config "add-all" (fun () -> consume_db (build_db config.size));
   bench config "datoms-name" (fun () ->
-    consume_int (fold_datoms (fun count _ -> count + 1) 0 (Lazy.force db) Aevt ~a:"name" ()));
+    consume_int (fold_datoms ~a:"name" (fun count _ -> count + 1) 0 (Lazy.force db) Aevt));
   bench config "q1" (fun () ->
     consume_rows (q_string (Lazy.force db) "[:find ?e :where [?e :name \"Ivan\"]]"));
   bench config "q2" (fun () ->
@@ -460,7 +424,7 @@ let main () =
          (Lazy.force db)
          "[:find ?e ?s :where [?e :name \"Ivan\"] [?e :salary ?s] [(> ?s 50000)]]"));
   bench config "pull-one" (fun () ->
-    consume_pull (pull (Lazy.force db) [ Pull_attr "name"; Pull_attr "age"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ] (Entity_id 1)));
+    consume_pull (pull (Lazy.force db) [ Pull_attr "name"; Pull_attr "age"; Pull_ref ("friend", [ Pull_attr "name"; Pull_attr "age" ]) ] (Entity_id (eid 1L))));
   bench config "storage-roundtrip" (fun () ->
     consume_db (build_storage_db config.size));
   bench config "get-page-data" (fun () ->
