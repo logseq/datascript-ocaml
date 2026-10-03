@@ -9,6 +9,7 @@ depends: [
   "dune" {>= "3.17"}
   "persistent_sorted_set_ocaml" {= "dev"}
   "melange"
+  "odoc" {with-doc}
 ]
 pin-depends: [
   ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#695223e0a28cec1ff13a6ac7e870e4983ad3bb46"]

@@ -1,0 +1,133 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment can be in flight; queue rather than cancel.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    name: Build and deploy odoc site
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Same opam cache strategy (and keys) as ci.yml — see the comments there.
+      - name: Resolve pinned dependency commits
+        id: pins
+        run: |
+          export GIT_TERMINAL_PROMPT=0
+          sha=$(
+            grep -hoE 'git\+[^"]+#[^"]+' ./*.opam | sort -u | while IFS= read -r pin; do
+              repo="${pin%%#*}"; ref="${pin##*#}"
+              git ls-remote "${repo#git+}" "$ref" || echo "unresolved $pin"
+            done | shasum | awk '{print $1}'
+          )
+          echo "resolved pins sha: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Restore opam root
+        id: opam-root
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.opam
+          key: opam-root-${{ runner.os }}-ocaml-5.5.1
+
+      - name: Restore opam switch
+        id: opam-switch
+        uses: actions/cache/restore@v4
+        with:
+          path: _opam
+          key: opam-switch-${{ runner.os }}-ocaml-5.5.1-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.sha }}
+          restore-keys: |
+            opam-switch-${{ runner.os }}-ocaml-5.5.1-
+
+      - name: Check for restored opam environment
+        id: opam-env
+        run: |
+          if [ -f "$HOME/.opam/config" ] && [ -d "_opam" ]; then
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install opam binary
+        if: steps.opam-env.outputs.restored == 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL https://github.com/ocaml/opam/releases/download/2.6.0/opam-2.6.0-x86_64-linux -o ~/.local/bin/opam
+          chmod +x ~/.local/bin/opam
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          eval "$(opam env)"
+          opam --version && ocaml -version
+
+      - name: Set up OCaml
+        if: steps.opam-env.outputs.restored != 'true'
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.5.1"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev pkg-config
+
+      - name: Install OCaml dependencies
+        run: |
+          grep -hoE '\["[A-Za-z0-9_.-]+" +"git\+[^"]+"\]' ./*.opam \
+            | sed 's/\["//; s/"\]$//; s/" "/ /' \
+            | sort -u \
+            | while read -r pkg url; do
+                opam pin add "$pkg" "$url" -y
+              done
+          opam install . --deps-only --with-doc -y || {
+            opam update -y
+            opam install . --deps-only --with-doc -y
+          }
+
+      - name: Save opam root
+        if: steps.opam-root.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.opam
+          key: opam-root-${{ runner.os }}-ocaml-5.5.1
+
+      - name: Save opam switch
+        if: steps.opam-switch.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _opam
+          key: ${{ steps.opam-switch.outputs.cache-primary-key }}
+
+      - name: Build odoc site
+        run: opam exec -- dune build @doc
+
+      # enablement turns on GitHub Pages (source = GitHub Actions)
+      # automatically on the first run — no manual settings toggle needed.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _build/default/_doc/_html
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
