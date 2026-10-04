@@ -14462,6 +14462,47 @@ let test_connection_reports_strip_skip_store_metadata () =
   if !seen_meta <> [ [ "source", String "manual" ] ] then
     failwith "listeners should receive tx metadata without skip-store?"
 
+(* Regression: the tail-compaction flush inside transact_conn/apply_report
+   must not corrupt older snapshots. Index nodes used to be written back to
+   their previous storage addresses, so a stored snapshot that still
+   referenced those addresses silently observed post-flush content — e.g.
+   report.db_before appeared to already contain the tx's own datoms and
+   downstream delta computation (render_delta membership-at) saw
+   before = after. Node writes are append-only now. *)
+let test_db_before_snapshot_survives_compaction_store () =
+  let storage = memory_storage () in
+  let conn = create_conn ~storage () in
+  ignore
+    (transact_conn conn
+       (List.init 200 (fun i -> Add (Entity_id (i + 1), "name", String (string_of_int i)))));
+  let conn =
+    match restore_conn storage with
+    | Some conn -> conn
+    | None -> failwith "restore_conn should return a conn"
+  in
+  let captured_before = conn_db conn in
+  let before_count = List.length (datoms captured_before Eavt ()) in
+  (* The 20-datom restored tail plus this tx crosses the branching-factor
+     compaction threshold, forcing a full index store inside transact_conn.
+     Rebalancing during the insert inherits storage addresses of
+     neighbouring nodes that the pre-transaction snapshot still references
+     lazily — the case that used to corrupt those snapshots. *)
+  let report =
+    transact_conn conn
+      (List.concat_map
+         (fun i ->
+            [ Add (Entity_id i, "age", String (string_of_int i))
+            ; Add (Entity_id i, "name", String (Printf.sprintf "name-%d" i))
+            ])
+         (List.init 60 (fun i -> i + 1)))
+  in
+  assert_equal_int "db_after datom count" 260
+    (List.length (datoms report.db_after Eavt ()));
+  assert_equal_int "report.db_before datom count" before_count
+    (List.length (datoms report.db_before Eavt ()));
+  assert_equal_int "captured snapshot datom count" before_count
+    (List.length (datoms captured_before Eavt ()))
+
 let test_transact__test_retract_fns () =
   let db =
     empty_db ()
@@ -17828,6 +17869,7 @@ let () =
   test_connection_auto_listener_keys ();
   test_bang_connection_api_aliases ();
   test_connection_reports_strip_skip_store_metadata ();
+  test_db_before_snapshot_survives_compaction_store ();
   test_transact__test_retract_fns ();
   test_transact__test_transient_issue_294 ();
   test_retract_attr_removes_all_attribute_values ();

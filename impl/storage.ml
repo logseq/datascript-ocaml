@@ -51,12 +51,13 @@ let file_storage = Platform.file_storage
 
 let buffered_node_storage pending_entries =
   { PSet.store_node =
-      (fun ?address node ->
-        let address =
-          match address with
-          | Some address -> address
-          | None -> next_storage_address ()
-        in
+      (fun ?address:_ node ->
+        (* Addresses are append-only: never write a changed node back to its
+           previous address, because older db snapshots keep deferred refs to
+           that address and would silently observe the new content
+           (a tx-report's db_before then appears to already contain the tx's
+           own datoms). Obsolete addresses are reclaimed by collect_garbage. *)
+        let address = next_storage_address () in
         pending_entries := (address, Storage_node node) :: !pending_entries;
         address)
   ; restore_node = (fun _address -> None)
@@ -109,12 +110,11 @@ let normalize_stored_tail schema =
 
 let restoring_node_storage ?schema storage =
   { PSet.store_node =
-      (fun ?address node ->
-        let address =
-          match address with
-          | Some address -> address
-          | None -> next_storage_address ()
-        in
+      (fun ?address:_ node ->
+        (* See buffered_node_storage: writes must be append-only so older
+           snapshots' deferred refs to the previous address keep resolving to
+           the content they were created with. *)
+        let address = next_storage_address () in
         storage.storage_store [ address, Storage_node node ];
         address)
   ; restore_node =
