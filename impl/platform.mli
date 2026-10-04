@@ -8,6 +8,17 @@ val now_seconds : unit -> float
 (** Create a file-backed storage instance rooted at the given path. *)
 val file_storage : string -> storage
 
+(** Adapt a bytes-level backend into a [storage]. The platform owns the
+    [storage_payload] serialization codec: native platforms marshal
+    payloads to binary buffers, JS platforms raise
+    [Invalid_argument]. *)
+val make_storage :
+  write:((storage_address * string) list -> unit) ->
+  read:(storage_address list -> (storage_address * string) list) ->
+  list:(unit -> storage_address list) ->
+  delete:(storage_address list -> unit) ->
+  storage
+
 (** Compile a platform-specific regular expression from a pattern string. *)
 val compile_regex : string -> regex
 

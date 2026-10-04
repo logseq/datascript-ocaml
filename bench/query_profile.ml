@@ -13,25 +13,16 @@ let measure name iterations f =
   Printf.printf "%s\t%.5f\t%d\n%!" name (elapsed /. float_of_int iterations) !total
 
 let indexed =
-  { cardinality = One
-  ; unique = None
-  ; indexed = true
-  ; is_component = false
-  ; no_history = false
-  ; doc = None
-  ; value_type = None
-  ; tuple_attrs = None
-  ; tuple_types = None
-  }
+  Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let unique_identity =
-  { indexed with unique = Some Identity }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:(Some Identity) ~indexed:((Schema.indexed indexed)) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let ref_attr =
-  { indexed with indexed = false; value_type = Some RefType }
+  Schema.spec ~cardinality:((Schema.cardinality indexed)) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:(Some RefType) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let many =
-  { indexed with cardinality = Many; indexed = false }
+  Schema.spec ~cardinality:(Many) ?unique:((Schema.unique indexed)) ~indexed:(false) ~is_component:((Schema.is_component indexed)) ~no_history:((Schema.no_history indexed)) ?doc:((Schema.doc indexed)) ?value_type:((Schema.value_type indexed)) ?tuple:(match ((Schema.tuple_attrs indexed), (Schema.tuple_types indexed)) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let schema =
   [ "id", unique_identity
@@ -116,41 +107,41 @@ let q_len_inputs db inputs query =
 
 let direct_q3 db =
   let male = Bytes.make (1001) '\000' in
-  datoms db Aevt ~a:"sex" ()
+  datoms ~a:"sex" db Aevt
   |> Seq.iter (fun datom ->
-    if datom.v = Keyword "male" && datom.e >= 0 && datom.e < Bytes.length male then
-      Bytes.set male datom.e '\001');
-  datoms db Avet ~a:"name" ~v:(String "Ivan") ()
+    if datom.v = Keyword "male" && Entity_id.to_int64 datom.e >= 0L && Entity_id.to_int64 datom.e < Int64.of_int (Bytes.length male) then
+      Bytes.set male (Int64.to_int (Entity_id.to_int64 datom.e)) '\001');
+  datoms ~a:"name" ~v:(String "Ivan") db Avet
   |> Seq.fold_left
        (fun count datom ->
-         if datom.e >= 0 && datom.e < Bytes.length male && Bytes.get male datom.e = '\001' then
-           count + seq_len (datoms db Eavt ~e:datom.e ~a:"age" ())
+         if Entity_id.to_int64 datom.e >= 0L && Entity_id.to_int64 datom.e < Int64.of_int (Bytes.length male) && Bytes.get male (Int64.to_int (Entity_id.to_int64 datom.e)) = '\001' then
+           count + seq_len (datoms ~e:datom.e ~a:"age" db Eavt)
          else
            count)
        0
 
 let direct_q3_table db =
-  let max_entity = db.max_datom_e + 1 in
+  let max_entity = Int64.to_int (Entity_id.to_int64 (serializable db).serializable_max_eid) + 1 in
   let male = Bytes.make max_entity '\000' in
-  datoms db Aevt ~a:"sex" ()
+  datoms ~a:"sex" db Aevt
   |> Seq.iter (fun datom ->
-    if datom.v = Keyword "male" && datom.e >= 0 && datom.e < Bytes.length male then
-      Bytes.set male datom.e '\001');
+    if datom.v = Keyword "male" && Entity_id.to_int64 datom.e >= 0L && Entity_id.to_int64 datom.e < Int64.of_int (Bytes.length male) then
+      Bytes.set male (Int64.to_int (Entity_id.to_int64 datom.e)) '\001');
   let ages = Array.make max_entity None in
-  datoms db Aevt ~a:"age" ()
+  datoms ~a:"age" db Aevt
   |> Seq.iter (fun datom ->
-    if datom.e >= 0 && datom.e < Array.length ages then
-      ages.(datom.e) <- Some datom.v);
-  datoms db Avet ~a:"name" ~v:(String "Ivan") ()
+    if Entity_id.to_int64 datom.e >= 0L && Entity_id.to_int64 datom.e < Int64.of_int (Array.length ages) then
+      ages.(Int64.to_int (Entity_id.to_int64 datom.e)) <- Some datom.v);
+  datoms ~a:"name" ~v:(String "Ivan") db Avet
   |> Seq.fold_left
        (fun count datom ->
          if
-           datom.e >= 0
-           && datom.e < Bytes.length male
-           && Bytes.get male datom.e = '\001'
-           && datom.e < Array.length ages
+           Entity_id.to_int64 datom.e >= 0L
+           && Entity_id.to_int64 datom.e < Int64.of_int (Bytes.length male)
+           && Bytes.get male (Int64.to_int (Entity_id.to_int64 datom.e)) = '\001'
+           && Entity_id.to_int64 datom.e < Int64.of_int (Array.length ages)
          then
-           match ages.(datom.e) with
+           match ages.(Int64.to_int (Entity_id.to_int64 datom.e)) with
            | Some _ -> count + 1
            | None -> count
          else
@@ -158,17 +149,17 @@ let direct_q3_table db =
        0
 
 let name_entities db =
-  datoms db Avet ~a:"name" ~v:(String "Ivan") ()
+  datoms ~a:"name" ~v:(String "Ivan") db Avet
   |> Seq.map (fun datom -> datom.e)
   |> List.of_seq
 
 let age_rows db =
-  datoms db Aevt ~a:"age" ()
+  datoms ~a:"age" db Aevt
   |> Seq.map (fun datom -> datom.e, datom.v)
   |> List.of_seq
 
 let male_entities db =
-  datoms db Aevt ~a:"sex" ~v:(Keyword "male") ()
+  datoms ~a:"sex" ~v:(Keyword "male") db Aevt
   |> Seq.map (fun datom -> datom.e)
   |> List.of_seq
 
@@ -222,7 +213,7 @@ let add_five size =
 let explicit_people size =
   people size
   |> List.mapi (fun index -> function
-    | Entity entity -> Entity { entity with db_id = Some (Entity_id (index + 1)) }
+    | Entity entity -> Entity { entity with db_id = Some (Entity_id (Entity_id.of_int (index + 1))) }
     | tx_op -> tx_op)
 
 let people_without_alias size =
@@ -235,7 +226,7 @@ let people_without_alias size =
 let people_without_alias_explicit size =
   people_without_alias size
   |> List.mapi (fun index -> function
-    | Entity entity -> Entity { entity with db_id = Some (Entity_id (index + 1)) }
+    | Entity entity -> Entity { entity with db_id = Some (Entity_id (Entity_id.of_int (index + 1))) }
     | tx_op -> tx_op)
 
 let bulk_explicit size =
@@ -275,14 +266,14 @@ let () =
     parse_query_string "[:find ?e ?s :in $ ?min-s :where [?e :salary ?s] [(> ?s ?min-s)]]"
   in
   Printf.printf "case\tms\tblackhole\n%!";
-  measure "datoms-name-avet" iterations (fun () -> seq_len (datoms db Avet ~a:"name" ~v:(String "Ivan") ()));
-  measure "datoms-name-aevt-list" iterations (fun () -> list_len (datoms db Aevt ~a:"name" () |> List.of_seq));
-  measure "datoms-sex-aevt" iterations (fun () -> seq_len (datoms db Aevt ~a:"sex" ()));
-  measure "datoms-sex-aevt-fold" iterations (fun () -> fold_datoms (fun count _ -> count + 1) 0 db Aevt ~a:"sex" ());
-  measure "datoms-sex-aevt-direct" iterations (fun () -> seq_len_direct (datoms db Aevt ~a:"sex" ()));
-  measure "datoms-sex-aevt-list" iterations (fun () -> list_len (datoms db Aevt ~a:"sex" () |> List.of_seq));
-  measure "datoms-sex-aevt-value" iterations (fun () -> seq_len (datoms db Aevt ~a:"sex" ~v:(Keyword "male") ()));
-  measure "datoms-age-aevt" iterations (fun () -> seq_len (datoms db Aevt ~a:"age" ()));
+  measure "datoms-name-avet" iterations (fun () -> seq_len (datoms ~a:"name" ~v:(String "Ivan") db Avet));
+  measure "datoms-name-aevt-list" iterations (fun () -> list_len (datoms ~a:"name" db Aevt |> List.of_seq));
+  measure "datoms-sex-aevt" iterations (fun () -> seq_len (datoms ~a:"sex" db Aevt));
+  measure "datoms-sex-aevt-fold" iterations (fun () -> fold_datoms ~a:"sex" (fun count _ -> count + 1) 0 db Aevt);
+  measure "datoms-sex-aevt-direct" iterations (fun () -> seq_len_direct (datoms ~a:"sex" db Aevt));
+  measure "datoms-sex-aevt-list" iterations (fun () -> list_len (datoms ~a:"sex" db Aevt |> List.of_seq));
+  measure "datoms-sex-aevt-value" iterations (fun () -> seq_len (datoms ~a:"sex" ~v:(Keyword "male") db Aevt));
+  measure "datoms-age-aevt" iterations (fun () -> seq_len (datoms ~a:"age" db Aevt));
   measure "profile-name-list" iterations (fun () -> List.length (name_entities db));
   measure "profile-age-list" iterations (fun () -> List.length (age_rows db));
   measure "profile-sex-male-list" iterations (fun () -> List.length (male_entities db));
@@ -315,9 +306,9 @@ let () =
   measure "direct-q3-table" iterations (fun () -> direct_q3_table db)
   ;
   let tx_iterations = max 1 (iterations / 100) in
-  measure "add-1" tx_iterations (fun () -> add_one_by_one size |> fun db -> seq_len (datoms db Eavt ()));
-  measure "add-5" tx_iterations (fun () -> add_five size |> fun db -> seq_len (datoms db Eavt ()));
-  measure "bulk-explicit" tx_iterations (fun () -> bulk_explicit size |> fun db -> seq_len (datoms db Eavt ()));
-  measure "bulk-no-alias" tx_iterations (fun () -> bulk_without_alias size |> fun db -> seq_len (datoms db Eavt ()));
-  measure "bulk-no-alias-explicit" tx_iterations (fun () -> bulk_without_alias_explicit size |> fun db -> seq_len (datoms db Eavt ()));
-  measure "bulk-add-ops" tx_iterations (fun () -> bulk_add_ops size |> fun db -> seq_len (datoms db Eavt ()))
+  measure "add-1" tx_iterations (fun () -> add_one_by_one size |> fun db -> seq_len (datoms db Eavt));
+  measure "add-5" tx_iterations (fun () -> add_five size |> fun db -> seq_len (datoms db Eavt));
+  measure "bulk-explicit" tx_iterations (fun () -> bulk_explicit size |> fun db -> seq_len (datoms db Eavt));
+  measure "bulk-no-alias" tx_iterations (fun () -> bulk_without_alias size |> fun db -> seq_len (datoms db Eavt));
+  measure "bulk-no-alias-explicit" tx_iterations (fun () -> bulk_without_alias_explicit size |> fun db -> seq_len (datoms db Eavt));
+  measure "bulk-add-ops" tx_iterations (fun () -> bulk_add_ops size |> fun db -> seq_len (datoms db Eavt))

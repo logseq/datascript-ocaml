@@ -8,11 +8,11 @@ let expect label expected actual =
 
 let expect_true label cond = if not cond then failf "%s" label
 
-let expect_value label expected actual = if not (Util.value_equal expected actual) then failf "%s" label
+let expect_value label expected actual = if not (expected = actual) then failf "%s" label
 
-let number_attr = { cardinality = One; unique = None; indexed = false; is_component = false; no_history = false; doc = None; value_type = Some NumberType; tuple_attrs = None; tuple_types = None }
+let number_attr = Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(Some NumberType) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
-let instant_attr = { cardinality = One; unique = None; indexed = false; is_component = false; no_history = false; doc = None; value_type = Some InstantType; tuple_attrs = None; tuple_types = None }
+let instant_attr = Schema.spec ~cardinality:(One) ?unique:(None) ~indexed:(false) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(Some InstantType) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) ()
 
 let epoch_ms = 1_700_000_000_000L
 
@@ -20,14 +20,14 @@ let test_int64_values_roundtrip () =
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "epoch-ms", Int64 epoch_ms)
-         ; Add (Entity_id 1, "int64-min", Int64 Int64.min_int)
-         ; Add (Entity_id 1, "int64-max", Int64 Int64.max_int)
-         ; Add (Entity_id 1, "negative", Int64 (-4_000_000_000_000L))
+         [ Add (Entity_id (eid 1L), "epoch-ms", Int64 epoch_ms)
+         ; Add (Entity_id (eid 1L), "int64-min", Int64 Int64.min_int)
+         ; Add (Entity_id (eid 1L), "int64-max", Int64 Int64.max_int)
+         ; Add (Entity_id (eid 1L), "negative", Int64 (-4_000_000_000_000L))
          ]
   in
   let values =
-    datoms db Eavt ()
+    datoms db Eavt
     |> List.of_seq
     |> List.map (fun d -> d.a, d.v)
   in
@@ -46,24 +46,24 @@ let test_int64_values_roundtrip () =
    | _ -> failwith "negative int64 decoded to unexpected constructor")
 
 let test_int64_equality_and_ordering () =
-  expect_true "Int64 1 is not equal to Float 1.0" (not (Util.value_equal (Int64 1L) (Float 1.0)));
-  expect_true "Int64 1 orders with Float 1.0" (Util.compare_value (Int64 1L) (Float 1.0) = 0);
-  expect_true "Int64 5 is comparable to Instant 5" (Util.compare_value (Int64 5L) (Instant 5L) = 0);
-  expect_true "Int64 5 is never equal to Instant 5" (not (Util.value_equal (Int64 5L) (Instant 5L)));
-  expect_true "Instant 4 sorts below Int64 5" (Util.compare_value (Instant 4L) (Int64 5L) < 0);
-  expect_true "Int64 5 sorts below Instant 6" (Util.compare_value (Int64 5L) (Instant 6L) < 0);
-  expect_true "Int64 ordering uses full 64-bit range" (Util.compare_value (Int64 Int64.max_int) (Int64 1L) > 0);
-  expect_true "Int64 min sorts below max" (Util.compare_value (Int64 Int64.min_int) (Int64 Int64.max_int) < 0)
+  expect_true "Int64 1 is not equal to Float 1.0" (not (Internal.Util.value_equal (Int64 1L) (Float 1.0)));
+  expect_true "Int64 1 orders with Float 1.0" (Internal.Util.compare_value (Int64 1L) (Float 1.0) = 0);
+  expect_true "Int64 5 is comparable to Instant 5" (Internal.Util.compare_value (Int64 5L) (Instant 5L) = 0);
+  expect_true "Int64 5 is never equal to Instant 5" (not (Internal.Util.value_equal (Int64 5L) (Instant 5L)));
+  expect_true "Instant 4 sorts below Int64 5" (Internal.Util.compare_value (Instant 4L) (Int64 5L) < 0);
+  expect_true "Int64 5 sorts below Instant 6" (Internal.Util.compare_value (Int64 5L) (Instant 6L) < 0);
+  expect_true "Int64 ordering uses full 64-bit range" (Internal.Util.compare_value (Int64 Int64.max_int) (Int64 1L) > 0);
+  expect_true "Int64 min sorts below max" (Internal.Util.compare_value (Int64 Int64.min_int) (Int64 Int64.max_int) < 0)
 
 let test_int64_predicates () =
-  expect_true "number? accepts Int64" (Built_ins.matches_value_predicate NumberValue (Int64 1L));
-  expect_true "integer? accepts Int64" (Built_ins.matches_value_predicate IntegerValue (Int64 1L));
-  expect_true "number? rejects Instant" (not (Built_ins.matches_value_predicate NumberValue (Instant 1L)));
-  expect_true "integer? rejects Instant" (not (Built_ins.matches_value_predicate IntegerValue (Instant 1L)));
-  expect_true "integer? rejects Float" (not (Built_ins.matches_value_predicate IntegerValue (Float 1.0)));
-  expect_true "zero? on Int64" (Built_ins.matches_numeric_predicate ZeroNumber (Int64 0L));
-  expect_true "even? on Int64" (Built_ins.matches_numeric_predicate EvenInteger (Int64 4L));
-  expect_true "odd? on Int64" (Built_ins.matches_numeric_predicate OddInteger (Int64 3L))
+  expect_true "number? accepts Int64" (Internal.Built_ins.matches_value_predicate NumberValue (Int64 1L));
+  expect_true "integer? accepts Int64" (Internal.Built_ins.matches_value_predicate IntegerValue (Int64 1L));
+  expect_true "number? rejects Instant" (not (Internal.Built_ins.matches_value_predicate NumberValue (Instant 1L)));
+  expect_true "integer? rejects Instant" (not (Internal.Built_ins.matches_value_predicate IntegerValue (Instant 1L)));
+  expect_true "integer? rejects Float" (not (Internal.Built_ins.matches_value_predicate IntegerValue (Float 1.0)));
+  expect_true "zero? on Int64" (Internal.Built_ins.matches_numeric_predicate ZeroNumber (Int64 0L));
+  expect_true "even? on Int64" (Internal.Built_ins.matches_numeric_predicate EvenInteger (Int64 4L));
+  expect_true "odd? on Int64" (Internal.Built_ins.matches_numeric_predicate OddInteger (Int64 3L))
 
 let test_int64_edn () =
   (match read_edn "1700000000000" with
@@ -76,20 +76,20 @@ let test_int64_edn () =
     empty_db ~schema:[ "created-at", instant_attr ] ()
     |> db_with_string "[{:db/id 1 :created-at #inst \"2024-03-09T16:02:03.456Z\"}]"
   in
-  (match List.of_seq (datoms db Eavt ~a:"created-at" ()) with
+  (match List.of_seq (datoms ~a:"created-at" db Eavt) with
    | [ datom ] -> expect_value "#inst transacts as Instant" (Instant 1_710_000_123_456L) datom.v
    | _ -> failwith "#inst datom missing");
   expect_true "Instant prints as #inst readably"
-    (Built_ins.print_query_value ~readably:true (Instant 1_710_000_123_456L)
+    (Internal.Built_ins.print_query_value ~readably:true (Instant 1_710_000_123_456L)
      = "#inst \"2024-03-09T16:02:03.456Z\"")
 
 let test_int64_query () =
   let db =
     empty_db ()
     |> db_with
-         [ Add (Entity_id 1, "ms", Int64 1_000_000_000_000L)
-         ; Add (Entity_id 2, "ms", Int64 1_700_000_000_000L)
-         ; Add (Entity_id 3, "ms", Int64 9_223_372_036_854_775_000L)
+         [ Add (Entity_id (eid 1L), "ms", Int64 1_000_000_000_000L)
+         ; Add (Entity_id (eid 2L), "ms", Int64 1_700_000_000_000L)
+         ; Add (Entity_id (eid 3L), "ms", Int64 9_223_372_036_854_775_000L)
          ]
   in
   (match q_string db "[:find ?v :where [?e :ms ?v] [(> ?v 1600000000000)]]" with
@@ -144,10 +144,10 @@ let test_int64_storage_migration () =
   let schema = [ "count", number_attr; "created-at", instant_attr ] in
   let db =
     init_db ~schema ~storage
-      [ Db.datom ~e:1 ~a:"count" ~v:(Instant epoch_ms) ()
-      ; Db.datom ~e:1 ~a:"created-at" ~v:(Instant epoch_ms) ()
-      ; Db.datom ~e:1 ~a:"untyped-time" ~v:(Instant epoch_ms) ()
-      ; Db.datom ~e:2 ~a:"count" ~v:(Int64 9_223_372_036_854_775_000L) ()
+      [ Db.datom (eid 1L) "count" (Instant epoch_ms)
+      ; Db.datom (eid 1L) "created-at" (Instant epoch_ms)
+      ; Db.datom (eid 1L) "untyped-time" (Instant epoch_ms)
+      ; Db.datom (eid 2L) "count" (Int64 9_223_372_036_854_775_000L)
       ]
   in
   ignore (store ~storage db);
@@ -155,27 +155,27 @@ let test_int64_storage_migration () =
    | None -> failwith "restore failed"
    | Some restored ->
      let value_for e a =
-       match List.of_seq (datoms restored Eavt ~e ~a ()) with
+       match List.of_seq (datoms ~e ~a restored Eavt) with
        | [ d ] -> d.v
        | _ -> failwith ("missing datom for " ^ a)
      in
-     expect_value "Instant under numeric attr stays Instant on restore" (Instant epoch_ms) (value_for 1 "count");
-     expect_value "Instant under instant attr stays Instant" (Instant epoch_ms) (value_for 1 "created-at");
-     expect_value "Instant under untyped attr stays Instant on restore" (Instant epoch_ms) (value_for 1 "untyped-time");
-     expect_value "big Int64 survives kvs restore" (Int64 9_223_372_036_854_775_000L) (value_for 2 "count"))
+     expect_value "Instant under numeric attr stays Instant on restore" (Instant epoch_ms) (value_for (eid 1L) "count");
+     expect_value "Instant under instant attr stays Instant" (Instant epoch_ms) (value_for (eid 1L) "created-at");
+     expect_value "Instant under untyped attr stays Instant on restore" (Instant epoch_ms) (value_for (eid 1L) "untyped-time");
+     expect_value "big Int64 survives kvs restore" (Int64 9_223_372_036_854_775_000L) (value_for (eid 2L) "count"))
 
 let test_int64_lookup_ref_and_entity () =
   let db =
-    empty_db ~schema:[ "email", { cardinality = One; unique = Some Identity; indexed = true; is_component = false; no_history = false; doc = None; value_type = None; tuple_attrs = None; tuple_types = None } ] ()
+    empty_db ~schema:[ "email", Schema.spec ~cardinality:(One) ?unique:(Some Identity) ~indexed:(true) ~is_component:(false) ~no_history:(false) ?doc:(None) ?value_type:(None) ?tuple:(match (None, None) with Some a, _ -> Some (Tuple_attrs a) | None, Some t -> Some (Tuple_types t) | None, None -> None) () ] ()
     |> db_with
-         [ Add (Entity_id 1, "email", String "ivan@x")
-         ; Add (Entity_id 1, "ms", Int64 epoch_ms)
+         [ Add (Entity_id (eid 1L), "email", String "ivan@x")
+         ; Add (Entity_id (eid 1L), "ms", Int64 epoch_ms)
          ]
   in
   (match q_string db "[:find ?v . :where [[:email \"ivan@x\"] :ms ?v]]" with
    | [ [ Result_value (Int64 value) ] ] -> expect "lookup-ref resolves int64 attr" epoch_ms value
    | _ -> failwith "lookup-ref query returned unexpected result");
-  (match entity db (Entity_id 1) with
+  (match entity db (Entity_id (eid 1L)) with
    | Some e ->
      (match entity_attr e "db/id" with
       | Some (One_value (Int64 id)) -> expect "db/id renders as Int64" 1L id

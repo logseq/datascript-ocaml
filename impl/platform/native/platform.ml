@@ -83,6 +83,19 @@ let file_storage dir =
   ; storage_delete = delete
   }
 
+let make_storage ~write ~read ~list ~delete =
+  { storage_store =
+      (fun entries ->
+        write (List.map (fun (address, payload) -> (address, Marshal.to_string payload [])) entries))
+  ; storage_restore =
+      (fun address ->
+        match read [ address ] with
+        | [ (_, bytes) ] -> Some (Marshal.from_string bytes 0 : storage_payload)
+        | _ -> None)
+  ; storage_list_addresses = (fun () -> list ())
+  ; storage_delete = (fun addresses -> delete addresses)
+  }
+
 let str_pattern_of_pattern pattern =
   let buffer = Buffer.create (String.length pattern) in
   let add_escaped = function

@@ -25,7 +25,7 @@ module Codec : sig
   val float : float t
   val bool : bool t
   val keyword : string t
-  val entity_id : int t
+  val entity_id : Datascript.entity_id t
   val value : Datascript.value t
   val agree : 'a t -> 'a t -> unit
   val encode : 'a t -> 'a -> Datascript.value

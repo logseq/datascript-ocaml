@@ -33,12 +33,12 @@ type context =
   }
 
 type closure_index =
-  { up : (int, value list) Hashtbl.t
-  ; down : (int, int list) Hashtbl.t
-  ; leaf_up : (int, value list) Hashtbl.t
-  ; leaf_down : (value, int list) Hashtbl.t
-  ; anc : (int, value list) Hashtbl.t
-  ; desc : (int, int list) Hashtbl.t
+  { up : (entity_id, value list) Hashtbl.t
+  ; down : (entity_id, entity_id list) Hashtbl.t
+  ; leaf_up : (entity_id, value list) Hashtbl.t
+  ; leaf_down : (value, entity_id list) Hashtbl.t
+  ; anc : (entity_id, value list) Hashtbl.t
+  ; desc : (entity_id, entity_id list) Hashtbl.t
   }
 
 type query_closure_cache =
@@ -54,7 +54,7 @@ type query_callables =
   }
 
 type result_resolution_context =
-  { validate_entity_id : int -> entity_id
+  { validate_entity_id : int64 -> entity_id
   ; resolve_query_value : value -> value option
   ; lookup_ref_entity_id : attr -> value -> entity_id option
   }
@@ -185,7 +185,7 @@ val result_of_datom_tx : datom -> query_result
 val result_of_datom_op : datom -> query_result
 val result_of_ref : query_result -> query_result
 val entity_id_of_resolved_query_result :
-  validate_entity_id:(int -> entity_id) -> query_result option -> entity_id option
+  validate_entity_id:(int64 -> entity_id) -> query_result option -> entity_id option
 val resolved_query_result : result_resolution_context -> query_result -> query_result option
 val lookup_ref_entity_id_of_value : result_resolution_context -> value -> entity_id option
 val query_result_entity_id : result_resolution_context -> query_result -> entity_id option

@@ -1,19 +1,11 @@
 open Datascript
+module DT = Internal.Datascript_types
+open DT
 
 let indexed =
-  {
-    cardinality = One;
-    unique = None;
-    indexed = true;
-    is_component = false;
-    no_history = false;
-    doc = None;
-    value_type = None;
-    tuple_attrs = None;
-    tuple_types = None;
-  }
+  { DT.cardinality = DT.One; unique = None; indexed = true; is_component = false; no_history = false; doc = None; value_type = None; tuple_attrs = None; tuple_types = None }
 
-let unique_identity = { indexed with unique = Some Identity }
+let unique_identity = { indexed with DT.unique = Some DT.Identity }
 
 let schema =
   [
@@ -54,11 +46,11 @@ let () =
   let db_path = Filename.temp_file "write-probe" ".sqlite3" in
   let session = Datascript_sqlite.open_session db_path in
   let storage = Datascript_sqlite.storage session in
-  let conn = create_conn ~schema ~storage () in
+  let conn = Internal.create_conn ~schema ~storage () in
   let mutable_rows = ref (kvs_rows db_path) in
   Printf.printf "start rows=%d\n%!" !mutable_rows;
   for b = 1 to batches do
-    ignore (transact_conn conn (block_tx (b * 10000) per_batch));
+    ignore (Internal.transact_conn conn (block_tx (b * 10000) per_batch));
     let rows = kvs_rows db_path in
     Printf.printf "batch %d: rows=%d (+%d)\n%!" b rows (rows - !mutable_rows);
     mutable_rows := rows

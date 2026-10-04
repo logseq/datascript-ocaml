@@ -1,20 +1,20 @@
 module Ds = Datascript
+module DT = Ds.Internal.Datascript_types
 module PSet = Persistent_sorted_set
 module Transit = Transit_native.Transit.Json
 
 open Ds
 
-let schema_attr_default : Ds.schema_attr =
-  {
-    cardinality = One;
-    unique = None;
-    indexed = false;
-    is_component = false;
-    no_history = false;
-    doc = None;
-    value_type = None;
-    tuple_attrs = None;
-    tuple_types = None;
+let schema_attr_default : DT.schema_attr =
+  { DT.cardinality = DT.One
+  ; DT.unique = None
+  ; DT.indexed = false
+  ; DT.is_component = false
+  ; DT.no_history = false
+  ; DT.doc = None
+  ; DT.value_type = None
+  ; DT.tuple_attrs = None
+  ; DT.tuple_types = None
   }
 
 let string_of_transit_key = function
@@ -41,6 +41,11 @@ let int_of_transit_value = function
       else None
   | _ -> None
 
+let int64_of_transit_value = function
+  | Transit.Int value -> Some (Int64.of_int value)
+  | Transit.Int64 value -> Some value
+  | _ -> None
+
 let lookup_transit_key key entries =
   List.find_map
     (fun (entry_key, value) ->
@@ -50,40 +55,40 @@ let lookup_transit_key key entries =
     entries
 
 let transit_of_cardinality = function
-  | One -> Transit.Keyword "db.cardinality/one"
-  | Many -> Transit.Keyword "db.cardinality/many"
+  | DT.One -> Transit.Keyword "db.cardinality/one"
+  | DT.Many -> Transit.Keyword "db.cardinality/many"
 
 let cardinality_of_transit = function
-  | Transit.Keyword "db.cardinality/many" -> Many
-  | Transit.Keyword "db.cardinality/one" -> One
-  | _ -> One
+  | Transit.Keyword "db.cardinality/many" -> DT.Many
+  | Transit.Keyword "db.cardinality/one" -> DT.One
+  | _ -> DT.One
 
 let transit_of_unique = function
-  | Value -> Transit.Keyword "db.unique/value"
-  | Identity -> Transit.Keyword "db.unique/identity"
+  | DT.Value -> Transit.Keyword "db.unique/value"
+  | DT.Identity -> Transit.Keyword "db.unique/identity"
 
 let unique_of_transit = function
-  | Transit.Keyword "db.unique/value" -> Some Value
-  | Transit.Keyword "db.unique/identity" -> Some Identity
+  | Transit.Keyword "db.unique/value" -> Some DT.Value
+  | Transit.Keyword "db.unique/identity" -> Some DT.Identity
   | _ -> None
 
 let transit_of_value_type = function
-  | RefType -> Transit.Keyword "db.type/ref"
-  | StringType -> Transit.Keyword "db.type/string"
-  | KeywordType -> Transit.Keyword "db.type/keyword"
-  | NumberType -> Transit.Keyword "db.type/number"
-  | UuidType -> Transit.Keyword "db.type/uuid"
-  | InstantType -> Transit.Keyword "db.type/instant"
-  | TupleType -> Transit.Keyword "db.type/tuple"
+  | DT.RefType -> Transit.Keyword "db.type/ref"
+  | DT.StringType -> Transit.Keyword "db.type/string"
+  | DT.KeywordType -> Transit.Keyword "db.type/keyword"
+  | DT.NumberType -> Transit.Keyword "db.type/number"
+  | DT.UuidType -> Transit.Keyword "db.type/uuid"
+  | DT.InstantType -> Transit.Keyword "db.type/instant"
+  | DT.TupleType -> Transit.Keyword "db.type/tuple"
 
 let value_type_of_transit = function
-  | Transit.Keyword "db.type/ref" -> Some RefType
-  | Transit.Keyword "db.type/string" -> Some StringType
-  | Transit.Keyword "db.type/keyword" -> Some KeywordType
-  | Transit.Keyword "db.type/number" -> Some NumberType
-  | Transit.Keyword "db.type/uuid" -> Some UuidType
-  | Transit.Keyword "db.type/instant" -> Some InstantType
-  | Transit.Keyword "db.type/tuple" -> Some TupleType
+  | Transit.Keyword "db.type/ref" -> Some DT.RefType
+  | Transit.Keyword "db.type/string" -> Some DT.StringType
+  | Transit.Keyword "db.type/keyword" -> Some DT.KeywordType
+  | Transit.Keyword "db.type/number" -> Some DT.NumberType
+  | Transit.Keyword "db.type/uuid" -> Some DT.UuidType
+  | Transit.Keyword "db.type/instant" -> Some DT.InstantType
+  | Transit.Keyword "db.type/tuple" -> Some DT.TupleType
   | _ -> None
 
 let transit_of_ref_type = function
@@ -112,19 +117,18 @@ let transit_of_tuple_types types =
 let schema_attr_to_transit ~ident_backed attr ident =
   let entries = ref [] in
   let add key value = entries := (Transit.Keyword key, value) :: !entries in
-  (match attr.cardinality with
-  | One -> ()
-  | Many -> add "db/cardinality" (transit_of_cardinality attr.cardinality));
-  Option.iter (fun unique -> add "db/unique" (transit_of_unique unique)) attr.unique;
-  if attr.indexed then add "db/index" (Transit.Bool true);
-  if attr.is_component then add "db/isComponent" (Transit.Bool true);
-  if attr.no_history then add "db/noHistory" (Transit.Bool true);
-  Option.iter (fun doc -> add "db/doc" (Transit.String doc)) attr.doc;
+  (match attr.DT.cardinality with
+  | DT.One -> ()
+  | DT.Many -> add "db/cardinality" (transit_of_cardinality attr.DT.cardinality));
+  Option.iter (fun unique -> add "db/unique" (transit_of_unique unique)) attr.DT.unique;
+  if attr.DT.indexed then add "db/index" (Transit.Bool true);
+  if attr.DT.is_component then add "db/isComponent" (Transit.Bool true);
+  if attr.DT.no_history then add "db/noHistory" (Transit.Bool true);
+  Option.iter (fun doc -> add "db/doc" (Transit.String doc)) attr.DT.doc;
   Option.iter
-    (fun value_type -> add "db/valueType" (transit_of_value_type value_type))
-    attr.value_type;
-  Option.iter (fun attrs -> add "db/tupleAttrs" (transit_of_tuple_attrs attrs)) attr.tuple_attrs;
-  Option.iter (fun types -> add "db/tupleTypes" (transit_of_tuple_types types)) attr.tuple_types;
+    (fun value_type -> add "db/valueType" (transit_of_value_type value_type)) attr.DT.value_type;
+  Option.iter (fun attrs -> add "db/tupleAttrs" (transit_of_tuple_attrs attrs)) attr.DT.tuple_attrs;
+  Option.iter (fun types -> add "db/tupleTypes" (transit_of_tuple_types types)) attr.DT.tuple_types;
   (* cljs update-schema merges {:db/ident ident} into the attr's spec map *)
   if ident_backed then add "db/ident" (Transit.Keyword ident);
   Transit.Map (List.rev !entries)
@@ -139,7 +143,7 @@ let schema_to_transit ?(eids = []) schema =
              schema_attr
              attr ))
        schema
-     @ List.map (fun (eid, ident) -> (Transit.Int eid, Transit.Keyword ident)) eids)
+     @ List.map (fun (eid, ident) -> (Transit.Int64 eid, Transit.Keyword ident)) eids)
 
 let tuple_attrs_of_transit = function
   | Transit.Array values | Transit.List values -> Some (List.filter_map keyword_of_transit values)
@@ -156,18 +160,18 @@ let schema_attr_of_transit = function
       List.fold_left
         (fun schema (key, value) ->
           match keyword_of_transit key with
-          | Some "db/cardinality" -> { schema with cardinality = cardinality_of_transit value }
-          | Some "db/unique" -> { schema with unique = unique_of_transit value }
+          | Some "db/cardinality" -> { schema with DT.cardinality = cardinality_of_transit value }
+          | Some "db/unique" -> { schema with DT.unique = unique_of_transit value }
           | Some "db/index" ->
-              { schema with indexed = Option.value (bool_of_transit value) ~default:false }
+              { schema with DT.indexed = Option.value (bool_of_transit value) ~default:false }
           | Some "db/isComponent" ->
-              { schema with is_component = Option.value (bool_of_transit value) ~default:false }
+              { schema with DT.is_component = Option.value (bool_of_transit value) ~default:false }
           | Some "db/noHistory" ->
-              { schema with no_history = Option.value (bool_of_transit value) ~default:false }
-          | Some "db/doc" -> { schema with doc = string_of_transit value }
-          | Some "db/valueType" -> { schema with value_type = value_type_of_transit value }
-          | Some "db/tupleAttrs" -> { schema with tuple_attrs = tuple_attrs_of_transit value }
-          | Some "db/tupleTypes" -> { schema with tuple_types = tuple_types_of_transit value }
+              { schema with DT.no_history = Option.value (bool_of_transit value) ~default:false }
+          | Some "db/doc" -> { schema with DT.doc = string_of_transit value }
+          | Some "db/valueType" -> { schema with DT.value_type = value_type_of_transit value }
+          | Some "db/tupleAttrs" -> { schema with DT.tuple_attrs = tuple_attrs_of_transit value }
+          | Some "db/tupleTypes" -> { schema with DT.tuple_types = tuple_types_of_transit value }
           | Some _ | None -> schema)
         schema_attr_default props
   | _ -> schema_attr_default
@@ -186,11 +190,63 @@ let schema_eids_of_transit = function
   | Transit.Map entries ->
       List.filter_map
         (fun (key, value) ->
-          match int_of_transit_value key, keyword_of_transit value with
+          match int64_of_transit_value key, keyword_of_transit value with
           | Some eid, Some ident -> Some (eid, ident)
           | _ -> None)
         entries
   | _ -> []
+
+let rec impl_value_to_transit = function
+  | DT.Nil -> Transit.Null
+  | DT.Int64 value -> Transit.Int64 value
+  | DT.Float value -> Transit.Float value
+  | DT.String value -> Transit.String value
+  | DT.Symbol value -> Transit.Symbol value
+  | DT.Bool value -> Transit.Bool value
+  | DT.Keyword value -> Transit.Keyword value
+  | DT.Uuid value -> Transit.Uuid value
+  | DT.Instant value -> Transit.Date value
+  | DT.Regex value -> Transit.Tagged ("regex", Transit.String value)
+  | DT.Ref entity_id -> Transit.Int64 entity_id
+  | DT.List values -> Transit.List (List.map impl_value_to_transit values)
+  | DT.Vector values -> Transit.Array (List.map impl_value_to_transit values)
+  | DT.Map entries ->
+      Transit.Map (List.map (fun (key, value) -> (impl_value_to_transit key, impl_value_to_transit value)) entries)
+  | DT.Set values -> Transit.Set (List.map impl_value_to_transit values)
+  | DT.Tuple values ->
+      Transit.Array
+        (List.map
+           (function
+             | None -> Transit.Null
+             | Some value -> impl_value_to_transit value)
+           values)
+  | DT.TxRef -> Transit.Keyword "db/current-tx"
+  | DT.Ref_to _ -> invalid_arg "storage payload cannot contain unresolved refs"
+
+let rec impl_value_of_transit = function
+  | Transit.Null -> DT.Nil
+  | Bool value -> DT.Bool value
+  | String value -> DT.String value
+  | Int value -> DT.Int64 (Int64.of_int value)
+  | Int64 value -> DT.Int64 value
+  | Float value -> DT.Float value
+  | Binary value -> DT.String value
+  | Big_decimal value -> DT.Float (float_of_string value)
+  | Big_int value -> DT.Int64 (Int64.of_string value)
+  | Date value -> DT.Instant value
+  | Uuid value -> DT.Uuid (Internal.Util.uuid_canonicalize value)
+  | Uri value -> DT.String value
+  | Keyword value -> DT.Keyword value
+  | Symbol value -> DT.Symbol value
+  | Array values -> DT.Vector (List.map impl_value_of_transit values)
+  | Map entries -> DT.Map (List.map (fun (key, value) -> (impl_value_of_transit key, impl_value_of_transit value)) entries)
+  | Set values -> DT.Set (List.map impl_value_of_transit values)
+  | List values -> DT.List (List.map impl_value_of_transit values)
+  | Tagged ("u", Transit.String value) -> DT.Uuid (Internal.Util.uuid_canonicalize value)
+  | Tagged ("m", Transit.Int value) -> DT.Instant (Int64.of_int value)
+  | Tagged ("m", Transit.Int64 value) -> DT.Instant value
+  | Tagged ("regex", Transit.String value) -> DT.Regex value
+  | Tagged (tag, value) -> DT.Vector [ DT.String tag; impl_value_of_transit value ]
 
 let rec value_to_transit = function
   | Ds.Nil -> Transit.Null
@@ -203,7 +259,7 @@ let rec value_to_transit = function
   | Uuid value -> Transit.Uuid value
   | Instant value -> Transit.Date value
   | Regex value -> Transit.Tagged ("regex", Transit.String value)
-  | Ref entity_id -> Transit.Int entity_id
+  | Ref entity_id -> Transit.Int64 (Entity_id.to_int64 entity_id)
   | List values -> Transit.List (List.map value_to_transit values)
   | Vector values -> Transit.Array (List.map value_to_transit values)
   | Map entries ->
@@ -230,7 +286,7 @@ let rec value_of_transit = function
   | Big_decimal value -> Float (float_of_string value)
   | Big_int value -> Int64 (Int64.of_string value)
   | Date value -> Instant value
-  | Uuid value -> Uuid (Util.uuid_canonicalize value)
+  | Uuid value -> Uuid (Internal.Util.uuid_canonicalize value)
   | Uri value -> String value
   | Keyword value -> Keyword value
   | Symbol value -> Symbol value
@@ -238,31 +294,41 @@ let rec value_of_transit = function
   | Map entries -> Map (List.map (fun (key, value) -> (value_of_transit key, value_of_transit value)) entries)
   | Set values -> Set (List.map value_of_transit values)
   | List values -> List (List.map value_of_transit values)
-  | Tagged ("u", Transit.String value) -> Uuid (Util.uuid_canonicalize value)
+  | Tagged ("u", Transit.String value) -> Uuid (Internal.Util.uuid_canonicalize value)
   | Tagged ("m", Transit.Int value) -> Instant (Int64.of_int value)
   | Tagged ("m", Transit.Int64 value) -> Instant value
   | Tagged ("regex", Transit.String value) -> Regex value
   | Tagged (tag, value) -> Vector [ String tag; value_of_transit value ]
 
 let datom_to_transit datom =
-  let tx = if datom.Ds.added then datom.tx else -datom.tx in
-  Transit.Array [ Transit.Int datom.e; Transit.Keyword datom.a; value_to_transit datom.v; Transit.Int tx ]
+  let tx = if datom.DT.added then datom.DT.tx else Int64.neg datom.DT.tx in
+  Transit.Array
+    [ Transit.Int64 datom.DT.e
+    ; Transit.Keyword datom.DT.a
+    ; impl_value_to_transit datom.DT.v
+    ; Transit.Int64 tx
+    ]
 
 let int_of_transit label value =
   match int_of_transit_value value with
   | Some value -> value
   | None -> invalid_arg (label ^ " must be a Transit integer")
 
+let int64_of_transit label value =
+  match int64_of_transit_value value with
+  | Some value -> value
+  | None -> invalid_arg (label ^ " must be a Transit integer")
+
 let datom_of_transit = function
   | Transit.Array [ entity; attr; value; tx ] ->
-      let e = int_of_transit "datom entity" entity in
+      let e = int64_of_transit "datom entity" entity in
       let a =
         match keyword_of_transit attr with
         | Some attr -> attr
         | None -> invalid_arg "datom attr must be a Transit keyword"
       in
-      let tx = int_of_transit "datom tx" tx in
-      { Ds.e; a; v = value_of_transit value; tx = abs tx; added = tx >= 0 }
+      let tx = int64_of_transit "datom tx" tx in
+      { DT.e; DT.a = a; DT.v = impl_value_of_transit value; DT.tx = Int64.abs tx; DT.added = tx >= 0L }
   | _ -> invalid_arg "storage datom must be [e a v tx]"
 
 let datoms_to_transit datoms = Transit.Array (List.map datom_to_transit datoms)
@@ -274,8 +340,8 @@ let datoms_of_transit = function
 let index_metadata_to_transit metadata =
   Transit.Map
     [
-      (Transit.Keyword "count", Transit.Int metadata.storage_index_count);
-      (Transit.Keyword "shift", Transit.Int metadata.storage_index_shift);
+      (Transit.Keyword "count", Transit.Int metadata.DT.storage_index_count);
+      (Transit.Keyword "shift", Transit.Int metadata.DT.storage_index_shift);
     ]
 
 let optional_metadata_entry key = function
@@ -285,20 +351,20 @@ let optional_metadata_entry key = function
 let storage_root_to_transit root =
   Transit.Map
     ([
-       (Transit.Keyword "schema", schema_to_transit ~eids:root.storage_schema_idents root.storage_schema);
-       (Transit.Keyword "max-eid", Transit.Int root.storage_max_eid);
-       (Transit.Keyword "max-tx", Transit.Int root.storage_max_tx);
-       (Transit.Keyword "eavt", address_to_transit root.storage_eavt);
-       (Transit.Keyword "aevt", address_to_transit root.storage_aevt);
-       (Transit.Keyword "avet", address_to_transit root.storage_avet);
-       (Transit.Keyword "duplicate-datoms", datoms_to_transit root.storage_duplicate_datoms);
-       (Transit.Keyword "max-addr", Transit.Int root.storage_max_addr);
-       (Transit.Keyword "branching-factor", Transit.Int root.storage_branching_factor);
-       (Transit.Keyword "ref-type", transit_of_ref_type root.storage_ref_type);
+       (Transit.Keyword "schema", schema_to_transit ~eids:root.DT.storage_schema_idents root.DT.storage_schema);
+       (Transit.Keyword "max-eid", Transit.Int64 root.DT.storage_max_eid);
+       (Transit.Keyword "max-tx", Transit.Int64 root.DT.storage_max_tx);
+       (Transit.Keyword "eavt", address_to_transit root.DT.storage_eavt);
+       (Transit.Keyword "aevt", address_to_transit root.DT.storage_aevt);
+       (Transit.Keyword "avet", address_to_transit root.DT.storage_avet);
+       (Transit.Keyword "duplicate-datoms", datoms_to_transit root.DT.storage_duplicate_datoms);
+       (Transit.Keyword "max-addr", Transit.Int root.DT.storage_max_addr);
+       (Transit.Keyword "branching-factor", Transit.Int root.DT.storage_branching_factor);
+       (Transit.Keyword "ref-type", transit_of_ref_type root.DT.storage_ref_type);
      ]
-    @ optional_metadata_entry "eavt-metadata" root.storage_eavt_metadata
-    @ optional_metadata_entry "aevt-metadata" root.storage_aevt_metadata
-    @ optional_metadata_entry "avet-metadata" root.storage_avet_metadata)
+    @ optional_metadata_entry "eavt-metadata" root.DT.storage_eavt_metadata
+    @ optional_metadata_entry "aevt-metadata" root.DT.storage_aevt_metadata
+    @ optional_metadata_entry "avet-metadata" root.DT.storage_avet_metadata)
 
 let storage_node_to_transit = function
   | PSet.Leaf datoms ->
@@ -314,9 +380,9 @@ let storage_tail_to_transit groups =
   Transit.Array (List.map (fun group -> datoms_to_transit group) groups)
 
 let payload_to_transit = function
-  | Ds.Storage_root root -> storage_root_to_transit root
-  | Storage_node node -> storage_node_to_transit node
-  | Storage_tail groups -> storage_tail_to_transit groups
+  | DT.Storage_root root -> storage_root_to_transit root
+  | DT.Storage_node node -> storage_node_to_transit node
+  | DT.Storage_tail groups -> storage_tail_to_transit groups
 
 let require_key key entries =
   match lookup_transit_key key entries with
@@ -333,8 +399,8 @@ let index_metadata_of_transit entries =
   | Some count, Some shift ->
       Some
         {
-          Ds.storage_index_count = int_of_transit "index metadata :count" count;
-          storage_index_shift = int_of_transit "index metadata :shift" shift;
+          DT.storage_index_count = int_of_transit "index metadata :count" count;
+          DT.storage_index_shift = int_of_transit "index metadata :shift" shift;
         }
   | _ -> None
 
@@ -345,21 +411,21 @@ let optional_metadata key entries =
 
 let storage_root_of_transit entries =
   {
-    Ds.storage_schema = schema_of_transit (require_key "schema" entries);
-    storage_schema_idents = schema_eids_of_transit (require_key "schema" entries);
-    storage_max_eid = int_of_transit "storage root :max-eid" (require_key "max-eid" entries);
-    storage_max_tx = int_of_transit "storage root :max-tx" (require_key "max-tx" entries);
-    storage_eavt = address_of_transit "storage root :eavt" (require_key "eavt" entries);
-    storage_aevt = address_of_transit "storage root :aevt" (require_key "aevt" entries);
-    storage_avet = address_of_transit "storage root :avet" (require_key "avet" entries);
-    storage_eavt_metadata = optional_metadata "eavt-metadata" entries;
-    storage_aevt_metadata = optional_metadata "aevt-metadata" entries;
-    storage_avet_metadata = optional_metadata "avet-metadata" entries;
-    storage_duplicate_datoms = optional_datoms "duplicate-datoms" entries;
-    storage_max_addr = int_of_transit "storage root :max-addr" (require_key "max-addr" entries);
+    DT.storage_schema = schema_of_transit (require_key "schema" entries);
+    DT.storage_schema_idents = schema_eids_of_transit (require_key "schema" entries);
+    DT.storage_max_eid = int64_of_transit "storage root :max-eid" (require_key "max-eid" entries);
+    DT.storage_max_tx = int64_of_transit "storage root :max-tx" (require_key "max-tx" entries);
+    DT.storage_eavt = address_of_transit "storage root :eavt" (require_key "eavt" entries);
+    DT.storage_aevt = address_of_transit "storage root :aevt" (require_key "aevt" entries);
+    DT.storage_avet = address_of_transit "storage root :avet" (require_key "avet" entries);
+    DT.storage_eavt_metadata = optional_metadata "eavt-metadata" entries;
+    DT.storage_aevt_metadata = optional_metadata "aevt-metadata" entries;
+    DT.storage_avet_metadata = optional_metadata "avet-metadata" entries;
+    DT.storage_duplicate_datoms = optional_datoms "duplicate-datoms" entries;
+    DT.storage_max_addr = int_of_transit "storage root :max-addr" (require_key "max-addr" entries);
     storage_branching_factor =
       int_of_transit "storage root :branching-factor" (require_key "branching-factor" entries);
-    storage_ref_type = ref_type_of_transit (require_key "ref-type" entries);
+    DT.storage_ref_type = ref_type_of_transit (require_key "ref-type" entries);
   }
 
 let child_addresses_of_transit = function
@@ -380,10 +446,10 @@ let storage_tail_of_transit = function
 
 let payload_of_transit = function
   | Transit.Map entries ->
-      if Option.is_some (lookup_transit_key "schema" entries) then Storage_root (storage_root_of_transit entries)
-      else if Option.is_some (lookup_transit_key "keys" entries) then Storage_node (storage_node_of_transit entries)
+      if Option.is_some (lookup_transit_key "schema" entries) then DT.Storage_root (storage_root_of_transit entries)
+      else if Option.is_some (lookup_transit_key "keys" entries) then DT.Storage_node (storage_node_of_transit entries)
       else invalid_arg "unknown storage payload map"
-  | (Transit.Array _ | Transit.List _) as tail -> Storage_tail (storage_tail_of_transit tail)
+  | (Transit.Array _ | Transit.List _) as tail -> DT.Storage_tail (storage_tail_of_transit tail)
   | _ -> invalid_arg "unknown storage payload"
 
 (* cljs datascript writes storage payloads in transit's non-verbose JSON

@@ -61,22 +61,22 @@ let matches_value_predicate predicate value =
 let matches_numeric_predicate predicate value =
   match predicate, value with
   | ZeroNumber, Int64 value -> value = 0L
-  | ZeroNumber, Ref value -> value = 0
+  | ZeroNumber, Ref value -> value = 0L
   | ZeroNumber, Float value -> value = 0.0
   | ZeroNumber, Instant value -> value = 0L
   | PositiveNumber, Int64 value -> value > 0L
-  | PositiveNumber, Ref value -> value > 0
+  | PositiveNumber, Ref value -> value > 0L
   | PositiveNumber, Float value -> value > 0.0
   | PositiveNumber, Instant value -> value > 0L
   | NegativeNumber, Int64 value -> value < 0L
-  | NegativeNumber, Ref value -> value < 0
+  | NegativeNumber, Ref value -> value < 0L
   | NegativeNumber, Float value -> value < 0.0
   | NegativeNumber, Instant value -> value < 0L
   | EvenInteger, Int64 value -> Int64.rem value 2L = 0L
-  | EvenInteger, Ref value -> value mod 2 = 0
+  | EvenInteger, Ref value -> Int64.rem value 2L = 0L
   | EvenInteger, Instant value -> Int64.rem value 2L = 0L
   | OddInteger, Int64 value -> Int64.rem value 2L <> 0L
-  | OddInteger, Ref value -> value mod 2 <> 0
+  | OddInteger, Ref value -> Int64.rem value 2L <> 0L
   | OddInteger, Instant value -> Int64.rem value 2L <> 0L
   | (EvenInteger | OddInteger), Float _ -> false
   | _, _ -> false
@@ -105,7 +105,7 @@ let all_values_equal = function
 
 let numeric_value = function
   | Int64 value -> Some (`Int64 value)
-  | Ref value -> Some (`Int64 (Int64.of_int value))
+  | Ref value -> Some (`Int64 value)
   | Instant value -> Some (`Int64 value)
   | Float value -> Some (`Float value)
   | _ -> None
@@ -324,7 +324,7 @@ let string_of_query_value = function
   | Uuid value -> value
   | Instant value -> Int64.to_string value
   | Regex value -> value
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string entity_id
   | List _ | Vector _ | Map _ | Set _ | Tuple _ | TxRef | Ref_to _ -> invalid_arg "cannot stringify composite query value"
 
 let escaped_string_literal value =
@@ -355,7 +355,7 @@ let rec print_query_value ~readably = function
   | Instant value ->
     if readably then "#inst \"" ^ Util.string_of_instant_millis value ^ "\"" else Int64.to_string value
   | Regex value -> "#\"" ^ value ^ "\""
-  | Ref entity_id -> string_of_int entity_id
+  | Ref entity_id -> Int64.to_string entity_id
   | List values -> "(" ^ print_query_values ~readably values ^ ")"
   | Vector values -> "[" ^ print_query_values ~readably values ^ "]"
   | Set values -> "#{" ^ print_query_values ~readably values ^ "}"

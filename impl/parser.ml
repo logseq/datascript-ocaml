@@ -365,7 +365,7 @@ let rec query_form_of_value = function
   | Uuid value -> QueryFormTagged ("uuid", QueryFormString value)
   | Instant value -> QueryFormInt value
   | Regex value -> QueryFormTagged ("regex", QueryFormString value)
-  | Ref entity_id -> QueryFormInt (Int64.of_int entity_id)
+  | Ref entity_id -> QueryFormInt entity_id
   | TxRef
   | Ref_to _ ->
     invalid_arg "cannot convert value to query form"
@@ -713,10 +713,7 @@ let parse_pattern_term
      | QueryFormSymbol symbol when source_position && is_query_source_symbol symbol ->
        QSource (query_source_name symbol)
      | QueryFormSymbol symbol -> QValue (Symbol symbol)
-     | QueryFormInt entity_id when entity_position ->
-       (match Util.int64_to_int entity_id with
-        | Some entity_id -> QEntity entity_id
-        | None -> QValue (Int64 entity_id))
+     | QueryFormInt entity_id when entity_position -> QEntity entity_id
      | QueryFormKeyword attr when attr_position -> QAttr attr
      | QueryFormKeyword value -> QValue (Keyword value)
      | QueryFormInt value -> QValue (Int64 value)

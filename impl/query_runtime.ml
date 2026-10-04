@@ -295,7 +295,7 @@ end) = struct
   
   let query_result_input_string = function
     | Result_value value -> edn_string_of_value value
-    | Result_entity entity_id -> string_of_int entity_id
+    | Result_entity entity_id -> Int64.to_string entity_id
     | Result_attr attr -> ":" ^ attr
     | Result_db _ -> "<db>"
     | Result_pull _ -> "<pull>"

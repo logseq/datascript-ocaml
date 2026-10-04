@@ -7,7 +7,7 @@ let assert_equal_query label expected actual =
 
 let test_data_readers__test_db_reader () =
   let db =
-    Data_readers.db_from_reader_string
+    db_from_reader_string
       "#datascript/DB {:schema {:email {:db/unique :db.unique/identity}
                                 :friend {:db/valueType :db.type/ref}}
                        :datoms [[1 :email \"ivan@example.com\"]
@@ -22,7 +22,7 @@ let test_data_readers__test_db_reader () =
 let test_data_readers__test_datom_reader_in_tx_data () =
   let db =
     empty_db ()
-    |> db_with (Data_readers.tx_data_of_edn_form (read_edn "[#datascript/Datom [1 :name \"Ivan\" 536870913 true]]"))
+    |> db_with (tx_data_of_edn_form (read_edn "[#datascript/Datom [1 :name \"Ivan\" 536870913 true]]"))
   in
   assert_equal_query
     "data reader turns tagged datoms into transaction data"

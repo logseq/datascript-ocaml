@@ -1,417 +1,1195 @@
-include module type of Datascript_types
+(** DataScript's immutable in-memory database engine.
 
-module Built_ins : sig
-  type regex
+    The public surface is organized into small focused modules. The
+    implementation [.ml] follows upstream DataScript's model; this
+    interface exposes an idiomatic, type-safe, evolvable API:
 
-  val map_get_value : (value * value) list -> value -> value option
-  val value_get : value -> value -> value option
-  val value_count : value -> int option
-  val value_has_count : int -> value -> bool
-  val value_is_not_empty : value -> bool
-  val matches_value_predicate : value_predicate -> value -> bool
-  val matches_numeric_predicate : numeric_predicate -> value -> bool
-  val matches_comparison_predicate : comparison_predicate -> int -> bool
-  val comparison_chain_matches : comparison_predicate -> value list -> bool
-  val all_values_equal : value list -> bool
-  val eval_arithmetic : arithmetic_op -> value list -> value option
-  val normalized_comparison : int -> int
-  val extremum_value : extremum_op -> value -> value list -> value
-  val string_starts_with : string -> string -> bool
-  val string_ends_with : string -> string -> bool
-  val string_index_of : string -> string -> int option
-  val string_includes : string -> string -> bool
-  val string_last_index_of : string -> string -> int option
-  val is_ascii_whitespace : char -> bool
-  val string_is_blank : string -> bool
-  val split_string : string -> string -> string list
-  val split_string_limited : string -> string -> int -> string list
-  val split_lines : string -> string list
-  val string_of_query_value : value -> string
-  val escaped_string_literal : string -> string
-  val print_query_value : readably:bool -> value -> string
-  val print_query_values : readably:bool -> value list -> string
-  val collection_string_values : value -> string list option
-  val replace_string : ?first_only:bool -> string -> string -> string -> string
-  val compile_regex : string -> regex
-  val validate_regex : string -> unit
-  val replace_regex : ?first_only:bool -> string -> string -> string -> string
-  val string_escape_replacement : (value * value) list -> char -> string option
-  val escape_string : string -> (value * value) list -> string
-  val regex_pattern_of_result : query_result -> string option
-  val regex_find : string -> string -> string option
-  val regex_matches : string -> string -> string option
-  val regex_seq : string -> string -> string list
-  val split_regex : string -> string -> string list
-  val split_regex_limited : string -> string -> int -> string list
-  val reverse_string : string -> string
-  val capitalize_string : string -> string
-  val trim_left_with : (char -> bool) -> string -> string
-  val trim_right_with : (char -> bool) -> string -> string
-  val trim_with : (char -> bool) -> string -> string
-  val is_newline : char -> bool
-  val aggregate_result : aggregate -> query_result list -> query_result
-  val value_is_truthy : value -> bool
-  val boolean_and_value : value list -> value
-  val boolean_or_value : value list -> value
-  val split_at : int -> 'a list -> 'a list * 'a list
-  val values_equal : value -> value -> bool
-  val type_keyword_of_value : value -> string
-  val value_contains : value -> value -> bool
-  val range_values : int64 -> int64 -> int64 -> int64 list
+    - {!module:Entity_id}, {!module:Tx_id}, {!module:Attr},
+      {!module:Var}, {!module:Source}, {!module:Rule_name},
+      {!module:Symbol} and {!module:Ident}: semantic wrapper types for
+      the different identifier domains. Values are created with
+      [Module.of_int]/[Module.of_string] and read back with
+      [(x :> int)]/[(x :> string)] or [Module.to_int]/[Module.to_string],
+      so unrelated domains cannot be mixed accidentally.
+    - {!module:Db}, {!module:Conn}, {!module:Entity}: the abstract
+      [db], [conn] and [entity] types and their operations.
+    - {!module:Schema}: the abstract [schema_attr] record plus the
+      {!val:Schema.spec} smart constructor, which makes the invalid
+      tuple combinations of the flat record unrepresentable.
+    - {!module:Tx}: transaction data constructors.
+    - {!module:Pull}: the pull API.
+    - {!module:Query}: [q] and friends, plus {!val:Query.v} and
+      accessors over the abstract [query] type.
+    - {!module:Clause}: a small clause AST — [view] decomposes a
+      clause into a semantic {!clause_view}, and [call]/[pattern]/...
+      build clauses through the builtin registry.
+    - {!module:Storage}: durable storage through the bytes-level
+      {!module-type:Storage.S} backend interface.
+    - {!module:Edn}: the EDN reader.
+    - {!module:Compat}: deprecated [_bang]/[is_*]/async aliases kept
+      for compatibility.
+    - {!module:Internal}: the lower-level implementation modules, for
+      codecs, tests and ports. Not a stable public API.
+
+    Types [db], [entity], [conn], [storage], [schema_attr], [query],
+    [query_clause] and [query_input] are abstract: they are created
+    and decomposed through the modules above. *)
+
+(** {1 Primitive domains} *)
+
+module Entity_id : sig
+  (** The domain of entity identifiers (64-bit). *)
+
+  type t = private int64
+
+  val of_int64 : int64 -> t
+  val to_int64 : t -> int64
+  val of_int : int -> t
+  val to_int : t -> int
+  val equal : t -> t -> bool
+  val compare : t -> t -> int
 end
 
-module Data_readers : sig
-  val attr_of_edn_key : query_form -> attr
-  val tx_attr_of_edn_key : query_form -> attr
-  val tx_op_name_of_edn_form : query_form -> string
-  val is_edn_attr_key : query_form -> bool
-  val keyword_name_of_form : query_form -> string
-  val entity_ref_of_edn_form : query_form -> entity_ref
-  val tx_data_of_edn_form : query_form -> tx_op list
-  val parse_tx_data_string : string -> tx_op list
-  val schema_of_edn_form : query_form -> schema
-  val schema_of_edn_string : string -> schema
-  val db_from_reader_form : query_form -> db
-  val db_from_reader_string : string -> db
+
+(** {1 Internal modules}
+
+    Lower-level implementation modules exposed for the in-repo codec,
+    parser and test ports. These are the full implementation
+    signatures — subject to change between releases. Prefer the
+    module-level API above. *)
+
+module Internal : sig
+  module PSet : module type of Persistent_sorted_set
+  module Built_ins : module type of Built_ins
+  module Util : module type of Util
+  module Lru : module type of Lru
+  module Lookup_refs : module type of Lookup_refs
+  module Schema : module type of Schema
+  module Schema_access : module type of Schema_access
+  module Serialize : module type of Serialize
+  module Conn : module type of Conn
+  module Db : module type of Db
+  module Entity : module type of Entity
+  module Storage : module type of Storage
+  module Transact : module type of Transact
+  module Transact_datoms : module type of Transact_datoms
+  module Db_access : module type of Db_access
+  module Entity_refs : module type of Entity_refs
+  module Query : module type of Query
+  module Query_runtime : module type of Query_runtime
+  module Query_where : module type of Query_where
+  module Query_api : module type of Query_api
+  module Query_eval : module type of Query_eval
+  module Parser : module type of Parser
+  val default_parser_context : Parser.query_context
+  val default_pull_parser_context : Pull_parser.context
+  val default_pull_api_context : Pull_api.context
+  val default_data_readers_context : Data_readers.context
+  val default_entity_context : Entity.context
+  val default_storage_tail_context : Storage.tail_context
+  val default_storage_restore_context : Storage.restore_context
+  val empty_db :
+    ?schema:Datascript_types.schema ->
+    ?storage:Datascript_types.storage ->
+    unit ->
+    Datascript_types.db
+  val init_db :
+    ?schema:Datascript_types.schema ->
+    ?storage:Datascript_types.storage ->
+    Datascript_types.datom list ->
+    Datascript_types.db
+  val db_with : Datascript_types.tx_op list -> Datascript_types.db -> Datascript_types.db
+  val create_conn :
+    ?schema:Datascript_types.schema ->
+    ?storage:Datascript_types.storage ->
+    unit ->
+    Conn.t
+  val conn_from_datoms :
+    ?schema:Datascript_types.schema ->
+    ?storage:Datascript_types.storage ->
+    Datascript_types.datom list ->
+    Conn.t
+  val conn_db : Conn.t -> Datascript_types.db
+  val db_hash : Datascript_types.db -> int
+  val q :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    Datascript_types.query ->
+    Datascript_types.query_result list list
+  val q_string :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    string ->
+    Datascript_types.query_result list list
+  val q_with :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    string list ->
+    Datascript_types.query ->
+    Datascript_types.query_result list list
+  val q_with_string :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    string list ->
+    string ->
+    Datascript_types.query_result list list
+  val q_sources :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    (string * Datascript_types.query_source) list ->
+    Datascript_types.query ->
+    Datascript_types.query_result list list
+  val q_sources_string :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    (string * Datascript_types.query_source) list ->
+    string ->
+    Datascript_types.query_result list list
+  val q_return :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    Datascript_types.query_return ->
+    Datascript_types.query ->
+    Datascript_types.query_output
+  val q_return_string :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    string ->
+    Datascript_types.query_output
+  val q_return_map :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    Datascript_types.query_return ->
+    Datascript_types.query_return_map ->
+    Datascript_types.query ->
+    Datascript_types.query_output
+  val q_return_map_string :
+    ?inputs:Datascript_types.query_arg list ->
+    Datascript_types.db ->
+    string ->
+    Datascript_types.query_output
+  val datoms :
+    Datascript_types.db ->
+    Datascript_types.index ->
+    ?e:Datascript_types.entity_id ->
+    ?a:Datascript_types.attr ->
+    ?v:Datascript_types.value ->
+    ?tx:Datascript_types.tx ->
+    unit ->
+    Datascript_types.datom Seq.t
+  val entid :
+    Datascript_types.db ->
+    Datascript_types.attr ->
+    Datascript_types.value ->
+    Datascript_types.entity_id option
+  val entid_ref :
+    Datascript_types.db ->
+    Datascript_types.entity_ref ->
+    Datascript_types.entity_id option
+  val schema : Datascript_types.db -> Datascript_types.schema
+  val with_tx :
+    ?tx_meta:Datascript_types.tx_meta ->
+    Datascript_types.db ->
+    Datascript_types.tx_op list ->
+    Datascript_types.tx_report
+  val transact :
+    ?tx_meta:Datascript_types.tx_meta ->
+    Datascript_types.db ->
+    Datascript_types.tx_op list ->
+    Datascript_types.tx_report
+  val transact_conn :
+    ?tx_meta:Datascript_types.tx_meta ->
+    Conn.t ->
+    Datascript_types.tx_op list ->
+    Datascript_types.tx_report
+  val pull :
+    ?visitor:(Datascript_types.pull_visit -> unit) ->
+    Datascript_types.db ->
+    Datascript_types.pull_selector list ->
+    Datascript_types.entity_ref ->
+    Datascript_types.pulled_entity option
+  val pull_many :
+    ?visitor:(Datascript_types.pull_visit -> unit) ->
+    Datascript_types.db ->
+    Datascript_types.pull_selector list ->
+    Datascript_types.entity_ref list ->
+    Datascript_types.pulled_entity option list
+  val entity :
+    Datascript_types.db ->
+    Datascript_types.entity_ref ->
+    Datascript_types.entity option
+  val parse_query : Datascript_types.query_form -> Datascript_types.query
+  val parse_query_string : string -> Datascript_types.query
+  val serializable : Datascript_types.db -> Datascript_types.serializable_db
+  val from_serializable : Datascript_types.serializable_db -> Datascript_types.db
+  val store : ?storage:Datascript_types.storage -> Datascript_types.db -> Datascript_types.db
+  val store_tail : Datascript_types.storage -> Datascript_types.datom list list -> unit
+  val memory_storage : unit -> Datascript_types.storage
+  val file_storage : string -> Datascript_types.storage
+  val storage_addresses : Datascript_types.storage -> Datascript_types.storage_address list
+  val restore : Datascript_types.storage -> Datascript_types.db option
+  val tail_compaction_threshold : Datascript_types.db -> int
+  val tail_datom_count : Datascript_types.datom list list -> int
+  val restore_root_snapshot :
+    Datascript_types.storage -> Datascript_types.serializable_db option
+  val restore_tail_groups : Datascript_types.storage -> Datascript_types.datom list list
+  val db_with_tail : Datascript_types.db -> Datascript_types.datom list list -> Datascript_types.db
+  val collect_garbage : Datascript_types.storage -> unit
+  val datom :
+    ?tx:Datascript_types.tx ->
+    ?added:bool ->
+    e:Datascript_types.entity_id ->
+    a:Datascript_types.attr ->
+    v:Datascript_types.value ->
+    unit ->
+    Datascript_types.datom
+  val filter :
+    Datascript_types.db ->
+    (Datascript_types.db -> Datascript_types.datom -> bool) ->
+    Datascript_types.db
+  val is_reverse_ref : Datascript_types.attr -> bool
+  val reverse_ref : Datascript_types.attr -> Datascript_types.attr
+  val settings :
+    Datascript_types.db -> (Datascript_types.attr * Datascript_types.value) list
+  val restore_conn : Datascript_types.storage -> Conn.t option
+  val conn_from_db : Datascript_types.db -> Conn.t
+  module Pull_parser : module type of Pull_parser
+  module Pull_api : module type of Pull_api
+  module Data_readers : module type of Data_readers
+  module Upsert : module type of Upsert
+  module Datascript_types : module type of Datascript_types
 end
 
-module Conn : sig
-  type t
 
-  type creation_context =
-    { empty_db : ?schema:schema -> ?storage:storage -> unit -> db
-    ; init_db : ?schema:schema -> ?storage:storage -> datom list -> db
-    ; store : ?storage:storage -> db -> db
-    }
+module Tx_id : sig
+  (** The domain of transaction ids ([datom.tx], 64-bit). *)
 
-  type schema_context =
-    { store : ?storage:storage -> db -> db
-    ; with_schema : db -> schema -> db
-    }
+  type t = private int64
 
-  type restore_context =
-    { restore : storage -> db option
-    ; restore_tail_groups : storage -> datom list list
-    }
-
-  type transact_context =
-    { store : ?storage:storage -> db -> db
-    ; store_tail : storage -> datom list list -> unit
-    ; storage_tail_datom_count : datom list list -> int
-    ; storage_tail_compaction_threshold : db -> int
-    ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
-    }
-
-  type reset_context =
-    { store : ?storage:storage -> db -> db
-    ; datoms : db -> datom list
-    }
-
-  val create : creation_context -> ?schema:schema -> ?storage:storage -> unit -> t
-  val from_db : creation_context -> db -> t
-  val from_datoms : creation_context -> ?schema:schema -> ?storage:storage -> datom list -> t
-  val db : t -> db
-  val update_db : t -> (db -> db) -> unit
-  val storage_tail : t -> datom list list
-  val is_conn : t -> bool
-  val listen : t -> string -> (tx_report -> unit) -> string
-  val listen_auto : t -> (tx_report -> unit) -> string
-  val unlisten : t -> string -> unit
-  val reset_schema : schema_context -> t -> schema -> db
-  val restore : restore_context -> storage -> t option
-  val transact : transact_context -> ?tx_meta:tx_meta -> t -> tx_op list -> tx_report
-  val reset : reset_context -> ?tx_meta:tx_meta -> t -> db -> db
+  val of_int64 : int64 -> t
+  val to_int64 : t -> int64
+  val of_int : int -> t
+  val to_int : t -> int
+  val equal : t -> t -> bool
+  val compare : t -> t -> int
 end
 
-type conn = Conn.t
+type attr = string
+(** Attribute names (["db/ident"], [":user/name"], ...). *)
+
+type var = string
+(** Query variable names, interned without their [?] sigil: ["?e"] and
+    ["e"] denote the same variable. *)
+
+type source_var = string
+(** Source aliases, interned without their [$] sigil; the default
+    source is the bare name ["$"]. *)
+
+type rule_name = string
+(** Rule names ([parent], [ancestor], ...). *)
+
+type sym = string
+(** Function and callable names ([str], [my-fn], ...). *)
+
+type ident = string
+(** [:db/ident] values ([":status/done"], ...). *)
+
+type entity_id = Entity_id.t
+type tx = Tx_id.t
+
+(** [eid] is {!Entity_id.of_int64}; [txid] is {!Tx_id.of_int64}. *)
+
+val eid : int64 -> entity_id
+val txid : int64 -> tx
+
+(** {1 Values, datoms and schema} *)
+
+type cardinality =
+  | One
+  | Many
+
+type unique =
+  | Value
+  | Identity
+
+type value_type =
+  | RefType
+  | TupleType
+  | StringType
+  | KeywordType
+  | NumberType
+  | UuidType
+  | InstantType
+
+type value =
+  | Nil
+  | Int64 of int64
+  | Float of float
+  | String of string
+  | Symbol of string
+  | Bool of bool
+  | Keyword of string
+  | Uuid of string
+  | Instant of int64
+  | Regex of string
+  | Ref of entity_id
+  | List of value list
+  | Vector of value list
+  | Map of (value * value) list
+  | Set of value list
+  | Tuple of value option list
+  | TxRef
+  | Ref_to of entity_ref
+
+and entity_ref =
+  | Entity_id of entity_id
+  | Temp_id of string
+  | CurrentTx
+  | Ident of string
+  | Lookup_ref of attr * value
+
+(** A tuple attribute spec: either a homogeneous composite of named
+    attributes ([:db/tupleAttrs]) or a fixed-type tuple
+    ([:db/tupleTypes]). *)
+
+type tuple_spec =
+  | Tuple_attrs of attr list
+  | Tuple_types of value_type list
+
+type value_spec =
+  | Scalar_type of value_type
+  | Tuple_type of tuple_spec
+
+type schema_attr
+
+type schema = (attr * schema_attr) list
+
+type datom =
+  { e : entity_id
+  ; a : attr
+  ; v : value
+  ; tx : tx
+  ; added : bool
+  }
+
+(** The three maintained indexes. *)
+
+type index =
+  | Eavt
+  | Aevt
+  | Avet
+
+type serializable_db =
+  { serializable_schema : schema
+  ; serializable_datoms : datom list
+  ; serializable_max_eid : entity_id
+  ; serializable_max_tx : tx
+  }
+
+type storage_address = string
+type storage_payload
+
+type db
+
+type conn
+
+type entity
+
+type storage
+
+(** {1 Transactions} *)
+
+type tx_value =
+  | One_value of value
+  | Many_values of value list
+  | One_entity of tx_entity
+  | Many_entities of tx_entity list
+
+and tx_entity =
+  { db_id : entity_ref option
+  ; attrs : (attr * tx_value) list
+  }
+
+type tx_op =
+  | Add of entity_ref * attr * value
+  | Retract of entity_ref * attr * value option
+  | RetractEntity of entity_ref
+  | RetractAttr of entity_ref * attr
+  | CompareAndSet of entity_ref * attr * value option * value
+  | Entity of tx_entity
+  | Raw_datom of datom
+  | InstallTxFn of entity_ref * (db -> value list -> tx_op list)
+  | CallIdent of entity_ref * value list
+  | Call of (db -> tx_op list)
+
+type tx_meta = (attr * value) list
+
+type tx_report =
+  { db_before : db
+  ; db_after : db
+  ; tx_data : datom list
+  ; tempids : (string * entity_id) list
+  ; tx_meta : tx_meta
+  }
+
+module Tx : sig
+  (** Constructors for transaction operations ([tx_op]). *)
+
+  val add : entity_ref -> attr -> value -> tx_op
+  val retract : entity_ref -> attr -> value -> tx_op
+  val retract_attr : entity_ref -> attr -> tx_op
+  val retract_entity : entity_ref -> tx_op
+  val compare_and_set : entity_ref -> attr -> value option -> value -> tx_op
+  val entity : tx_entity -> tx_op
+  val raw_datom : datom -> tx_op
+  val install_tx_fn : entity_ref -> (db -> value list -> tx_op list) -> tx_op
+  val call_ident : entity_ref -> value list -> tx_op
+  val call : (db -> tx_op list) -> tx_op
+end
+
+(** {1 EDN} *)
+
+type query_form =
+  | QueryFormNil
+  | QueryFormBool of bool
+  | QueryFormInt of int64
+  | QueryFormFloat of float
+  | QueryFormString of string
+  | QueryFormKeyword of string
+  | QueryFormSymbol of string
+  | QueryFormVector of query_form list
+  | QueryFormList of query_form list
+  | QueryFormSet of query_form list
+  | QueryFormTagged of string * query_form
+  | QueryFormMap of (query_form * query_form) list
+
+module Edn : sig
+  (** The EDN reader, mirroring upstream [datascript.edn]. *)
+
+  type t = query_form
+
+  val read : string -> t
+  val read_string : string -> t
+  val attr_of_key : t -> attr
+  val tx_attr_of_key : t -> attr
+  val tx_op_name : t -> string
+  val is_attr_key : t -> bool
+  val keyword_name : t -> string
+  val entity_ref : t -> entity_ref
+  val to_tx_data : t -> tx_op list
+  val to_schema : t -> schema
+  val to_db : t -> db
+end
+
+val read_edn : string -> query_form
+val parse_tx_data_string : string -> tx_op list
+val schema_of_edn_string : string -> schema
+val db_from_reader_string : string -> db
+val attr_of_edn_key : query_form -> attr
+val tx_attr_of_edn_key : query_form -> attr
+val tx_op_name_of_edn_form : query_form -> string
+val is_edn_attr_key : query_form -> bool
+val keyword_name_of_form : query_form -> string
+val entity_ref_of_edn_form : query_form -> entity_ref
+val tx_data_of_edn_form : query_form -> tx_op list
+val schema_of_edn_form : query_form -> schema
+val db_from_reader_form : query_form -> db
+
+(** {1 Pull} *)
+
+type pulled_entity =
+  { pulled_id : entity_id
+  ; pulled_attrs : (pull_key * pulled_value) list
+  }
+
+and pull_key = value
+
+and pulled_value =
+  | Pulled_scalar of value
+  | Pulled_many of pulled_value list
+  | Pulled_entity of pulled_entity
+
+type pull_visit =
+  | PullVisitAttr of entity_id * attr
+  | PullVisitWildcard of entity_id
+  | PullVisitReverse of attr * entity_id
+
+type pull_selector =
+  | Pull_id
+  | Pull_wildcard
+  | Pull_attr of attr
+  | Pull_attr_default of attr * value
+  | Pull_attr_limit of attr * int
+  | Pull_attr_unlimited of attr
+  | Pull_attr_xform of attr * (pulled_value -> pulled_value)
+  | Pull_attr_default_xform of attr * value * (pulled_value -> pulled_value)
+  | Pull_ref of attr * pull_selector list
+  | Pull_ref_default of attr * pull_selector list * value
+  | Pull_ref_limit of attr * pull_selector list * int
+  | Pull_ref_unlimited of attr * pull_selector list
+  | Pull_ref_xform of attr * pull_selector list * (pulled_value -> pulled_value)
+  | Pull_recursive_ref of attr * pull_selector list * int option
+  | Pull_reverse_ref of attr * pull_selector list
+  | Pull_reverse_ref_default of attr * pull_selector list * value
+  | Pull_reverse_ref_limit of attr * pull_selector list * int
+  | Pull_reverse_ref_unlimited of attr * pull_selector list
+  | Pull_reverse_ref_xform of attr * pull_selector list * (pulled_value -> pulled_value)
+  | Pull_as of pull_selector * pull_key
+
+module Pull : sig
+  type pattern = pull_selector list
+
+  val parse : db -> query_form -> pattern
+  val parse_string : db -> string -> pattern
+  val pull :
+    ?visitor:(pull_visit -> unit) -> db -> pattern -> entity_ref -> pulled_entity option
+  val pull_string :
+    ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
+  val pull_many :
+    ?visitor:(pull_visit -> unit) ->
+    db ->
+    pattern ->
+    entity_ref list ->
+    pulled_entity option list
+  val pull_many_string :
+    ?visitor:(pull_visit -> unit) ->
+    db ->
+    string ->
+    entity_ref list ->
+    pulled_entity option list
+end
+
+val parse_pull_pattern : db -> query_form -> pull_selector list
+val parse_pull_pattern_string : db -> string -> pull_selector list
+val pull :
+  ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref -> pulled_entity option
+val pull_string :
+  ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
+val pull_many :
+  ?visitor:(pull_visit -> unit) ->
+  db ->
+  pull_selector list ->
+  entity_ref list ->
+  pulled_entity option list
+val pull_many_string :
+  ?visitor:(pull_visit -> unit) ->
+  db ->
+  string ->
+  entity_ref list ->
+  pulled_entity option list
+
+(** {1 Queries} *)
+
+type query_term =
+  | QVar of var
+  | QEntity of entity_id
+  | QIdent of ident
+  | QLookupRef of attr * value
+  | QAttr of attr
+  | QValue of value
+  | QSource of source_var
+  | QWildcard
+
+type query_result =
+  | Result_entity of entity_id
+  | Result_attr of attr
+  | Result_value of value
+  | Result_db of db
+  | Result_pull of pulled_entity
+
+type query_source =
+  | Db_source of db
+  | Relation_source of query_result list list
+
+type value_predicate =
+  | NumberValue
+  | IntegerValue
+  | StringValue
+  | BooleanValue
+  | KeywordValue
+
+type numeric_predicate =
+  | ZeroNumber
+  | PositiveNumber
+  | NegativeNumber
+  | EvenInteger
+  | OddInteger
+
+type comparison_predicate =
+  | LessThan
+  | GreaterThan
+  | LessOrEqual
+  | GreaterOrEqual
+
+type equality_predicate =
+  | EqualValues
+  | NotEqualValues
+
+type arithmetic_op =
+  | AddNumbers
+  | SubtractNumbers
+  | MultiplyNumbers
+  | DivideNumbers
+  | IncrementNumber
+  | DecrementNumber
+  | QuotientNumbers
+  | RemainderNumbers
+  | ModuloNumbers
+
+type extremum_op =
+  | MinimumValue
+  | MaximumValue
+
+type boolean_predicate =
+  | TrueValue
+  | FalseValue
+  | NilValue
+  | SomeValue
+
+type query_clause
+
+type input_binding =
+  | Bind_scalar of var
+  | Bind_ignore
+  | Bind_collection of input_binding
+  | Bind_tuple of input_binding list
+
+(** A builtin or dynamic call: the head [call_fn] resolved through the
+    builtin registry applied to [call_args]. *)
+
+type call =
+  { call_fn : sym
+  ; call_args : query_term list
+  }
+
+type pattern =
+  { pattern_e : query_term
+  ; pattern_a : query_term
+  ; pattern_v : query_term
+  ; pattern_tx : query_term option
+  ; pattern_op : query_term option
+  }
+
+(** The semantic shape of a clause: builtin calls appear as named
+    {!Pred_view}/{!Fn_view} calls whatever internal representation
+    they use. Source-qualified clauses decompose as
+    [Source_view (src, inner)]. *)
+
+type clause_view =
+  | Pattern_view of pattern
+  | Relation_view of query_term list
+  | Pred_view of call
+  | Fn_view of call * input_binding
+  | Not_view of query_clause list
+  | Not_join_view of var list * query_clause list
+  | Or_view of query_clause list list
+  | Or_join_view of var list * query_clause list list
+  | Or_join_required_view of var list * var list * query_clause list list
+  | Rule_view of rule_name * query_term list
+  | Source_view of source_var * query_clause
+
+module Clause : sig
+  type t = query_clause
+
+  (** [view clause] decomposes a clause into its semantic shape. *)
+
+  val view : t -> clause_view
+
+  (** [of_form form] parses a clause from its EDN form. *)
+
+  val of_form : query_form -> t
+
+  val pattern :
+    ?tx:query_term ->
+    ?op:query_term ->
+    ?src:source_var ->
+    query_term ->
+    query_term ->
+    query_term ->
+    t
+
+  (** [relation terms] is a relation clause [[terms ...]] — the
+      EDN form [[?a ?b]]. *)
+
+  val relation : ?src:source_var -> query_term list -> t
+
+  (** [rule_call name args] is the rule invocation [(name args...)]. *)
+
+  val rule_call : ?src:source_var -> rule_name -> query_term list -> t
+
+  (** [call fn args] builds the clause for [(fn args...)]: the head is
+      resolved through the builtin registry, so builtins produce the
+      same clause as parsing and unknown heads become dynamic calls.
+      [~binding] adds the output binding, producing a function call
+      clause. *)
+
+  val call : ?src:source_var -> ?binding:input_binding -> sym -> query_term list -> t
+
+  (** [pred fn args] is [call fn args] restricted to predicate
+      position. *)
+
+  val pred : ?src:source_var -> sym -> query_term list -> t
+
+  (** [fn fn args binding] is [call fn args ~binding]. *)
+
+  val fn : ?src:source_var -> sym -> query_term list -> input_binding -> t
+
+  val not_ : ?src:source_var -> t list -> t
+  val not_join : ?src:source_var -> var list -> t list -> t
+  val or_ : ?src:source_var -> t list list -> t
+  val or_join : ?src:source_var -> var list -> t list list -> t
+  val or_join_required :
+    ?src:source_var -> required:var list -> var list -> t list list -> t
+  val missing : ?src:source_var -> query_term -> query_term -> t
+
+  (** Desugared clause shapes.  The remaining builders construct the
+      specific clauses the builtin registry desugars to; [?src] wraps
+      them in a source-scoped clause.  Bound output names are [var]s. *)
+
+  val get_else :
+    ?src:source_var ->
+    query_term ->
+    query_term ->
+    query_term ->
+    var ->
+    t
+  val get_some :
+    ?src:source_var -> query_term -> query_term list -> var -> var -> t
+  val get_value : ?src:source_var -> query_term -> query_term -> var -> t
+  val get_default_value :
+    ?src:source_var ->
+    query_term ->
+    query_term ->
+    query_term ->
+    var ->
+    t
+  val count_value : ?src:source_var -> query_term -> var -> t
+  val empty_value : ?src:source_var -> query_term -> t
+  val not_empty_value : ?src:source_var -> query_term -> t
+  val contains_value : ?src:source_var -> query_term -> query_term -> t
+  val value_pred : ?src:source_var -> value_predicate -> query_term -> t
+  val numeric_pred : ?src:source_var -> numeric_predicate -> query_term -> t
+  val boolean_pred : ?src:source_var -> boolean_predicate -> query_term -> t
+  val boolean_not_pred : ?src:source_var -> query_term -> t
+  val boolean_and_pred : ?src:source_var -> query_term list -> t
+  val boolean_or_pred : ?src:source_var -> query_term list -> t
+  val differ_pred : ?src:source_var -> query_term list -> t
+  val identical_pred : ?src:source_var -> query_term -> query_term -> t
+  val comparison :
+    ?src:source_var ->
+    comparison_predicate ->
+    query_term ->
+    query_term ->
+    t
+  val comparison_n :
+    ?src:source_var -> comparison_predicate -> query_term list -> t
+  val equality : ?src:source_var -> equality_predicate -> query_term list -> t
+  val arithmetic :
+    ?src:source_var -> arithmetic_op -> query_term list -> var -> t
+  val custom_pred :
+    ?src:source_var ->
+    sym ->
+    query_term list ->
+    (query_result list -> bool) ->
+    t
+
+  (** [custom_fn name args out_vars f] binds [f] applied to the resolved
+      [args] into [out_vars]. *)
+
+  val custom_fn :
+    ?src:source_var ->
+    sym ->
+    query_term list ->
+    var list ->
+    (query_result list -> query_result list option) ->
+    t
+end
+
+type aggregate =
+  | Count
+  | CountDistinct
+  | Distinct
+  | Sum
+  | Avg
+  | Median
+  | Variance
+  | Stddev
+  | Min
+  | Max
+  | MinN of int
+  | MaxN of int
+  | Rand
+  | RandN of int
+  | Sample of int
+  | MinNVar of var
+  | MaxNVar of var
+  | RandNVar of var
+  | SampleVar of var
+  | CustomVar of var
+  | Custom of (query_result list -> query_result)
+
+type find_spec =
+  | Find_var of var
+  | Find_pull of var * pull_selector list
+  | Find_pull_form of var * query_form
+  | Find_pull_var of var * var
+  | Find_pull_source of source_var * var * pull_selector list
+  | Find_pull_source_form of source_var * var * query_form
+  | Find_pull_source_var of source_var * var * var
+  | Find_aggregate of aggregate * query_term list
+
+(** Declaration-only [:in] elements — the shape a query declares.
+    Runtime values bound at evaluation time use {!query_arg}. *)
+
+type input_spec =
+  | Spec_source of source_var
+  | Spec_scalar of var
+  | Spec_collection of var
+  | Spec_collection_ignore
+  | Spec_nested_collection of input_binding
+  | Spec_tuple of var list
+  | Spec_relation of var list
+  | Spec_nested_tuple of input_binding list
+  | Spec_nested_relation of input_binding list
+  | Spec_rules
+  | Spec_ignore
+
+type query_rule =
+  { rule_name : rule_name
+  ; rule_params : var list
+  ; rule_body : query_clause list
+  }
+
+(** A runtime argument bound to an [:in] spec when evaluating a
+    query. *)
+
+type query_arg =
+  | Arg_scalar of query_result
+  | Arg_entity_ref of entity_ref
+  | Arg_collection of query_result list
+  | Arg_tuple of query_result list
+  | Arg_relation of query_result list list
+  | Arg_predicate of (query_result list -> bool)
+  | Arg_function of (query_result list -> query_result list option)
+  | Arg_aggregate of (query_result list -> query_result)
+  | Arg_rules of query_rule list
+
+type query
+
+type query_return =
+  | Return_relation
+  | Return_collection
+  | Return_tuple
+  | Return_scalar
+
+type query_return_map =
+  | Return_keys of string list
+  | Return_syms of string list
+  | Return_strs of string list
+
+type query_output =
+  | Query_relation of query_result list list
+  | Query_collection of query_result list
+  | Query_tuple of query_result list option
+  | Query_scalar of query_result option
+  | Query_relation_maps of (value * query_result) list list
+  | Query_tuple_map of (value * query_result) list option
+
+(** Bound runtime inputs produced by input application; kept abstract
+    and reachable through {!Internal}. *)
+
+type query_input
+
+module Query : sig
+  type t = query
+
+  (** [v find where] builds a query programmatically and
+      validates it exactly like the EDN parser. *)
+
+  val v :
+    ?in_:input_spec list ->
+    ?with_:var list ->
+    ?rules:query_rule list ->
+    find_spec list ->
+    query_clause list ->
+    t
+
+  (** Read-only accessors. *)
+
+  val find : t -> find_spec list
+  val where : t -> query_clause list
+  val inputs : t -> input_spec list
+  val with_ : t -> var list
+  val rules : t -> query_rule list
+
+  val of_form : query_form -> t
+  val of_string : string -> t
+  val q : ?inputs:query_arg list -> db -> t -> query_result list list
+  val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
+  val q_with : ?inputs:query_arg list -> db -> string list -> t -> query_result list list
+  val q_with_string :
+    ?inputs:query_arg list -> db -> string list -> string -> query_result list list
+  val q_sources :
+    ?inputs:query_arg list ->
+    db ->
+    (string * query_source) list ->
+    t ->
+    query_result list list
+  val q_sources_string :
+    ?inputs:query_arg list ->
+    db ->
+    (string * query_source) list ->
+    string ->
+    query_result list list
+  val q_return : ?inputs:query_arg list -> db -> query_return -> t -> query_output
+  val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
+  val q_return_map :
+    ?inputs:query_arg list -> db -> query_return -> query_return_map -> t -> query_output
+  val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
+end
+
+val parse_query : query_form -> query
+val parse_query_string : string -> query
+
+(** [parse_rules_string input] parses an EDN rules section ([[(name ?v) clause ...]]) *)
+
+val parse_rules_string : string -> query_rule list
+val parse_query_return : query_form -> query_return * query
+val parse_query_return_string : string -> query_return * query
+val parse_query_return_map : query_form -> query_return * query_return_map option * query
+val parse_query_return_map_string :
+  string -> query_return * query_return_map option * query
+val parse_query_return_map_string_with_pull_context :
+  ?default_pull_db:db ->
+  ?pull_db_for_source:(string -> db) ->
+  string ->
+  query_return * query_return_map option * query
+val parse_binding : query_form -> input_binding
+val parse_in : query_form -> input_spec list
+val parse_with : query_form -> string list
+val parse_find : query_form -> query_return * find_spec list
+
+val q : ?inputs:query_arg list -> db -> query -> query_result list list
+val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
+val q_with : ?inputs:query_arg list -> db -> string list -> query -> query_result list list
+val q_with_string :
+  ?inputs:query_arg list -> db -> string list -> string -> query_result list list
+val q_sources :
+  ?inputs:query_arg list ->
+  db ->
+  (string * query_source) list ->
+  query ->
+  query_result list list
+val q_sources_string :
+  ?inputs:query_arg list ->
+  db ->
+  (string * query_source) list ->
+  string ->
+  query_result list list
+val q_return : ?inputs:query_arg list -> db -> query_return -> query -> query_output
+val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
+val q_return_map :
+  ?inputs:query_arg list -> db -> query_return -> query_return_map -> query -> query_output
+val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
+
+(** {1 Database values} *)
 
 module Db : sig
+  type t = db
+
+  val empty : ?schema:schema -> ?storage:storage -> unit -> db
+  val init : ?schema:schema -> ?storage:storage -> datom list -> db
   val tx0 : tx
-  val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
-  val is_datom : datom -> bool
-  val value_equal : value -> value -> bool
-  val same_fact : datom -> datom -> bool
-  val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+  val datom : ?tx:tx -> ?added:bool -> entity_id -> attr -> value -> datom
+  val serializable : db -> serializable_db
+  val from_serializable : serializable_db -> db
+  val db_from_reader_string : string -> db
+  val filter : db -> (db -> datom -> bool) -> db
+  val unfiltered : db -> db
+  val with_ : tx_op list -> db -> db
+  val with_string : string -> db -> db
+  val with_tx : ?tx_meta:tx_meta -> db -> tx_op list -> tx_report
+  val with_tx_string : ?tx_meta:tx_meta -> db -> string -> tx_report
+  val schema : db -> schema
+  val with_schema : db -> schema -> db
+  val datoms :
+    ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
   val fold_datoms :
-    ('acc -> datom -> 'acc) ->
-    'acc ->
-    db ->
-    index ->
     ?e:entity_id ->
     ?a:attr ->
     ?v:value ->
     ?tx:tx ->
-    unit ->
+    ('acc -> datom -> 'acc) ->
+    'acc ->
+    db ->
+    index ->
     'acc
-  val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-  val find_datom : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
-  val find_datom_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
-  val seek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-  val seek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-  val rseek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-  val rseek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-  val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+  val datoms_ref :
+    ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+  val find_datom :
+    ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom option
+  val find_datom_ref :
+    ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom option
+  val seek_datoms :
+    ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+  val seek_datoms_ref :
+    ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+  val rseek_datoms :
+    ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+  val rseek_datoms_ref :
+    ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+  val index_range : ?start:value -> ?stop:value -> db -> attr -> datom Seq.t
+  val entid : db -> attr -> value -> entity_id option
+  val entid_ref : db -> entity_ref -> entity_id option
   val hash : db -> int
   val hash_cache_size : unit -> int
   val diff : db -> db -> datom list * datom list * datom list
   val squuid : ?msec:int64 -> unit -> value
   val squuid_time_millis : value -> int64
+  val is_unique : db -> attr -> bool
+  val is_unique_identity : db -> attr -> bool
+  val is_indexed : db -> attr -> bool
+  val is_component : db -> attr -> bool
+  val is_ref : db -> attr -> bool
+  val is_tuple : db -> attr -> bool
+  val tuple_attrs : db -> attr -> attr list option
+  val reverse_ref : attr -> attr
+  val is_datom : datom -> bool
+  val value_equal : value -> value -> bool
+  val same_fact : datom -> datom -> bool
+end
+
+module Conn : sig
+  type t = conn
+
+  val create : ?schema:schema -> ?storage:storage -> unit -> conn
+  val from_db : db -> conn
+  val from_datoms : ?schema:schema -> ?storage:storage -> datom list -> conn
+  val restore : storage -> conn option
+  val db : conn -> db
+  val update_db : conn -> (db -> db) -> unit
+  val storage_tail : conn -> datom list list
+  val listen : conn -> string -> (tx_report -> unit) -> string
+  val listen_auto : conn -> (tx_report -> unit) -> string
+  val unlisten : conn -> string -> unit
+  val reset : ?tx_meta:tx_meta -> conn -> db -> db
+  val reset_schema : conn -> schema -> db
+  val apply_report : conn -> tx_report -> tx_report
+  val transact : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
+  val transact_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
+  val transact_async : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 end
 
 module Entity : sig
-  type context =
-    { datoms_by_entity : db -> entity_id -> datom Seq.t
-    ; datoms_by_avet_ref : db -> attr -> entity_id -> datom Seq.t
-    ; all_datoms : db -> datom Seq.t
-    ; compare_value : value -> value -> int
-    ; cardinality : db -> attr -> cardinality
-    ; is_ref_attr : db -> attr -> bool
-    ; is_component : db -> attr -> bool
-    ; reverse_ref : attr -> attr
-    ; is_reverse_ref : attr -> bool
-    ; entity_id_of_ref : db -> entity_ref -> entity_id option
-    }
+  type t = entity
 
-  val entity : context -> db -> entity_ref -> entity option
-  val entity_attr_raw : entity -> attr -> tx_value option
-  val entity_attr : context -> entity -> attr -> tx_value option
-  val entity_attrs : entity -> (attr * tx_value) list
-  val entity_db : entity -> db
+  val id : entity -> entity_id
+  val of_ref : db -> entity_ref -> entity option
+  val attr : entity -> attr -> tx_value option
+  val attr_raw : entity -> attr -> tx_value option
+  val attrs : entity -> (attr * tx_value) list
+  val db : entity -> db
+  val equal : entity -> entity -> bool
+  val hash : entity -> int
+  val touch : entity -> entity
   val is_entity : entity -> bool
-  val entity_equal : entity -> entity -> bool
-  val entity_hash : entity -> int
-  val touch : context -> entity -> entity
-end
-
-module Lru : sig
-  type ('key, 'value) t
-  type ('key, 'value) cache
-
-  val create : int -> ('key, 'value) t
-  val assoc : 'key -> 'value -> ('key, 'value) t -> ('key, 'value) t
-  val find : 'key -> ('key, 'value) t -> 'value option
-  val cache : int -> ('key, 'value) cache
-  val cache_get : ('key, 'value) cache -> 'key -> (unit -> 'value) -> 'value
-end
-
-module Lookup_refs : sig
-  type context =
-    { is_unique : db -> attr -> bool
-    ; entid_in_datoms : db -> datom list -> attr -> value -> entity_id option
-    ; visible_datoms : db -> datom list
-    ; value_to_string : value -> string
-    }
-
-  val unresolved_message : context -> attr -> value -> string
-  val non_unique_message : context -> attr -> value -> string
-  val entity_id_in_datoms : ?strict_missing:bool -> context -> db -> datom list -> attr -> value -> entity_id option
-  val entity_id : ?strict_missing:bool -> context -> db -> attr -> value -> entity_id option
 end
 
 module Schema : sig
-  val validate_schema : schema -> schema
-  val schema_attr_by_name : schema -> attr -> schema_attr option
-  val schema_attr_is_ref : schema -> attr -> bool
-  val schema_attr_is_tuple : schema_attr option -> bool
-  val schema_attr_is_avet_accessible : schema -> attr -> bool
-  val schema_has_no_history : schema -> attr -> bool
+  type t = schema_attr
+
+  (** [spec] builds a [schema_attr]. Tuple attributes and tuple types
+      are expressed through {!tuple_spec}, so the invalid combinations
+      of the flat record cannot be constructed: a tuple spec implies
+      [valueType TupleType], and [tupleAttrs] and [tupleTypes] are
+      mutually exclusive. *)
+
+  val spec :
+    ?indexed:bool ->
+    ?value_type:value_type ->
+    ?cardinality:cardinality ->
+    ?unique:unique ->
+    ?is_component:bool ->
+    ?no_history:bool ->
+    ?doc:string ->
+    ?tuple:tuple_spec ->
+    unit ->
+    t
+
+  val validate : schema -> schema
+  val fields : attr list
+  val attr_by_name : schema -> attr -> schema_attr option
+  val cardinality : t -> cardinality
+  val unique : t -> unique option
+  val indexed : t -> bool
+  val is_component : t -> bool
+  val no_history : t -> bool
+  val doc : t -> string option
+  val value_type : t -> value_type option
+  val tuple_attrs : t -> attr list option
+  val tuple_types : t -> value_type list option
+  val tuple : t -> tuple_spec option
+  val is_ref : schema -> attr -> bool
+  val is_tuple : schema_attr option -> bool
+  val is_avet_accessible : schema -> attr -> bool
+  val has_no_history : schema -> attr -> bool
   val folded_datoms : int ref
-  val split_namespaced_attr : attr -> string option * string
-  val join_namespaced_attr : string option -> string -> attr
+  val split_namespaced : attr -> string option * string
+  val join_namespaced : string option -> string -> attr
   val is_reverse_ref : attr -> bool
   val reverse_ref : attr -> attr
 end
 
-module Serialize : sig
-  type context =
-    { next_db_uid : unit -> int
-    ; validate_schema : schema -> schema
-    ; normalize_datom_for_schema : schema -> datom -> datom
-    ; refresh_db_indexes : db -> db
-    }
-
-  val serializable : db -> serializable_db
-  val from_serializable : context -> serializable_db -> db
-end
-
 module Storage : sig
-  type tail_context =
-    { apply_group : db -> datom list -> db
-    }
+  (** Durable storage backends.
 
-  type restore_context =
-    { next_db_uid : unit -> int
-    ; db_with_tail : db -> datom list list -> db
-    }
+      A [storage] is built over a small bytes-level backend (module
+      {!module-type:S}) that persists opaque buffers keyed by
+      addresses; the library owns serialization. For codecs that
+      interoperate with ClojureScript DataScript's persisted layout
+      (SQLite, Melange backends), see {!Internal.Storage}. *)
 
+  type t = storage
+
+  module type S = sig
+    type t
+
+    val write : t -> (storage_address * string) list -> unit
+    val read : t -> storage_address list -> (storage_address * string) list
+    val list : t -> storage_address list
+    val delete : t -> storage_address list -> unit
+  end
+
+  val make : (module S with type t = 's) -> 's -> t
+  val memory : unit -> t
+  val file : string -> t
   val root_address : storage_address
   val tail_address : storage_address
-  val memory_storage : unit -> storage
-  val file_storage : string -> storage
-  val store : ?storage:storage -> db -> db
-  val store_tail : storage -> datom list list -> unit
+  val store : ?storage:t -> db -> db
+  val store_tail : t -> datom list list -> unit
   val tail_compaction_threshold : db -> int
   val tail_datom_count : datom list list -> int
-  val restore_root_snapshot : storage -> serializable_db option
-  val restore_tail_groups : storage -> datom list list
-  val db_with_tail : tail_context -> db -> datom list list -> db
-  val restore : restore_context -> storage -> db option
-  val storage_addresses : storage -> storage_address list
-  val storage : db -> storage option
+  val restore_root_snapshot : t -> serializable_db option
+  val restore_tail_groups : t -> datom list list
+  val db_with_tail : db -> datom list list -> db
+  val restore : t -> db option
   val addresses : db list -> storage_address list
+  val of_db : db -> t option
   val settings : db -> (attr * value) list
-  val collect_garbage : storage -> unit
+  val collect_garbage : t -> unit
 end
 
-module Util : sig
-  val int64_to_int : int64 -> int option
-  val int64_to_int_exn : string -> int64 -> int
-  val civil_from_days : int64 -> int * int * int
-  val string_of_instant_millis : int64 -> string
-  val list_equal_by : ('a -> 'a -> bool) -> 'a list -> 'a list -> bool
-  val entity_ref_equal : entity_ref -> entity_ref -> bool
-  val value_equal : value -> value -> bool
-  val split_keyword : string -> string * string
-  val compare_list_with : ('a -> 'a -> int) -> 'a list -> 'a list -> int
-  val compare_option_with : ('a -> 'a -> int) -> 'a option -> 'a option -> int
-  val compare_value : value -> value -> int
-  val first_nonzero : int list -> int
-  val compare_datom : index -> datom -> datom -> int
-  val normalize_value : value -> value
-  val normalize_datom_value : datom -> datom
-  val uuid_canonicalize : string -> string
-end
-
-module Parser : sig
-  val read_edn : string -> query_form
-  val section_forms : query_form -> query_form list
-  val query_form_section : string -> (query_form * query_form) list -> query_form option
-  val query_form_sections : query_form list -> (query_form * query_form) list
-  val query_form_map : query_form -> (query_form * query_form) list
-  val query_form_sequence : query_form -> query_form list option
-  val query_symbol_name : string -> string
-  val query_callable_name : string -> string
-  val is_plain_input_symbol : string -> bool
-  val is_query_input_symbol : string -> bool
-  val query_input_name : string -> string
-  val query_source_name : string -> string
-  val is_query_source_symbol : string -> bool
-  val is_plain_rule_symbol : string -> bool
-  val aggregate_of_symbol : string -> aggregate option
-  val amount_aggregate_of_symbol : string -> int -> aggregate option
-  val dynamic_amount_aggregate_of_symbol : string -> string -> aggregate option
-  val parse_find_arg : query_form -> query_term
-  val parse_find_args : query_form list -> query_term list
-  val parse_output_var : query_form -> string
-  val parse_output_vars : query_form -> string list
-  val parse_flat_output_vars : query_form -> string list option
-  val parse_collection_output_var : query_form -> string option
-  val parse_relation_output_vars : query_form -> string list option
-  val nonempty_input_vars : string -> string list -> string list
-  val input_relation_vars : query_form -> query_form list option
-  val input_var_of_form : query_form -> string option
-  val flat_input_vars : query_form list -> string list option
-  val parse_nested_input_binding : query_form -> input_binding
-  val nested_relation_binding : query_form -> input_binding list option
-  val parse_input_binding : query_form -> query_input option
-  val parse_inputs : query_form option -> query_input list
-  val input_declares_rules_var : query_form option -> bool
-  val ensure_distinct_input_rules_var : query_form option -> unit
-  val parse_with_var : query_form -> string
-  val parse_with_section : query_form option -> string list
-  val parse_return_map_labels : string -> query_form -> string list
-  val parse_return_map_section : (query_form * query_form) list -> query_return_map option
-  val lookup_ref_of_form : query_form -> (attr * value) option
-  val parse_pattern_term :
-    ?entity_position:bool ->
-    ?attr_position:bool ->
-    ?lookup_ref_position:bool ->
-    ?source_position:bool ->
-    query_form ->
-    query_term
-  val comparison_predicate_of_symbol : string -> comparison_predicate option
-  val value_predicate_of_symbol : string -> value_predicate option
-  val numeric_predicate_of_symbol : string -> numeric_predicate option
-  val boolean_predicate_of_symbol : string -> boolean_predicate option
-  val unary_string_predicate_clause_of_symbol : string -> (query_term -> query_clause) option
-  val binary_string_predicate_clause_of_symbol : string -> (query_term -> query_term -> query_clause) option
-  val equality_predicate_of_symbol : string -> equality_predicate option
-  val arithmetic_op_of_symbol : string -> arithmetic_op option
-  val query_attr_name : query_form -> attr
-  val parse_data_pattern_clause : query_form list -> query_clause
-  val parse_rule_expr : string -> query_form list -> string * query_term list
-  val parse_source_pattern_clause : string -> query_form list -> query_clause
-  val parse_missing_clause : query_form list -> query_clause
-  val parse_get_else_clause : query_form list -> string -> query_clause
-  val parse_two_output_vars : query_form -> string * string
-  val parse_get_some_clause : query_form list -> query_form -> query_clause
-  val parse_get_clause : query_form list -> string -> query_clause
-  val parse_core_value_function : string -> query_form list -> string -> query_clause
-  val parse_collection_function : string -> query_form list -> string -> query_clause
-  val parse_flat_value_function : string -> query_form list -> string list -> query_clause
-  val ground_values_of_form : query_form -> value list
-  val ground_relation_rows_of_form : query_form -> value list list
-  val dynamic_ground_term : query_form -> query_term option
-  val parse_ground_function : query_form list -> query_form -> query_clause
-  val parse_value_metadata_function : string -> query_form list -> string -> query_clause
-  val parse_string_transform_function : string -> query_form list -> string -> query_clause
-  val parse_binding : query_form -> input_binding
-  val parse_in : query_form -> query_input list
-  val parse_with : query_form -> string list
-  val parse_find : query_form -> query_return * find_spec list
-  val parse_clause : query_form -> query_clause
-  val parse_rules : query_form -> query_rule list
-  val parse_query : query_form -> query
-  val parse_query_string : string -> query
-  val parse_query_return : query_form -> query_return * query
-  val parse_query_return_string : string -> query_return * query
-  val parse_query_return_map : query_form -> query_return * query_return_map option * query
-  val parse_query_return_map_string : string -> query_return * query_return_map option * query
-end
-
-module Pull_parser : sig
-  val parse_pattern : db -> query_form -> pull_selector list
-  val parse_pattern_string : db -> string -> pull_selector list
-end
-
-module Pull_api : sig
-  val pull : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref -> pulled_entity option
-  val pull_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
-  val pull_many : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref list -> pulled_entity option list
-  val pull_many_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref list -> pulled_entity option list
-end
-
-module Upsert : sig
-  type resolution = attr * value * entity_id
-
-  type context =
-    { is_unique_identity : db -> attr -> bool
-    ; entid_in_datoms : db -> datom list -> attr -> value -> entity_id option
-    ; value_to_string : value -> string
-    }
-
-  val lookup_ref_string : context -> attr -> value -> string
-  val conflicting_upserts_message : context -> resolution -> resolution -> string
-  val explicit_conflict_message : context -> attr -> value -> entity_id -> entity_id -> string
-  val identity_resolutions : context -> db -> datom list -> (attr * tx_value) list -> resolution list
-  val conflicting_identity_resolution : resolution list -> (resolution * resolution) option
-  val validate_explicit_target : context -> db -> datom list -> entity_id -> (attr * tx_value) list -> unit
-  val entity_unique_identity : context -> db -> datom list -> (attr * tx_value) list -> entity_id option
-end
+(** {1 Database lifecycle} *)
 
 val tx0 : tx
-val datom : ?tx:tx -> ?added:bool -> e:entity_id -> a:attr -> v:value -> unit -> datom
-val is_datom : datom -> bool
+val datom : ?tx:tx -> ?added:bool -> entity_id -> attr -> value -> datom
 val empty_db : ?schema:schema -> ?storage:storage -> unit -> db
 val empty : db -> db
-val is_db : db -> bool
 val init_db : ?schema:schema -> ?storage:storage -> datom list -> db
 val filter : db -> (db -> datom -> bool) -> db
-val is_filtered : db -> bool
 val unfiltered_db : db -> db
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
-val db_from_reader_string : string -> db
 val memory_storage : unit -> storage
 val file_storage : string -> storage
 val store : ?storage:storage -> db -> db
@@ -428,29 +1206,22 @@ val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
 val squuid : ?msec:int64 -> unit -> value
 val squuid_time_millis : value -> int64
+
+(** {1 Connections and transactions} *)
+
 val create_conn : ?schema:schema -> ?storage:storage -> unit -> conn
 val conn_from_db : db -> conn
 val conn_from_datoms : ?schema:schema -> ?storage:storage -> datom list -> conn
 val restore_conn : storage -> conn option
 val conn_db : conn -> db
 val db : conn -> db
-val is_conn : conn -> bool
 val listen : conn -> string -> (tx_report -> unit) -> string
-val listen_bang : conn -> string -> (tx_report -> unit) -> string
 val listen_auto : conn -> (tx_report -> unit) -> string
-val listen_bang_auto : conn -> (tx_report -> unit) -> string
 val unlisten : conn -> string -> unit
-val unlisten_bang : conn -> string -> unit
 val reset_conn : ?tx_meta:tx_meta -> conn -> db -> db
-val reset_conn_bang : ?tx_meta:tx_meta -> conn -> db -> db
 val reset_schema : conn -> schema -> db
-val reset_schema_bang : conn -> schema -> db
 val schema : db -> schema
 val with_schema : db -> schema -> db
-val schema_of_edn_string : string -> schema
-val is_reverse_ref : attr -> bool
-val reverse_ref : attr -> attr
-val parse_tx_data_string : string -> tx_op list
 val db_with : tx_op list -> db -> db
 val db_with_string : string -> db -> db
 val transact : ?tx_meta:tx_meta -> db -> tx_op list -> tx_report
@@ -459,469 +1230,121 @@ val with_tx : ?tx_meta:tx_meta -> db -> tx_op list -> tx_report
 val with_tx_string : ?tx_meta:tx_meta -> db -> string -> tx_report
 val transact_conn : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
 val transact_conn_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
-val transact_bang : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
-val transact_bang_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
 val apply_report : conn -> tx_report -> tx_report
-val transact_async : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
-val transact_async_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
-val tempid : ?part:string -> ?value:int -> unit -> entity_ref
+val tempid : ?part:string -> ?value:entity_id -> unit -> entity_ref
 val resolve_tempid : ?db:db -> (string * entity_id) list -> string -> entity_id option
+
+(** {1 Entities} *)
+
 val entity : db -> entity_ref -> entity option
 val entity_attr : entity -> attr -> tx_value option
 val entity_attrs : entity -> (attr * tx_value) list
 val entity_db : entity -> db
-val is_entity : entity -> bool
 val entity_equal : entity -> entity -> bool
 val entity_hash : entity -> int
 val touch : entity -> entity
 val entid : db -> attr -> value -> entity_id option
 val entid_ref : db -> entity_ref -> entity_id option
-val read_edn : string -> query_form
-val parse_binding : query_form -> input_binding
-val parse_in : query_form -> query_input list
-val parse_with : query_form -> string list
-val parse_find : query_form -> query_return * find_spec list
-val parse_pull_pattern : db -> query_form -> pull_selector list
-val parse_pull_pattern_string : db -> string -> pull_selector list
-val pull : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref -> pulled_entity option
-val pull_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref -> pulled_entity option
-val pull_many : ?visitor:(pull_visit -> unit) -> db -> pull_selector list -> entity_ref list -> pulled_entity option list
-val pull_many_string : ?visitor:(pull_visit -> unit) -> db -> string -> entity_ref list -> pulled_entity option list
-val parse_query : query_form -> query
-val parse_query_string : string -> query
-val parse_query_return : query_form -> query_return * query
-val parse_query_return_string : string -> query_return * query
-val parse_query_return_map : query_form -> query_return * query_return_map option * query
-val parse_query_return_map_string : string -> query_return * query_return_map option * query
-val parse_query_return_map_string_with_pull_context :
-  ?default_pull_db:db ->
-  ?pull_db_for_source:(string -> db) ->
-  string ->
-  query_return * query_return_map option * query
+val is_reverse_ref : attr -> bool
+val reverse_ref : attr -> attr
 
-module Query : sig
-  type closure_index =
-    { up : (int, value list) Hashtbl.t
-    ; down : (int, int list) Hashtbl.t
-    ; leaf_up : (int, value list) Hashtbl.t
-    ; leaf_down : (value, int list) Hashtbl.t
-    ; anc : (int, value list) Hashtbl.t
-    ; desc : (int, int list) Hashtbl.t
-    }
+(** {1 Datoms} *)
 
-  type query_closure_cache =
-    { closures : (string * string, closure_index) Hashtbl.t
-    }
-
-  type query_callables =
-    { callable_predicates : (string * (query_result list -> bool)) list
-    ; callable_functions : (string * (query_result list -> query_result list option)) list
-    ; callable_aggregates : (string * (query_result list -> query_result)) list
-    ; callable_aliases : (string * string) list
-    ; closure_cache : query_closure_cache option
-    }
-
-  type result_resolution_context =
-    { validate_entity_id : int -> entity_id
-    ; resolve_query_value : value -> value option
-    ; lookup_ref_entity_id : attr -> value -> entity_id option
-    }
-
-  type match_context =
-    { result_resolution_context : result_resolution_context
-    ; source_db : db
-    ; ident_entity_id : string -> entity_id option
-    ; unresolved_lookup_ref_message : attr -> value -> string
-    ; value_equal : value -> value -> bool
-    ; coerce_tuple_lookup_value : attr -> value -> value
-    }
-
-  type source_context =
-    { match_context : match_context
-    ; pattern_datoms : db -> query_term -> query_term -> query_term -> query_term option -> datom Seq.t
-    ; fold_pattern_datoms :
-        'a.
-        db ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term option ->
-        init:'a ->
-        f:('a -> datom -> 'a) ->
-        'a
-    ; pattern_comparison_datoms :
-        db -> query_term list -> comparison_predicate -> value -> datom Seq.t option
-    ; match_data_pattern :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    ; match_data_pattern_tx :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    ; match_data_pattern_tx_op :
-        db ->
-        (string * query_result) list ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        query_term ->
-        datom ->
-        (string * query_result) list option
-    }
-
-  type input_context =
-    { resolve_query_input_result : query_result -> query_result option
-    ; bind_var :
-        string ->
-        query_result ->
-        (string * query_result) list ->
-        (string * query_result) list option
-    ; entity_id_of_ref : entity_ref -> entity_id option
-    }
-
-  val empty_query_callables : query_callables
-  val q : ?inputs:query_arg list -> db -> query -> query_result list list
-  val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
-  val q_with : ?inputs:query_arg list -> db -> string list -> query -> query_result list list
-  val q_with_string :
-    ?inputs:query_arg list -> db -> string list -> string -> query_result list list
-  val q_sources :
-    ?inputs:query_arg list ->
-    db ->
-    (string * query_source) list ->
-    query ->
-    query_result list list
-  val q_sources_string :
-    ?inputs:query_arg list ->
-    db ->
-    (string * query_source) list ->
-    string ->
-    query_result list list
-  val q_return : ?inputs:query_arg list -> db -> query_return -> query -> query_output
-  val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
-  val q_return_map :
-    ?inputs:query_arg list -> db -> query_return -> query_return_map -> query -> query_output
-  val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
-  val return_map_label_count : query_return_map -> int
-  val return_map_name : query_return_map -> string
-  val validate_query_return_map :
-    query_return -> query_return_map option -> query -> query_return_map option
-  val has_aggregates : find_spec list -> bool
-  val collect_find_vars : (string * query_result) list -> string list -> query_result list option
-  val group_by_key :
-    (query_result list * (string * query_result) list) list ->
-    (query_result list * (string * query_result) list list) list
-  val grouping_vars_of_find : find_spec list -> string list
-  val aggregate_amount_value : string -> (string * query_result) list -> int
-  val resolve_dynamic_aggregate : aggregate -> (string * query_result) list list -> aggregate
-  val aggregate_param_vars : aggregate -> string list
-  val aggregate_callable_vars : aggregate -> string list
-  val split_aggregate_terms : query_term list -> query_term list * query_term
-  val aggregate_input_values : aggregate -> query_result list -> query_result list -> query_result list
-  val resolve_callable_name : query_callables -> string -> string
-  val callable_predicate : query_callables -> string -> (query_result list -> bool) option
-  val callable_function : query_callables -> string -> (query_result list -> query_result list option) option
-  val callable_aggregate : query_callables -> string -> (query_result list -> query_result) option
-  val has_callable : query_callables -> string -> bool
-  val alias_callable : query_callables -> string -> string -> query_callables
-  val resolve_callable_aggregate : query_callables -> aggregate -> aggregate
-  val result_of_datom_e : datom -> query_result
-  val result_of_datom_a : datom -> query_result
-  val result_of_datom_v : datom -> query_result
-  val result_of_datom_tx : datom -> query_result
-  val result_of_datom_op : datom -> query_result
-  val result_of_ref : query_result -> query_result
-  val entity_id_of_resolved_query_result :
-    validate_entity_id:(int -> entity_id) -> query_result option -> entity_id option
-  val resolved_query_result : result_resolution_context -> query_result -> query_result option
-  val lookup_ref_entity_id_of_value : result_resolution_context -> value -> entity_id option
-  val query_result_entity_id : result_resolution_context -> query_result -> entity_id option
-  val query_results_equivalent : result_resolution_context -> query_result -> query_result -> bool
-  val bind_var :
-    result_resolution_context ->
-    string ->
-    query_result ->
-    (string * query_result) list ->
-    (string * query_result) list option
-  val result_matches_entity : result_resolution_context -> entity_id -> query_result -> bool
-  val match_query_term :
-    match_context ->
-    query_term ->
-    query_result ->
-    (string * query_result) list ->
-    (string * query_result) list option
-  val match_value_term_for_datom_attr :
-    match_context ->
-    (string * query_result) list ->
-    query_term ->
-    datom ->
-    (string * query_result) list option
-  val match_pattern_clause :
-    match_context ->
-    (string * query_result) list ->
-    query_term ->
-    query_term ->
-    query_term ->
-    datom ->
-    (string * query_result) list option
-  val match_pattern_tx_clause :
-    match_context ->
-    (string * query_result) list ->
-    query_term ->
-    query_term ->
-    query_term ->
-    query_term ->
-    datom ->
-    (string * query_result) list option
-  val match_reverse_pattern_clause :
-    match_context ->
-    (string * query_result) list ->
-    query_term ->
-    attr ->
-    query_term ->
-    datom ->
-    (string * query_result) list option
-  val eval_query_term :
-    match_context -> (string * query_result) list -> query_term -> query_result option
-  val collect_query_terms :
-    match_context -> (string * query_result) list -> query_term list -> query_result list option
-  val collect_query_terms_exn :
-    match_context -> (string * query_result) list -> query_term list -> query_result list
-  val query_term_entity_id :
-    match_context -> (string * query_result) list -> query_term -> entity_id option
-  val source : db -> (string * query_source) list -> string -> query_source
-  val sources_with_root_default : db -> (string * query_source) list -> (string * query_source) list
-  val source_db : db -> (string * query_source) list -> string -> db
-  val query_source_db : query_source -> db
-  val match_relation_row :
-    source_context ->
-    (string * query_result) list ->
-    query_term list ->
-    query_result list ->
-    (string * query_result) list option
-  val match_query_source_pattern :
-    source_context ->
-    db ->
-    query_source ->
-    (string * query_result) list ->
-    query_term list ->
-    (string * query_result) list list
-  val match_source_pattern :
-    source_context ->
-    db ->
-    (string * query_source) list ->
-    string ->
-    (string * query_result) list ->
-    query_term list ->
-    (string * query_result) list list
-  val match_relation_source_pattern :
-    source_context ->
-    db ->
-    (string * query_source) list ->
-    string ->
-    (string * query_result) list ->
-    query_term list ->
-    (string * query_result) list list
-  val eval_query_term_with_sources :
-    match_context ->
-    db ->
-    (string * query_source) list ->
-    (string * query_result) list ->
-    query_term ->
-    query_result option
-  val collect_dynamic_query_terms_exn :
-    match_context ->
-    db ->
-    (string * query_source) list ->
-    (string * query_result) list ->
-    query_term list ->
-    query_result list
-  val aggregate_extra_args :
-    match_context ->
-    db ->
-    (string * query_source) list ->
-    (string * query_result) list list ->
-    query_term list ->
-    query_result list
-  val aggregate_values :
-    match_context ->
-    db ->
-    (string * query_source) list ->
-    (string * query_result) list list ->
-    query_term list ->
-    query_result list
-  val query_callables_of_inputs : query_input list -> query_callables
-  val query_rules_of_inputs : query_input list -> query_rule list
-  val matching_rules : query_rule list -> string -> int -> query_rule list
-  val matching_rules_exn : query_rule list -> string -> int -> query_rule list
-  val project_binding : string list -> (string * query_result) list -> (string * query_result) list
-  val rule_invocation_callables :
-    query_callables -> (string * query_result) list -> query_rule -> query_term list -> query_callables
-  val vars_of_query_term : query_term -> string list
-  val vars_of_query_terms : query_term list -> string list
-  val vars_of_clause : query_clause -> string list
-  val named_source : string -> string list
-  val sources_of_query_term : query_term -> string list
-  val sources_of_query_terms : query_term list -> string list
-  val sources_of_optional_query_term : query_term option -> string list
-  val sources_of_clause : query_clause -> string list
-  val sources_of_find_spec : find_spec -> string list
-  val has_rule_clause : query_clause -> bool
-  val rule_names : query_rule list -> string list
-  val resolve_dynamic_rule_clause : string list -> query_clause -> query_clause
-  val resolve_dynamic_rule : string list -> query_rule -> query_rule
-  val find_spec_uses_default_source : find_spec -> bool
-  val clause_uses_default_source : query_clause -> bool
-  val infer_default_inputs :
-    query_form option -> find_spec list -> query_clause list -> query_input list -> query_input list
-  val query_term_vars : query_term list -> string list
-  val vars_of_find_spec : find_spec -> string list
-  val vars_of_input_binding : input_binding -> string list
-  val vars_of_input : query_input -> string list
-  val source_of_input : query_input -> string option
-  val ensure_distinct_input_vars : query_input list -> unit
-  val ensure_distinct_input_sources : query_input list -> unit
-  val format_query_vars : string list -> string
-  val format_source_vars : string list -> string
-  val validate_query : query -> query
-  val query_input_var_label : string -> string
-  val query_term_string : value_to_string:(value -> string) -> query_term -> string
-  val query_output_var_string : string -> string
-  val query_output_binding_string : string list -> string
-  val query_call_string : value_to_string:(value -> string) -> string -> query_term list -> string
-  val numeric_predicate_symbol : numeric_predicate -> string
-  val arithmetic_op_symbol : arithmetic_op -> string
-  val query_clause_string : value_to_string:(value -> string) -> query_clause -> string
-  val query_not_clause_string : value_to_string:(value -> string) -> query_clause list -> string
-  val query_or_clause_string : value_to_string:(value -> string) -> query_clause list list -> string
-  val query_or_join_vars_string : string list -> string list -> string
-  val query_or_join_clause_string :
-    value_to_string:(value -> string) -> string list -> string list -> query_clause list list -> string
-  val query_var_set_string : string list -> string
-  val query_var_sets_string : string list list -> string
-  val unbound_vars_of_terms : (string * query_result) list -> query_term list -> string list
-  val ensure_query_terms_bound : (string * query_result) list -> query_term list -> string -> unit
-  val ensure_not_has_outer_binding :
-    value_to_string:(value -> string) -> (string * query_result) list -> query_clause list -> unit
-  val vars_of_branch : query_clause list -> string list
-  val free_vars_of_branch : string list -> query_clause list -> string list
-  val ensure_or_branch_vars_match :
-    value_to_string:(value -> string) ->
-    (string * query_result) list ->
-    query_clause list list ->
-    unit
-  val ensure_join_vars_bound : (string * query_result) list -> string list -> unit
-  val ensure_join_vars_bound_in_clause : (string * query_result) list -> string list -> string -> unit
-  val ensure_or_join_branches_cover_listed_vars :
-    (string * query_result) list -> string list -> query_clause list list -> unit
-  val clause_calls_rule : string -> query_clause -> bool
-  val matching_rules_for_call :
-    (string * string * query_result option list) list ->
-    string * string * query_result option list ->
-    query_rule list ->
-    string ->
-    int ->
-    query_rule list
-  val query_input_binding_string : input_binding -> string
-  val query_input_decl_binding_string : query_input -> string
-  val query_input_binding_label : query_input -> string
-  val query_input_consumes_argument : consume_rules:bool -> query_input -> bool
-  val values_of_collection_result : query_result -> query_result list option
-  val row_of_collection_result : query_result -> query_result list
-  val row_of_scalar_sequence : query_result -> query_result list
-  val rows_of_map_entries : (value * value) list -> query_result list list
-  val bind_relation_row :
-    input_context ->
-    (string * query_result) list ->
-    string list ->
-    query_result list ->
-    (string * query_result) list option
-  val resolve_query_input_row : input_context -> query_result list -> query_result list option
-  val collection_values_of_input : input_context -> query_result -> query_result list option
-  val row_values_of_input : input_context -> query_result -> query_result list option
-  val eval_ground_term_tuple :
-    input_context ->
-    (string * query_result) list ->
-    query_result ->
-    string list ->
-    (string * query_result) list list
-  val eval_ground_term_relation :
-    input_context ->
-    (string * query_result) list ->
-    query_result ->
-    string list ->
-    (string * query_result) list list
-  val bind_input_binding :
-    input_context ->
-    input_binding ->
-    query_result ->
-    (string * query_result) list list ->
-    (string * query_result) list list
-  val bind_nested_input_tuple :
-    input_context ->
-    input_binding list ->
-    query_result list ->
-    (string * query_result) list list ->
-    (string * query_result) list list
-  val apply_query_input :
-    input_context ->
-    (string * query_result) list list ->
-    query_input ->
-    (string * query_result) list list
-  val bind_query_inputs :
-    query_input_of_arg:(query_input -> query_arg -> query_input) ->
-    consume_rules:bool ->
-    query_input list ->
-    query_arg list ->
-    query_input list
-end
-
-val q : ?inputs:query_arg list -> db -> query -> query_result list list
-val q_string : ?inputs:query_arg list -> db -> string -> query_result list list
-val q_with : ?inputs:query_arg list -> db -> string list -> query -> query_result list list
-val q_with_string :
-  ?inputs:query_arg list -> db -> string list -> string -> query_result list list
-val q_sources :
-  ?inputs:query_arg list -> db -> (string * query_source) list -> query -> query_result list list
-val q_sources_string :
-  ?inputs:query_arg list ->
-  db ->
-  (string * query_source) list ->
-  string ->
-  query_result list list
-val q_return : ?inputs:query_arg list -> db -> query_return -> query -> query_output
-val q_return_string : ?inputs:query_arg list -> db -> string -> query_output
-val q_return_map :
-  ?inputs:query_arg list -> db -> query_return -> query_return_map -> query -> query_output
-val q_return_map_string : ?inputs:query_arg list -> db -> string -> query_output
-val datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
+val datoms :
+  ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
 val fold_datoms :
-  ('acc -> datom -> 'acc) ->
-  'acc ->
-  db ->
-  index ->
   ?e:entity_id ->
   ?a:attr ->
   ?v:value ->
   ?tx:tx ->
-  unit ->
+  ('acc -> datom -> 'acc) ->
+  'acc ->
+  db ->
+  index ->
   'acc
-val datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-val find_datom : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
-val find_datom_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom option
-val seek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-val seek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-val rseek_datoms : db -> index -> ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-val rseek_datoms_ref : db -> index -> ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> unit -> datom Seq.t
-val index_range : db -> attr -> ?start:value -> ?stop:value -> unit -> datom Seq.t
+val datoms_ref :
+  ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+val find_datom :
+  ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom option
+val find_datom_ref :
+  ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom option
+val seek_datoms :
+  ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+val seek_datoms_ref :
+  ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+val rseek_datoms :
+  ?e:entity_id -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+val rseek_datoms_ref :
+  ?e:entity_ref -> ?a:attr -> ?v:value -> ?tx:tx -> db -> index -> datom Seq.t
+val index_range : ?start:value -> ?stop:value -> db -> attr -> datom Seq.t
+
+(** {1 Compatibility aliases}
+
+    Deprecated entry points kept for compatibility; new code should
+    use the module-level API above. *)
+
+module Compat : sig
+  val is_datom : datom -> bool
+  val is_db : db -> bool
+  val is_conn : conn -> bool
+  val is_entity : entity -> bool
+  val is_filtered : db -> bool
+  val listen_bang : conn -> string -> (tx_report -> unit) -> string
+  val listen_bang_auto : conn -> (tx_report -> unit) -> string
+  val unlisten_bang : conn -> string -> unit
+  val reset_conn_bang : ?tx_meta:tx_meta -> conn -> db -> db
+  val reset_schema_bang : conn -> schema -> db
+  val transact_bang : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
+  val transact_bang_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
+  val transact_async : ?tx_meta:tx_meta -> conn -> tx_op list -> tx_report
+  val transact_async_string : ?tx_meta:tx_meta -> conn -> string -> tx_report
+end
+
+(** {1 Boundary coercions}
+
+    The public types share their runtime representation with the
+    implementation types; these identity coercions move values across the
+    boundary without copying. They exist so the in-repo cljs-interop codecs
+    (SQLite, Transit) and test ports can pass implementation-level values
+    into the public API and back. *)
+
+module Internal_convert : sig
+  val internalize_db : db -> Internal.Datascript_types.db
+  val externalize_db : Internal.Datascript_types.db -> db
+  val internalize_storage : storage -> Internal.Datascript_types.storage
+  val externalize_storage : Internal.Datascript_types.storage -> storage
+  val internalize_entity : entity -> Internal.Datascript_types.entity
+  val externalize_entity : Internal.Datascript_types.entity -> entity
+  val internalize_conn : conn -> Internal.Conn.t
+  val externalize_conn : Internal.Conn.t -> conn
+  val internalize_query : query -> Internal.Datascript_types.query
+  val externalize_query : Internal.Datascript_types.query -> query
+  val internalize_query_input : query_input -> Internal.Datascript_types.query_input
+  val externalize_query_input : Internal.Datascript_types.query_input -> query_input
+  val internalize_schema_attr : schema_attr -> Internal.Datascript_types.schema_attr
+  val externalize_schema_attr : Internal.Datascript_types.schema_attr -> schema_attr
+  val internalize_value : value -> Internal.Datascript_types.value
+  val externalize_value : Internal.Datascript_types.value -> value
+  val internalize_datom : datom -> Internal.Datascript_types.datom
+  val externalize_datom : Internal.Datascript_types.datom -> datom
+  val internalize_entity_ref : entity_ref -> Internal.Datascript_types.entity_ref
+  val externalize_entity_ref : Internal.Datascript_types.entity_ref -> entity_ref
+  val internalize_entity_id : entity_id -> Internal.Datascript_types.entity_id
+  val externalize_entity_id : Internal.Datascript_types.entity_id -> entity_id
+  val internalize_tx : tx -> Internal.Datascript_types.tx
+  val externalize_tx : Internal.Datascript_types.tx -> tx
+  val internalize_tx_op : tx_op -> Internal.Datascript_types.tx_op
+  val externalize_tx_op : Internal.Datascript_types.tx_op -> tx_op
+  val internalize_query_result : query_result -> Internal.Datascript_types.query_result
+  val externalize_query_result : Internal.Datascript_types.query_result -> query_result
+  val internalize_query_rule : query_rule -> Internal.Datascript_types.query_rule
+  val externalize_query_rule : Internal.Datascript_types.query_rule -> query_rule
+  val internalize_query_form : query_form -> Internal.Datascript_types.query_form
+  val externalize_query_form : Internal.Datascript_types.query_form -> query_form
+  val internalize_input_binding : input_binding -> Internal.Datascript_types.input_binding
+  val externalize_input_binding : Internal.Datascript_types.input_binding -> input_binding
+  val internalize_query_output : query_output -> Internal.Datascript_types.query_output
+  val externalize_query_output : Internal.Datascript_types.query_output -> query_output
+  val internalize_tx_report : tx_report -> Internal.Datascript_types.tx_report
+  val externalize_tx_report : Internal.Datascript_types.tx_report -> tx_report
+end

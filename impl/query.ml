@@ -37,12 +37,12 @@ type context =
    i.e. "?p is an ancestor of ?c along :attr edges".  Built once per
    (source, attr) inside one query evaluation. *)
 type closure_index =
-  { up : (int, value list) Hashtbl.t
-  ; down : (int, int list) Hashtbl.t
-  ; leaf_up : (int, value list) Hashtbl.t
-  ; leaf_down : (value, int list) Hashtbl.t
-  ; anc : (int, value list) Hashtbl.t
-  ; desc : (int, int list) Hashtbl.t
+  { up : (entity_id, value list) Hashtbl.t
+  ; down : (entity_id, entity_id list) Hashtbl.t
+  ; leaf_up : (entity_id, value list) Hashtbl.t
+  ; leaf_down : (value, entity_id list) Hashtbl.t
+  ; anc : (entity_id, value list) Hashtbl.t
+  ; desc : (entity_id, entity_id list) Hashtbl.t
   }
 
 type query_closure_cache =
@@ -58,7 +58,7 @@ type query_callables =
   }
 
 type result_resolution_context =
-  { validate_entity_id : int -> entity_id
+  { validate_entity_id : int64 -> entity_id
   ; resolve_query_value : value -> value option
   ; lookup_ref_entity_id : attr -> value -> entity_id option
   }
@@ -435,7 +435,7 @@ let result_of_ref = function
 let entity_id_of_resolved_query_result ~validate_entity_id = function
   | Some (Result_entity entity_id) -> Some entity_id
   | Some (Result_value (Int64 entity_id)) ->
-    Option.map validate_entity_id (Util.int64_to_int entity_id)
+    Some (validate_entity_id entity_id)
   | Some (Result_value (Ref entity_id)) -> Some entity_id
   | _ -> None
 
@@ -1487,7 +1487,7 @@ let query_input_var_label var =
 
 let query_term_string ~value_to_string = function
   | QVar var -> query_input_var_label var
-  | QEntity entity_id -> string_of_int entity_id
+  | QEntity entity_id -> Int64.to_string entity_id
   | QIdent ident -> ":" ^ ident
   | QLookupRef (attr, value) -> "[:" ^ attr ^ " " ^ value_to_string value ^ "]"
   | QAttr attr -> ":" ^ attr

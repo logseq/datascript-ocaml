@@ -170,7 +170,7 @@ end) = struct
      representation and is markedly slower than hashing each leaf by
      constructor. Result_db/Result_pull never appear in result rows. *)
   let rec query_result_hash = function
-    | Result_entity e -> e * 5 + 1
+    | Result_entity e -> Hashtbl.hash e * 5 + 1
     | Result_attr a -> Hashtbl.hash a * 31 + 2
     | Result_value v -> query_value_hash v * 31 + 3
     | Result_db _ -> 0
@@ -182,7 +182,7 @@ end) = struct
     | Keyword s -> Hashtbl.hash s * 7 + 14
     | Bool b -> Hashtbl.hash b * 7 + 15
     | Instant i -> Hashtbl.hash i * 7 + 16
-    | Ref e -> e * 7 + 17
+    | Ref e -> Hashtbl.hash e * 7 + 17
     | List vs | Vector vs | Set vs ->
       List.fold_left (fun acc v -> acc * 7 + query_value_hash v) 18 vs
     | Tuple vs ->
