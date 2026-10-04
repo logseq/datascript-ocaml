@@ -19,6 +19,22 @@ type context =
 
 module String_map = Map.Make (String)
 
+(* Fun.protect for runtimes without backtrace support (Melange): the
+   stdlib version restores the raise backtrace via a primitive that is
+   not polyfilled there, which would replace the work exception with the
+   polyfill error. Same semantics minus backtrace preservation. *)
+let protect ~(finally : unit -> unit) (work : unit -> 'a) : 'a =
+  let finally_no_exn () =
+    try finally () with e -> raise (Fun.Finally_raised e)
+  in
+  match work () with
+  | result ->
+      finally_no_exn ();
+      result
+  | exception work_exn ->
+      finally_no_exn ();
+      raise work_exn
+
 (* tempids: upstream keeps a map for lookup plus deterministic insertion
    order for the :tempids report. An assoc list made both lookup and
    append O(n) — quadratic on bulk transactions — so keep a persistent
@@ -479,7 +495,7 @@ let apply_tx context tx_ops db =
       tx_memo.active <- false;
       Hashtbl.reset tx_memo.datoms
   in
-  Fun.protect ~finally:restore_memo @@ fun () ->
+  protect ~finally:restore_memo @@ fun () ->
   tx_memo.base_max_eid <- db.max_eid;
   Hashtbl.reset tx_memo.datoms;
   tx_memo.active <- true;
