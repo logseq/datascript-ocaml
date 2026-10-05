@@ -831,12 +831,6 @@ end) = struct
        | _ -> None)
     | _ -> None
 
-  let value_of_relation_term db relation row term =
-    let binding = row_binding relation.attrs row in
-    match eval_query_term db binding term with
-    | Some result -> Query_eval.value_of_query_result result
-    | None -> None
-
   let relation_term_value_getter relation = function
     | QVar var ->
       (match List.find_index (( = ) var) relation.attrs with
@@ -857,52 +851,49 @@ end) = struct
     | QAttr attr -> Some (fun _ -> Some (Result_attr attr))
     | QWildcard | QIdent _ | QLookupRef _ | QSource _ -> None
 
-  let relation_comparison_matches db relation row predicate left_term right_term =
-    match
-      ( value_of_relation_term db relation row left_term
-      , value_of_relation_term db relation row right_term )
-    with
-    | Some left, Some right ->
-      Built_ins.matches_comparison_predicate
-        predicate
-        (query_evaluator_context.compare_value left right)
-    | _ -> false
+  (* Value getter for predicate/filter clauses.  Terms the relation
+     cannot bind — unbound vars, idents, lookup refs, sources, wildcards —
+     evaluate to the same result on every row ([eval_query_term] only
+     consults bindings for vars present in them), so they resolve once
+     instead of rebuilding a binding map per row.  Resolution is lazy so
+     an exceptional term raises on first-row use exactly as the per-row
+     fallback did; an unresolvable term yields [None], which excludes the
+     row just like the per-row eval did. *)
+  let filter_term_value_getter db relation term =
+    match relation_term_value_getter relation term with
+    | Some getter -> getter
+    | None ->
+      let resolved = ref None in
+      (fun _ ->
+        match !resolved with
+        | Some value -> value
+        | None ->
+          let value =
+            match eval_query_term db [] term with
+            | Some result -> Query_eval.value_of_query_result result
+            | None -> None
+          in
+          resolved := Some value;
+          value)
 
   let filter_relation_comparison db relation predicate left_term right_term =
-    match relation_term_value_getter relation left_term, relation_term_value_getter relation right_term with
-    | Some left_value, Some right_value ->
-      { relation with
-        rows =
-          List.filter
-            (fun row ->
-              match left_value row, right_value row with
-              | Some left, Some right ->
-                Built_ins.matches_comparison_predicate
-                  predicate
-                  (query_evaluator_context.compare_value left right)
-              | _ -> false)
-            relation.rows
-      }
-    | _ ->
-      { relation with
-        rows =
-          List.filter
-            (fun row -> relation_comparison_matches db relation row predicate left_term right_term)
-            relation.rows
-      }
+    let left_value = filter_term_value_getter db relation left_term in
+    let right_value = filter_term_value_getter db relation right_term in
+    { relation with
+      rows =
+        List.filter
+          (fun row ->
+            match left_value row, right_value row with
+            | Some left, Some right ->
+              Built_ins.matches_comparison_predicate
+                predicate
+                (query_evaluator_context.compare_value left right)
+            | _ -> false)
+          relation.rows
+    }
 
   let filter_relation_equality db relation predicate terms =
-    let term_values =
-      terms
-      |> List.fold_left
-           (fun acc term ->
-             match acc with
-             | None -> None
-             | Some getters ->
-               Option.map (fun getter -> getter :: getters) (relation_term_value_getter relation term))
-           (Some [])
-      |> Option.map List.rev
-    in
+    let term_values = List.map (filter_term_value_getter db relation) terms in
     let row_matches values =
       let equal = Built_ins.all_values_equal values in
       match predicate with
@@ -910,19 +901,14 @@ end) = struct
       | NotEqualValues -> not equal
     in
     let collect_values row =
-      match term_values with
-      | Some term_values ->
-        term_values
-        |> List.fold_left
-             (fun acc term_value ->
-               match acc with
-               | None -> None
-               | Some values -> Option.map (fun value -> value :: values) (term_value row))
-             (Some [])
-        |> Option.map List.rev
-      | None ->
-        let binding = row_binding relation.attrs row in
-        Query_eval.collect_query_values query_evaluator_context db binding terms
+      term_values
+      |> List.fold_left
+           (fun acc term_value ->
+             match acc with
+             | None -> None
+             | Some values -> Option.map (fun value -> value :: values) (term_value row))
+           (Some [])
+      |> Option.map List.rev
     in
     let rows =
       relation.rows
@@ -1735,9 +1721,127 @@ end) = struct
     in
     promote [] clauses
 
+  let bound_pattern_term bindings = function
+    | QVar name as term ->
+      (match List.assoc_opt name bindings with
+       | Some (Result_entity entity_id) -> QEntity entity_id
+       | Some (Result_value value) -> QValue value
+       | Some (Result_attr attr) -> QAttr attr
+       | Some (Result_db _ | Result_pull _) | None -> term)
+    | term -> term
+
+  let bound_attr_pattern_term bindings term =
+    match bound_pattern_term bindings term with
+    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
+    | term -> term
+
+  let rec bound_relation_clause binding = function
+    | Pattern (e_term, a_term, v_term) ->
+      Pattern
+        ( bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term )
+    | PatternTx (e_term, a_term, v_term, tx_term) ->
+      PatternTx
+        ( bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term
+        , bound_pattern_term binding tx_term )
+    | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) ->
+      PatternTxOp
+        ( bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term
+        , bound_pattern_term binding tx_term
+        , bound_pattern_term binding op_term )
+    | SourcePattern (source_name, e_term, a_term, v_term) ->
+      SourcePattern
+        ( source_name
+        , bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term )
+    | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) ->
+      SourcePatternTx
+        ( source_name
+        , bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term
+        , bound_pattern_term binding tx_term )
+    | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) ->
+      SourcePatternTxOp
+        ( source_name
+        , bound_pattern_term binding e_term
+        , bound_attr_pattern_term binding a_term
+        , bound_pattern_term binding v_term
+        , bound_pattern_term binding tx_term
+        , bound_pattern_term binding op_term )
+    | SourceRelationPattern (source_name, terms) ->
+      SourceRelationPattern (source_name, List.map (bound_pattern_term binding) terms)
+    | ComparisonPredicate (predicate, left_term, right_term) ->
+      ComparisonPredicate
+        (predicate, bound_pattern_term binding left_term, bound_pattern_term binding right_term)
+    | ComparisonPredicateN (predicate, terms) ->
+      ComparisonPredicateN (predicate, List.map (bound_pattern_term binding) terms)
+    | EqualityPredicate (predicate, terms) ->
+      EqualityPredicate (predicate, List.map (bound_pattern_term binding) terms)
+    | ArithmeticValue (op, terms, output_var) ->
+      ArithmeticValue (op, List.map (bound_pattern_term binding) terms, output_var)
+    | NameValue (term, output_var) ->
+      NameValue (bound_pattern_term binding term, output_var)
+    | NamespaceValue (term, output_var) ->
+      NamespaceValue (bound_pattern_term binding term, output_var)
+    | KeywordFromName (term, output_var) ->
+      KeywordFromName (bound_pattern_term binding term, output_var)
+    | KeywordFromNamespaceName (namespace_term, name_term, output_var) ->
+      KeywordFromNamespaceName
+        (bound_pattern_term binding namespace_term, bound_pattern_term binding name_term, output_var)
+    | SourceClause (source_name, clause) ->
+      SourceClause (source_name, bound_relation_clause binding clause)
+    | Not clauses ->
+      Not (List.map (bound_relation_clause binding) clauses)
+    | SourceNot (source_name, clauses) ->
+      SourceNot (source_name, List.map (bound_relation_clause binding) clauses)
+    | NotJoin (vars, clauses) ->
+      NotJoin (vars, List.map (bound_relation_clause binding) clauses)
+    | SourceNotJoin (source_name, vars, clauses) ->
+      SourceNotJoin (source_name, vars, List.map (bound_relation_clause binding) clauses)
+    | clause -> clause
+
+  (* A relation reduced to a single row binds every attr to a constant:
+     propagate the row's values into the remaining clauses (the v3 consts
+     model) so later patterns resolve through bounded index seeks instead
+     of hash/stream joins over the whole attribute. *)
+  let rec collapse_consts_clause binding = function
+    (* not/not-join bodies keep their vars: they are resolved against the
+       outer relation's bound vars (anti_join and
+       ensure_not_has_outer_binding are var-based), and the projected join
+       vars already carry the collapsed constants. *)
+    | (Not _ | SourceNot _ | NotJoin _ | SourceNotJoin _) as clause -> clause
+    | SourceClause (source_name, clause) ->
+      SourceClause (source_name, collapse_consts_clause binding clause)
+    | clause -> bound_relation_clause binding clause
+
+  let substitute_row_consts relation clauses =
+    match relation.rows with
+    | [ row ] when relation.attrs <> [] ->
+      (* Attr-valued consts stay join vars: substituting them into a/value
+         positions produces QAttr, which carries no value constraint there
+         (query_value_term ignores it and direct rows skip the match), while
+         the join key already compares attr values correctly. *)
+      let binding =
+        row_binding relation.attrs row
+        |> List.filter (fun (_, value) ->
+          match value with
+          | Result_attr _ -> false
+          | _ -> true)
+      in
+      List.map (collapse_consts_clause binding) clauses
+    | _ -> clauses
+
   let rec eval_relation_from_relation db sources default_source relation clauses =
     let clauses = promote_attr_binding_clauses clauses in
-    let rec apply relation = function
+    let rec apply relation clauses =
+      match substitute_row_consts relation clauses with
       | [] -> Some relation
       | _ when relation.rows = [] -> Some relation
       | Pattern (e_term, a_term, v_term) :: rest ->
@@ -1854,92 +1958,6 @@ end) = struct
       match relation_of_same_entity_patterns db default_source clauses with
       | Some next -> Some (hash_join relation next)
       | None -> apply relation clauses
-
-  let bound_pattern_term bindings = function
-    | QVar name as term ->
-      (match List.assoc_opt name bindings with
-       | Some (Result_entity entity_id) -> QEntity entity_id
-       | Some (Result_value value) -> QValue value
-       | Some (Result_attr attr) -> QAttr attr
-       | Some (Result_db _ | Result_pull _) | None -> term)
-    | term -> term
-
-  let bound_attr_pattern_term bindings term =
-    match bound_pattern_term bindings term with
-    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
-    | term -> term
-
-  let rec bound_relation_clause binding = function
-    | Pattern (e_term, a_term, v_term) ->
-      Pattern
-        ( bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term )
-    | PatternTx (e_term, a_term, v_term, tx_term) ->
-      PatternTx
-        ( bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term
-        , bound_pattern_term binding tx_term )
-    | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) ->
-      PatternTxOp
-        ( bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term
-        , bound_pattern_term binding tx_term
-        , bound_pattern_term binding op_term )
-    | SourcePattern (source_name, e_term, a_term, v_term) ->
-      SourcePattern
-        ( source_name
-        , bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term )
-    | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) ->
-      SourcePatternTx
-        ( source_name
-        , bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term
-        , bound_pattern_term binding tx_term )
-    | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) ->
-      SourcePatternTxOp
-        ( source_name
-        , bound_pattern_term binding e_term
-        , bound_attr_pattern_term binding a_term
-        , bound_pattern_term binding v_term
-        , bound_pattern_term binding tx_term
-        , bound_pattern_term binding op_term )
-    | SourceRelationPattern (source_name, terms) ->
-      SourceRelationPattern (source_name, List.map (bound_pattern_term binding) terms)
-    | ComparisonPredicate (predicate, left_term, right_term) ->
-      ComparisonPredicate
-        (predicate, bound_pattern_term binding left_term, bound_pattern_term binding right_term)
-    | ComparisonPredicateN (predicate, terms) ->
-      ComparisonPredicateN (predicate, List.map (bound_pattern_term binding) terms)
-    | EqualityPredicate (predicate, terms) ->
-      EqualityPredicate (predicate, List.map (bound_pattern_term binding) terms)
-    | ArithmeticValue (op, terms, output_var) ->
-      ArithmeticValue (op, List.map (bound_pattern_term binding) terms, output_var)
-    | NameValue (term, output_var) ->
-      NameValue (bound_pattern_term binding term, output_var)
-    | NamespaceValue (term, output_var) ->
-      NamespaceValue (bound_pattern_term binding term, output_var)
-    | KeywordFromName (term, output_var) ->
-      KeywordFromName (bound_pattern_term binding term, output_var)
-    | KeywordFromNamespaceName (namespace_term, name_term, output_var) ->
-      KeywordFromNamespaceName
-        (bound_pattern_term binding namespace_term, bound_pattern_term binding name_term, output_var)
-    | SourceClause (source_name, clause) ->
-      SourceClause (source_name, bound_relation_clause binding clause)
-    | Not clauses ->
-      Not (List.map (bound_relation_clause binding) clauses)
-    | SourceNot (source_name, clauses) ->
-      SourceNot (source_name, List.map (bound_relation_clause binding) clauses)
-    | NotJoin (vars, clauses) ->
-      NotJoin (vars, List.map (bound_relation_clause binding) clauses)
-    | SourceNotJoin (source_name, vars, clauses) ->
-      SourceNotJoin (source_name, vars, List.map (bound_relation_clause binding) clauses)
-    | clause -> clause
 
   let relation_prefix_clause = function
     | Pattern _ | PatternTx _ | PatternTxOp _
@@ -2243,7 +2261,8 @@ end) = struct
 
   let eval_relation_from_empty db sources default_source clauses =
     let clauses = promote_attr_binding_clauses clauses in
-    let rec apply relation = function
+    let rec apply relation clauses =
+      match substitute_row_consts relation clauses with
       | [] -> Some relation
       | _ when relation.rows = [] -> Some { relation with rows = []; unique_rows = true }
       | Pattern (e_term, a_term, v_term) :: ComparisonPredicate (predicate, left_term, right_term) :: rest ->
@@ -2437,7 +2456,8 @@ end) = struct
         | [ binding ] -> Some binding
         | _ -> None
       in
-      let rec apply relation = function
+      let rec apply relation clauses =
+        match substitute_row_consts relation clauses with
         | [] -> Some (relation_bindings relation)
         | _ when relation.rows = [] -> Some []
         | Pattern (e_term, a_term, v_term) :: rest ->
