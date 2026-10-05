@@ -40,7 +40,7 @@ let decode_storage_address encoded =
 let storage_payload_path dir address =
   Filename.concat dir (encode_storage_address address ^ ".bin")
 
-let file_storage dir =
+let file_storage ?auto_gc dir =
   ensure_storage_dir dir;
   let write_payload address payload =
     let channel = open_out_bin (storage_payload_path dir address) in
@@ -81,6 +81,7 @@ let file_storage dir =
   ; storage_restore = read_payload
   ; storage_list_addresses = list_addresses
   ; storage_delete = delete
+  ; storage_auto_gc = auto_gc
   }
 
 let str_pattern_of_pattern pattern =

@@ -443,6 +443,63 @@ let test_storage__test_tail_datom_count () =
   assert_equal_int "tail_datom_count sums group sizes" 4
     (Storage.tail_datom_count [ [ d 1 1 ]; [ d 2 2; d 2 3; d 2 4 ]; [] ])
 
+let test_storage__test_auto_gc () =
+  let batches_of_txs conn tx_count batch_count =
+    let entity = ref 0 in
+    for _ = 1 to batch_count do
+      ignore
+        (transact_conn conn
+           (List.init tx_count (fun _ ->
+              incr entity;
+              Add (Entity_id !entity, "name", String (string_of_int !entity)))))
+    done
+  in
+  (* 35 > branching factor 32: every batch compacts, leaving orphaned index
+     nodes behind. Default storage keeps them; an always-tripping policy
+     collects after each compaction. *)
+  let manual_storage = memory_storage () in
+  let manual_conn = create_conn ~schema:[ "name", indexed ] ~storage:manual_storage () in
+  batches_of_txs manual_conn 35 4;
+  let auto_storage = memory_storage ~auto_gc:{ min_garbage = 1; garbage_fraction = 0.0 } () in
+  let auto_conn = create_conn ~schema:[ "name", indexed ] ~storage:auto_storage () in
+  batches_of_txs auto_conn 35 4;
+  let auto_live = List.length (addresses [ conn_db auto_conn ]) in
+  if List.length (storage_addresses auto_storage) <> auto_live then
+    failf
+      "auto-GC should leave only reachable addresses: stored=%d live=%d"
+      (List.length (storage_addresses auto_storage))
+      auto_live;
+  if not (List.length (storage_addresses manual_storage) > auto_live) then
+    failwith "manual storage should accumulate unreachable addresses";
+  (* min_garbage is a floor: a large one keeps the storage manual *)
+  let floored_storage =
+    memory_storage ~auto_gc:{ min_garbage = 1_000_000; garbage_fraction = 0.0 } ()
+  in
+  let floored_conn = create_conn ~schema:[ "name", indexed ] ~storage:floored_storage () in
+  batches_of_txs floored_conn 35 4;
+  assert_equal_int
+    "unreachable floor keeps auto-GC from deleting"
+    (List.length (storage_addresses manual_storage))
+    (List.length (storage_addresses floored_storage));
+  (* maybe_collect_garbage is a no-op without a policy, and honours one *)
+  let probe = memory_storage () in
+  ignore (store ~storage:probe (small_db ()));
+  probe.storage_store [ "stale/addr", Storage_tail [] ];
+  maybe_collect_garbage probe;
+  if not (List.mem "stale/addr" (storage_addresses probe)) then
+    failwith "maybe_collect_garbage should be a no-op without a policy";
+  auto_collect_garbage { min_garbage = 1; garbage_fraction = 0.0 } probe;
+  if List.mem "stale/addr" (storage_addresses probe) then
+    failwith "auto_collect_garbage should delete unreachable addresses";
+  let opted = memory_storage ~auto_gc:{ min_garbage = 1; garbage_fraction = 0.0 } () in
+  ignore (store ~storage:opted (small_db ()));
+  opted.storage_store [ "stale/addr", Storage_tail [] ];
+  maybe_collect_garbage opted;
+  if List.mem "stale/addr" (storage_addresses opted) then
+    failwith "maybe_collect_garbage should honour storage_auto_gc";
+  if default_auto_gc.min_garbage <> 1024 || default_auto_gc.garbage_fraction <> 0.5 then
+    failwith "default_auto_gc should keep the documented policy"
+
 let test_storage__test_db_with_tail () =
   let db =
     empty_db ~schema:[ "block/updated-at", indexed; "block/uuid", unique_identity ] ()
@@ -591,4 +648,5 @@ let () =
   test_storage__test_conn ();
   test_storage__test_conn_tail_write_order ();
   test_storage__test_tail_datom_count ();
+  test_storage__test_auto_gc ();
   test_storage__test_db_with_tail ();

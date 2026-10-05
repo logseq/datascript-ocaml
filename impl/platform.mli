@@ -6,7 +6,7 @@ open Datascript_types
 val now_seconds : unit -> float
 
 (** Create a file-backed storage instance rooted at the given path. *)
-val file_storage : string -> storage
+val file_storage : ?auto_gc:auto_gc -> string -> storage
 
 (** Compile a platform-specific regular expression from a pattern string. *)
 val compile_regex : string -> regex

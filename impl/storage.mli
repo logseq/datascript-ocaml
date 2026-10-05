@@ -11,8 +11,8 @@ type restore_context =
 
 val root_address : storage_address
 val tail_address : storage_address
-val memory_storage : unit -> storage
-val file_storage : string -> storage
+val memory_storage : ?auto_gc:auto_gc -> unit -> storage
+val file_storage : ?auto_gc:auto_gc -> string -> storage
 val store : ?storage:storage -> db -> db
 val store_tail : storage -> datom list list -> unit
 val normalize_stored_datom : schema -> datom -> datom
@@ -27,3 +27,6 @@ val storage : db -> storage option
 val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list
 val collect_garbage : storage -> unit
+val default_auto_gc : auto_gc
+val auto_collect_garbage : auto_gc -> storage -> unit
+val maybe_collect_garbage : storage -> unit

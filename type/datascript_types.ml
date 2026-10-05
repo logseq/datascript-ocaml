@@ -108,11 +108,22 @@ type storage_payload =
   | Storage_node of datom Persistent_sorted_set.stored_node
   | Storage_tail of datom list list
 
+(* Opt-in automatic garbage collection for a storage. After every
+   storage-tail compaction the unreachable-address count is re-evaluated
+   and the garbage is deleted when it is both >= [min_garbage] and
+   >= [garbage_fraction] of all stored addresses. [None] (the default)
+   keeps upstream's manual-only [collect_garbage]. *)
+type auto_gc =
+  { min_garbage : int
+  ; garbage_fraction : float
+  }
+
 type storage =
   { storage_store : (storage_address * storage_payload) list -> unit
   ; storage_restore : storage_address -> storage_payload option
   ; storage_list_addresses : unit -> storage_address list
   ; storage_delete : storage_address list -> unit
+  ; storage_auto_gc : auto_gc option
   }
 
 type tx_value =

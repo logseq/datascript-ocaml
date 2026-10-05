@@ -1335,7 +1335,7 @@ let upsert_sql (address, payload) =
     (sql_quote content)
     addresses
 
-let storage db_path =
+let storage ?auto_gc db_path =
   create_kvs_table db_path;
   let store entries =
     let sql = String.concat "" (List.map upsert_sql entries) in
@@ -1375,4 +1375,5 @@ let storage db_path =
   ; storage_restore = restore
   ; storage_list_addresses = list_addresses
   ; storage_delete = delete
+  ; storage_auto_gc = auto_gc
   }

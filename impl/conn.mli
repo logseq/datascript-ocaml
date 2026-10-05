@@ -23,6 +23,7 @@ type transact_context =
   ; store_tail : storage -> datom list list -> unit
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
+  ; maybe_collect_garbage : storage -> unit
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
@@ -40,6 +41,7 @@ type context =
   ; restore_tail_groups : storage -> datom list list
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
+  ; maybe_collect_garbage : storage -> unit
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db

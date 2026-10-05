@@ -6,7 +6,7 @@ let now_seconds () =
   let now_ms = Js.Unsafe.meth_call Js.date "now" [||] in
   Js.to_float now_ms /. 1000.0
 
-let file_storage _dir =
+let file_storage ?auto_gc:_ _dir =
   invalid_arg "file_storage is not supported on js_of_ocaml"
 
 let compile_regex = Regexp.regexp

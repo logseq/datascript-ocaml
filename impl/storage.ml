@@ -23,7 +23,7 @@ let next_storage_address () =
 let note_storage_root root =
   max_storage_addr := max !max_storage_addr root.storage_max_addr
 
-let memory_storage () =
+let memory_storage ?auto_gc () =
   let disk = ref [] in
   let store entries =
     disk :=
@@ -45,6 +45,7 @@ let memory_storage () =
   ; storage_restore = restore
   ; storage_list_addresses = list_addresses
   ; storage_delete = delete
+  ; storage_auto_gc = auto_gc
   }
 
 let file_storage = Platform.file_storage
@@ -442,9 +443,29 @@ let settings (db : db) =
   ; "storage", Bool (Option.is_some db.storage_ref)
   ]
 
-let collect_garbage storage =
+let live_address_set storage =
   let live = Hashtbl.create 257 in
   List.iter (fun address -> Hashtbl.replace live address ()) (storage_root_addresses storage);
-  storage.storage_list_addresses ()
-  |> List.filter (fun address -> not (Hashtbl.mem live address))
-  |> storage.storage_delete
+  live
+
+let unreachable_addresses live storage =
+  List.filter (fun address -> not (Hashtbl.mem live address)) (storage.storage_list_addresses ())
+
+let collect_garbage storage =
+  unreachable_addresses (live_address_set storage) storage |> storage.storage_delete
+
+let default_auto_gc = { min_garbage = 1024; garbage_fraction = 0.5 }
+
+let auto_collect_garbage policy storage =
+  let live = live_address_set storage in
+  let all = storage.storage_list_addresses () in
+  let garbage = List.filter (fun address -> not (Hashtbl.mem live address)) all in
+  if
+    List.length garbage >= policy.min_garbage
+    && float_of_int (List.length garbage) >= policy.garbage_fraction *. float_of_int (List.length all)
+  then storage.storage_delete garbage
+
+let maybe_collect_garbage storage =
+  match storage.storage_auto_gc with
+  | None -> ()
+  | Some policy -> auto_collect_garbage policy storage
