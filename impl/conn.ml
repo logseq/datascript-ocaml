@@ -5,7 +5,10 @@ type t =
   ; mutable listeners : (string * (tx_report -> unit)) list
   ; mutable next_listener_id : int
   ; storage : storage option
-  ; mutable storage_tail : datom list list
+  ; (* per-transaction datom batches, newest first: consing each report's
+       tx_data is O(1); reversed back to on-disk tx order only when the
+       tail is written or read out *)
+    mutable storage_tail : datom list list
   }
 
 type creation_context =
@@ -70,7 +73,7 @@ let make ?storage ?(storage_tail = []) db =
     | None -> db
     | Some _ -> { db with storage_ref = storage }
   in
-  { db; listeners = []; next_listener_id = 0; storage; storage_tail }
+  { db; listeners = []; next_listener_id = 0; storage; storage_tail = List.rev storage_tail }
 
 let create (context : creation_context) ?schema ?storage () =
   let db = context.empty_db ?schema ?storage () in
@@ -97,7 +100,7 @@ let db conn = conn.db
    store/notify side effects, for bookkeeping fields like :max-tx. *)
 let update_db conn f = conn.db <- f conn.db
 
-let storage_tail conn = conn.storage_tail
+let storage_tail conn = List.rev conn.storage_tail
 
 let is_conn (_ : t) = true
 
@@ -145,13 +148,13 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
      | None -> ()
      | Some storage ->
        if report.tx_data <> [] then begin
-         let tail = conn.storage_tail @ [ report.tx_data ] in
+         let tail = report.tx_data :: conn.storage_tail in
          if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold report.db_after then begin
            conn.db <- context.store ~storage report.db_after;
            conn.storage_tail <- []
          end else begin
            conn.storage_tail <- tail;
-           context.store_tail storage conn.storage_tail
+           context.store_tail storage (List.rev conn.storage_tail)
          end
        end);
   notify_listeners conn report;
@@ -173,13 +176,13 @@ let apply_report (context : transact_context) conn (report : tx_report) =
    | None -> ()
    | Some storage ->
      if report.tx_data <> [] then begin
-       let tail = conn.storage_tail @ [ report.tx_data ] in
+       let tail = report.tx_data :: conn.storage_tail in
        if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold db_after then begin
          conn.db <- context.store ~storage db_after;
          conn.storage_tail <- []
        end else begin
          conn.storage_tail <- tail;
-         context.store_tail storage conn.storage_tail
+         context.store_tail storage (List.rev conn.storage_tail)
        end
      end);
   let report = { report with db_after } in

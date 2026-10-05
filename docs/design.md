@@ -159,6 +159,16 @@ Not every value near the DB should become an ordered persistent index.
 Moving these to PSS would not improve parity with upstream DataScript and would
 make serialization and equality behavior more complex.
 
+## Storage Tail
+
+`conn.storage_tail` holds one `datom list` batch per committed transaction,
+stored newest-first so appending a transaction's `tx_data` is O(1). The
+batches are flattened back to transaction order only where the flat tail is
+consumed: `store_tail` writes, `storage_tail_datom_count`, the compaction
+threshold check, and the `Conn.storage_tail` accessor. The persisted
+`Storage_tail` payload keeps upstream's transaction-order-then-in-transaction
+datom order.
+
 ## Persistent Sorted Set Dependency
 
 The repo depends on `persistent_sorted_set_ocaml` through an opam pin to

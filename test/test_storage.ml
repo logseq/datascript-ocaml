@@ -379,6 +379,70 @@ let test_storage__test_conn () =
       (datoms restored_db Eavt ())
   | None -> failwith "conn_from_datoms should store attached datoms"
 
+let tail_groups storage =
+  match storage.storage_restore Storage.tail_address with
+  | Some (Storage_tail groups) -> groups
+  | _ -> failwith "storage tail address missing"
+
+let flatten_tail_groups groups =
+  List.map (fun group -> List.map (fun d -> d.e, d.a, d.v) group) groups
+
+let test_storage__test_conn_tail_write_order () =
+  let storage = memory_storage () in
+  let conn = create_conn ~storage () in
+  let assert_tail label conn expected =
+    let stored = flatten_tail_groups (tail_groups storage) in
+    if stored <> expected then
+      failf "%s: stored tail order mismatch: %s" label
+        (String.concat ";" (List.map (fun g -> string_of_int (List.length g)) stored));
+    if flatten_tail_groups (Conn.storage_tail conn) <> expected then
+      failwith (label ^ ": conn storage_tail accessor order mismatch")
+  in
+  ignore (transact_conn conn [ Add (Entity_id 1, "a", String "1") ]);
+  ignore
+    (transact_conn conn
+       [ Add (Entity_id 2, "a", String "2"); Add (Entity_id 2, "b", String "3") ]);
+  assert_tail "two txs" conn
+    [ [ 1, "a", String "1" ]
+    ; [ 2, "a", String "2"; 2, "b", String "3" ]
+    ];
+  (* a restored conn seeds its tail from disk and keeps appending in tx
+     order; the on-disk order must survive the internal reversal *)
+  let conn =
+    match restore_conn storage with
+    | Some conn -> conn
+    | None -> failwith "restore_conn should return a conn"
+  in
+  ignore (transact_conn conn [ Add (Entity_id 3, "a", String "4") ]);
+  assert_tail "restored conn" conn
+    [ [ 1, "a", String "1" ]
+    ; [ 2, "a", String "2"; 2, "b", String "3" ]
+    ; [ 3, "a", String "4" ]
+    ];
+  (* crossing the compaction threshold clears the stored tail *)
+  ignore
+    (transact_conn conn
+       (List.init 40 (fun i -> Add (Entity_id (i + 10), "a", String (string_of_int i)))));
+  (match tail_groups storage with
+   | [] -> ()
+   | _ -> failwith "compaction should clear the stored tail");
+  ignore (transact_conn conn [ Add (Entity_id 99, "a", String "9") ]);
+  assert_tail "post-compaction" conn [ [ 99, "a", String "9" ] ];
+  assert_equal_triples
+    "all datoms queryable after compaction"
+    [ 1, "a", String "1"; 2, "a", String "2"; 2, "b", String "3"
+    ; 3, "a", String "4"; 99, "a", String "9" ]
+    (datoms (conn_db conn) Eavt ~e:1 ()
+     @ datoms (conn_db conn) Eavt ~e:2 ()
+     @ datoms (conn_db conn) Eavt ~e:3 ()
+     @ datoms (conn_db conn) Eavt ~e:99 ()
+     |> List.sort compare)
+
+let test_storage__test_tail_datom_count () =
+  let d tx e = datom ~tx ~e ~a:"a" ~v:(String "v") () in
+  assert_equal_int "tail_datom_count sums group sizes" 4
+    (Storage.tail_datom_count [ [ d 1 1 ]; [ d 2 2; d 2 3; d 2 4 ]; [] ])
+
 let test_storage__test_db_with_tail () =
   let db =
     empty_db ~schema:[ "block/updated-at", indexed; "block/uuid", unique_identity ] ()
@@ -525,4 +589,6 @@ let () =
   test_storage__test_transact_after_restore_uses_index_slices ();
   test_storage__test_conn_repeated_transacts_store_incrementally ();
   test_storage__test_conn ();
+  test_storage__test_conn_tail_write_order ();
+  test_storage__test_tail_datom_count ();
   test_storage__test_db_with_tail ();

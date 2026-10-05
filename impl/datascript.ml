@@ -903,11 +903,14 @@ let persist_transact_tail ~tx_meta db tx_data =
     match db.storage_ref with
     | None -> db
     | Some storage ->
-      let tail = restore_tail_groups storage @ [ tx_data ] in
-      if storage_tail_datom_count tail > storage_tail_compaction_threshold db then
+      let groups = restore_tail_groups storage in
+      if
+        storage_tail_datom_count groups + List.length tx_data
+        > storage_tail_compaction_threshold db
+      then
         store ~storage db
       else begin
-        store_tail storage tail;
+        store_tail storage (groups @ [ tx_data ]);
         db
       end
 

@@ -280,7 +280,7 @@ let tail_compaction_threshold (db : db) =
   (PSet.settings db.eavt_index).branching_factor
 
 let tail_datom_count tail =
-  tail |> List.concat |> List.length
+  List.fold_left (fun count group -> count + List.length group) 0 tail
 
 let restore_root_snapshot storage =
   match storage.storage_restore root_address with
