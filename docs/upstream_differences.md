@@ -105,14 +105,12 @@ through them.
 
 ### DataScript: Direct Lookup Refs Scan Visible Datoms
 
-Some unique-value checks already use the `AVET` index, including transaction
-conflict checks. Direct `entid` and lookup-ref resolution still go through
-`visible_datoms` and then scan a list for the matching unique attribute/value.
-
-That preserves result behavior, but it is an eager path where upstream can use
-indexed lookup. Exact parity should route direct lookup-ref resolution through a
-bounded `AVET` lookup, while keeping transaction-local datom-list paths for
-staged transaction state.
+Resolved. Direct `entid` and lookup-ref resolution now go through `find_avet_exact`,
+a bounded `AVET` seek on the attribute/value slice, instead of materializing
+`visible_datoms` and scanning a list. Transaction-local datom-list paths remain
+for staged transaction state (`entity_id_in_datoms` keeps its list semantics), and
+`find_avet_exact` applies `filter_pred` so filtered-db results match the old
+`visible_datoms` path.
 
 ### DataScript: Public Options Are Narrower Than Upstream
 
@@ -250,9 +248,9 @@ evidence shows parity or there is no upstream surface in the checked-out source:
    values by default to match upstream API shape more closely.
 5. Add lazy seek/range APIs for `seek_datoms`, `rseek_datoms`, and
    `index_range`, then route compatibility layers through those APIs.
-6. Route direct lookup-ref resolution through bounded `AVET` lookup instead of
+6. ~~Route direct lookup-ref resolution through bounded `AVET` lookup instead of
    scanning `visible_datoms`, while preserving transaction-local datom-list
-   behavior.
+   behavior.~~ Done.
 7. ~~Rework entity values into lazy views so constructing an entity does not
    materialize all forward and reverse attributes before `entity_attr`
    access.~~ Done: `entity` construction is O(1) (db + eid plus a bounded

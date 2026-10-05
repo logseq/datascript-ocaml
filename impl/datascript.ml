@@ -92,8 +92,6 @@ let empty db = Db_impl.empty db_core_context db
 let init_db ?(schema = []) ?storage datoms =
   Db_impl.init_db db_core_context ~schema ?storage datoms
 
-let visible_datoms = Db_impl.visible_datoms
-
 let is_filtered = Db_impl.is_filtered
 
 let unfiltered_db db = Db_impl.unfiltered db_core_context db
@@ -205,7 +203,6 @@ module Transact_datoms_impl = Transact_datoms.Make (struct
   let normalize_value = normalize_value
   let validate_entity_id = validate_entity_id
   let max_allocatable_entity_id = max_allocatable_entity_id
-  let visible_datoms = visible_datoms
 end)
 
 let normalize_entity_attr_value = Transact_datoms_impl.normalize_entity_attr_value
@@ -251,20 +248,6 @@ let cas_expected_value_string = function
   | None -> "nil"
   | Some value -> edn_string_of_value value
 
-let lookup_refs_context : Lookup_refs.context =
-  { is_unique
-  ; entid_in_datoms
-  ; visible_datoms
-  ; value_to_string = edn_string_of_value
-  }
-
-let unresolved_lookup_ref_message attr value =
-  Lookup_refs.unresolved_message lookup_refs_context attr value
-
-let unresolved_entity_ref_message = function
-  | Lookup_ref (attr, value) -> unresolved_lookup_ref_message attr value
-  | _ -> "lookup ref did not resolve"
-
 let find_avet_exact db attr value =
   let bound = datom ~e:0 ~a:attr ~v:value () in
   let compare_prefix left right =
@@ -276,15 +259,15 @@ let find_avet_exact db attr value =
     else if left == bound then -compare_prefix right left
     else Util.compare_datom Avet left right
   in
-  match
-    PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
-    @ List.filter
-        (fun datom -> datom.a = attr && value_equal datom.v value)
-        (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
-    |> List.sort (Util.compare_datom Avet)
-  with
-  | datom :: _ -> Some datom
-  | [] -> None
+  PSet.slice ~from_:bound ~to_:bound ~cmp db.avet_index
+  @ List.filter
+      (fun datom -> datom.a = attr && value_equal datom.v value)
+      (Option.value (Hashtbl.find_opt db.duplicate_avet_by_attr attr) ~default:[])
+  |> List.sort (Util.compare_datom Avet)
+  |> List.find_opt (fun datom ->
+    match db.filter_pred with
+    | Some pred -> pred datom
+    | None -> true)
 
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
@@ -357,6 +340,22 @@ and entid_db db attr value =
   else
     None
 
+let entid = entid_db
+
+let lookup_refs_context : Lookup_refs.context =
+  { is_unique
+  ; entid = entid_db
+  ; entid_in_datoms
+  ; value_to_string = edn_string_of_value
+  }
+
+let unresolved_lookup_ref_message attr value =
+  Lookup_refs.unresolved_message lookup_refs_context attr value
+
+let unresolved_entity_ref_message = function
+  | Lookup_ref (attr, value) -> unresolved_lookup_ref_message attr value
+  | _ -> "lookup ref did not resolve"
+
 let lookup_ref_entity_id_db ?(strict_missing = false) db attr value =
   if not (is_unique db attr) then
     invalid_arg (Lookup_refs.non_unique_message lookup_refs_context attr value);
@@ -367,8 +366,6 @@ let lookup_ref_entity_id_db ?(strict_missing = false) db attr value =
       invalid_arg (unresolved_lookup_ref_message attr value)
     else
       None
-
-let entid = entid_db
 
 module Transact_impl = Transact
 
