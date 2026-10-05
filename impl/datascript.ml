@@ -116,6 +116,7 @@ let store ?storage db =
 
 let memory_storage = Storage.memory_storage
 let file_storage = Storage.file_storage
+let default_auto_gc = Storage.default_auto_gc
 let store_tail = Storage.store_tail
 let storage_tail_compaction_threshold = Storage.tail_compaction_threshold
 let storage_tail_datom_count = Storage.tail_datom_count
@@ -125,6 +126,8 @@ let storage = Storage.storage
 let addresses = Storage.addresses
 let settings = Storage.settings
 let collect_garbage = Storage.collect_garbage
+let auto_collect_garbage = Storage.auto_collect_garbage
+let maybe_collect_garbage = Storage.maybe_collect_garbage
 
 let conn_creation_context : Conn.creation_context =
   { empty_db; init_db; store }
@@ -907,9 +910,11 @@ let persist_transact_tail ~tx_meta db tx_data =
       if
         storage_tail_datom_count groups + List.length tx_data
         > storage_tail_compaction_threshold db
-      then
-        store ~storage db
-      else begin
+      then begin
+        let db = store ~storage db in
+        maybe_collect_garbage storage;
+        db
+      end else begin
         store_tail storage (groups @ [ tx_data ]);
         db
       end
@@ -931,6 +936,7 @@ let transact_conn ?(tx_meta = []) conn tx_data =
     ; store_tail
     ; storage_tail_datom_count
     ; storage_tail_compaction_threshold
+    ; maybe_collect_garbage
     ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
     }
   in
@@ -942,6 +948,7 @@ let apply_report (conn : conn) (report : tx_report) : tx_report =
     ; store_tail
     ; storage_tail_datom_count
     ; storage_tail_compaction_threshold
+    ; maybe_collect_garbage
     ; transact = (fun ~tx_meta db tx_data -> transact_report ~tx_meta db tx_data)
     }
   in

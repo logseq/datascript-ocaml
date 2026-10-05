@@ -32,6 +32,7 @@ type transact_context =
   ; store_tail : storage -> datom list list -> unit
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
+  ; maybe_collect_garbage : storage -> unit
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   }
 
@@ -49,6 +50,7 @@ type context =
   ; restore_tail_groups : storage -> datom list list
   ; storage_tail_datom_count : datom list list -> int
   ; storage_tail_compaction_threshold : db -> int
+  ; maybe_collect_garbage : storage -> unit
   ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
   ; datoms : db -> datom list
   ; with_schema : db -> schema -> db
@@ -151,7 +153,8 @@ let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
          let tail = report.tx_data :: conn.storage_tail in
          if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold report.db_after then begin
            conn.db <- context.store ~storage report.db_after;
-           conn.storage_tail <- []
+           conn.storage_tail <- [];
+           context.maybe_collect_garbage storage
          end else begin
            conn.storage_tail <- tail;
            context.store_tail storage (List.rev conn.storage_tail)
@@ -179,7 +182,8 @@ let apply_report (context : transact_context) conn (report : tx_report) =
        let tail = report.tx_data :: conn.storage_tail in
        if context.storage_tail_datom_count tail > context.storage_tail_compaction_threshold db_after then begin
          conn.db <- context.store ~storage db_after;
-         conn.storage_tail <- []
+         conn.storage_tail <- [];
+         context.maybe_collect_garbage storage
        end else begin
          conn.storage_tail <- tail;
          context.store_tail storage (List.rev conn.storage_tail)

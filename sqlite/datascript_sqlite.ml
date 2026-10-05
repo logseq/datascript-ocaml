@@ -24,7 +24,7 @@ let close session =
     sqlite_close session.path;
     session.closed <- true)
 
-let storage session : Ds.storage =
+let storage ?auto_gc session : Ds.storage =
   { storage_store =
       (fun entries ->
         ensure_open session;
@@ -46,4 +46,5 @@ let storage session : Ds.storage =
       (fun addresses ->
         ensure_open session;
         sqlite_delete session.path addresses)
+  ; storage_auto_gc = auto_gc
   }

@@ -169,6 +169,26 @@ threshold check, and the `Conn.storage_tail` accessor. The persisted
 `Storage_tail` payload keeps upstream's transaction-order-then-in-transaction
 datom order.
 
+## Garbage Collection
+
+`Storage.collect_garbage` stays manual-only by default, matching upstream
+DataScript: storage files grow until a caller collects unreachable addresses.
+An opt-in automatic policy can be attached to a `storage` record through its
+`storage_auto_gc` field — set it with the `?auto_gc` argument on
+`memory_storage`, `file_storage`, or the SQLite storage constructors.
+
+- `auto_gc.min_garbage` — minimum number of unreachable storage addresses
+  before collection runs.
+- `auto_gc.garbage_fraction` — minimum share of all stored addresses that must
+  be unreachable before collection runs.
+
+After a storage-tail compaction writes a fresh index snapshot,
+`maybe_collect_garbage` re-evaluates the addresses unreachable from the new
+root and deletes them when both thresholds trip. With no policy (`None`, the
+default) nothing is deleted automatically; reclaim space by calling
+`collect_garbage`, or `auto_collect_garbage` with an explicit policy.
+`default_auto_gc` is `{ min_garbage = 1024; garbage_fraction = 0.5 }`.
+
 ## Persistent Sorted Set Dependency
 
 The repo depends on `persistent_sorted_set_ocaml` through an opam pin to

@@ -99,6 +99,7 @@ module Conn : sig
     ; store_tail : storage -> datom list list -> unit
     ; storage_tail_datom_count : datom list list -> int
     ; storage_tail_compaction_threshold : db -> int
+    ; maybe_collect_garbage : storage -> unit
     ; transact : tx_meta:tx_meta -> db -> tx_op list -> tx_report
     }
 
@@ -247,8 +248,8 @@ module Storage : sig
 
   val root_address : storage_address
   val tail_address : storage_address
-  val memory_storage : unit -> storage
-  val file_storage : string -> storage
+  val memory_storage : ?auto_gc:auto_gc -> unit -> storage
+  val file_storage : ?auto_gc:auto_gc -> string -> storage
   val store : ?storage:storage -> db -> db
   val store_tail : storage -> datom list list -> unit
   val tail_compaction_threshold : db -> int
@@ -262,6 +263,18 @@ module Storage : sig
   val addresses : db list -> storage_address list
   val settings : db -> (attr * value) list
   val collect_garbage : storage -> unit
+  (* Default opt-in GC policy: collect when at least 1024 addresses are
+      unreachable and they make up >= 50% of all stored addresses. *)
+  val default_auto_gc : auto_gc
+  (* Evaluate an auto-GC policy once: count the addresses no longer
+      reachable from the stored root and delete them when the garbage is
+      both >= [policy.min_garbage] and >= [policy.garbage_fraction] of all
+      stored addresses. *)
+  val auto_collect_garbage : auto_gc -> storage -> unit
+  (* [auto_collect_garbage] driven by [storage.storage_auto_gc]; a no-op
+      when the storage carries no policy (the default). Invoked
+      automatically after every storage-tail compaction. *)
+  val maybe_collect_garbage : storage -> unit
 end
 
 module Util : sig
@@ -413,8 +426,12 @@ val unfiltered_db : db -> db
 val serializable : db -> serializable_db
 val from_serializable : serializable_db -> db
 val db_from_reader_string : string -> db
-val memory_storage : unit -> storage
-val file_storage : string -> storage
+(* [auto_gc] opts a storage into automatic garbage collection after each
+    storage-tail compaction; omitted, [collect_garbage] stays manual-only
+    (upstream behaviour). *)
+val memory_storage : ?auto_gc:auto_gc -> unit -> storage
+val file_storage : ?auto_gc:auto_gc -> string -> storage
+val default_auto_gc : auto_gc
 val store : ?storage:storage -> db -> db
 val store_tail : storage -> datom list list -> unit
 val restore : storage -> db option
@@ -424,6 +441,9 @@ val addresses : db list -> storage_address list
 val settings : db -> (attr * value) list
 val storage_addresses : storage -> storage_address list
 val collect_garbage : storage -> unit
+(* See [Storage.auto_collect_garbage] / [Storage.maybe_collect_garbage]. *)
+val auto_collect_garbage : auto_gc -> storage -> unit
+val maybe_collect_garbage : storage -> unit
 val db_hash : db -> int
 val db_hash_cache_size : unit -> int
 val diff : db -> db -> datom list * datom list * datom list
