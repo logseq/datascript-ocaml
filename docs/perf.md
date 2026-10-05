@@ -110,10 +110,21 @@ Current status:
 - `js_of_ocaml` is faster than upstream on nearly all cases; exceptions are
   `add-all` at size 10000 (2105 ms vs 941.57 ms) and `q3` at sizes 1000 and
   10000 (1.61 ms vs 1.31 ms at 10000).
-- `js_of_ocaml` overflows the default Node.js stack at size 10000
-  (`RangeError: Maximum call stack size exceeded` during `add-all`). The
-  numbers above were measured with `node --stack-size=8000`; this is a known
-  js_of_ocaml recursion limitation, not a benchmark artifact.
+- `js_of_ocaml` used to overflow the default Node.js stack at size 10000
+  (`RangeError: Maximum call stack size exceeded` during `add-all`), so the
+  size-10000 numbers above were measured with `node --stack-size=8000`. The
+  recursion was `List.remove_assoc` — non-tail in the OCaml stdlib — walking
+  the per-transaction tempid order list in `ensure_current_tx_tempid`
+  (`impl/transact.ml`), one entry per transacted entity (~10000 frames plus
+  `caml_compare` calls). A tail-recursive `remove_assoc` now ships in the
+  `Datascript_types.List` shadow (`type/datascript_types.ml`), next to the
+  existing `concat_map`/`concat`/`flatten` overrides, so native, Melange,
+  and js_of_ocaml all get the bounded-stack version. Verified: the full
+  size-10000 suite now completes under `node --stack-size=200`, and
+  `add-all` at size 10000 measured 764–923 ms (jsoo) vs 245 ms (native) on
+  the same machine (before the fix: 825 ms jsoo / 245 ms native, measured
+  with the default Node stack which happens to fit the ~10k-deep recursion
+  on Node 24).
 - `storage-roundtrip` has no upstream equivalent (upstream bundle is in-memory
   only), so it is reported without a comparison.
 - `get-page-data` models Logseq's `logseq.api.db-based.tools/get-page-data`:

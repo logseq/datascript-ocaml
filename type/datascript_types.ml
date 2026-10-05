@@ -534,10 +534,14 @@ type tx_report =
 (* The Melange stdlib compiles List.concat_map/concat/flatten into recursive
    JS calls whose depth grows with the input (concat_map once per element
    mapped to [], concat/flatten once per sublist), which overflows the JS
-   call stack on data-sized lists such as query binding sets. These
-   tail-recursive versions keep the exact Stdlib.List semantics on every
-   platform. Declared here so the universal `open Datascript_types` (and
-   `open Datascript`) shadows them module-wide. *)
+   call stack on data-sized lists such as query binding sets. js_of_ocaml
+   hits the same wall through the OCaml stdlib: List.remove_assoc is not
+   tail-recursive there either, and walking a data-sized assoc list (e.g.
+   the tempid order list, one entry per transacted entity) overflows the JS
+   call stack where native barely notices. These tail-recursive versions
+   keep the exact Stdlib.List semantics on every platform. Declared here so
+   the universal `open Datascript_types` (and `open Datascript`) shadows
+   them module-wide. *)
 module List = struct
   include List
 
@@ -550,4 +554,12 @@ module List = struct
 
   let concat l = concat_map (fun x -> x) l
   let flatten = concat
+
+  let remove_assoc x l =
+    let rec aux rev_prefix = function
+      | [] -> List.rev rev_prefix
+      | ((a, _) as pair) :: rest ->
+        if a = x then List.rev_append rev_prefix rest else aux (pair :: rev_prefix) rest
+    in
+    aux [] l
 end
