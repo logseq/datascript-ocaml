@@ -1040,6 +1040,7 @@ let search_attr_value db attr value =
 
 let entity_context =
   { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_entity_attr = (fun db entity_id attr -> datoms db Eavt ~e:entity_id ~a:attr ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value

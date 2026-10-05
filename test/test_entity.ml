@@ -289,6 +289,9 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
             Add (Entity_id (index + 2), "friend", Ref 1)))
   in
   let all_datoms_calls = ref 0 in
+  let datoms_by_entity_calls = ref 0 in
+  let datoms_by_entity_attr_calls = ref 0 in
+  let datoms_by_avet_ref_calls = ref 0 in
   let schema_attr db attr = List.assoc_opt attr db.schema in
   let cardinality db attr =
     match schema_attr db attr with
@@ -311,8 +314,18 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
     | _ -> None
   in
   let context : Entity.context =
-    { datoms_by_entity = (fun db entity_id -> datoms_seq db Eavt ~e:entity_id ())
-    ; datoms_by_avet_ref = (fun db attr entity_id -> datoms_seq db Avet ~a:attr ~v:(Ref entity_id) ())
+    { datoms_by_entity =
+        (fun db entity_id ->
+          incr datoms_by_entity_calls;
+          datoms_seq db Eavt ~e:entity_id ())
+    ; datoms_by_entity_attr =
+        (fun db entity_id attr ->
+          incr datoms_by_entity_attr_calls;
+          datoms_seq db Eavt ~e:entity_id ~a:attr ())
+    ; datoms_by_avet_ref =
+        (fun db attr entity_id ->
+          incr datoms_by_avet_ref_calls;
+          datoms_seq db Avet ~a:attr ~v:(Ref entity_id) ())
     ; all_datoms =
         (fun db ->
           incr all_datoms_calls;
@@ -332,15 +345,37 @@ let test_entity__test_entity_attr_lookup_is_lazy () =
     | None -> failwith "expected entity"
   in
   assert_equal_int "constructing an entity should not scan all datoms" 0 !all_datoms_calls;
+  assert_equal_int
+    "constructing an entity peeks at its own datoms once (numeric-eid-exists?)"
+    1 !datoms_by_entity_calls;
   assert_equal_tx_value
     "forward attr lookup should not materialize reverse attrs"
     (Some (One_value (String "Ivan")))
     (Entity.entity_attr context entity "name");
   assert_equal_int "forward attr lookup should still avoid all datoms" 0 !all_datoms_calls;
+  assert_equal_int
+    "forward attr lookup should seek only that attr's datoms"
+    1 !datoms_by_entity_attr_calls;
+  assert_equal_int
+    "forward attr lookup should not scan all of the entity's datoms"
+    1 !datoms_by_entity_calls;
+  ignore (Entity.entity_attr context entity "name");
+  assert_equal_int "repeated attr lookups should hit the entity cache" 1 !datoms_by_entity_attr_calls;
   ignore (Entity.entity_attr context entity "_friend");
   assert_equal_int "reverse attr lookup should use AVET instead of all datoms" 0 !all_datoms_calls;
+  assert_equal_int "reverse attr lookup should seek the ref attr's datoms" 1 !datoms_by_avet_ref_calls;
+  let scans_before_attrs = !datoms_by_entity_calls in
   ignore (Entity.entity_attrs entity);
-  assert_equal_int "full entity materialization only reads the entity's own datoms" 0 !all_datoms_calls
+  assert_equal_int "full entity materialization only reads the entity's own datoms" 0 !all_datoms_calls;
+  assert_equal_int
+    "entity materialization scans the entity's datoms once"
+    (scans_before_attrs + 1) !datoms_by_entity_calls;
+  ignore (Entity.entity_attrs entity);
+  assert_equal_int "entity_attrs caches the materialized attrs" (scans_before_attrs + 1) !datoms_by_entity_calls;
+  ignore (Entity.entity_attr context entity "missing");
+  assert_equal_int
+    "a touched entity answers absent forward attrs without another seek"
+    1 !datoms_by_entity_attr_calls
 
 let () =
   test_entity__test_entity ();

@@ -88,25 +88,6 @@ test-validation` to `test_q_input_arity_matches_upstream_validation_messages`.
 The tested validation behavior matches, but the full upstream `query_v3`
 implementation is not ported as a separate surface.
 
-### DataScript: Entity Construction Is Not Lazy
-
-Upstream DataScript entities behave as lazy entity views: constructing an entity
-does not require building the full attribute map, and attributes are resolved
-when requested.
-
-The OCaml `entity` type currently stores a concrete `attrs` list. Calling
-`entity db entity_ref` resolves the entity id, materializes forward attributes
-from the EAVT entity slice, scans visible datoms for reverse attributes, sorts
-the resulting attributes, and then returns the entity record. Referenced entity
-values are still expanded later by `entity_attr`, but the base entity attribute
-map is already materialized.
-
-The current behavior can still match observable entity results, but it is an
-implementation divergence from upstream laziness and can affect performance for
-call sites that only need one attribute from an entity. Exact upstream parity
-should move entity values back toward lazy views and make `entity_attr` perform
-bounded per-attribute index access.
-
 ### DataScript: Seek And Range APIs Materialize Lists
 
 Public `datoms` and `datoms_ref` return `Seq.t` and preserve lazy index access
@@ -272,8 +253,13 @@ evidence shows parity or there is no upstream surface in the checked-out source:
 6. Route direct lookup-ref resolution through bounded `AVET` lookup instead of
    scanning `visible_datoms`, while preserving transaction-local datom-list
    behavior.
-7. Rework entity values into lazy views so constructing an entity does not
-   materialize all forward and reverse attributes before `entity_attr` access.
+7. ~~Rework entity values into lazy views so constructing an entity does not
+   materialize all forward and reverse attributes before `entity_attr`
+   access.~~ Done: `entity` construction is O(1) (db + eid plus a bounded
+   `numeric-eid-exists?`-style peek), `entity_attr` resolves a single attr
+   through a bounded `(eid, attr)` EAVT seek (reverse `:_` attrs through a
+   bounded AVET seek on the ref attribute), and `entity_attrs`/`touch`
+   materialize on demand and cache the result on the entity.
 8. Keep restored PSS `to_seq` and `count` lazy/metadata-backed enough for
    storage-backed DataScript indexes.
 9. Keep the existing coverage scripts and cross-runtime parity gate as required
