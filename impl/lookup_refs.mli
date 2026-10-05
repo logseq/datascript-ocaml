@@ -2,8 +2,8 @@ open Datascript_types
 
 type context =
   { is_unique : db -> attr -> bool
+  ; entid : db -> attr -> value -> entity_id option
   ; entid_in_datoms : db -> datom list -> attr -> value -> entity_id option
-  ; visible_datoms : db -> datom list
   ; value_to_string : value -> string
   }
 

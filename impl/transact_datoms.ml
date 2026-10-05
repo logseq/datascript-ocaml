@@ -17,7 +17,6 @@ module Make (Context : sig
   val normalize_value : value -> value
   val validate_entity_id : int -> entity_id
   val max_allocatable_entity_id : int
-  val visible_datoms : db -> datom list
 end) = struct
   open Context
 
@@ -314,7 +313,5 @@ end) = struct
       |> Option.map (fun d -> d.e)
     else
       None
-  
-  let entid db attr value = entid_in_datoms db (visible_datoms db) attr value
   
 end
