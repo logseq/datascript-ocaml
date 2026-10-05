@@ -82,3 +82,9 @@
  (modules codec_parity)
  (modes exe)
  (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
+
+(executable
+ (name entity_view_bench)
+ (modules entity_view_bench)
+ (modes exe)
+ (libraries datascript-ocaml-native unix))
