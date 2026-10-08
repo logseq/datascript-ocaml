@@ -3363,26 +3363,36 @@ end) = struct
     | "has-ref" | "page-ref" | "parent" -> true
     | _ -> false
 
-  and ref_rule_body_has_no_match db sources default_source rules binding rule =
+  (* Recursive ref rules (e.g. (parent ?t ?c) inside parent's own body) are
+     expanded repeatedly by this static no-match precheck.  visited marks the
+     rules already under expansion; a revisit means the call could still match
+     deeper, so the precheck conservatively returns false ("can't prove no
+     match") instead of recursing forever. *)
+  and ref_rule_body_has_no_match db sources default_source rules binding visited rule =
     rule.rule_body
     |> List.exists (function
       | Rule (name, terms) when ref_rule_name name ->
-        rule_clause_has_no_match db sources default_source rules binding (Rule (name, terms))
+        rule_clause_has_no_match ~visited db sources default_source rules binding (Rule (name, terms))
       | SourceRule (source_name, name, terms) when ref_rule_name name ->
-        rule_clause_has_no_match db sources default_source rules binding (SourceRule (source_name, name, terms))
+        rule_clause_has_no_match ~visited db sources default_source rules binding (SourceRule (source_name, name, terms))
       | clause -> bound_rule_clause_has_no_match db sources default_source binding clause)
 
-  and ref_rule_candidate_has_no_match db sources default_source rules binding rule terms =
+  and ref_rule_candidate_has_no_match db sources default_source rules binding visited rule terms =
     match rule_invocation_binding db binding rule terms with
     | None -> true
-    | Some rule_binding -> ref_rule_body_has_no_match db sources default_source rules rule_binding rule
+    | Some rule_binding ->
+      if Hashtbl.mem visited (rule.rule_name, List.length rule.rule_params) then
+        false
+      else (
+        Hashtbl.replace visited (rule.rule_name, List.length rule.rule_params) ();
+        ref_rule_body_has_no_match db sources default_source rules rule_binding visited rule)
 
-  and rule_clause_has_no_match db sources default_source rules binding = function
+  and rule_clause_has_no_match ?(visited = Hashtbl.create 4) db sources default_source rules binding = function
     | Rule (name, terms) ->
       matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
         if ref_rule_name name then
-          ref_rule_candidate_has_no_match db sources default_source rules binding rule terms
+          ref_rule_candidate_has_no_match db sources default_source rules binding visited rule terms
         else
           rule_candidate_has_no_match db sources default_source binding rule terms)
     | SourceRule (source_name, name, terms) ->
@@ -3391,14 +3401,15 @@ end) = struct
       matching_rules_for_invocation rules name terms
       |> List.for_all (fun rule ->
         if ref_rule_name name then
-          ref_rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) rules binding rule terms
+          ref_rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) rules binding visited rule terms
         else
           rule_candidate_has_no_match rule_db source_sources (Db_source rule_db) binding rule terms)
     | _ -> false
 
   and clauses_have_impossible_rule db sources default_source rules binding clauses =
+    let visited = Hashtbl.create 4 in
     List.exists
-      (rule_clause_has_no_match db sources default_source rules binding)
+      (rule_clause_has_no_match ~visited db sources default_source rules binding)
       clauses
 
   and binding_key vars binding =

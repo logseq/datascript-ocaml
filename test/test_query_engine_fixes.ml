@@ -1011,6 +1011,48 @@ let test_mid_tx_refresh_reapplies_removals_once () =
    | [ String "a"; String "b" ] -> ()
    | _ -> failf "prop/owner should keep cardinality-many mid-tx, got %d datoms" (List.length vals))
 
+(* Regression: `(not (page-ref ...))` (a not over a ref-rule chain whose tail
+   is the recursive `parent` rule) made the no-match precheck expand `parent`
+   inside its own body forever. Must terminate and still answer correctly. *)
+let test_not_over_recursive_ref_rule () =
+  let base_attr =
+    { cardinality = One; unique = None; indexed = false; is_component = false
+    ; no_history = false; doc = None; value_type = None; tuple_attrs = None
+    ; tuple_types = None }
+  in
+  let schema =
+    [ "block/parent", { base_attr with value_type = Some RefType }
+    ; "block/refs", { base_attr with value_type = Some RefType } ]
+  in
+  (* 2 refs 9; 3's parent 2 refs 9 (has-ref via ancestor); 4 refs nothing *)
+  let db =
+    empty_db ~schema ()
+    |> db_with
+         [ Entity { db_id = Some (Entity_id 2); attrs = [ "block/refs", One_value (Ref 9) ] }
+         ; Entity { db_id = Some (Entity_id 3); attrs = [ "block/parent", One_value (Ref 2) ] }
+         ; Entity { db_id = Some (Entity_id 5); attrs = [] }
+         ; Entity { db_id = Some (Entity_id 4); attrs = [ "block/parent", One_value (Ref 5) ] }
+         ]
+  in
+  let rules =
+    rules_of_string
+      "[[(parent ?p ?c) [?c :block/parent ?p]]
+        [(parent ?p ?c) [?t :block/parent ?p] (parent ?t ?c)]
+        [(has-ref ?b ?r) [?b :block/refs ?r]]
+        [(has-ref ?b ?r) (parent ?p ?b) [?p :block/refs ?r]]
+        [(page-ref ?b ?ref) (has-ref ?b ?ref)]]"
+  in
+  assert_rows
+    "(not (page-ref ?b 9)) keeps only blocks that don't ref 9"
+    [ [ Result_entity 4 ] ]
+    (q_string ~inputs:[ Arg_rules rules ] db
+       "[:find ?b :in $ % :where [?b :block/parent _] (not (page-ref ?b 9))]");
+  assert_rows
+    "(not (has-ref ?b 9)) answers through the recursive parent edge"
+    [ [ Result_entity 4 ] ]
+    (q_string ~inputs:[ Arg_rules rules ] db
+       "[:find ?b :in $ % :where [?b :block/parent _] (not (has-ref ?b 9))]")
+
 let () =
   List.iter
     (fun (name, f) ->
@@ -1048,4 +1090,5 @@ let () =
     ; "mid_tx_schema_refresh_is_incremental", test_mid_tx_schema_refresh_is_incremental
     ; "mid_tx_refresh_reapplies_removals_once", test_mid_tx_refresh_reapplies_removals_once
     ; "bound_non_entity_in_entity_position", test_bound_non_entity_in_entity_position
+    ; "not_over_recursive_ref_rule", test_not_over_recursive_ref_rule
     ]
