@@ -1412,12 +1412,25 @@ let source_or_join_clause source required_vars vars branches =
 let ensure_inferred_join_vars vars =
   if vars = [] then invalid_arg "Join variables should not be empty"
 
+(* cljs parse-and: (and c1 c2 ...) splices its clauses into the enclosing
+   conjunction (where list, not/not-join body, rule body). or/or-join
+   branches keep their own and-arm since a branch may be a sole (and ...). *)
+let rec flatten_and_forms (forms : query_form list) : query_form list =
+  List.concat_map
+    (fun form ->
+      match form with
+      | (QueryFormVector (QueryFormSymbol "and" :: inner)
+        | QueryFormList (QueryFormSymbol "and" :: inner)) ->
+        flatten_and_forms inner
+      | _ -> [ form ])
+    forms
+
 let rec parse_pattern_clause context = function
   | QueryFormVector [ QueryFormList (QueryFormSymbol "missing?" :: args) ] ->
     parse_missing_clause args
   | (QueryFormVector (QueryFormSymbol "not" :: clause_forms)
     | QueryFormList (QueryFormSymbol "not" :: clause_forms)) ->
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "Cannot parse 'not' clause"
      | clauses ->
        ensure_inferred_join_vars (clauses |> List.concat_map vars_of_clause |> List.sort_uniq compare);
@@ -1425,7 +1438,7 @@ let rec parse_pattern_clause context = function
   | (QueryFormVector (QueryFormSymbol "not-join" :: join_vars :: clause_forms)
     | QueryFormList (QueryFormSymbol "not-join" :: join_vars :: clause_forms)) ->
     let vars = parse_join_vars "not-join" join_vars in
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "Cannot parse 'not-join' clause"
      | clauses -> NotJoin (vars, clauses))
   | (QueryFormVector (QueryFormSymbol "not-join" :: _)
@@ -1453,7 +1466,7 @@ let rec parse_pattern_clause context = function
         | QueryFormList (QueryFormSymbol "not" :: clause_forms))
       ]
     when is_query_source_symbol source_symbol ->
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "source-qualified not requires at least one clause"
      | clauses -> SourceNot (query_source_name source_symbol, clauses))
   | QueryFormVector
@@ -1463,7 +1476,7 @@ let rec parse_pattern_clause context = function
       ]
     when is_query_source_symbol source_symbol ->
     let vars = parse_join_vars "source-qualified not-join" join_vars in
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "source-qualified not-join requires at least one clause"
      | clauses -> SourceNotJoin (query_source_name source_symbol, vars, clauses))
   | QueryFormVector
@@ -1501,13 +1514,13 @@ let rec parse_pattern_clause context = function
     invalid_arg "source-qualified or-join requires join variables and branches"
   | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not" :: clause_forms)
     when is_query_source_symbol source_symbol ->
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "source-qualified not requires at least one clause"
      | clauses -> SourceNot (query_source_name source_symbol, clauses))
   | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not-join" :: join_vars :: clause_forms)
     when is_query_source_symbol source_symbol ->
     let vars = parse_join_vars "source-qualified not-join" join_vars in
-    (match List.map (parse_pattern_clause context) clause_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms clause_forms) with
      | [] -> invalid_arg "source-qualified not-join requires at least one clause"
      | clauses -> SourceNotJoin (query_source_name source_symbol, vars, clauses))
   | QueryFormList (QueryFormSymbol source_symbol :: QueryFormSymbol "not-join" :: _)
@@ -1801,7 +1814,7 @@ let parse_rule_head = function
 let parse_rule context = function
   | (QueryFormVector (head :: body_forms) | QueryFormList (head :: body_forms)) ->
     let rule_name, rule_params = parse_rule_head head in
-    (match List.map (parse_pattern_clause context) body_forms with
+    (match List.map (parse_pattern_clause context) (flatten_and_forms body_forms) with
      | [] -> invalid_arg "Rule branch should have clauses"
      | rule_body -> { rule_name; rule_params; rule_body })
   | _ -> invalid_arg "rules must be vectors or lists"
@@ -1847,7 +1860,8 @@ let infer_default_inputs = Query.infer_default_inputs
 let validate_query = Query.validate_query
 
 let parse_where context = function
-  | Some (QueryFormVector clauses | QueryFormList clauses) -> List.map (parse_pattern_clause context) clauses
+  | Some (QueryFormVector clauses | QueryFormList clauses) ->
+    List.map (parse_pattern_clause context) (flatten_and_forms clauses)
   | Some _ -> invalid_arg "query :where must be a vector or list"
   | None -> []
 

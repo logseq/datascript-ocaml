@@ -312,6 +312,62 @@ let test_parser_where__or_clause () =
   assert_invalid "or-join missing branches" (fun () -> ignore (Parser.parse_clause (list [ sym "or-join"; vec [ sym "?x" ] ])));
   assert_invalid "or missing branches" (fun () -> ignore (Parser.parse_clause (list [ sym "or" ])))
 
+let test_parser_where__and_clause () =
+  let where_of query_string =
+    (Parser.parse_query_string query_string).where
+  in
+  (* cljs parse-and: (and ...) splices into the enclosing conjunction *)
+  assert_equal
+    "and splices top-level where clauses"
+    [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+    ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ]
+    (where_of "[:find ?e :where (and [?e :a 1] [?e :b 2])]");
+  assert_equal
+    "and splices alongside other where clauses"
+    [ Pattern (QVar "e", QAttr "c", QValue (Int64 3L))
+    ; Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+    ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ]
+    (where_of "[:find ?e :where [?e :c 3] (and [?e :a 1] [?e :b 2])]");
+  assert_equal
+    "nested and splices recursively"
+    [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+    ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L))
+    ; Pattern (QVar "e", QAttr "c", QValue (Int64 3L)) ]
+    (where_of "[:find ?e :where (and [?e :a 1] (and [?e :b 2] [?e :c 3]))]");
+  assert_equal
+    "and inside not splices into negated conjunction"
+    [ Not [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+          ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ] ]
+    (where_of "[:find ?e :where (not (and [?e :a 1] [?e :b 2]))]");
+  assert_equal
+    "and inside not alongside other clauses"
+    [ Pattern (QVar "e", QAttr "c", QValue (Int64 3L))
+    ; Not [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+          ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ] ]
+    (where_of "[:find ?e :where [?e :c 3] (not (and [?e :a 1] [?e :b 2]))]");
+  assert_equal
+    "and inside not-join splices"
+    [ NotJoin ([ "e" ], [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+                       ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ]) ]
+    (where_of "[:find ?e :where (not-join [?e] (and [?e :a 1] [?e :b 2]))]");
+  assert_equal
+    "and stays a single branch inside or"
+    [ Or [ [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+           ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ]
+         ; [ Pattern (QVar "e", QAttr "c", QValue (Int64 3L)) ] ] ]
+    (where_of "[:find ?e :where (or (and [?e :a 1] [?e :b 2]) [?e :c 3])]");
+  (match Parser.parse_rules
+           (vec [ vec [ vec [ sym "myrule"; sym "?e" ]
+                      ; list [ sym "and"; vec [ sym "?e"; kw "a"; int 1 ]; vec [ sym "?e"; kw "b"; int 2 ] ] ] ])
+   with
+   | [ { rule_body
+       ; _ } ]
+     when rule_body
+          = [ Pattern (QVar "e", QAttr "a", QValue (Int64 1L))
+            ; Pattern (QVar "e", QAttr "b", QValue (Int64 2L)) ] ->
+     ()
+   | _ -> failwith "and inside rule body should splice clauses")
+
 let () =
   test_parser_where__pattern ();
   test_parser_where__test_pred ();
@@ -322,4 +378,5 @@ let () =
   test_parser_where__string_transform_helper_batch ();
   test_parser_where__string_predicate_symbol_helper_batch ();
   test_parser_where__not_clause ();
-  test_parser_where__or_clause ()
+  test_parser_where__or_clause ();
+  test_parser_where__and_clause ()
