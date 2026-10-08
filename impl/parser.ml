@@ -345,7 +345,11 @@ let rec query_value_of_form = function
   | QueryFormVector values -> Vector (List.map query_value_of_form values)
   | QueryFormList values -> List (List.map query_value_of_form values)
   | QueryFormMap entries -> Map (List.map (fun (key, value) -> query_value_of_form key, query_value_of_form value) entries)
-  | QueryFormSymbol symbol -> invalid_arg ("cannot parse symbol as query constant: " ^ symbol)
+  | QueryFormSymbol symbol ->
+    (* upstream parse-constant wraps any form opaquely — a ?-symbol nested in
+       a collection value is literal data, not a variable *)
+    if String.length symbol > 0 && symbol.[0] = '?' then Symbol symbol
+    else invalid_arg ("cannot parse symbol as query constant: " ^ symbol)
 
 let rec query_form_of_value = function
   | Nil -> QueryFormNil
