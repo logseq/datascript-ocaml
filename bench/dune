@@ -88,3 +88,9 @@
  (modules entity_view_bench)
  (modes exe)
  (libraries datascript-ocaml-native unix))
+
+(executable
+ (name restore_probe)
+ (modules restore_probe)
+ (modes exe)
+ (libraries datascript-ocaml-native datascript_sqlite unix sqlite3))
