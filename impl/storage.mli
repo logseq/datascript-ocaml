@@ -13,6 +13,7 @@ val root_address : storage_address
 val tail_address : storage_address
 val memory_storage : unit -> storage
 val file_storage : string -> storage
+val batch_node_writes : storage -> storage
 val store : ?storage:storage -> db -> db
 val store_tail : storage -> datom list list -> unit
 val normalize_stored_datom : schema -> datom -> datom

@@ -85,12 +85,14 @@ let refresh_db_indexes_with_tx_data db tx_data =
   db
 
 let empty_db ?(schema = []) ?storage () =
-  Db_impl.empty_db db_core_context ~schema ?storage ()
+  Db_impl.empty_db db_core_context ~schema
+    ?storage:(Option.map Storage.batch_node_writes storage) ()
 
 let empty db = Db_impl.empty db_core_context db
 
 let init_db ?(schema = []) ?storage datoms =
-  Db_impl.init_db db_core_context ~schema ?storage datoms
+  Db_impl.init_db db_core_context ~schema
+    ?storage:(Option.map Storage.batch_node_writes storage) datoms
 
 let is_filtered = Db_impl.is_filtered
 
@@ -130,13 +132,18 @@ let conn_creation_context : Conn.creation_context =
   { empty_db; init_db; store }
 
 let create_conn ?schema ?storage () =
-  Conn.create conn_creation_context ?schema ?storage ()
+  Conn.create conn_creation_context ?schema
+    ?storage:(Option.map Storage.batch_node_writes storage) ()
 
 let conn_from_db db =
-  Conn.from_db conn_creation_context db
+  Conn.from_db conn_creation_context
+    { db with
+        storage_ref = Option.map Storage.batch_node_writes db.storage_ref
+    }
 
 let conn_from_datoms ?schema ?storage datoms =
-  Conn.from_datoms conn_creation_context ?schema ?storage datoms
+  Conn.from_datoms conn_creation_context ?schema
+    ?storage:(Option.map Storage.batch_node_writes storage) datoms
 
 let conn_db = Conn.db
 

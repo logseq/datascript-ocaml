@@ -81,9 +81,12 @@ let create (context : creation_context) ?schema ?storage () =
     match storage with
     | None -> db
     | Some storage ->
-      { (context.store ~storage db) with storage_ref = Some storage }
+      (* store binds db.storage_ref to the effective (wrapped) storage;
+         carry that into the conn so node writes and flush share its
+         pending buffer *)
+      context.store ~storage db
   in
-  make ?storage db
+  make ?storage:db.storage_ref db
 
 let from_db (context : creation_context) db =
   match db.storage_ref with
@@ -137,7 +140,8 @@ let reset_schema (context : schema_context) conn schema =
 let restore (context : restore_context) storage =
   match context.restore storage with
   | None -> None
-  | Some db -> Some (make ~storage ~storage_tail:(context.restore_tail_groups storage) db)
+  | Some db ->
+    Some (make ?storage:db.storage_ref ~storage_tail:(context.restore_tail_groups storage) db)
 
 let transact (context : transact_context) ?(tx_meta = []) conn tx_data =
   let skip_store = tx_meta_skips_store tx_meta in

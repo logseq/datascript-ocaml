@@ -223,6 +223,57 @@ let store_index node_storage index index_set =
   | exception Invalid_argument message when String.equal message "store requires a storage-backed set" ->
     fst (PSet.store (storage_backed_index node_storage index index_set))
 
+(* cljs store-impl! buffers every node write in *store-buffer* and commits a
+   single -store batch per tx. The index node storages above used to call
+   storage_store once per stored node — Graph_store maps each call to one
+   sqlite transaction, so a ~300B node row paid a full commit (~4KB+ WAL)
+   instead of ~300B inside a batch.
+
+   Wrap the backend storage so node-only batches accumulate in pending and
+   flush together with the first batch carrying the root/tail — the markers
+   store_to_storage/store_tail append at the end of every write batch. The
+   wrapped record must be the one bound to the conn/db and to the index node
+   storages, so all per-node writes within one conn lifetime share the same
+   pending buffer; bind it at every entry point below (store, restore,
+   restore_root_snapshot, create_conn via empty_db/init_db). Wrapping an
+   already wrapped storage stays correct: the inner buffer still flushes on
+   the outer flush call. *)
+let batch_node_writes (storage : storage) : storage =
+  let pending = ref [] in
+  { storage with
+      storage_store =
+        (fun entries ->
+          let nodes, rest =
+            List.partition
+              (fun (_, payload) -> match payload with Storage_node _ -> true | _ -> false)
+              entries
+          in
+          pending := List.rev_append nodes !pending;
+          match rest with
+          | [] -> ()
+          | _ ->
+              let batch = List.rev !pending @ rest in
+              pending := [];
+              storage.storage_store batch)
+  ; storage_restore =
+      (fun address ->
+        match
+          List.find_map
+            (fun (addr, payload) ->
+              if String.equal addr address then Some payload else None)
+            !pending
+        with
+        | Some payload -> Some payload
+        | None -> storage.storage_restore address)
+  ; storage_delete =
+      (fun addresses ->
+        pending :=
+          List.filter
+            (fun (addr, _) -> not (List.mem addr addresses))
+            !pending;
+        storage.storage_delete addresses)
+  }
+
 let store_to_storage db storage =
   let pending_entries = ref [] in
   let node_storage = buffered_node_storage pending_entries in
@@ -265,10 +316,17 @@ let store_to_storage db storage =
     }
 
 let store ?storage db =
-  match storage, db.storage_ref with
-  | Some storage, _ -> store_to_storage db storage
-  | None, Some storage -> store_to_storage db storage
-  | None, None -> invalid_arg "db has no attached storage"
+  (* The bound storage_ref always wins: it carries the batch buffer the
+     index node storages write into. cljs throws when asked to store a db
+     to a different IStorage than it was created with; preferring the
+     bound one keeps that single-storage invariant. *)
+  let storage =
+    match db.storage_ref, storage with
+    | Some bound, _ -> bound
+    | None, Some storage -> batch_node_writes storage
+    | None, None -> invalid_arg "db has no attached storage"
+  in
+  { (store_to_storage db storage) with storage_ref = Some storage }
 
 let store_tail storage tail =
   storage.storage_store [ tail_address, Storage_tail tail ]
@@ -283,6 +341,7 @@ let tail_datom_count tail =
   List.fold_left (fun count group -> count + List.length group) 0 tail
 
 let restore_root_snapshot storage =
+  let storage = batch_node_writes storage in
   match storage.storage_restore root_address with
   | Some (Storage_root root) ->
     note_storage_root root;
@@ -328,6 +387,7 @@ let db_with_tail context db tail =
     tail
 
 let restore context storage =
+  let storage = batch_node_writes storage in
   match storage.storage_restore root_address with
   | None -> None
   | Some (Storage_root root) ->
