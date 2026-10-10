@@ -2515,6 +2515,32 @@ module Query = struct
          exactly once and not bound by an input is a wildcard for the purpose
          of constraining find_var's entity set. *)
       let input_vars = List.concat_map Query.vars_of_input query.inputs in
+      (* An attr term that is input-bound to a concrete attr name behaves
+         exactly like the literal QAttr — [?e ?a ?v] with ?a bound becomes
+         a plain attr pattern. Unbound attr vars stay vars and the collect
+         below falls through to the generic engine. *)
+      let attr_term = function
+        | QVar var ->
+          (match resolve with
+           | Some resolve ->
+             (match resolve var with
+              | Some (Keyword name | String name | Symbol name) -> QAttr name
+              | _ -> QVar var)
+           | None -> QVar var)
+        | QValue (Keyword name | String name | Symbol name) -> QAttr name
+        | term -> term
+      in
+      let patterns =
+        List.map
+          (function
+            | Pattern (e, a, v) -> Pattern (e, attr_term a, v)
+            | PatternTx (e, a, v, tx) -> PatternTx (e, attr_term a, v, tx)
+            | PatternTxOp (e, a, v, tx, op) -> PatternTxOp (e, attr_term a, v, tx, op)
+            | Missing (e, a) -> Missing (e, attr_term a)
+            | GetElse (e, a, d, out) -> GetElse (e, attr_term a, d, out)
+            | clause -> clause)
+          patterns
+      in
       let var_counts = Hashtbl.create 8 in
       List.iter
         (fun var ->
