@@ -10,3 +10,4 @@
 {"round":10,"idea":"Q6","kind":"keep","title":"pull row dedup hash + pull memo","q143_ms_before":44.6,"q143_ms_after":10.1,"notes":"Result_pull hashed as constant -> O(n^2) dedup; now hashes pulled_id + memoizes pulls per (selector,eid)","tests":"green"}
 {"round":11,"idea":"Q7","kind":"keep","title":"query_eval_datoms lean dispatch","missing_ms_before":5.8,"missing_ms_after":2.9,"notes":"context.datoms -> entity_attr_index_datoms/entity_index_datoms under dup/filter guards","tests":"green"}
 {"round":12,"idea":"Q7","kind":"keep","title":"attr_value_for_query per-db memo","missing_ms_before":2.9,"missing_ms_after":1.7,"q132_ms":4.9,"tests":"green"}
+{"round":13,"idea":"Q7","kind":"keep","title":"hoist constant pure clauses","q160_ms_before":4.87,"q160_ms_after":3.9,"tests":"green"}
