@@ -42,3 +42,18 @@ Status: ( ) queued  (>) running  (k) kept  (x) reverted  (d) done/dry
 ( ) X1: remove per-call string concat / Printf.sprintf in hot loops.
 ( ) X2: allocation reduction in datom/tuple construction on query path.
 - [ ] Q7 (partially done: lean clause datoms + attr memo + const hoist; join already streaming-hash) where-eval for join+missing?/not/or patterns — q132/q176 ~10ms on 2k rows (5us/row bindings machinery), q188 3.1ms attr-attr join, q110 or-join 2.2ms, q184/186 rule queries ~2.6ms — identified by lq_prof (logseq_queries.edn timing, scratch probe)
+
+## Status 2026-10-10b (rounds 11-15, query where-eval)
+
+Kept: lean clause-eval datoms (r11), per-db attr memo (r12), const pure-clause
+hoist (r13), e-bound attr probe lean path + stream_join fold (r15).
+Revert: wildcard_shadowed_attrs memo (r14, no gain).
+
+Current lq_prof top: q143 10.6ms (pull machinery ~3us/entity + ~2us collect/row;
+structural floor without pull-assembly redesign), q176 6.3, q132 4.0, q160 3.9,
+q184/186 2.6 (rules), q110 2.2 (or-join), q188 1.9.
+
+Remaining candidates (diminishing): pulled_attrs boxing/dedupe/sort rework,
+collect_find_specs pull fast path, or-join + rule machinery, T5 tx report,
+X2 alloc trims. Join machinery is already streaming hash-join ~0.65us/datom;
+bindings machinery ~0.8us/row is the sequential-eval floor.
