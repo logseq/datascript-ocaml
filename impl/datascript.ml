@@ -3056,6 +3056,67 @@ module Query = struct
                (match entity_aggregate_result aggregate entity_ids with
                 | Some value -> [ [ value ] ]
                 | None -> []))
+    | [ Find_var var_a; Find_var var_b ] ->
+      (* rows (e, v): the out column var must be bound by exactly one
+         [entity_var :attr out_var] pattern — each matching datom is a
+         row. Try both orientations of the two find vars. *)
+      let out_binding =
+        let counts = Hashtbl.create 8 in
+        List.iter
+          (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
+          (List.concat_map Query.vars_of_clause query.where);
+        let single_use var = Hashtbl.find_opt counts var = Some 1 in
+        let attr_on entity_var value_var =
+          if single_use value_var then
+            List.find_map
+              (function
+                | Pattern (QVar e, QAttr attr, QVar v)
+                  when e = entity_var && v = value_var -> Some attr
+                | _ -> None)
+              query.where
+          else None
+        in
+        match attr_on var_a var_b with
+        | Some attr -> Some (var_a, attr, false)
+        | None -> Option.map (fun attr -> var_b, attr, true) (attr_on var_b var_a)
+      in
+      (match out_binding with
+       | Some (find_var, attr, swapped) ->
+         (* an input-bound out var selects only that value's datoms *)
+         let bound_keep =
+           match Option.bind resolve (fun r -> r (if swapped then var_a else var_b)) with
+           | Some bound -> fun (datom : datom) -> compare_value datom.v bound = 0
+           | None -> fun _ -> true
+         in
+         simple_attr_entity_ids db ?resolve find_var query
+         |> Option.map (fun entity_ids ->
+                (* one aevt pass over the out attr, rows for the wanted
+                   entities — cheaper than per-entity seeks when each
+                   entity has few values *)
+                let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+                List.iter
+                  (fun entity_id ->
+                    if entity_id >= 0 && entity_id < Bytes.length wanted then
+                      Bytes.set wanted entity_id '\001')
+                  entity_ids;
+                let rows =
+                  primary_attr_datoms db Aevt attr
+                  |> List.filter_map (fun (datom : datom) ->
+                       if datom.e >= 0 && datom.e < Bytes.length wanted
+                         && Bytes.get wanted datom.e = '\001' && bound_keep datom then
+                         let out =
+                           (* a ref-typed out column yields the entity,
+                              not the boxed Ref value *)
+                           match datom.v with
+                           | Ref id -> Result_entity id
+                           | _ -> Query_impl.result_of_datom_v datom
+                         in
+                         Some (if swapped then [ out; Result_entity datom.e ]
+                               else [ Result_entity datom.e; out ])
+                       else None)
+                in
+                Query_relation rows)
+       | None -> None)
     | _ -> None
 
   let simple_attr_entity_scalar db ?resolve query =
