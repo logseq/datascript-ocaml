@@ -36,3 +36,4 @@
 {"round":36,"idea":"Q7","kind":"keep","title":"entity-set aggregates count/min/max","verify":"7 MATCH incl empty sets","tests":"green","delta":"count -97%"}
 {"round":37,"idea":"Q7","kind":"keep","title":"two-var relation finds (e,v rows)","verify":"7 MATCH incl refs/swapped/xref","tests":"green","delta":"e-v rows -94~97%"}
 {"round":38,"idea":"Q7","kind":"keep","title":"n-var relation finds","verify":"4 MATCH + 2-var preserved","tests":"green","delta":"3var -77%"}
+{"round":39,"idea":"Q7","kind":"keep","title":"external entity var projection","verify":"3 MATCH","tests":"green","delta":"ext-2var -76%"}
