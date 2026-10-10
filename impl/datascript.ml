@@ -2606,6 +2606,35 @@ module Query = struct
            | _ -> None)
         | _ -> None
       in
+      (* string/equality predicates on a value var: attributes the
+         predicate to the var when the other side resolves to a
+         constant — like pred_bound but for non-numeric clauses *)
+      let str_pred_bound = function
+        | StringIncludesValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Includes s)
+           | _ -> None)
+        | StringStartsWithValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Starts s)
+           | _ -> None)
+        | StringEndsWithValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Ends s)
+           | _ -> None)
+        | EqualityPredicate (pred, terms) ->
+          (match pred, terms with
+           | EqualValues, [ QVar var; other ] | EqualValues, [ other; QVar var ] ->
+             (match resolve_const other with
+              | Some value -> Some (var, `Eq value)
+              | None -> None)
+           | NotEqualValues, [ QVar var; other ] | NotEqualValues, [ other; QVar var ] ->
+             (match resolve_const other with
+              | Some value -> Some (var, `Neq value)
+              | None -> None)
+           | _ -> None)
+        | _ -> None
+      in
       (* Range/cross-ref analysis is scoped to the clause list being
          collected — try_ref_target re-enters on a partition, and a var
          whose pattern and predicates split across partitions simply
@@ -2668,6 +2697,35 @@ module Query = struct
           |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (range_entry_of var))
         in
         let range_var_entry var = List.assoc_opt var range_vars in
+        let str_preds = Hashtbl.create 8 in
+        List.iter
+          (fun clause ->
+            match str_pred_bound clause with
+            | Some (var, bound) ->
+              Hashtbl.replace str_preds var
+                (bound :: Option.value ~default:[] (Hashtbl.find_opt str_preds var))
+            | None -> ())
+          clauses;
+        let str_entry_of var =
+          let preds = Option.value ~default:[] (Hashtbl.find_opt str_preds var) in
+          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
+            || var = for_var || List.mem var input_vars
+            || Hashtbl.mem range_preds var then
+            None
+          else
+            List.find_map
+              (function
+                | Pattern (QVar entity_var, QAttr attr, QVar value_var)
+                  when entity_var = for_var && value_var = var ->
+                  Some (`Str (attr, preds))
+                | _ -> None)
+              clauses
+        in
+        let str_vars =
+          Hashtbl.fold (fun var _ acc -> var :: acc) str_preds []
+          |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (str_entry_of var))
+        in
+        let str_var_entry var = List.assoc_opt var str_vars in
         (* cross-ref edges: [?e :ref ?v] where every other clause
            mentioning v constrains v in entity position — v's entity set
            comes from a recursive collect (depth-bounded by [seen]), and
@@ -2677,7 +2735,7 @@ module Query = struct
           | Pattern (QVar e, QAttr a, QVar v)
             when e = for_var && v <> for_var && is_ref_attr db a
               && not (List.mem v input_vars) && not (List.mem v seen)
-              && not (Hashtbl.mem range_preds v) ->
+              && not (Hashtbl.mem range_preds v) && not (Hashtbl.mem str_preds v) ->
             let mentions v' clause' = List.mem v' (Query.vars_of_clause clause') in
             let v_clauses =
               List.filter (fun c -> c != clause && mentions v c) clauses
@@ -2702,7 +2760,7 @@ module Query = struct
         let cross_entries = List.filter_map cross_entry_of clauses in
         let cross_var_entry var = List.assoc_opt var cross_entries in
         let rec collect acc = function
-          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd cross_entries))
+          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd str_vars @ List.map snd cross_entries))
         | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when for_var = entity_var ->
           collect (`Attr attr :: acc) rest
         | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when for_var = entity_var ->
@@ -2724,8 +2782,9 @@ module Query = struct
         | Pattern (QVar entity_var, QAttr _, QVar value_var) :: rest
           when for_var = entity_var
             && (Option.is_some (range_var_entry value_var)
+                || Option.is_some (str_var_entry value_var)
                 || Option.is_some (cross_var_entry value_var)) ->
-          (* pattern consumed into a `Range or `ValueIn entry *)
+          (* pattern consumed into a `Range/`Str/`ValueIn entry *)
           collect acc rest
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
           when for_var = entity_var && Option.is_some (coll_resolve value_var) ->
@@ -2753,8 +2812,12 @@ module Query = struct
         | clause :: rest
           when (match pred_bound clause with
                 | Some (var, _) -> Option.is_some (range_var_entry var)
-                | None -> false) ->
-          (* comparison predicate consumed into a `Range entry *)
+                | None ->
+                  (match str_pred_bound clause with
+                   | Some (var, _) -> Option.is_some (str_var_entry var)
+                   | None -> false)) ->
+          (* comparison/string predicate consumed into a `Range/`Str
+             entry *)
           collect acc rest
         | Or branches :: rest ->
           (* An or-clause over find_var contributes the union of its
@@ -2822,6 +2885,24 @@ module Query = struct
                 | Some (bound, strict) ->
                   let c = compare_value datom.v bound in
                   if strict then c < 0 else c <= 0)
+          in
+          primary_attr_datoms db Aevt attr
+          |> List.filter keep
+          |> List.map (fun (datom : datom) -> datom.e)
+          |> List.sort_uniq compare
+        | `Str (attr, constraints) ->
+          let keep (datom : datom) =
+            List.for_all
+              (function
+                | `Eq value -> compare_value datom.v value = 0
+                | `Neq value -> compare_value datom.v value <> 0
+                | `Includes needle ->
+                  (match datom.v with String s -> Built_ins.string_includes s needle | _ -> false)
+                | `Starts prefix ->
+                  (match datom.v with String s -> Built_ins.string_starts_with s prefix | _ -> false)
+                | `Ends suffix ->
+                  (match datom.v with String s -> Built_ins.string_ends_with s suffix | _ -> false))
+              constraints
           in
           primary_attr_datoms db Aevt attr
           |> List.filter keep
