@@ -2300,13 +2300,31 @@ module Query = struct
 
   let simple_attr_entity_ids db find_var query =
     match query.where, query.rules, query.with_vars with
-    | patterns, [], [] when only_source_inputs query.inputs ->
+    | patterns, [], []
+      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
+      (* Same relaxation as simple_attr_entity_collection: a value var used
+         exactly once and not bound by an input is a wildcard for the purpose
+         of constraining find_var's entity set. *)
+      let input_vars = List.concat_map Query.vars_of_input query.inputs in
+      let var_counts = Hashtbl.create 8 in
+      List.iter
+        (fun var ->
+          Hashtbl.replace var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt var_counts var)))
+        (List.concat_map Query.vars_of_clause patterns);
+      let free_value_var var =
+        var <> find_var
+        && not (List.mem var input_vars)
+        && Hashtbl.find_opt var_counts var = Some 1
+      in
       let rec collect_patterns acc = function
         | [] -> Some (List.rev acc)
         | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
           collect_patterns (`Attr attr :: acc) rest
         | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when find_var = entity_var ->
           collect_patterns (`Value (attr, value) :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when find_var = entity_var && free_value_var value_var ->
+          collect_patterns (`Attr attr :: acc) rest
         | _ -> None
       in
       let entity_ids_for_pattern = function
