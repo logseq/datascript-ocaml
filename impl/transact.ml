@@ -1569,7 +1569,7 @@ let apply_tx context tx_ops db =
         attrs
     in
     let remember_fast_tempid = remember_tempid in
-    let ambiguous_tempid_entity_without_unique =
+    let ambiguous_tempid_entity_without_unique () =
       let counts = Hashtbl.create (List.length tx_ops) in
       tx_ops
       |> List.iter (function
@@ -1584,7 +1584,7 @@ let apply_tx context tx_ops db =
           && Option.value (Hashtbl.find_opt counts tempid) ~default:0 > 1
         | _ -> false)
     in
-    let bulk_tempid_entities_without_unique =
+    let bulk_tempid_entities_without_unique () =
       tx_ops
       |> List.filter (function
         | Entity { db_id = Some (Temp_id _); attrs } -> not (has_unique_identity_attr attrs)
@@ -1665,13 +1665,30 @@ let apply_tx context tx_ops db =
         let tx_data = List.rev facts_rev in
         Some (db, max_eid, tempids_rev, tx_data)
     in
-    match try_new_tempid_entities () with
+    (* cheap reachability flags: the tempid machinery can only fire when the
+       tx actually mentions tempids — skip those scans otherwise *)
+    let has_tempid_entity =
+      List.exists
+        (function
+          | Entity { db_id = Some (Temp_id _); _ } -> true
+          | _ -> false)
+        tx_ops
+    in
+    let has_tempid_add =
+      List.exists
+        (function
+          | Add (Temp_id _, _, _) -> true
+          | _ -> false)
+        tx_ops
+    in
+    match (if has_tempid_entity then try_new_tempid_entities () else None) with
     | Some result -> Some result
     | None when not (List.for_all supported_tx_op tx_ops) -> None
-    | None when ambiguous_tempid_entity_without_unique -> None
-    | None when bulk_tempid_entities_without_unique -> None
+    | None when has_tempid_entity && ambiguous_tempid_entity_without_unique () -> None
+    | None when has_tempid_entity && bulk_tempid_entities_without_unique () -> None
     | None ->
       let tempid_add_groups =
+        if not has_tempid_add then [] else
         let groups_tbl = Hashtbl.create 16 in
         let order_rev = ref [] in
         tx_ops
