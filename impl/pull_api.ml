@@ -205,10 +205,17 @@ let forward_entity context db entity_id attrs =
       ; materialize_attrs = (fun () -> attrs)
       }
 
+(* Keep the last occurrence of each attr (stable sort, then drop all but the
+   last of each run) — same semantics as cons-onto-remove_assoc without the
+   O(n^2) list rebuilds. *)
 let dedupe_pulled_attrs attrs =
   attrs
+  |> List.stable_sort (fun (left, _) (right, _) -> compare left right)
   |> List.fold_left
-       (fun deduped (attr, value) -> (attr, value) :: List.remove_assoc attr deduped)
+       (fun acc (attr, _ as pair) ->
+         match acc with
+         | (prev_attr, _) :: _ when prev_attr = attr -> pair :: List.tl acc
+         | _ -> pair :: acc)
        []
   |> List.rev
 
