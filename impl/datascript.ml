@@ -2658,14 +2658,67 @@ module Query = struct
        | None -> try_ref_target ())
     | _ -> None
 
+  (* find_var projects the values of one [entity_var :attr find_var]
+     pattern — the entity set comes from the matcher, one aevt pass over
+     the attr emits distinct out values. Used by the value-var finds
+     (?v, [?v ...], ?v .) that have no entity column. *)
+  let value_var_projection db ?resolve find_var query =
+    let counts = Hashtbl.create 8 in
+    List.iter
+      (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
+      (List.concat_map Query.vars_of_clause query.where);
+    if Hashtbl.find_opt counts find_var <> Some 1 then None
+    else
+      match
+        List.find_map
+          (function
+            | Pattern (QVar entity_var, QAttr attr, QVar v)
+              when v = find_var && entity_var <> find_var -> Some (entity_var, attr)
+            | _ -> None)
+          query.where
+      with
+      | None -> None
+      | Some (entity_var, attr) ->
+        simple_attr_entity_ids db ?resolve entity_var query
+        |> Option.map (fun entity_ids ->
+               let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+               List.iter
+                 (fun entity_id ->
+                   if entity_id >= 0 && entity_id < Bytes.length wanted then
+                     Bytes.set wanted entity_id '\001')
+                 entity_ids;
+               let keep =
+                 match Option.bind resolve (fun r -> r find_var) with
+                 | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                 | None -> fun _ -> true
+               in
+               let seen = Hashtbl.create (List.length entity_ids) in
+               primary_attr_datoms db Aevt attr
+               |> List.filter_map (fun (d : datom) ->
+                    if d.e >= 0 && d.e < Bytes.length wanted
+                      && Bytes.get wanted d.e = '\001' && keep d then
+                      let out =
+                        match d.v with
+                        | Ref id -> Result_entity id
+                        | _ -> Result_value d.v
+                      in
+                      let key = Marshal.to_string out [] in
+                      if Hashtbl.mem seen key then None
+                      else (Hashtbl.replace seen key (); Some out)
+                    else None))
+
   let simple_attr_entity_collection db ?resolve query =
     (* [?e ...] collection is the same entity-ids walk as every other
        find shape — one matcher keeps all clause arms in one place. *)
     match query.find with
     | [ Find_var find_var ] ->
-      simple_attr_entity_ids db ?resolve find_var query
-      |> Option.map (fun entity_ids ->
-             Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
+      (match simple_attr_entity_ids db ?resolve find_var query with
+       | Some entity_ids ->
+         Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
+       | None ->
+         (* find_var may project a value column ([?v ...] over [u :a ?v]) *)
+         Option.map (fun values -> Query_collection values)
+           (value_var_projection db ?resolve find_var query))
     | _ -> None
 
   let simple_attr_entity_pull_collection db ?resolve query =
@@ -3046,9 +3099,13 @@ module Query = struct
        entity-ids walk as the collection form, wrapped as 1-elem rows. *)
     match query.find with
     | [ Find_var find_var ] ->
-      simple_attr_entity_ids db ?resolve find_var query
-      |> Option.map (fun entity_ids ->
-             Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
+      (match simple_attr_entity_ids db ?resolve find_var query with
+       | Some entity_ids ->
+         Some (Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
+       | None ->
+         (* find_var may project a value column (?v over [u :a ?v]) *)
+         Option.map (fun values -> Query_relation (List.map (fun v -> [ v ]) values))
+           (value_var_projection db ?resolve find_var query))
     | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
       simple_attr_entity_ids db ?resolve find_var query
       |> Option.map (fun entity_ids ->
@@ -3205,12 +3262,18 @@ module Query = struct
        none. Same matcher, scalar wrap. *)
     match query.find with
     | [ Find_var find_var ] ->
-      simple_attr_entity_ids db ?resolve find_var query
-      |> Option.map (fun entity_ids ->
-             Query_scalar
+      (match simple_attr_entity_ids db ?resolve find_var query with
+       | Some entity_ids ->
+         Some (Query_scalar
                (match entity_ids with
                 | entity_id :: _ -> Some (Result_entity entity_id)
                 | [] -> None))
+       | None ->
+         (* find_var may project a value column (?v . over [u :a ?v]) *)
+         Option.map
+           (fun values ->
+             Query_scalar (match values with v :: _ -> Some v | [] -> None))
+           (value_var_projection db ?resolve find_var query))
     | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
       simple_attr_entity_ids db ?resolve find_var query
       |> Option.map (fun entity_ids ->
