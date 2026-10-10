@@ -39,3 +39,4 @@
 {"round":39,"idea":"Q7","kind":"keep","title":"external entity var projection","verify":"3 MATCH","tests":"green","delta":"ext-2var -76%"}
 {"round":40,"idea":"Q7","kind":"keep","title":"value-var finds (?v/[?v...]/?v.)","verify":"5 MATCH","tests":"green","delta":"value finds -80%"}
 {"round":41,"idea":"Q7","kind":"keep","title":"non-recursive rule inlining","verify":"6 MATCH incl recursive fallback","tests":"green","delta":"rule queries -12~32%"}
+{"round":42,"idea":"Q7","kind":"keep","title":"bound attr-var resolution","verify":"4 MATCH","tests":"green","delta":"attr-var finds -65~96%"}
