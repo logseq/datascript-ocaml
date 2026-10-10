@@ -69,7 +69,8 @@ let sorted_forward_entity_attrs context db entity_id =
   raw_forward_entity_attrs context db entity_id
   |> List.filter_map (fun (attr, values) ->
     Option.map (fun v -> attr, v) (tx_value_of_raw_attr context db attr values))
-  |> List.sort (fun (left, _) (right, _) -> Util.compare_attr left right)
+  (* the eavt slice emits datoms in (e, a, v) index order, so the attr
+     groups above are already sorted — no final sort needed *)
 
 let reverse_entity_attr context db entity_id attr =
   let forward_attr = context.reverse_ref attr in
@@ -101,7 +102,7 @@ let lazy_entity context db entity_id =
             reverse_entity_attr context db entity_id attr
           else
             match !materialized with
-            | Some _ -> None
+            | Some attrs -> List.assoc_opt attr attrs
             | None ->
               context.datoms_by_entity_attr db entity_id attr
               |> Seq.map (fun datom -> datom.v)
@@ -116,7 +117,6 @@ let lazy_entity context db entity_id =
     | Some attrs -> attrs
     | None ->
       let attrs = sorted_forward_entity_attrs context db entity_id in
-      List.iter (fun (attr, value) -> Hashtbl.replace lookup_cache attr (Some value)) attrs;
       materialized := Some attrs;
       attrs
   in

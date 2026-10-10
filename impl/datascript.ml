@@ -282,6 +282,16 @@ let entity_index_datoms db entity_id =
   let cmp left right = compare left.e right.e in
   PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
 
+(* Bounded (e, a) eavt slice — index datoms only. *)
+let entity_attr_index_datoms db entity_id attr =
+  let bound = datom ~e:entity_id ~a:attr ~v:Nil () in
+  let cmp left right =
+    match compare left.e right.e with
+    | 0 -> Util.compare_attr left.a right.a
+    | c -> c
+  in
+  PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
@@ -1051,9 +1061,23 @@ let search_attr_value db attr value =
     Db_access_impl.search_datoms db Aevt ~a:attr ()
     |> Seq.filter (fun datom -> values_compare_equal_fast datom.v value)
 
+(* Entity lookups skip the full datoms accessor (arg resolution, seq
+   machinery, duplicate merge, filter_pred) when none of it applies;
+   duplicate_datoms entries are already in the index, so the lean slice
+   is lossless. *)
+let entity_eavt_seq db entity_id =
+  match db.duplicate_datoms, db.filter_pred with
+  | [], None -> List.to_seq (entity_index_datoms db entity_id)
+  | _ -> datoms db Eavt ~e:entity_id ()
+
+let entity_attr_eavt_seq db entity_id attr =
+  match db.duplicate_datoms, db.filter_pred with
+  | [], None -> List.to_seq (entity_attr_index_datoms db entity_id attr)
+  | _ -> datoms db Eavt ~e:entity_id ~a:attr ()
+
 let entity_context =
-  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; datoms_by_entity_attr = (fun db entity_id attr -> datoms db Eavt ~e:entity_id ~a:attr ())
+  { Entity.datoms_by_entity = entity_eavt_seq
+  ; datoms_by_entity_attr = entity_attr_eavt_seq
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
@@ -1093,7 +1117,7 @@ let pull_api_context : Pull_api_impl.context =
   ; entity
   ; entity_attr_raw
   ; entity_attrs
-  ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_entity = entity_eavt_seq
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; cardinality
