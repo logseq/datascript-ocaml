@@ -22,3 +22,4 @@
 {"round":22,"idea":"Q5","kind":"investigated","title":"batch wildcard pull at >=32 ids","finding":"pull_wildcard_many_by_ids (single eavt pass) ≈ per-entity pulls at 2025 ids — 9.2ms unchanged; pull cost is output boxing, not seeks","kept":false}
 {"round":23,"idea":"Q6","kind":"keep","title":"entity collection fast path over free value vars + unused inputs","q195_us_before":3020,"q195_us_after":2188,"tests":"green"}
 {"round":24,"idea":"Q6","kind":"keep","title":"free-value-var relaxation in simple_attr_entity_ids (pull matchers)","tests":"green","note":"coverage extension — enables pull fast paths on more real queries"}
+{"round":25,"idea":"Q6","kind":"keep","title":"not-clause in entity collection fast path","verify":"fast-vs-generic row equality MATCH on synthetic db","tests":"green"}
