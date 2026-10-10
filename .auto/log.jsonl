@@ -19,3 +19,4 @@
 {"round":19,"idea":"Q7","kind":"keep","title":"per-row eval for e-bound first-pattern branches (generalized)","tests":"green"}
 {"round":20,"idea":"Q5","kind":"keep","title":"fused sort-dedupe for pulled attrs","dedupe_sort_us_before":1.3,"dedupe_sort_us_after":0.9,"tests":"green"}
 {"round":21,"idea":"T5","kind":"investigated","title":"conn+storage per-tx write cost","finding":"conn+sqlite add-1 217us/tx vs 6.5us bare; ~116us/tx is file IO (fsync) on tail writes; encode 18us; compaction flush ~600us x every 32 txs; tail blob is small (bf=32); per-tx durability requires the write — amortizing needs flush-policy change (deferred/lazy tail), a durability semantics decision","kept":false}
+{"round":22,"idea":"Q5","kind":"investigated","title":"batch wildcard pull at >=32 ids","finding":"pull_wildcard_many_by_ids (single eavt pass) ≈ per-entity pulls at 2025 ids — 9.2ms unchanged; pull cost is output boxing, not seeks","kept":false}
