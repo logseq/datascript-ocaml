@@ -3029,6 +3029,18 @@ module Query = struct
       |> Option.map (pull_values selector)
     | _ -> None
 
+  (* [(count ?e)]/(min ?e)/(max ?e) over an entity set is a fold over the
+     collected ids — no relation materialization at all. *)
+  let entity_aggregate_result aggregate entity_ids =
+    (* upstream: an aggregate over an empty group yields no row at all —
+       scalar nil, not zero or an exception *)
+    match aggregate, entity_ids with
+    | _, [] -> None
+    | Count, _ -> Some (Result_value (Int64 (Int64.of_int (List.length entity_ids))))
+    | Min, entity_id :: _ -> Some (Result_entity entity_id)
+    | Max, _ -> Some (Result_entity (List.fold_left (fun _ id -> id) 0 entity_ids))
+    | _ -> None
+
   let simple_attr_entity_relation db ?resolve query =
     (* [:find ?e :where ...] over find_var-only patterns is the same
        entity-ids walk as the collection form, wrapped as 1-elem rows. *)
@@ -3037,6 +3049,13 @@ module Query = struct
       simple_attr_entity_ids db ?resolve find_var query
       |> Option.map (fun entity_ids ->
              Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
+    | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
+      simple_attr_entity_ids db ?resolve find_var query
+      |> Option.map (fun entity_ids ->
+             Query_relation
+               (match entity_aggregate_result aggregate entity_ids with
+                | Some value -> [ [ value ] ]
+                | None -> []))
     | _ -> None
 
   let simple_attr_entity_scalar db ?resolve query =
@@ -3050,6 +3069,10 @@ module Query = struct
                (match entity_ids with
                 | entity_id :: _ -> Some (Result_entity entity_id)
                 | [] -> None))
+    | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
+      simple_attr_entity_ids db ?resolve find_var query
+      |> Option.map (fun entity_ids ->
+             Query_scalar (entity_aggregate_result aggregate entity_ids))
     | _ -> None
 
   let ref_target_pull_relation db query =
