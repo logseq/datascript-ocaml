@@ -43,3 +43,4 @@
 {"round":43,"idea":"Q7","kind":"keep","title":"get-else projection finds","verify":"3 MATCH","tests":"green","delta":"get-else finds -24%"}
 {"round":44,"idea":"Q7","kind":"keep","title":"coll-input membership InColl","verify":"incoll MATCH; contains? dropped (filter not generator)","tests":"green","delta":"coll attr -71%"}
 {"round":45,"idea":"Q7","kind":"keep","title":"string/equality preds -> Str entry","verify":"7 MATCH incl block-content rule","tests":"green","delta":"includes? -66%"}
+{"round":46,"idea":"Q7","kind":"keep","title":"contains? on value vars -> InColl/Range","verify":"12 MATCH incl non-vacuous set case","tests":"green","delta":"contains? -79%"}
