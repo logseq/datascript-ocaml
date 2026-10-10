@@ -14,3 +14,4 @@
 {"round":14,"idea":"Q5","kind":"revert","title":"wildcard_shadowed_attrs memo","notes":"no measurable gain; selector walk already cheap"}
 {"round":15,"idea":"Q7","kind":"keep","title":"e-bound attr probe lean path","join_ms_before":3.28,"join_ms_after":1.9,"q132_ms":3.7,"q188_ms":1.9,"tests":"green"}
 {"round":16,"idea":"Q5","kind":"keep","title":"dedupe_pulled_attrs sort-based","pull_us_before":3.2,"pull_us_after":2.9,"tests":"green"}
+{"round":17,"idea":"Q7","kind":"keep","title":"or/not branch per-row eval for lone e-bound pattern","q110_ms_before":2.2,"q110_us_after":44,"tests":"green"}
