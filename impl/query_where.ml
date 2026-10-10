@@ -2874,6 +2874,58 @@ end) = struct
         bindings
         clauses
     in
+    (* Loop-invariant pure clauses: a deterministic *Value clause whose input
+       terms only reference vars already bound in the (single) seed binding
+       produces the same extension for every row — evaluate it once on the
+       seed instead of once per row. Only pure string/identity transforms
+       qualify; printing, random and user-callable clauses are excluded. *)
+    let hoistable_clause_io = function
+      | IdentityValue (term, out)
+      | StringLowerCaseValue (term, out)
+      | StringUpperCaseValue (term, out)
+      | StringCapitalizeValue (term, out)
+      | StringReverseValue (term, out)
+      | StringTrimValue (term, out)
+      | StringTrimLeftValue (term, out)
+      | StringTrimRightValue (term, out)
+      | StringTrimNewlineValue (term, out) -> Some ([ term ], out)
+      | _ -> None
+    in
+    let hoist_constant_clauses seed clauses =
+      let rec walk seed kept = function
+        | [] -> [ seed ], List.rev kept
+        | clause :: rest ->
+          (match hoistable_clause_io clause with
+           | Some (input_terms, output_var) ->
+             let seed_vars = List.map fst seed in
+             if
+               output_var <> "_"
+               && not (List.mem output_var seed_vars)
+               && List.for_all
+                    (fun var -> List.mem var seed_vars)
+                    (Query.vars_of_query_terms input_terms)
+             then
+               (match
+                  eval_clause ~active_rules ~callables ~default_source db sources rules seed clause
+                with
+                | [ extended ] -> walk extended kept rest
+                | [] -> [], []
+                | _ -> walk seed (clause :: kept) rest)
+             else
+               walk seed (clause :: kept) rest
+           | None -> walk seed (clause :: kept) rest)
+      in
+      walk seed [] clauses
+    in
+    let bindings, clauses =
+      match bindings with
+      | [ seed ] -> hoist_constant_clauses seed clauses
+      | _ -> bindings, clauses
+    in
+    match bindings, clauses with
+    | [], _ -> []
+    | _, [] -> bindings
+    | _ ->
     let eval_rule_with_suffix_relation_context
         rule_db
         rule_sources
