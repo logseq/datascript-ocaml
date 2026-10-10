@@ -276,6 +276,12 @@ let find_avet_exact db attr value =
     | Some pred -> pred datom
     | None -> true)
 
+(* All index datoms of one entity via a single eavt e-prefix slice. *)
+let entity_index_datoms db entity_id =
+  let bound = datom ~e:entity_id ~a:"" ~v:Nil () in
+  let cmp left right = compare left.e right.e in
+  PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
@@ -1282,9 +1288,9 @@ let resolve_query_value_for_attr db attr value =
     Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
   | _ -> resolve_query_value db value
 
-let datoms_by_attr_value db attr value =
+let datom_value_matcher db attr value =
   match resolve_query_value_for_attr db attr value with
-  | None -> []
+  | None -> None
   | Some value ->
     let value =
       if is_tuple_attr db attr then
@@ -1297,13 +1303,20 @@ let datoms_by_attr_value db attr value =
       | Keyword ident, None -> Option.map (fun entity_id -> Ref entity_id) (entid db ident_attr (Keyword ident))
       | _ -> None
     in
-    let datom_value_matches datom =
-      values_compare_equal_fast datom.v value
-      ||
-      match ident_entity_value with
-      | Some entity_value -> values_compare_equal_fast datom.v entity_value
-      | None -> false
-    in
+    Some
+      ( value
+      , ident_entity_value
+      , fun datom ->
+        values_compare_equal_fast datom.v value
+        ||
+        match ident_entity_value with
+        | Some entity_value -> values_compare_equal_fast datom.v entity_value
+        | None -> false )
+
+let datoms_by_attr_value db attr value =
+  match datom_value_matcher db attr value with
+  | None -> []
+  | Some (value, ident_entity_value, datom_value_matches) ->
     if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
       datoms_list db Avet ~a:attr ~v:value ()
     else
@@ -1593,7 +1606,8 @@ module Query_where_impl = Query_where.Make (struct
   let normalize_value = normalize_value
 end)
 
-let eval_clauses = Query_where_impl.eval_clauses
+let eval_clauses ?active_rules ?callables ?default_source db sources rules input_bindings where =
+  Query_where_impl.eval_clauses ?active_rules ?callables ?default_source db sources rules input_bindings where
 let eval_relation_rows = Query_where_impl.eval_relation_rows
 
 let parser_query_context : Parser_impl.query_context =
@@ -1853,7 +1867,8 @@ module Query = struct
 
   type simple_row_slot =
     | Simple_entity_slot
-    | Simple_value_slot of query_result option array
+    | Simple_value_slot of attr
+    | Simple_value_table of query_result option array
 
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in
@@ -1917,30 +1932,132 @@ module Query = struct
         if duplicate_value_var then
           None
         else
-          let constant_datoms =
+          (* Each constant clause either resolves into a datom set (when an
+             avet seek can produce it) or stays a per-entity predicate to
+             be decided once the driver is known. *)
+          let constants =
             constant_patterns
-            |> List.map (fun (attr, value) -> attr, datoms_by_attr_value db attr value)
+            |> List.map (fun (attr, value) ->
+              match datom_value_matcher db attr value with
+              | None -> `Unresolvable
+              | Some (value, ident_entity_value, datom_value_matches) ->
+                if
+                  Option.is_none ident_entity_value
+                  && query_value_uses_avet value
+                  && query_attr_uses_avet db attr
+                then `Datoms (datoms_list db Avet ~a:attr ~v:value ())
+                else `Verify (attr, datom_value_matches))
           in
-          if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
+          if List.exists (( = ) `Unresolvable) constants then
             Some []
           else
-            let value_tables =
-              value_var_attrs
-              |> List.map (fun (value_var, attr) ->
-                let values = Array.make (db.max_datom_e + 1) None in
-                primary_attr_datoms db Aevt attr
-                |> List.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
-                value_var, values)
+            (* Divergence from upstream for speed: a non-avet constant is
+               either materialized into a membership set (upstream
+               behavior) or kept as a per-entity predicate checked with a
+               bounded (e, a) eavt seek; value vars likewise use either a
+               per-entity seek or a materialized array. The lean seek wins
+               when the driver selects far fewer entities than the
+               attribute's datom count. Same rows, only the access plan
+               differs. *)
+            let scan_datoms, rest_sets, pending_verifiers =
+              let sets =
+                List.filter_map (function `Datoms datoms -> Some datoms | _ -> None) constants
+              in
+              let verifiers =
+                List.filter_map
+                  (function
+                    | `Verify (attr, datom_value_matches) -> Some (attr, datom_value_matches)
+                    | _ -> None)
+                  constants
+              in
+              match
+                List.sort
+                  (fun left right -> compare (List.length left) (List.length right))
+                  sets
+              with
+              | driver :: rest -> driver, rest, verifiers
+              | [] ->
+                (match verifiers with
+                 | (attr, datom_value_matches) :: rest ->
+                   (* every constant clause is non-avet: materialize one
+                      to drive the scan, verify the rest per entity *)
+                   ( datoms_list db Aevt ~a:attr () |> List.filter datom_value_matches
+                   , []
+                   , rest )
+                 | [] -> [], [], [])
+            in
+            let attr_lean_ok =
+              let driver_count = List.length scan_datoms in
+              let memo = Hashtbl.create 8 in
+              fun attr ->
+                match Hashtbl.find_opt memo attr with
+                | Some ok -> ok
+                | None ->
+                  let ok =
+                    driver_count * 4 <= List.length (primary_attr_datoms db Aevt attr)
+                  in
+                  Hashtbl.replace memo attr ok;
+                  ok
+            in
+            let constant_sets, verifiers =
+              List.fold_left
+                (fun (sets, verifiers) (attr, datom_value_matches) ->
+                  if attr_lean_ok attr then
+                    sets, (attr, datom_value_matches) :: verifiers
+                  else
+                    (datoms_list db Aevt ~a:attr () |> List.filter datom_value_matches) :: sets
+                  , verifiers)
+                (rest_sets, [])
+                pending_verifiers
+            in
+            let constant_sets =
+              constant_sets
+              |> List.map (fun datoms ->
+                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+                List.iter
+                  (fun datom ->
+                    if datom.e >= 0 && datom.e < Bytes.length entities then
+                      Bytes.set entities datom.e '\001')
+                  datoms;
+                entities)
+            in
+            let datom_of_attr entity_datoms attr =
+              List.find_opt (fun datom -> datom.a = attr) entity_datoms
+            in
+            let entity_allowed entity_id entity_datoms =
+              List.for_all
+                (fun entities ->
+                  entity_id >= 0
+                  && entity_id < Bytes.length entities
+                  && Bytes.get entities entity_id = '\001')
+                constant_sets
+              && List.for_all
+                   (fun (attr, datom_value_matches) ->
+                     match datom_of_attr entity_datoms attr with
+                     | Some datom ->
+                       (match db.filter_pred with
+                        | Some pred -> pred datom
+                        | None -> true)
+                       && datom_value_matches datom
+                     | None -> false)
+                   verifiers
             in
             let slot_for_find_var var =
               if var = e_var then
                 Some Simple_entity_slot
               else
                 Option.map
-                  (fun values -> Simple_value_slot values)
-                  (List.assoc_opt var value_tables)
+                  (fun attr ->
+                    if attr_lean_ok attr then
+                      Simple_value_slot attr
+                    else (
+                      let values = Array.make (db.max_datom_e + 1) None in
+                      primary_attr_datoms db Aevt attr
+                      |> List.iter (fun datom ->
+                        if datom.e >= 0 && datom.e < Array.length values then
+                          values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
+                      Simple_value_table values))
+                  (List.assoc_opt var value_var_attrs)
             in
             let* row_slots =
               find_vars
@@ -1952,47 +2069,48 @@ module Query = struct
                    (Some [])
               |> Option.map List.rev
             in
-            let constant_sets =
-              constant_datoms
-              |> List.map (fun (_, datoms) ->
-                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
-                List.iter
-                  (fun datom ->
-                    if datom.e >= 0 && datom.e < Bytes.length entities then
-                      Bytes.set entities datom.e '\001')
-                  datoms;
-                entities)
-            in
-            let _, scan_datoms =
-              constant_datoms
-              |> List.sort (fun (_, left) (_, right) -> compare (List.length left) (List.length right))
-              |> List.hd
-            in
-            let entity_allowed entity_id =
-              constant_sets
-              |> List.for_all (fun entities ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001')
-            in
-            let value_of_slot entity_id = function
+            let value_of_slot entity_id entity_datoms = function
               | Simple_entity_slot -> Some (Result_entity entity_id)
-              | Simple_value_slot values ->
-                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+              | Simple_value_slot attr ->
+                Option.map
+                  (fun datom -> Query_impl.result_of_datom_v datom)
+                  (datom_of_attr entity_datoms attr)
+              | Simple_value_table values ->
+                if entity_id >= 0 && entity_id < Array.length values then
+                  values.(entity_id)
+                else None
             in
-            let row_for_entity entity_id =
+            let row_for_entity entity_id entity_datoms =
               row_slots
               |> List.fold_left
                    (fun row slot ->
                      match row with
                      | None -> None
-                     | Some row -> Option.map (fun value -> value :: row) (value_of_slot entity_id slot))
+                     | Some row ->
+                       Option.map
+                         (fun value -> value :: row)
+                         (value_of_slot entity_id entity_datoms slot))
                    (Some [])
               |> Option.map List.rev
             in
             scan_datoms
             |> List.filter_map (fun datom ->
-              if entity_allowed datom.e then row_for_entity datom.e else None)
+              let entity_id = datom.e in
+              let in_sets =
+                List.for_all
+                  (fun entities ->
+                    entity_id >= 0
+                    && entity_id < Bytes.length entities
+                    && Bytes.get entities entity_id = '\001')
+                  constant_sets
+              in
+              match in_sets with
+              | false -> None
+              | true ->
+                let entity_datoms = entity_index_datoms db entity_id in
+                if entity_allowed entity_id entity_datoms then
+                  row_for_entity entity_id entity_datoms
+                else None)
             |> List.sort_uniq compare
             |> fun rows -> Some rows
 
