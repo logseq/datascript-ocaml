@@ -3056,66 +3056,121 @@ module Query = struct
                (match entity_aggregate_result aggregate entity_ids with
                 | Some value -> [ [ value ] ]
                 | None -> []))
-    | [ Find_var var_a; Find_var var_b ] ->
-      (* rows (e, v): the out column var must be bound by exactly one
-         [entity_var :attr out_var] pattern — each matching datom is a
-         row. Try both orientations of the two find vars. *)
-      let out_binding =
-        let counts = Hashtbl.create 8 in
-        List.iter
-          (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
-          (List.concat_map Query.vars_of_clause query.where);
-        let single_use var = Hashtbl.find_opt counts var = Some 1 in
-        let attr_on entity_var value_var =
-          if single_use value_var then
-            List.find_map
-              (function
-                | Pattern (QVar e, QAttr attr, QVar v)
-                  when e = entity_var && v = value_var -> Some attr
-                | _ -> None)
-              query.where
-          else None
-        in
-        match attr_on var_a var_b with
-        | Some attr -> Some (var_a, attr, false)
-        | None -> Option.map (fun attr -> var_b, attr, true) (attr_on var_b var_a)
+    | find_vars
+      when List.length find_vars >= 2
+        && List.for_all (function Find_var _ -> true | _ -> false) find_vars ->
+      (* rows (e, v1, v2 ...): every non-entity find var must be bound by
+         exactly one [entity_var :attr out_var] pattern — the entity set
+         comes from the matcher, then one aevt pass per out attr collects
+         per-entity values and the rows are the per-entity product.
+         Entities missing any out attr produce no rows (join semantics). *)
+      let find_var_names =
+        List.map (function Find_var v -> v | _ -> assert false) find_vars
       in
-      (match out_binding with
-       | Some (find_var, attr, swapped) ->
-         (* an input-bound out var selects only that value's datoms *)
-         let bound_keep =
-           match Option.bind resolve (fun r -> r (if swapped then var_a else var_b)) with
-           | Some bound -> fun (datom : datom) -> compare_value datom.v bound = 0
-           | None -> fun _ -> true
-         in
+      let counts = Hashtbl.create 8 in
+      List.iter
+        (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
+        (List.concat_map Query.vars_of_clause query.where);
+      let single_use var = Hashtbl.find_opt counts var = Some 1 in
+      let attr_on entity_var value_var =
+        if single_use value_var then
+          List.find_map
+            (function
+              | Pattern (QVar e, QAttr attr, QVar v)
+                when e = entity_var && v = value_var -> Some attr
+              | _ -> None)
+            query.where
+        else None
+      in
+      (* candidate entity var: every other find var resolves on it *)
+      let candidate =
+        List.find_map
+          (fun entity_var ->
+            let others = List.filter (fun v -> v <> entity_var) find_var_names in
+            if others <> [] && List.for_all (fun v -> Option.is_some (attr_on entity_var v)) others then
+              Some entity_var
+            else None)
+          find_var_names
+      in
+      (match candidate with
+       | Some find_var ->
          simple_attr_entity_ids db ?resolve find_var query
          |> Option.map (fun entity_ids ->
-                (* one aevt pass over the out attr, rows for the wanted
-                   entities — cheaper than per-entity seeks when each
-                   entity has few values *)
                 let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
                 List.iter
                   (fun entity_id ->
                     if entity_id >= 0 && entity_id < Bytes.length wanted then
                       Bytes.set wanted entity_id '\001')
                   entity_ids;
-                let rows =
-                  primary_attr_datoms db Aevt attr
-                  |> List.filter_map (fun (datom : datom) ->
-                       if datom.e >= 0 && datom.e < Bytes.length wanted
-                         && Bytes.get wanted datom.e = '\001' && bound_keep datom then
-                         let out =
-                           (* a ref-typed out column yields the entity,
-                              not the boxed Ref value *)
-                           match datom.v with
-                           | Ref id -> Result_entity id
-                           | _ -> Query_impl.result_of_datom_v datom
-                         in
-                         Some (if swapped then [ out; Result_entity datom.e ]
-                               else [ Result_entity datom.e; out ])
-                       else None)
+                let wanted_entity e =
+                  e >= 0 && e < Bytes.length wanted && Bytes.get wanted e = '\001'
                 in
-                Query_relation rows)
+                let out_of (d_v : value) =
+                  match d_v with
+                  | Ref id -> Result_entity id
+                  | _ -> Result_value d_v
+                in
+                let out_vars = List.filter (fun v -> v <> find_var) find_var_names in
+                (match out_vars with
+                 | [ out_var ] ->
+                   (* single out column: emit straight off one aevt pass —
+                      no per-entity tables needed *)
+                   let attr = Option.get (attr_on find_var out_var) in
+                   let keep =
+                     match Option.bind resolve (fun r -> r out_var) with
+                     | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                     | None -> fun _ -> true
+                   in
+                   let entity_first = List.hd find_var_names = find_var in
+                   let rows =
+                     primary_attr_datoms db Aevt attr
+                     |> List.filter_map (fun (d : datom) ->
+                          if wanted_entity d.e && keep d then
+                            let out = out_of d.v in
+                            Some (if entity_first then [ Result_entity d.e; out ]
+                                  else [ out; Result_entity d.e ])
+                          else None)
+                   in
+                   Query_relation rows
+                 | _ ->
+                   (* var -> values table via one aevt pass per out attr *)
+                   let values_table var =
+                     let attr = Option.get (attr_on find_var var) in
+                     let keep =
+                       match Option.bind resolve (fun r -> r var) with
+                       | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                       | None -> fun _ -> true
+                     in
+                     let table = Hashtbl.create (List.length entity_ids) in
+                     primary_attr_datoms db Aevt attr
+                     |> List.iter (fun (d : datom) ->
+                          if wanted_entity d.e && keep d then
+                            Hashtbl.replace table d.e
+                              (d.v :: Option.value ~default:[] (Hashtbl.find_opt table d.e)));
+                     var, table
+                   in
+                   let tables = List.map values_table out_vars in
+                   let values_of var entity_id =
+                     Option.bind (List.assoc_opt var tables) (fun t -> Hashtbl.find_opt t entity_id)
+                     |> Option.value ~default:[]
+                     |> List.map out_of
+                   in
+                   (* emit rows honoring find order: entity col wherever it sits *)
+                   let columns var =
+                     if var = find_var then fun entity_id -> [ Result_entity entity_id ]
+                     else fun entity_id -> values_of var entity_id
+                   in
+                   let row_for entity_id =
+                     let rec product acc = function
+                       | [] -> [ List.rev acc ]
+                       | var :: rest ->
+                         (match columns var entity_id with
+                          | [] -> []
+                          | values -> List.concat_map (fun v -> product (v :: acc) rest) values)
+                     in
+                     product [] find_var_names
+                   in
+                   Query_relation (List.concat_map row_for entity_ids)))
        | None -> None)
     | _ -> None
 
