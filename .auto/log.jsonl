@@ -32,3 +32,4 @@
 {"round":32,"idea":"Q7","kind":"keep","title":"ref-target joins + unified entity matcher","verify":"13 fast-vs-generic MATCH at q_return layer","tests":"green","delta":"not-coll -98%, ref-target -45%, or -47%"}
 {"round":33,"idea":"Q7","kind":"keep","title":"range predicates as entity-set scans","verify":"9 fast-vs-generic MATCH incl q176-real","tests":"green","delta":"range-coll -97%"}
 {"round":34,"idea":"Q7","kind":"keep","title":"cross-ref joins via ValueIn membership","verify":"8 MATCH incl cycles/two-edges","tests":"green","delta":"page-blocks -71%"}
+{"round":35,"idea":"Q7","kind":"keep","title":"bound value vars as point lookups","verify":"6 MATCH incl bound-xref","tests":"green","delta":"named-page blocks -95%"}
