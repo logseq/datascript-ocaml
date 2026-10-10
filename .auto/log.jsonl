@@ -45,3 +45,4 @@
 {"round":45,"idea":"Q7","kind":"keep","title":"string/equality preds -> Str entry","verify":"7 MATCH incl block-content rule","tests":"green","delta":"includes? -66%"}
 {"round":46,"idea":"Q7","kind":"keep","title":"contains? on value vars -> InColl/Range","verify":"12 MATCH incl non-vacuous set case","tests":"green","delta":"contains? -79%"}
 {"round":47,"idea":"Q7","kind":"keep","title":"ident-entity resolution + or-bound contains + cross closure","verify":"ident/contains/or probes MATCH incl 155-row non-vacuous","tests":"green","delta":"ident+orc -22%"}
+{"round":48,"idea":"Q7","kind":"keep","title":"or-branch ground eval + missing-in-branch","verify":"or-branch probes MATCH","tests":"green","delta":"multi-clause rule ors now collectable"}
