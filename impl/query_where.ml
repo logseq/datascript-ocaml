@@ -3613,21 +3613,25 @@ end) = struct
       rules
       bindings
       clauses =
-    (* A lone pattern whose entity term is bound in every row resolves as one
-       bounded index probe per row; materializing a relation over the whole
-       attr and joining is strictly more work. *)
-    let bound_e_single_pattern =
+    (* A branch whose first clause binds its entity term in every row
+       resolves as bounded index probes per row; materializing the whole
+       attr into a relation and joining is strictly more work. *)
+    let bound_e_first_pattern =
       match clauses with
-      | [ Pattern (QVar e_var, _, _) ] ->
+      | Pattern (QVar e_var, _, _) :: _ ->
         List.for_all (fun binding -> List.mem_assoc e_var binding) bindings
       | _ -> false
     in
-    match bound_e_single_pattern, clauses with
-    | true, [ clause ] ->
-      bindings
-      |> List.concat_map (fun binding ->
-        eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-    | _ ->
+    if bound_e_first_pattern then
+      List.fold_left
+        (fun bindings clause ->
+          List.concat_map
+            (fun binding ->
+              eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+            bindings)
+        bindings
+        clauses
+    else
       (match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
        | Some bindings -> bindings
        | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses)
