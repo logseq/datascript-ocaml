@@ -2260,10 +2260,29 @@ module Query = struct
 
   let simple_attr_entity_collection db query =
     match query.find, query.where, query.rules, query.with_vars with
-    | [ Find_var find_var ], patterns, [], [] when only_source_inputs query.inputs ->
+    | [ Find_var find_var ], patterns, [], []
+      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
+      (* A value-position var that occurs exactly once in where and is not
+         bound by any input cannot constrain the entity set, so it reads like
+         a wildcard. Input vars can never reach this matcher: any pattern
+         referencing one fails to match either arm below. *)
+      let input_vars = List.concat_map Query.vars_of_input query.inputs in
+      let var_counts = Hashtbl.create 8 in
+      List.iter
+        (fun var ->
+          Hashtbl.replace var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt var_counts var)))
+        (List.concat_map Query.vars_of_clause patterns);
+      let free_value_var var =
+        var <> find_var
+        && not (List.mem var input_vars)
+        && Hashtbl.find_opt var_counts var = Some 1
+      in
       let rec collect_attrs acc = function
         | [] -> Some (List.rev acc)
         | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
+          collect_attrs (attr :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when find_var = entity_var && free_value_var value_var ->
           collect_attrs (attr :: acc) rest
         | _ -> None
       in
@@ -3254,12 +3273,15 @@ module Query = struct
          |> fun values -> Query_collection values
        | Some result -> result
        | None ->
-         let rows = q ~inputs db query in
-         rows
-         |> List.filter_map (function
-           | value :: _ -> Some value
-           | [] -> None)
-         |> fun values -> Query_collection values)))
+         (match simple_attr_entity_collection db query with
+          | Some result -> result
+          | None ->
+            let rows = q ~inputs db query in
+            rows
+            |> List.filter_map (function
+              | value :: _ -> Some value
+              | [] -> None)
+            |> fun values -> Query_collection values))))
     | Return_relation, None ->
       (match simple_attr_entity_pull_collection db query with
        | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
