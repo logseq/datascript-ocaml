@@ -2350,20 +2350,41 @@ module Query = struct
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
           when find_var = entity_var && free_value_var value_var ->
           collect_patterns (`Attr attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when find_var = entity_var ->
+          collect_patterns (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
+          when find_var = entity_var && free_value_var value_var ->
+          collect_patterns (`Neg attr :: acc) rest
         | _ -> None
       in
       let entity_ids_for_pattern = function
-        | `Attr attr -> entity_ids_with_attr db attr
-        | `Value (attr, value) -> exact_attr_value_entity_ids db attr value
+        | `Attr attr -> Some (entity_ids_with_attr db attr)
+        | `Value (attr, value) -> Some (exact_attr_value_entity_ids db attr value)
+        | `Neg attr -> Some (entity_ids_with_attr db attr)
       in
       (match collect_patterns [] patterns with
-       | Some (first_pattern :: rest_patterns) ->
-         Some
-           (List.fold_left
-              (fun entity_ids pattern -> intersect_sorted_entity_ids entity_ids (entity_ids_for_pattern pattern))
-              (entity_ids_for_pattern first_pattern)
-              rest_patterns)
-       | Some [] | None -> None)
+       | Some entries ->
+         let positives = List.filter_map (fun p -> match p with `Neg _ -> None | p -> entity_ids_for_pattern p) entries in
+         (match positives with
+          | first_ids :: rest_ids ->
+            let entity_ids =
+              List.fold_left intersect_sorted_entity_ids first_ids rest_ids
+            in
+            let rec subtract_sorted acc left right =
+              match left, right with
+              | [], _ | _, [] -> List.rev_append acc left
+              | l :: ls, r :: rs ->
+                if l = r then subtract_sorted acc ls rs
+                else if l < r then subtract_sorted (l :: acc) ls right
+                else subtract_sorted acc left rs
+            in
+            Some
+              (List.fold_left
+                 (fun entity_ids neg_ids -> subtract_sorted [] entity_ids neg_ids)
+                 entity_ids
+                 (List.filter_map (fun p -> match p with `Neg _ -> entity_ids_for_pattern p | _ -> None) entries))
+          | [] -> None)
+       | None -> None)
     | _ -> None
 
   let simple_attr_entity_pull_collection db query =
