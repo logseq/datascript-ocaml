@@ -41,3 +41,4 @@
 {"round":41,"idea":"Q7","kind":"keep","title":"non-recursive rule inlining","verify":"6 MATCH incl recursive fallback","tests":"green","delta":"rule queries -12~32%"}
 {"round":42,"idea":"Q7","kind":"keep","title":"bound attr-var resolution","verify":"4 MATCH","tests":"green","delta":"attr-var finds -65~96%"}
 {"round":43,"idea":"Q7","kind":"keep","title":"get-else projection finds","verify":"3 MATCH","tests":"green","delta":"get-else finds -24%"}
+{"round":44,"idea":"Q7","kind":"keep","title":"coll-input membership InColl","verify":"incoll MATCH; contains? dropped (filter not generator)","tests":"green","delta":"coll attr -71%"}
