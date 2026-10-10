@@ -29,3 +29,4 @@
 {"round":29,"idea":"Q6","kind":"keep","title":"Find_var relation uses entity-ids matcher","tests":"green"}
 {"round":30,"idea":"Q6","kind":"keep","title":"Find_var scalar uses entity-ids matcher","tests":"green"}
 {"round":31,"idea":"Q6","kind":"keep","title":"missing? mapped to Neg in entity matchers","tests":"green","verify":"missing-vs-not MATCH"}
+{"round":32,"idea":"Q7","kind":"keep","title":"ref-target joins + unified entity matcher","verify":"13 fast-vs-generic MATCH at q_return layer","tests":"green","delta":"not-coll -98%, ref-target -45%, or -47%"}
