@@ -47,3 +47,4 @@
 {"round":47,"idea":"Q7","kind":"keep","title":"ident-entity resolution + or-bound contains + cross closure","verify":"ident/contains/or probes MATCH incl 155-row non-vacuous","tests":"green","delta":"ident+orc -22%"}
 {"round":48,"idea":"Q7","kind":"keep","title":"or-branch ground eval + missing-in-branch","verify":"or-branch probes MATCH","tests":"green","delta":"multi-clause rule ors now collectable"}
 {"round":49,"idea":"Q7","kind":"keep","title":"seed inner sets with edge targets","verify":"xref-missing-tgt MATCH 163us vs 2912us; ref-target coll -50%","tests":"green","delta":"missing-on-ref-target -94%"}
+{"round":50,"idea":"Q7","kind":"keep","title":"wire fast paths into q","verify":"0 mismatches; missing/reverse/not/or checks preserved","tests":"green","delta":"q176 -98% q188 -95% q132 -76%"}
