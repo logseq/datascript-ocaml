@@ -11,3 +11,4 @@
 {"round":11,"idea":"Q7","kind":"keep","title":"query_eval_datoms lean dispatch","missing_ms_before":5.8,"missing_ms_after":2.9,"notes":"context.datoms -> entity_attr_index_datoms/entity_index_datoms under dup/filter guards","tests":"green"}
 {"round":12,"idea":"Q7","kind":"keep","title":"attr_value_for_query per-db memo","missing_ms_before":2.9,"missing_ms_after":1.7,"q132_ms":4.9,"tests":"green"}
 {"round":13,"idea":"Q7","kind":"keep","title":"hoist constant pure clauses","q160_ms_before":4.87,"q160_ms_after":3.9,"tests":"green"}
+{"round":14,"idea":"Q5","kind":"revert","title":"wildcard_shadowed_attrs memo","notes":"no measurable gain; selector walk already cheap"}
