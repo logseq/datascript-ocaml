@@ -276,6 +276,22 @@ let find_avet_exact db attr value =
     | Some pred -> pred datom
     | None -> true)
 
+(* All index datoms of one entity via a single eavt e-prefix slice. *)
+let entity_index_datoms db entity_id =
+  let bound = datom ~e:entity_id ~a:"" ~v:Nil () in
+  let cmp left right = compare left.e right.e in
+  PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+
+(* Bounded (e, a) eavt slice — index datoms only. *)
+let entity_attr_index_datoms db entity_id attr =
+  let bound = datom ~e:entity_id ~a:attr ~v:Nil () in
+  let cmp left right =
+    match compare left.e right.e with
+    | 0 -> Util.compare_attr left.a right.a
+    | c -> c
+  in
+  PSet.slice ~from_:bound ~to_:bound ~cmp db.eavt_index
+
 let find_eavt_exact db entity_id attr value =
   let bound = datom ~e:entity_id ~a:attr ~v:value () in
   let compare_prefix left right =
@@ -1045,9 +1061,23 @@ let search_attr_value db attr value =
     Db_access_impl.search_datoms db Aevt ~a:attr ()
     |> Seq.filter (fun datom -> values_compare_equal_fast datom.v value)
 
+(* Entity lookups skip the full datoms accessor (arg resolution, seq
+   machinery, duplicate merge, filter_pred) when none of it applies;
+   duplicate_datoms entries are already in the index, so the lean slice
+   is lossless. *)
+let entity_eavt_seq db entity_id =
+  match db.duplicate_datoms, db.filter_pred with
+  | [], None -> List.to_seq (entity_index_datoms db entity_id)
+  | _ -> datoms db Eavt ~e:entity_id ()
+
+let entity_attr_eavt_seq db entity_id attr =
+  match db.duplicate_datoms, db.filter_pred with
+  | [], None -> List.to_seq (entity_attr_index_datoms db entity_id attr)
+  | _ -> datoms db Eavt ~e:entity_id ~a:attr ()
+
 let entity_context =
-  { Entity.datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
-  ; datoms_by_entity_attr = (fun db entity_id attr -> datoms db Eavt ~e:entity_id ~a:attr ())
+  { Entity.datoms_by_entity = entity_eavt_seq
+  ; datoms_by_entity_attr = entity_attr_eavt_seq
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; compare_value
@@ -1087,7 +1117,7 @@ let pull_api_context : Pull_api_impl.context =
   ; entity
   ; entity_attr_raw
   ; entity_attrs
-  ; datoms_by_entity = (fun db entity_id -> datoms db Eavt ~e:entity_id ())
+  ; datoms_by_entity = entity_eavt_seq
   ; all_datoms = (fun db -> datoms db Eavt ())
   ; datoms_by_avet_ref = (fun db attr entity_id -> search_attr_value db attr (Ref entity_id))
   ; cardinality
@@ -1282,9 +1312,9 @@ let resolve_query_value_for_attr db attr value =
     Option.map (fun entity_id -> Ref entity_id) (entid_ref db entity_ref)
   | _ -> resolve_query_value db value
 
-let datoms_by_attr_value db attr value =
+let datom_value_matcher db attr value =
   match resolve_query_value_for_attr db attr value with
-  | None -> []
+  | None -> None
   | Some value ->
     let value =
       if is_tuple_attr db attr then
@@ -1297,13 +1327,20 @@ let datoms_by_attr_value db attr value =
       | Keyword ident, None -> Option.map (fun entity_id -> Ref entity_id) (entid db ident_attr (Keyword ident))
       | _ -> None
     in
-    let datom_value_matches datom =
-      values_compare_equal_fast datom.v value
-      ||
-      match ident_entity_value with
-      | Some entity_value -> values_compare_equal_fast datom.v entity_value
-      | None -> false
-    in
+    Some
+      ( value
+      , ident_entity_value
+      , fun datom ->
+        values_compare_equal_fast datom.v value
+        ||
+        match ident_entity_value with
+        | Some entity_value -> values_compare_equal_fast datom.v entity_value
+        | None -> false )
+
+let datoms_by_attr_value db attr value =
+  match datom_value_matcher db attr value with
+  | None -> []
+  | Some (value, ident_entity_value, datom_value_matches) ->
     if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
       datoms_list db Avet ~a:attr ~v:value ()
     else
@@ -1406,7 +1443,19 @@ let pattern_datoms db e_term a_term v_term tx_term =
     |> List.to_seq
     |> Seq.filter matches_optional_e_tx
   | QAttr attr, _ ->
+    (* An e-bounded attr probe resolves to one (e, a) eavt slice — take the
+       lean index lookup instead of the full accessor machinery. *)
+    (match e, db.duplicate_datoms, db.filter_pred with
+     | Some entity_id, [], None -> List.to_seq (entity_attr_index_datoms db entity_id attr)
+     | _ -> query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ())
+  | QValue (Keyword attr | String attr | Symbol attr), _ ->
+    (* A definite attr name that skipped bound_attr_pattern_term resolves
+       like QAttr — never a full eavt scan. *)
     query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ()
+  | (QValue _ | QEntity _), _ ->
+    (* A resolved non-attr constant in attr position cannot match any
+       datom — answer empty instead of scanning eavt. *)
+    Seq.empty
   | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
@@ -1442,6 +1491,9 @@ let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
     |> List.fold_left (fun acc datom -> if matches_optional_e_tx datom then f acc datom else acc) init
   | QAttr attr, _ ->
     fold_datoms f init db Aevt ?e ~a:attr ?tx ()
+  | QValue (Keyword attr | String attr | Symbol attr), _ ->
+    fold_datoms f init db Aevt ?e ~a:attr ?tx ()
+  | (QValue _ | QEntity _), _ -> init
   | _ -> fold_datoms f init db Eavt ?e ?v ?tx ()
 
 let pattern_comparison_datoms db terms predicate threshold =
@@ -1495,10 +1547,22 @@ let collect_query_terms_exn db bindings terms =
   Query.collect_query_terms_exn (query_match_context db) bindings terms
 
 
+(* Clause evaluation (missing?, get-else, ...) issues many bounded
+   (e, a) eavt lookups per row; route them through the lean index slices
+   when no duplicate bookkeeping or filter applies — identical datoms as
+   the full accessor, which still runs otherwise. *)
+let query_eval_datoms db index ?e ?a ?v ?tx () =
+  match index, e, a, v, tx, db.duplicate_datoms, db.filter_pred with
+  | Eavt, Some entity_id, Some attr, None, None, [], None ->
+    List.to_seq (entity_attr_index_datoms db entity_id attr)
+  | Eavt, Some entity_id, None, None, None, [], None ->
+    List.to_seq (entity_index_datoms db entity_id)
+  | _ -> datoms db index ?e ?a ?v ?tx ()
+
 let query_evaluator_context : Query_eval.evaluator_context =
   { result_resolution_context = query_result_context
   ; match_context = query_match_context
-  ; datoms
+  ; datoms = query_eval_datoms
   ; is_reverse_ref
   ; reverse_ref
   ; compare_value
@@ -1593,7 +1657,8 @@ module Query_where_impl = Query_where.Make (struct
   let normalize_value = normalize_value
 end)
 
-let eval_clauses = Query_where_impl.eval_clauses
+let eval_clauses ?active_rules ?callables ?default_source db sources rules input_bindings where =
+  Query_where_impl.eval_clauses ?active_rules ?callables ?default_source db sources rules input_bindings where
 let eval_relation_rows = Query_where_impl.eval_relation_rows
 
 let parser_query_context : Parser_impl.query_context =
@@ -1853,7 +1918,8 @@ module Query = struct
 
   type simple_row_slot =
     | Simple_entity_slot
-    | Simple_value_slot of query_result option array
+    | Simple_value_slot of attr
+    | Simple_value_table of query_result option array
 
   let simple_same_entity_constant_rows ?inputs db query =
     let ( let* ) = Option.bind in
@@ -1917,30 +1983,132 @@ module Query = struct
         if duplicate_value_var then
           None
         else
-          let constant_datoms =
+          (* Each constant clause either resolves into a datom set (when an
+             avet seek can produce it) or stays a per-entity predicate to
+             be decided once the driver is known. *)
+          let constants =
             constant_patterns
-            |> List.map (fun (attr, value) -> attr, datoms_by_attr_value db attr value)
+            |> List.map (fun (attr, value) ->
+              match datom_value_matcher db attr value with
+              | None -> `Unresolvable
+              | Some (value, ident_entity_value, datom_value_matches) ->
+                if
+                  Option.is_none ident_entity_value
+                  && query_value_uses_avet value
+                  && query_attr_uses_avet db attr
+                then `Datoms (datoms_list db Avet ~a:attr ~v:value ())
+                else `Verify (attr, datom_value_matches))
           in
-          if List.exists (fun (_, datoms) -> datoms = []) constant_datoms then
+          if List.exists (( = ) `Unresolvable) constants then
             Some []
           else
-            let value_tables =
-              value_var_attrs
-              |> List.map (fun (value_var, attr) ->
-                let values = Array.make (db.max_datom_e + 1) None in
-                primary_attr_datoms db Aevt attr
-                |> List.iter (fun datom ->
-                  if datom.e >= 0 && datom.e < Array.length values then
-                    values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
-                value_var, values)
+            (* Divergence from upstream for speed: a non-avet constant is
+               either materialized into a membership set (upstream
+               behavior) or kept as a per-entity predicate checked with a
+               bounded (e, a) eavt seek; value vars likewise use either a
+               per-entity seek or a materialized array. The lean seek wins
+               when the driver selects far fewer entities than the
+               attribute's datom count. Same rows, only the access plan
+               differs. *)
+            let scan_datoms, rest_sets, pending_verifiers =
+              let sets =
+                List.filter_map (function `Datoms datoms -> Some datoms | _ -> None) constants
+              in
+              let verifiers =
+                List.filter_map
+                  (function
+                    | `Verify (attr, datom_value_matches) -> Some (attr, datom_value_matches)
+                    | _ -> None)
+                  constants
+              in
+              match
+                List.sort
+                  (fun left right -> compare (List.length left) (List.length right))
+                  sets
+              with
+              | driver :: rest -> driver, rest, verifiers
+              | [] ->
+                (match verifiers with
+                 | (attr, datom_value_matches) :: rest ->
+                   (* every constant clause is non-avet: materialize one
+                      to drive the scan, verify the rest per entity *)
+                   ( datoms_list db Aevt ~a:attr () |> List.filter datom_value_matches
+                   , []
+                   , rest )
+                 | [] -> [], [], [])
+            in
+            let attr_lean_ok =
+              let driver_count = List.length scan_datoms in
+              let memo = Hashtbl.create 8 in
+              fun attr ->
+                match Hashtbl.find_opt memo attr with
+                | Some ok -> ok
+                | None ->
+                  let ok =
+                    driver_count * 4 <= List.length (primary_attr_datoms db Aevt attr)
+                  in
+                  Hashtbl.replace memo attr ok;
+                  ok
+            in
+            let constant_sets, verifiers =
+              List.fold_left
+                (fun (sets, verifiers) (attr, datom_value_matches) ->
+                  if attr_lean_ok attr then
+                    sets, (attr, datom_value_matches) :: verifiers
+                  else
+                    (datoms_list db Aevt ~a:attr () |> List.filter datom_value_matches) :: sets
+                  , verifiers)
+                (rest_sets, [])
+                pending_verifiers
+            in
+            let constant_sets =
+              constant_sets
+              |> List.map (fun datoms ->
+                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
+                List.iter
+                  (fun datom ->
+                    if datom.e >= 0 && datom.e < Bytes.length entities then
+                      Bytes.set entities datom.e '\001')
+                  datoms;
+                entities)
+            in
+            let datom_of_attr entity_datoms attr =
+              List.find_opt (fun datom -> datom.a = attr) entity_datoms
+            in
+            let entity_allowed entity_id entity_datoms =
+              List.for_all
+                (fun entities ->
+                  entity_id >= 0
+                  && entity_id < Bytes.length entities
+                  && Bytes.get entities entity_id = '\001')
+                constant_sets
+              && List.for_all
+                   (fun (attr, datom_value_matches) ->
+                     match datom_of_attr entity_datoms attr with
+                     | Some datom ->
+                       (match db.filter_pred with
+                        | Some pred -> pred datom
+                        | None -> true)
+                       && datom_value_matches datom
+                     | None -> false)
+                   verifiers
             in
             let slot_for_find_var var =
               if var = e_var then
                 Some Simple_entity_slot
               else
                 Option.map
-                  (fun values -> Simple_value_slot values)
-                  (List.assoc_opt var value_tables)
+                  (fun attr ->
+                    if attr_lean_ok attr then
+                      Simple_value_slot attr
+                    else (
+                      let values = Array.make (db.max_datom_e + 1) None in
+                      primary_attr_datoms db Aevt attr
+                      |> List.iter (fun datom ->
+                        if datom.e >= 0 && datom.e < Array.length values then
+                          values.(datom.e) <- Some (Query_impl.result_of_datom_v datom));
+                      Simple_value_table values))
+                  (List.assoc_opt var value_var_attrs)
             in
             let* row_slots =
               find_vars
@@ -1952,47 +2120,48 @@ module Query = struct
                    (Some [])
               |> Option.map List.rev
             in
-            let constant_sets =
-              constant_datoms
-              |> List.map (fun (_, datoms) ->
-                let entities = Bytes.make (db.max_datom_e + 1) '\000' in
-                List.iter
-                  (fun datom ->
-                    if datom.e >= 0 && datom.e < Bytes.length entities then
-                      Bytes.set entities datom.e '\001')
-                  datoms;
-                entities)
-            in
-            let _, scan_datoms =
-              constant_datoms
-              |> List.sort (fun (_, left) (_, right) -> compare (List.length left) (List.length right))
-              |> List.hd
-            in
-            let entity_allowed entity_id =
-              constant_sets
-              |> List.for_all (fun entities ->
-                entity_id >= 0
-                && entity_id < Bytes.length entities
-                && Bytes.get entities entity_id = '\001')
-            in
-            let value_of_slot entity_id = function
+            let value_of_slot entity_id entity_datoms = function
               | Simple_entity_slot -> Some (Result_entity entity_id)
-              | Simple_value_slot values ->
-                if entity_id >= 0 && entity_id < Array.length values then values.(entity_id) else None
+              | Simple_value_slot attr ->
+                Option.map
+                  (fun datom -> Query_impl.result_of_datom_v datom)
+                  (datom_of_attr entity_datoms attr)
+              | Simple_value_table values ->
+                if entity_id >= 0 && entity_id < Array.length values then
+                  values.(entity_id)
+                else None
             in
-            let row_for_entity entity_id =
+            let row_for_entity entity_id entity_datoms =
               row_slots
               |> List.fold_left
                    (fun row slot ->
                      match row with
                      | None -> None
-                     | Some row -> Option.map (fun value -> value :: row) (value_of_slot entity_id slot))
+                     | Some row ->
+                       Option.map
+                         (fun value -> value :: row)
+                         (value_of_slot entity_id entity_datoms slot))
                    (Some [])
               |> Option.map List.rev
             in
             scan_datoms
             |> List.filter_map (fun datom ->
-              if entity_allowed datom.e then row_for_entity datom.e else None)
+              let entity_id = datom.e in
+              let in_sets =
+                List.for_all
+                  (fun entities ->
+                    entity_id >= 0
+                    && entity_id < Bytes.length entities
+                    && Bytes.get entities entity_id = '\001')
+                  constant_sets
+              in
+              match in_sets with
+              | false -> None
+              | true ->
+                let entity_datoms = entity_index_datoms db entity_id in
+                if entity_allowed entity_id entity_datoms then
+                  row_for_entity entity_id entity_datoms
+                else None)
             |> List.sort_uniq compare
             |> fun rows -> Some rows
 
@@ -2028,7 +2197,23 @@ module Query = struct
         | _ -> false)
       inputs
 
+  (* reverse attr spelling: _a means the source side — an entity
+     "has" _a when another entity references it through a. The set of
+     such entities is the ref targets of a's datoms. *)
+  let reverse_base_attr attr =
+    if String.length attr > 1 && attr.[0] = '_' then
+      Some (String.sub attr 1 (String.length attr - 1))
+    else
+      None
+
   let entity_ids_with_attr db attr =
+    match reverse_base_attr attr with
+    | Some base ->
+      primary_attr_datoms db Aevt base
+      |> List.filter_map (fun (datom : datom) ->
+             (match datom.v with Ref id -> Some id | _ -> None))
+      |> List.sort_uniq compare
+    | None ->
     let rec collect previous acc = function
       | [] -> List.rev acc
       | datom :: rest ->
@@ -2040,6 +2225,18 @@ module Query = struct
     collect None [] (primary_attr_datoms db Aevt attr)
 
   let exact_attr_value_entity_ids db attr value =
+    match reverse_base_attr attr with
+    | Some base ->
+      (* ?e :_a v — (v, a, ?e): entities referenced by src through base *)
+      (match resolve_query_value_for_attr db base value with
+       | Some (Ref src) ->
+         datoms db Eavt ~e:src ~a:base ()
+         |> Seq.filter_map (fun (datom : datom) ->
+                (match datom.v with Ref id -> Some id | _ -> None))
+         |> List.of_seq
+         |> List.sort_uniq compare
+       | _ -> [])
+    | None ->
     match resolve_query_value_for_attr db attr value with
     | None -> []
     | Some value ->
@@ -2089,53 +2286,1376 @@ module Query = struct
     in
     loop [] left right
 
-  let simple_attr_entity_collection db query =
-    match query.find, query.where, query.rules, query.with_vars with
-    | [ Find_var find_var ], patterns, [], [] when only_source_inputs query.inputs ->
-      let rec collect_attrs acc = function
+  (* Inline rule invocations whose bodies are plain clauses: params are
+     replaced by the invocation's terms and body-local vars are renamed
+     fresh so they cannot collide with the outer query — the same
+     rewriting the generic engine does by evaluating the body in a
+     nested binding. Multiple same-name rules wrap the expansions in an
+     Or. Recursive or unhandled bodies leave the Rule clause in place
+     and the collect below falls back to the generic engine. *)
+  let expand_rule_clauses rules clauses =
+    let fresh = ref 0 in
+    let subst_terms_in_clause env clause =
+      let term = function
+        | QVar var -> (match List.assoc_opt var env with Some t -> t | None -> QVar var)
+        | t -> t
+      in
+      let var_name name =
+        match List.assoc_opt name env with
+        | None -> Some name
+        | Some (QVar v) -> Some v
+        | Some _ -> None
+      in
+      let rec one = function
+        | Pattern (e, a, v) -> Some (Pattern (term e, term a, term v))
+        | PatternTx (e, a, v, tx) -> Some (PatternTx (term e, term a, term v, term tx))
+        | PatternTxOp (e, a, v, tx, op) -> Some (PatternTxOp (term e, term a, term v, term tx, term op))
+        | SourcePattern (s, e, a, v) -> Some (SourcePattern (s, term e, term a, term v))
+        | SourcePatternTx (s, e, a, v, tx) -> Some (SourcePatternTx (s, term e, term a, term v, term tx))
+        | SourcePatternTxOp (s, e, a, v, tx, op) -> Some (SourcePatternTxOp (s, term e, term a, term v, term tx, term op))
+        | SourceRelationPattern (s, ts) -> Some (SourceRelationPattern (s, List.map term ts))
+        | Missing (e, a) -> Some (Missing (term e, term a))
+        | SourceMissing (s, e, a) -> Some (SourceMissing (s, term e, term a))
+        | GetElse (e, a, d, out) -> Option.map (fun out -> GetElse (term e, term a, term d, out)) (var_name out)
+        | SourceGetElse (s, e, a, d, out) -> Option.map (fun out -> SourceGetElse (s, term e, term a, term d, out)) (var_name out)
+        | GetSome (e, attrs, a, out) ->
+          Option.map (fun out -> GetSome (term e, List.map term attrs, a, out)) (var_name out)
+        | SourceGetSome (s, e, attrs, a, out) ->
+          Option.map (fun out -> SourceGetSome (s, term e, List.map term attrs, a, out)) (var_name out)
+        | GetValue (m, k, out) -> Option.map (fun out -> GetValue (term m, term k, out)) (var_name out)
+        | GetDefaultValue (m, k, d, out) -> Option.map (fun out -> GetDefaultValue (term m, term k, term d, out)) (var_name out)
+        | CountValue (t, out) -> Option.map (fun out -> CountValue (term t, out)) (var_name out)
+        | EmptyValue t -> Some (EmptyValue (term t))
+        | NotEmptyValue t -> Some (NotEmptyValue (term t))
+        | ContainsValue (c, k) -> Some (ContainsValue (term c, term k))
+        | ValuePredicate (op, t) -> Some (ValuePredicate (op, term t))
+        | NumericPredicate (op, t) -> Some (NumericPredicate (op, term t))
+        | ComparisonPredicate (op, l, r) -> Some (ComparisonPredicate (op, term l, term r))
+        | ComparisonPredicateN (op, ts) -> Some (ComparisonPredicateN (op, List.map term ts))
+        | EqualityPredicate (op, ts) -> Some (EqualityPredicate (op, List.map term ts))
+        | ArithmeticValue (op, ts, out) -> Option.map (fun out -> ArithmeticValue (op, List.map term ts, out)) (var_name out)
+        | CompareValue (l, r, out) -> Option.map (fun out -> CompareValue (term l, term r, out)) (var_name out)
+        | ExtremumValue (op, ts, out) -> Option.map (fun out -> ExtremumValue (op, List.map term ts, out)) (var_name out)
+        | BooleanPredicate (op, t) -> Some (BooleanPredicate (op, term t))
+        | BooleanNotPredicate t -> Some (BooleanNotPredicate (term t))
+        | BooleanNotValue (t, out) -> Option.map (fun out -> BooleanNotValue (term t, out)) (var_name out)
+        | IdentityValue (t, out) -> Option.map (fun out -> IdentityValue (term t, out)) (var_name out)
+        | BooleanAndPredicate ts -> Some (BooleanAndPredicate (List.map term ts))
+        | BooleanAndValue (ts, out) -> Option.map (fun out -> BooleanAndValue (List.map term ts, out)) (var_name out)
+        | BooleanOrPredicate ts -> Some (BooleanOrPredicate (List.map term ts))
+        | BooleanOrValue (ts, out) -> Option.map (fun out -> BooleanOrValue (List.map term ts, out)) (var_name out)
+        | RandomValue _ as c -> Some c
+        | RandomIntValue (b, out) -> Option.map (fun out -> RandomIntValue (term b, out)) (var_name out)
+        | DifferPredicate ts -> Some (DifferPredicate (List.map term ts))
+        | IdenticalPredicate (l, r) -> Some (IdenticalPredicate (term l, term r))
+        | TypeValue (t, out) -> Option.map (fun out -> TypeValue (term t, out)) (var_name out)
+        | MetaValue (t, out) -> Option.map (fun out -> MetaValue (term t, out)) (var_name out)
+        | NameValue (t, out) -> Option.map (fun out -> NameValue (term t, out)) (var_name out)
+        | NamespaceValue (t, out) -> Option.map (fun out -> NamespaceValue (term t, out)) (var_name out)
+        | KeywordFromName (t, out) -> Option.map (fun out -> KeywordFromName (term t, out)) (var_name out)
+        | KeywordFromNamespaceName (t, ns, out) -> Option.map (fun out -> KeywordFromNamespaceName (term t, term ns, out)) (var_name out)
+        | StringIncludesValue (a, b) -> Some (StringIncludesValue (term a, term b))
+        | StringStartsWithValue (a, b) -> Some (StringStartsWithValue (term a, term b))
+        | StringEndsWithValue (a, b) -> Some (StringEndsWithValue (term a, term b))
+        | StringLowerCaseValue (t, out) -> Option.map (fun out -> StringLowerCaseValue (term t, out)) (var_name out)
+        | StringUpperCaseValue (t, out) -> Option.map (fun out -> StringUpperCaseValue (term t, out)) (var_name out)
+        | StringCapitalizeValue (t, out) -> Option.map (fun out -> StringCapitalizeValue (term t, out)) (var_name out)
+        | StringReverseValue (t, out) -> Option.map (fun out -> StringReverseValue (term t, out)) (var_name out)
+        | StringTrimValue (t, out) -> Option.map (fun out -> StringTrimValue (term t, out)) (var_name out)
+        | StringTrimLeftValue (t, out) -> Option.map (fun out -> StringTrimLeftValue (term t, out)) (var_name out)
+        | StringTrimRightValue (t, out) -> Option.map (fun out -> StringTrimRightValue (term t, out)) (var_name out)
+        | StringTrimNewlineValue (t, out) -> Option.map (fun out -> StringTrimNewlineValue (term t, out)) (var_name out)
+        | StringIndexOfValue (a, b, out) -> Option.map (fun out -> StringIndexOfValue (term a, term b, out)) (var_name out)
+        | StringLastIndexOfValue (a, b, out) -> Option.map (fun out -> StringLastIndexOfValue (term a, term b, out)) (var_name out)
+        | StringSubstringValue (t, a, b, out) -> Option.map (fun out -> StringSubstringValue (term t, term a, b, out)) (var_name out)
+        | StringBuildValue (ts, out) -> Option.map (fun out -> StringBuildValue (List.map term ts, out)) (var_name out)
+        | PrintStringValue (ts, out) -> Option.map (fun out -> PrintStringValue (List.map term ts, out)) (var_name out)
+        | PrintLineStringValue (ts, out) -> Option.map (fun out -> PrintLineStringValue (List.map term ts, out)) (var_name out)
+        | PrStringValue (ts, out) -> Option.map (fun out -> PrStringValue (List.map term ts, out)) (var_name out)
+        | PrnStringValue (ts, out) -> Option.map (fun out -> PrnStringValue (List.map term ts, out)) (var_name out)
+        | StringJoinPlainValue (t, out) -> Option.map (fun out -> StringJoinPlainValue (term t, out)) (var_name out)
+        | StringJoinValue (a, b, out) -> Option.map (fun out -> StringJoinValue (term a, term b, out)) (var_name out)
+        | StringReplaceValue (a, b, c, out) -> Option.map (fun out -> StringReplaceValue (term a, term b, term c, out)) (var_name out)
+        | StringReplaceFirstValue (a, b, c, out) -> Option.map (fun out -> StringReplaceFirstValue (term a, term b, term c, out)) (var_name out)
+        | StringEscapeValue (a, b, out) -> Option.map (fun out -> StringEscapeValue (term a, term b, out)) (var_name out)
+        | RePatternValue _ as c -> Some c
+        | ReFindValue (a, b, out) -> Option.map (fun out -> ReFindValue (term a, term b, out)) (var_name out)
+        | ReMatchesValue (a, b, out) -> Option.map (fun out -> ReMatchesValue (term a, term b, out)) (var_name out)
+        | ReSeqValue (a, b, out) -> Option.map (fun out -> ReSeqValue (term a, term b, out)) (var_name out)
+        | ReFindPredicate (a, b) -> Some (ReFindPredicate (term a, term b))
+        | ReMatchesPredicate (a, b) -> Some (ReMatchesPredicate (term a, term b))
+        | StringBlankValue t -> Some (StringBlankValue (term t))
+        | StringSplitValue (a, b, out) -> Option.map (fun out -> StringSplitValue (term a, term b, out)) (var_name out)
+        | StringSplitLimitValue (a, b, c, out) -> Option.map (fun out -> StringSplitLimitValue (term a, term b, term c, out)) (var_name out)
+        | StringSplitLinesValue (t, out) -> Option.map (fun out -> StringSplitLinesValue (term t, out)) (var_name out)
+        | (Ground _ | GroundCollection _ | GroundTuple _ | GroundRelation _) as c -> Some c
+        | GroundTerm (t, out) -> Option.map (fun out -> GroundTerm (term t, out)) (var_name out)
+        | GroundTermCollection (t, out) -> Option.map (fun out -> GroundTermCollection (term t, out)) (var_name out)
+        | GroundTermTuple (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> GroundTermTuple (term t, outs)) (sub_vars outs)
+        | GroundTermRelation (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> GroundTermRelation (term t, outs)) (sub_vars outs)
+        | VectorValue (ts, out) -> Option.map (fun out -> VectorValue (List.map term ts, out)) (var_name out)
+        | ListValue (ts, out) -> Option.map (fun out -> ListValue (List.map term ts, out)) (var_name out)
+        | SetValue (ts, out) -> Option.map (fun out -> SetValue (List.map term ts, out)) (var_name out)
+        | HashMapValue (ts, out) -> Option.map (fun out -> HashMapValue (List.map term ts, out)) (var_name out)
+        | ArrayMapValue (ts, out) -> Option.map (fun out -> ArrayMapValue (List.map term ts, out)) (var_name out)
+        | RangeEndValue (t, out) -> Option.map (fun out -> RangeEndValue (term t, out)) (var_name out)
+        | RangeValue (a, b, out) -> Option.map (fun out -> RangeValue (term a, term b, out)) (var_name out)
+        | RangeStepValue (a, b, c, out) -> Option.map (fun out -> RangeStepValue (term a, term b, term c, out)) (var_name out)
+        | TupleFunction (ts, out) -> Option.map (fun out -> TupleFunction (List.map term ts, out)) (var_name out)
+        | UntupleFunction (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> UntupleFunction (term t, outs)) (sub_vars outs)
+        | Predicate (n, ts, f) -> Some (Predicate (n, List.map term ts, f))
+        | Function (n, ts, outs, f) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> Function (n, List.map term ts, outs, f)) (sub_vars outs)
+        | DynamicPredicate (n, ts) -> Some (DynamicPredicate (n, List.map term ts))
+        | DynamicFunction (n, ts, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> DynamicFunction (n, List.map term ts, outs)) (sub_vars outs)
+        | DynamicFunctionCollection (n, ts, out) -> Option.map (fun out -> DynamicFunctionCollection (n, List.map term ts, out)) (var_name out)
+        | DynamicFunctionRelation (n, ts, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> DynamicFunctionRelation (n, List.map term ts, outs)) (sub_vars outs)
+        | SourceClause (s, c) -> Option.map (fun c -> SourceClause (s, c)) (one c)
+        | Not cs -> Option.map (fun cs -> Not cs) (many cs)
+        | SourceNot (s, cs) -> Option.map (fun cs -> SourceNot (s, cs)) (many cs)
+        | NotJoin (vs, cs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun cs -> NotJoin (vs, cs)) (many cs))
+        | SourceNotJoin (s, vs, cs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun cs -> SourceNotJoin (s, vs, cs)) (many cs))
+        | Or brs -> Option.map (fun bs -> Or bs) (branches brs)
+        | SourceOr (s, brs) -> Option.map (fun bs -> SourceOr (s, bs)) (branches brs)
+        | OrJoin (vs, brs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun bs -> OrJoin (vs, bs)) (branches brs))
+        | SourceOrJoin (s, vs, brs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun bs -> SourceOrJoin (s, vs, bs)) (branches brs))
+        | OrJoinRequired (rvs, vs, brs) ->
+          Option.bind (sub_names rvs)
+            (fun rvs ->
+              Option.bind (sub_names vs)
+                (fun vs -> Option.map (fun bs -> OrJoinRequired (rvs, vs, bs)) (branches brs)))
+        | SourceOrJoinRequired (s, rvs, vs, brs) ->
+          Option.bind (sub_names rvs)
+            (fun rvs ->
+              Option.bind (sub_names vs)
+                (fun vs -> Option.map (fun bs -> SourceOrJoinRequired (s, rvs, vs, bs)) (branches brs)))
+        | (Rule _ | SourceRule _) as c -> Some c
+      and many clauses =
+        match clauses with
+        | [] -> Some []
+        | c :: rest -> Option.bind (one c) (fun c -> Option.map (fun r -> c :: r) (many rest))
+      and branches bs =
+        match bs with
+        | [] -> Some []
+        | b :: rest -> Option.bind (many b) (fun b -> Option.map (fun r -> b :: r) (branches rest))
+      and sub_names names =
+        match names with
+        | [] -> Some []
+        | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_names rest))
+      in
+      one clause
+    in
+    let rec expand ~depth ~seen clauses =
+      let rec go acc = function
         | [] -> Some (List.rev acc)
-        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
-          collect_attrs (attr :: acc) rest
+        | Rule (name, terms) :: rest ->
+          (match expand_invocation ~depth ~seen name terms with
+           | Some expansion -> go (List.rev_append expansion acc) rest
+           | None -> go (Rule (name, terms) :: acc) rest)
+        | (SourceRule _ as c) :: rest -> go (c :: acc) rest
+        | clause :: rest -> go (clause :: acc) rest
+      in
+      go [] clauses
+    and expand_invocation ~depth ~seen name terms =
+      if depth > 8 || List.mem name seen then None
+      else
+        match Query.matching_rules rules name (List.length terms) with
+        | [] -> None
+        | candidates ->
+          let expand_body rule =
+            (* params -> invocation terms; body-local vars -> fresh names *)
+            let env = List.combine rule.rule_params terms in
+            let body_vars =
+              List.concat_map Query.vars_of_clause rule.rule_body
+              |> List.filter (fun v -> not (List.mem_assoc v env))
+              |> List.sort_uniq compare
+            in
+            let env =
+              env
+              @ List.map
+                  (fun var ->
+                    incr fresh;
+                    var, QVar (var ^ "#" ^ string_of_int !fresh))
+                  body_vars
+            in
+            let rec sub = function
+              | [] -> Some []
+              | c :: rest ->
+                Option.bind (subst_terms_in_clause env c)
+                  (fun c -> Option.map (fun r -> c :: r) (sub rest))
+            in
+            match sub rule.rule_body with
+            | None -> None
+            | Some expanded -> expand ~depth:(depth + 1) ~seen:(name :: seen) expanded
+          in
+          match List.map expand_body candidates with
+          | [] -> None
+          | [ Some single ] -> Some single
+          | bodies when List.for_all Option.is_some bodies ->
+            Some [ Or (List.map Option.get bodies) ]
+          | _ -> None
+    in
+    expand ~depth:0 ~seen:[] clauses
+
+  let value_of_query_result = function
+    | Result_value value -> Some value
+    | Result_entity entity_id -> Some (Ref entity_id)
+    | Result_attr attr -> Some (Keyword attr)
+    | Result_db _ | Result_pull _ -> None
+
+  (* collection inputs ([?var ...] args) map a var to the values it
+     ranges over — a membership constraint, not a scalar binding *)
+  let coll_input_bindings query inputs =
+    let rec collect acc declarations args =
+      match declarations, args with
+      | [], _ -> Some (List.rev acc)
+      | Input_source_decl _ :: rest, _ -> collect acc rest args
+      | Input_rules_decl :: rest, Arg_rules _ :: args -> collect acc rest args
+      | Input_collection_decl var :: rest, Arg_collection values :: args ->
+        collect ((var, values) :: acc) rest args
+      | (_ :: rest), (_ :: args) -> collect acc rest args
+      | _ :: _, [] -> None
+    in
+    collect [] query.inputs inputs
+  (* ground checks after ident resolution: a clause left with no
+     variables is evaluated directly against the index *)
+  let clause_bool db =
+    let attr_present e a =
+      match reverse_base_attr a with
+      | Some base ->
+        (* ?e :_a — some other entity references e through base *)
+        primary_attr_datoms db Aevt base
+        |> List.exists (fun (datom : datom) -> datom.v = Ref e)
+      | None ->
+      match datoms db Eavt ~e ~a () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let value_present e a v =
+      match reverse_base_attr a with
+      | Some base ->
+        (* e :_a v — (v, a, e): v is the source entity referencing e *)
+        (match resolve_query_value_for_attr db base v with
+         | Some (Ref src) ->
+           (match datoms db Eavt ~e:src ~a:base ~v:(Ref e) () () with
+            | Seq.Cons _ -> true
+            | Seq.Nil -> false)
+         | _ -> false)
+      | None ->
+      match datoms db Eavt ~e ~a ~v () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let rec clause_bool = function
+      | Pattern (QEntity e, QAttr a, QWildcard) -> Some (attr_present e a)
+      | Pattern (QEntity e, QAttr a, QValue v) -> Some (value_present e a v)
+      | Missing (QEntity e, QAttr a) -> Some (not (attr_present e a))
+      | Not clauses ->
+        (match clauses_bool clauses with
+         | Some b -> Some (not b)
+         | None -> None)
+      | Or branches ->
+        let rec any acc = function
+          | [] -> acc
+          | branch :: rest ->
+            (match clauses_bool branch with
+             | Some true -> Some true
+             | Some false -> any acc rest
+             | None -> (match acc with Some true -> acc | _ -> None))
+        in
+        any (Some false) branches
+      | _ -> None
+    and clauses_bool clauses =
+      List.fold_left
+        (fun acc clause ->
+          match acc, clause_bool clause with
+          | Some acc', Some b -> Some (acc' && b)
+          | Some false, _ -> Some false
+          | _, None -> None
+          | None, Some _ -> None)
+        (Some true) clauses
+    in
+    clause_bool
+  (* Rule bodies expanded inline bind a property entity var through
+     [?x :db/ident K] — the property attr elsewhere is the keyword
+     itself, so ?x only ever shows up in entity position (its own
+     attribute clauses: tags, public?, valueType, ...). Resolve each
+     such var to its (unique) entity: entity-position uses become
+     QEntity e, the ident clause drops out, and any clause left
+     without variables becomes a ground check evaluated here. A
+     missing ident or a failed check means the join has no rows —
+     the query result is empty. A var in attr/value position stays
+     unresolved — the generic engine doesn't resolve entities there
+     either. *)
+  let resolve_ident_entity_vars db ?resolve clauses =
+    let ident_attr = "db/ident" in
+    let ident_const = function
+      | QValue (Keyword k | String k | Symbol k) -> Some k
+      | QVar var ->
+        (match resolve with
+         | Some resolve ->
+           (match resolve var with
+            | Some (Keyword k | String k | Symbol k) -> Some k
+            | _ -> None)
+         | None -> None)
+      | _ -> None
+    in
+    (* every mention of var must sit at a substitutable position —
+       entity or attr position of a pattern-ish clause (or/not wrappers
+       recurse); join-var lists and value/output positions are not *)
+    let term_has var = function QVar v -> v = var | _ -> false in
+    let rec var_ok var clause =
+      match clause with
+      | Pattern (_, a, v) | SourcePattern (_, _, a, v) ->
+        not (term_has var a) && not (term_has var v)
+      | PatternTx (_, a, v, tx) | SourcePatternTx (_, _, a, v, tx) ->
+        not (term_has var a) && not (term_has var v) && not (term_has var tx)
+      | PatternTxOp (_, a, v, tx, op) | SourcePatternTxOp (_, _, a, v, tx, op) ->
+        not (term_has var a) && not (term_has var v) && not (term_has var tx)
+        && not (term_has var op)
+      | Missing (_, a) | SourceMissing (_, _, a) -> not (term_has var a)
+      | GetElse (_, a, default, output) | SourceGetElse (_, _, a, default, output) ->
+        not (term_has var a) && not (term_has var default) && output <> var
+      | Or branches | SourceOr (_, branches) ->
+        List.for_all (List.for_all (var_ok var)) branches
+      | OrJoin (vars, branches) | SourceOrJoin (_, vars, branches) ->
+        not (List.mem var vars) && List.for_all (List.for_all (var_ok var)) branches
+      | OrJoinRequired (required_vars, vars, branches)
+      | SourceOrJoinRequired (_, required_vars, vars, branches) ->
+        not (List.mem var required_vars || List.mem var vars)
+        && List.for_all (List.for_all (var_ok var)) branches
+      | Not cs | SourceNot (_, cs) -> List.for_all (var_ok var) cs
+      | NotJoin (vars, cs) | SourceNotJoin (_, vars, cs) ->
+        not (List.mem var vars) && List.for_all (var_ok var) cs
+      | SourceClause (_, c) -> var_ok var c
+      | c -> not (List.mem var (Query.vars_of_clause c))
+    in
+    let subst var eid clause =
+      let sub_e = function QVar v when v = var -> QEntity eid | t -> t in
+      let rec go = function
+        | Pattern (e, a, v) -> Pattern (sub_e e, a, v)
+        | PatternTx (e, a, v, tx) -> PatternTx (sub_e e, a, v, tx)
+        | PatternTxOp (e, a, v, tx, op) -> PatternTxOp (sub_e e, a, v, tx, op)
+        | SourcePattern (s, e, a, v) -> SourcePattern (s, sub_e e, a, v)
+        | SourcePatternTx (s, e, a, v, tx) -> SourcePatternTx (s, sub_e e, a, v, tx)
+        | SourcePatternTxOp (s, e, a, v, tx, op) -> SourcePatternTxOp (s, sub_e e, a, v, tx, op)
+        | Missing (e, a) -> Missing (sub_e e, a)
+        | SourceMissing (s, e, a) -> SourceMissing (s, sub_e e, a)
+        | GetElse (e, a, d, out) -> GetElse (sub_e e, a, d, out)
+        | SourceGetElse (s, e, a, d, out) -> SourceGetElse (s, sub_e e, a, d, out)
+        | Or bs -> Or (List.map (List.map go) bs)
+        | SourceOr (s, bs) -> SourceOr (s, List.map (List.map go) bs)
+        | OrJoin (vars, bs) -> OrJoin (vars, List.map (List.map go) bs)
+        | SourceOrJoin (s, vars, bs) -> SourceOrJoin (s, vars, List.map (List.map go) bs)
+        | OrJoinRequired (req, vars, bs) -> OrJoinRequired (req, vars, List.map (List.map go) bs)
+        | SourceOrJoinRequired (s, req, vars, bs) ->
+          SourceOrJoinRequired (s, req, vars, List.map (List.map go) bs)
+        | Not cs -> Not (List.map go cs)
+        | SourceNot (s, cs) -> SourceNot (s, List.map go cs)
+        | NotJoin (vars, cs) -> NotJoin (vars, List.map go cs)
+        | SourceNotJoin (s, vars, cs) -> SourceNotJoin (s, vars, List.map go cs)
+        | SourceClause (s, c) -> SourceClause (s, go c)
+        | c -> c
+      in
+      go clause
+    in
+    (* drop ground clauses that check out, fail fast on false ones,
+       keep unresolvable ones for the generic machinery *)
+    let finish clauses =
+      let rec go acc = function
+        | [] -> `Ok (List.rev acc)
+        | clause :: rest when Query.vars_of_clause clause = [] ->
+          (match clause_bool db clause with
+           | Some true -> go acc rest
+           | Some false -> `Empty
+           | None -> go (clause :: acc) rest)
+        | clause :: rest -> go (clause :: acc) rest
+      in
+      go [] clauses
+    in
+    let rec resolve_all clauses =
+      let candidate =
+        List.find_map
+          (function
+            | Pattern (QVar var, QAttr attr, term)
+              when attr = ident_attr -> Option.map (fun k -> var, k) (ident_const term)
+            | _ -> None)
+          clauses
+      in
+      match candidate with
+      | None -> `Ok clauses
+      | Some (var, ident) ->
+        if
+          List.exists
+            (fun c -> List.mem var (Query.vars_of_clause c) && not (var_ok var c))
+            clauses
+        then `Ok clauses
+        else
+          (match entid db ident_attr (Keyword ident) with
+           | None -> `Empty
+           | Some eid ->
+             let dropped = ref false in
+             resolve_all
+               (List.filter_map
+                  (fun c ->
+                    match c with
+                    | Pattern (QVar v, QAttr attr, _)
+                      when v = var && attr = ident_attr && not !dropped ->
+                      dropped := true;
+                      None
+                    | _ -> Some (subst var eid c))
+                  clauses))
+    in
+    match resolve_all clauses with
+    | `Empty -> `Empty
+    | `Ok clauses -> finish clauses
+  (* Upstream evaluates clauses left to right and requires every var in
+     a not/missing? clause to be bound by the clauses before it (or by
+     :in inputs) — violating queries raise. Fast paths collect clauses
+     out of order, so they must decline when this invariant does not
+     hold and let the generic engine produce the same error. *)
+  let clauses_respect_binding_order query clauses =
+    let seeded () =
+      let bound = Hashtbl.create 16 in
+      List.iter
+        (fun var -> Hashtbl.replace bound var ())
+        (List.concat_map Query.vars_of_input query.inputs);
+      bound
+    in
+    let rec walk bound = function
+      | [] -> true
+      | clause :: rest ->
+        let vars = Query.vars_of_clause clause in
+        (match clause with
+         | Not _ | SourceNot (_, _) | NotJoin (_, _) | SourceNotJoin (_, _, _)
+         | Missing _ | SourceMissing (_, _, _) ->
+           List.for_all (fun var -> Hashtbl.mem bound var) vars && walk bound rest
+         | Or branches | SourceOr (_, branches) ->
+           let branch_vars =
+             List.map
+               (fun branch -> List.sort_uniq compare (List.concat_map Query.vars_of_clause branch))
+               branches
+           in
+           (match branch_vars with
+            | first :: rest' when List.for_all (fun bs -> bs = first) rest' ->
+              (* upstream requires every or-branch to bind the same free
+                 vars — check the rule even for hand-built queries *)
+              List.for_all (fun branch -> walk (Hashtbl.copy bound) branch) branches
+              && (List.iter (fun var -> Hashtbl.replace bound var ()) vars; walk bound rest)
+            | _ -> false)
+         | _ ->
+           List.iter (fun var -> Hashtbl.replace bound var ()) vars;
+           walk bound rest)
+    in
+    walk (seeded ()) clauses
+
+  let rec simple_attr_entity_ids db ?resolve ?coll find_var query =
+    match query.where, query.rules, query.with_vars with
+    | patterns, rules, [] when rules <> [] ->
+      (match expand_rule_clauses rules patterns with
+       | Some expanded ->
+         simple_attr_entity_ids db ?resolve ?coll find_var { query with where = expanded; rules = [] }
+       | None -> None)
+    | patterns, [], []
+      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs))
+        && clauses_respect_binding_order query patterns ->
+      (* Same relaxation as simple_attr_entity_collection: a value var used
+         exactly once and not bound by an input is a wildcard for the purpose
+         of constraining find_var's entity set. *)
+      let input_vars = List.concat_map Query.vars_of_input query.inputs in
+      (* An attr term that is input-bound to a concrete attr name behaves
+         exactly like the literal QAttr — [?e ?a ?v] with ?a bound becomes
+         a plain attr pattern. Unbound attr vars stay vars and the collect
+         below falls through to the generic engine. *)
+      let attr_term = function
+        | QVar var ->
+          (match resolve with
+           | Some resolve ->
+             (match resolve var with
+              | Some (Keyword name | String name | Symbol name) -> QAttr name
+              | _ -> QVar var)
+           | None -> QVar var)
+        | QValue (Keyword name | String name | Symbol name) -> QAttr name
+        | term -> term
+      in
+      let patterns =
+        List.map
+          (function
+            | Pattern (e, a, v) -> Pattern (e, attr_term a, v)
+            | PatternTx (e, a, v, tx) -> PatternTx (e, attr_term a, v, tx)
+            | PatternTxOp (e, a, v, tx, op) -> PatternTxOp (e, attr_term a, v, tx, op)
+            | Missing (e, a) -> Missing (e, attr_term a)
+            | GetElse (e, a, d, out) -> GetElse (e, attr_term a, d, out)
+            | clause -> clause)
+          patterns
+      in
+      (match resolve_ident_entity_vars db ?resolve patterns with
+       | `Empty -> Some []
+       | `Ok patterns ->
+      let var_counts = Hashtbl.create 8 in
+      List.iter
+        (fun var ->
+          Hashtbl.replace var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt var_counts var)))
+        (List.concat_map Query.vars_of_clause patterns);
+      let free_value_var var =
+        var <> find_var
+        && not (List.mem var input_vars)
+        && Hashtbl.find_opt var_counts var = Some 1
+      in
+      (* A value var bound by one pattern on find_var and constrained only
+         by comparison predicates ((>= ?v ?in) etc.) contributes the set of
+         entities whose attr value lands in the merged range — the pattern
+         and predicates are consumed into a `Range entry. *)
+      let resolve_const = function
+        | QValue value -> Some value
+        | QVar var ->
+          (match resolve with
+           | Some resolve -> resolve var
+           | None -> None)
         | _ -> None
       in
-      (match collect_attrs [] patterns with
-       | Some (first_attr :: rest_attrs) ->
-         let entity_ids =
-           List.fold_left
-             (fun entity_ids attr -> intersect_sorted_entity_ids entity_ids (entity_ids_with_attr db attr))
-             (entity_ids_with_attr db first_attr)
-             rest_attrs
-         in
-         Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
-       | Some [] | None -> None)
-    | _ -> None
-
-  let simple_attr_entity_ids db find_var query =
-    match query.where, query.rules, query.with_vars with
-    | patterns, [], [] when only_source_inputs query.inputs ->
-      let rec collect_patterns acc = function
-        | [] -> Some (List.rev acc)
-        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
-          collect_patterns (`Attr attr :: acc) rest
-        | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when find_var = entity_var ->
-          collect_patterns (`Value (attr, value) :: acc) rest
+      let coll_resolve var =
+        match coll with
+        | Some coll ->
+          Option.map
+            (List.filter_map value_of_query_result)
+            (List.assoc_opt var coll)
+        | None -> None
+      in
+      let pred_bound = function
+        | ComparisonPredicate (op, QVar var, other) | ComparisonPredicateN (op, [ QVar var; other ]) ->
+          (match op, resolve_const other with
+           | (GreaterThan | GreaterOrEqual | LessThan | LessOrEqual), Some bound ->
+             Some (var, `Var (op, bound))
+           | _ -> None)
+        | ComparisonPredicate (op, other, QVar var) | ComparisonPredicateN (op, [ other; QVar var ]) ->
+          (match op, resolve_const other with
+           | GreaterThan, Some bound -> Some (var, `Var (LessThan, bound))
+           | GreaterOrEqual, Some bound -> Some (var, `Var (LessOrEqual, bound))
+           | LessThan, Some bound -> Some (var, `Var (GreaterThan, bound))
+           | LessOrEqual, Some bound -> Some (var, `Var (GreaterOrEqual, bound))
+           | _ -> None)
         | _ -> None
+      in
+      (* string/equality predicates on a value var: attributes the
+         predicate to the var when the other side resolves to a
+         constant — like pred_bound but for non-numeric clauses *)
+      let str_pred_bound = function
+        | StringIncludesValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Includes s)
+           | _ -> None)
+        | StringStartsWithValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Starts s)
+           | _ -> None)
+        | StringEndsWithValue (QVar var, other) ->
+          (match resolve_const other with
+           | Some (String s) -> Some (var, `Ends s)
+           | _ -> None)
+        | EqualityPredicate (pred, terms) ->
+          (match pred, terms with
+           | EqualValues, [ QVar var; other ] | EqualValues, [ other; QVar var ] ->
+             (match resolve_const other with
+              | Some value -> Some (var, `Eq value)
+              | None -> None)
+           | NotEqualValues, [ QVar var; other ] | NotEqualValues, [ other; QVar var ] ->
+             (match resolve_const other with
+              | Some value -> Some (var, `Neq value)
+              | None -> None)
+           | _ -> None)
+        | _ -> None
+      in
+      (* Range/cross-ref analysis is scoped to the clause list being
+         collected — try_ref_target re-enters on a partition, and a var
+         whose pattern and predicates split across partitions simply
+         stays generic. *)
+      let rec collect_patterns_for ~seen for_var clauses =
+        let range_preds = Hashtbl.create 8 in
+        List.iter
+          (fun clause ->
+            match pred_bound clause with
+            | Some (var, bound) ->
+              Hashtbl.replace range_preds var
+                (bound :: Option.value ~default:[] (Hashtbl.find_opt range_preds var))
+            | None -> ())
+          clauses;
+        (* eligible: v's occurrences = 1 value-position pattern on find_var +
+           only the collected predicates *)
+        let range_entry_of var =
+          let preds = Option.value ~default:[] (Hashtbl.find_opt range_preds var) in
+          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
+            || var = for_var || List.mem var input_vars then
+            None
+          else
+            let attr =
+              List.find_map
+                (function
+                  | Pattern (QVar entity_var, QAttr attr, QVar value_var)
+                    when entity_var = for_var && value_var = var -> Some attr
+                  | _ -> None)
+                clauses
+            in
+            match attr with
+            | None -> None
+            | Some attr ->
+              (* merge bounds: lower bounds take the max value (ties pick
+                 strict), upper bounds the min *)
+              let tighten keep_max (v, s) = function
+                | None -> Some (v, s)
+                | Some (bv, bs) ->
+                  let c = compare_value v bv in
+                  if (keep_max && c > 0) || ((not keep_max) && c < 0) then Some (v, s)
+                  else if c = 0 then Some (v, s || bs)
+                  else Some (bv, bs)
+              in
+              let lo, hi =
+                List.fold_left
+                  (fun (lo, hi) bound ->
+                    match bound with
+                    | `Var ((GreaterThan | GreaterOrEqual) as op, bound) ->
+                      tighten true (bound, op = GreaterThan) lo, hi
+                    | `Var ((LessThan | LessOrEqual) as op, bound) ->
+                      lo, tighten false (bound, op = LessThan) hi
+                    | _ -> lo, hi)
+                  (None, None)
+                  preds
+              in
+              Some (`Range (attr, lo, hi))
+        in
+        let range_vars =
+          Hashtbl.fold (fun var _ acc -> var :: acc) range_preds []
+          |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (range_entry_of var))
+        in
+        let range_var_entry var = List.assoc_opt var range_vars in
+        let str_preds = Hashtbl.create 8 in
+        List.iter
+          (fun clause ->
+            match str_pred_bound clause with
+            | Some (var, bound) ->
+              Hashtbl.replace str_preds var
+                (bound :: Option.value ~default:[] (Hashtbl.find_opt str_preds var))
+            | None -> ())
+          clauses;
+        let str_entry_of var =
+          let preds = Option.value ~default:[] (Hashtbl.find_opt str_preds var) in
+          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
+            || var = for_var || List.mem var input_vars
+            || Hashtbl.mem range_preds var then
+            None
+          else
+            List.find_map
+              (function
+                | Pattern (QVar entity_var, QAttr attr, QVar value_var)
+                  when entity_var = for_var && value_var = var ->
+                  Some (`Str (attr, preds))
+                | _ -> None)
+              clauses
+        in
+        let str_vars =
+          Hashtbl.fold (fun var _ acc -> var :: acc) str_preds []
+          |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (str_entry_of var))
+        in
+        let str_var_entry var = List.assoc_opt var str_vars in
+        (* contains? predicates on a value var: [(contains? ?c ?v)] where
+           ?v is bound by one [for_var :attr ?v] pattern — following
+           value_contains exactly: Set/Map → member/key membership,
+           List/Vector/Tuple → Int64 index range, scalars → nothing.
+           The container resolves from a scalar input or from each
+           collection-input element. A contains? appearing before the
+           binding pattern drops every row upstream — an empty set. *)
+        let contains_preds = Hashtbl.create 8 in
+        List.iter
+          (fun clause ->
+            match clause with
+            | ContainsValue (QVar cvar, QVar v)
+              when v <> for_var && not (List.mem v input_vars) ->
+              Hashtbl.replace contains_preds v
+                ((cvar, clause) :: Option.value ~default:[] (Hashtbl.find_opt contains_preds v))
+            | _ -> ())
+          clauses;
+        let contains_entry_of var =
+          let preds = Option.value ~default:[] (Hashtbl.find_opt contains_preds var) in
+          if preds = [] || var = for_var || List.mem var input_vars
+            || Hashtbl.mem range_preds var || Hashtbl.mem str_preds var then
+            None
+          else
+            (* allowed values per contains? clause — the intersection
+               of all of them; a contains? before the binding drops
+               every row (matches upstream left-to-right eval) *)
+            let allowed_of cvar clause bind_idx =
+              let before =
+                match List.find_index (fun c -> c == clause) clauses with
+                | Some this_idx -> bind_idx < this_idx
+                | _ -> false
+              in
+              if not before then Some []
+              else
+                let one = function
+                  | List vs | Vector vs ->
+                    Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                  | Tuple vs ->
+                    (* value option elements; the index range only needs
+                       the length *)
+                    Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                  | Set vs -> Some vs
+                  | Map entries -> Some (List.map fst entries)
+                  | _ -> Some []
+                in
+                (match resolve_const (QVar cvar), coll_resolve cvar with
+                 | Some value, _ -> one value
+                 | None, Some elements ->
+                   (try Some (List.concat_map (fun e -> Option.get (one e)) elements)
+                    with _ -> None)
+                 | None, None -> None)
+            in
+            let binding_pattern_idx =
+              List.find_index
+                (function
+                  | Pattern (QVar e, QAttr _, QVar vv) -> e = for_var && vv = var
+                  | _ -> false)
+                clauses
+            in
+            (match binding_pattern_idx with
+             | Some pat_idx ->
+               (match
+                  List.find_map
+                    (function
+                      | Pattern (QVar e, QAttr a, QVar vv) when e = for_var && vv = var -> Some a
+                      | _ -> None)
+                    clauses
+                with
+                | Some attr
+                  when Hashtbl.find_opt var_counts var = Some (List.length preds + 1) ->
+                  (match List.map (fun (cvar, clause) -> allowed_of cvar clause pat_idx) preds with
+                   | alloweds when List.for_all Option.is_some alloweds ->
+                     let allowed =
+                       match List.filter_map (fun x -> x) alloweds with
+                       | first :: rest ->
+                         List.fold_left
+                           (fun acc other ->
+                             List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
+                           first rest
+                       | [] -> []
+                     in
+                     Some (`InColl (attr, allowed))
+                   | _ -> None)
+                | _ -> None)
+             | None ->
+               (* no top-level binding: an or whose every branch is a
+                  single [for_var :attr var] pattern binds var too —
+                  each branch becomes a membership entry *)
+               (match
+                  List.find_index
+                    (function
+                      | Or branches ->
+                        List.for_all
+                          (function
+                            | [ Pattern (QVar e, QAttr _, QVar vv) ] -> e = for_var && vv = var
+                            | _ -> false)
+                          branches
+                      | _ -> false)
+                    clauses
+                with
+                | None -> None
+                | Some or_idx ->
+                  let or_branches =
+                    List.find_map
+                      (function
+                        | Or branches
+                          when List.for_all
+                                 (function
+                                   | [ Pattern (QVar e, QAttr _, QVar vv) ] -> e = for_var && vv = var
+                                   | _ -> false)
+                                 branches ->
+                          Some
+                            (List.map
+                               (function
+                                 | [ Pattern (_, QAttr a, _) ] -> a
+                                 | _ -> assert false)
+                               branches)
+                        | _ -> None)
+                      clauses
+                  in
+                  (match or_branches with
+                   | Some attrs ->
+                     (* vars_of_clause dedupes within a clause: var
+                        shows once for the or itself however many
+                        branches bind it *)
+                     if Hashtbl.find_opt var_counts var = Some (List.length preds + 1) then
+                     (match List.map (fun (cvar, clause) -> allowed_of cvar clause or_idx) preds with
+                      | alloweds when List.for_all Option.is_some alloweds ->
+                        let allowed =
+                          match List.filter_map (fun x -> x) alloweds with
+                          | first :: rest ->
+                            List.fold_left
+                              (fun acc other ->
+                                List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
+                              first rest
+                          | [] -> []
+                        in
+                        Some (`Or (List.map (fun a -> [ `InColl (a, allowed) ]) attrs))
+                      | _ -> None)
+                     else None
+                   | _ -> None)))
+        in
+        let contains_vars =
+          Hashtbl.fold (fun var _ acc -> var :: acc) contains_preds []
+          |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (contains_entry_of var))
+        in
+        let contains_var_entry var = List.assoc_opt var contains_vars in
+        (* cross-ref edges: [?e :ref ?v] where every other clause
+           mentioning v constrains v in entity position — v's entity set
+           comes from a recursive collect (depth-bounded by [seen]), and
+           the edge becomes a value-membership filter on the ref attr *)
+        let cross_entry_of clause =
+          match clause with
+          | Pattern (QVar e, QAttr a, QVar v)
+            when e = for_var && v <> for_var && is_ref_attr db a
+              && not (List.mem v input_vars) && not (List.mem v seen)
+              && not (Hashtbl.mem range_preds v) && not (Hashtbl.mem str_preds v) ->
+            let mentions v' clause' = List.mem v' (Query.vars_of_clause clause') in
+            (* v's constraint component: the transitive closure over
+               shared vars — a clause can bind a var that only shows up
+               inside v's or-branches (contains? on the or's value var),
+               so pull every clause sharing a var with what we already
+               have until fixpoint *)
+            let seed = List.filter (fun c -> c != clause && mentions v c) clauses in
+            let rec closure acc =
+              let vars = List.concat_map Query.vars_of_clause acc in
+              let more =
+                List.filter
+                  (fun c ->
+                    c != clause
+                    && not (List.exists (fun c' -> c' == c) acc)
+                    && List.exists (fun x -> List.mem x vars) (Query.vars_of_clause c))
+                  clauses
+              in
+              if more = [] then acc else closure (acc @ more)
+            in
+            let v_clauses = closure seed in
+            (* the component is consumable iff every clause in it falls
+               to the recursive collect — a clause on an unrelated var
+               simply fails there. v itself must not be projected: the
+               `ValueIn entry only filters, it cannot produce v's
+               values per row *)
+            if v_clauses <> []
+              && not
+                   (List.mem v
+                      (List.concat_map Query.vars_of_find_spec query.find)) then
+              (match collect_patterns_for ~seen:(for_var :: seen) v v_clauses with
+               | Some v_entries -> Some (v, `ValueIn (a, v_entries), v_clauses)
+               | None -> None)
+            else None
+          | _ -> None
+        in
+        let cross_results = List.filter_map cross_entry_of clauses in
+        let cross_entries = List.map (fun (v, entry, _) -> v, entry) cross_results in
+        let cross_consumed = List.concat_map (fun (_, _, cs) -> cs) cross_results in
+        let cross_var_entry var = List.assoc_opt var cross_entries in
+        let rec collect acc = function
+          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd str_vars @ List.map snd contains_vars @ List.map snd cross_entries))
+        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when for_var = entity_var ->
+          collect (`Attr attr :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when for_var = entity_var ->
+          collect (`Value (attr, value) :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when for_var = entity_var && free_value_var value_var ->
+          collect (`Attr attr :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when for_var = entity_var
+            && Option.is_some (resolve_const (QVar value_var))
+            && not (Hashtbl.mem range_preds value_var) ->
+          (* input-bound value var: a point lookup, same as a literal.
+             A bound var that also carries comparison predicates stays
+             generic — the predicates check the bound value globally,
+             not the attr range. *)
+          (match resolve_const (QVar value_var) with
+           | Some value -> collect (`Value (attr, value) :: acc) rest
+           | None -> collect acc rest)
+        | Pattern (QVar entity_var, QAttr _, QVar value_var) :: rest
+          when for_var = entity_var
+            && (Option.is_some (range_var_entry value_var)
+                || Option.is_some (str_var_entry value_var)
+                || Option.is_some (contains_var_entry value_var)
+                || Option.is_some (cross_var_entry value_var)) ->
+          (* pattern consumed into a `Range/`Str/`ValueIn entry *)
+          collect acc rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when for_var = entity_var && Option.is_some (coll_resolve value_var) ->
+          (* a collection-bound value var is a membership constraint on
+             the attr's values *)
+          collect (`InColl (attr, Option.get (coll_resolve value_var)) :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when for_var = entity_var ->
+          collect (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
+          when for_var = entity_var && free_value_var value_var ->
+          collect (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when for_var = entity_var ->
+          collect (`NegValue (attr, value) :: acc) rest
+        | Missing (QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
+          collect (`Neg attr :: acc) rest
+        | (GetElse (QVar e, _, _, out) | SourceGetElse ("$", QVar e, _, _, out)) :: rest
+          when e = for_var && out <> for_var && not (List.mem out input_vars)
+            && Hashtbl.find_opt var_counts out = Some 1 ->
+          (* a get-else whose output var is used once is a free
+             projection — it reads for_var but adds no constraint on
+             the entity set *)
+          collect acc rest
+        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
+          collect (`Neg attr :: acc) rest
+        | clause :: rest
+          when (match pred_bound clause with
+                | Some (var, _) -> Option.is_some (range_var_entry var)
+                | None ->
+                  (match str_pred_bound clause with
+                   | Some (var, _) -> Option.is_some (str_var_entry var)
+                   | None ->
+                     (match clause with
+                      | ContainsValue (_, QVar v) -> Option.is_some (contains_var_entry v)
+                      | _ -> false))) ->
+          (* comparison/string predicate consumed into a `Range/`Str
+             entry *)
+          collect acc rest
+        | clause :: rest
+          when List.exists (fun c -> c == clause) cross_consumed ->
+          (* pulled into a cross-ref component — already folded into
+             the `ValueIn entry *)
+          collect acc rest
+        | Or branches :: rest ->
+          (* An or-clause over find_var contributes the union of its
+             branches' entity sets. A value var inside the or is safe
+             iff it appears nowhere outside this or — measured as its
+             global occurrence count equal to its or-internal count
+             (vars_of_clause recurses into or branches, so the global
+             count includes these). *)
+          let or_var_counts = Hashtbl.create 8 in
+          List.iter
+            (fun var ->
+              Hashtbl.replace or_var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt or_var_counts var)))
+            (List.concat_map (List.concat_map Query.vars_of_clause) branches);
+          let or_local var =
+            var <> find_var
+            && not (List.mem var input_vars)
+            && Hashtbl.find_opt var_counts var = Hashtbl.find_opt or_var_counts var
+          in
+          (* branch-local ground eval: ident resolution can leave
+             var-free clauses inside a branch (e.g. [?pe :block/tags
+             :Property] with ?pe substituted). A var-free clause
+             evaluating to false kills its branch; a branch reduced
+             to all-true clauses constrains nothing, so the whole or
+             is always satisfied and contributes no entity filter. *)
+          let rec collect_branch acc = function
+            | [] -> if acc = [] then `Unconstrained else `Entries (List.rev acc)
+            | clause :: rest when Query.vars_of_clause clause = [] ->
+              (match clause_bool db clause with
+               | Some true -> collect_branch acc rest
+               | Some false -> `Dead
+               | None -> `Fail)
+            | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = for_var -> collect_branch (`Attr a :: acc) rest
+            | Pattern (QVar e, QAttr a, QValue v) :: rest when e = for_var ->
+              collect_branch (`Value (a, v) :: acc) rest
+            | Pattern (QVar e, QAttr a, QVar v) :: rest when e = for_var && or_local v ->
+              collect_branch (`Attr a :: acc) rest
+            | Missing (QVar e, QAttr a) :: rest when e = for_var -> collect_branch (`Neg a :: acc) rest
+            | _ -> `Fail
+          in
+          let rec collect_branches acc = function
+            | [] -> `Ok (List.rev acc)
+            | branch :: rest ->
+              (match collect_branch [] branch with
+               | `Entries entries -> collect_branches (entries :: acc) rest
+               | `Dead -> collect_branches acc rest
+               | `Unconstrained -> `Unconstrained
+               | `Fail -> `Fail)
+          in
+          (match collect_branches [] branches with
+           | `Ok branch_entries -> collect (`Or branch_entries :: acc) rest
+           | `Unconstrained -> collect acc rest
+           | `Fail ->
+             (* every branch a single [for_var :attr vv] where vv is
+                otherwise bound only by contains? — contains_entry_of
+                already folded it into an `Or of `InColl branches *)
+             let shared_var =
+               match branches with
+               | [ Pattern (QVar e, QAttr _, QVar vv) ] :: _ when e = for_var ->
+                 if
+                   List.for_all
+                     (function
+                       | [ Pattern (QVar e', QAttr _, QVar vv') ] -> e' = for_var && vv' = vv
+                       | _ -> false)
+                     branches
+                 then Some vv
+                 else None
+               | _ -> None
+             in
+             (match Option.bind shared_var contains_var_entry with
+              | Some entry -> collect (entry :: acc) rest
+              | None -> None))
+        | _ -> None
+        in
+        collect [] clauses
+      in
+      let rec union_sorted acc left right =
+        match left, right with
+        | [], r -> List.rev_append acc r
+        | l, [] -> List.rev_append acc l
+        | l :: ls, r :: rs ->
+          if l = r then union_sorted (l :: acc) ls rs
+          else if l < r then union_sorted (l :: acc) ls right
+          else union_sorted (r :: acc) left rs
       in
       let entity_ids_for_pattern = function
         | `Attr attr -> entity_ids_with_attr db attr
         | `Value (attr, value) -> exact_attr_value_entity_ids db attr value
+        | `Neg attr -> entity_ids_with_attr db attr
+        | `NegValue (attr, value) -> exact_attr_value_entity_ids db attr value
+        | `Range (attr, lo, hi) ->
+          let keep (datom : datom) =
+            (match lo with
+             | None -> true
+             | Some (bound, strict) ->
+               let c = compare_value datom.v bound in
+               if strict then c > 0 else c >= 0)
+            && (match hi with
+                | None -> true
+                | Some (bound, strict) ->
+                  let c = compare_value datom.v bound in
+                  if strict then c < 0 else c <= 0)
+          in
+          primary_attr_datoms db Aevt attr
+          |> List.filter keep
+          |> List.map (fun (datom : datom) -> datom.e)
+          |> List.sort_uniq compare
+        | `Str (attr, constraints) ->
+          let keep (datom : datom) =
+            List.for_all
+              (function
+                | `Eq value -> compare_value datom.v value = 0
+                | `Neq value -> compare_value datom.v value <> 0
+                | `Includes needle ->
+                  (match datom.v with String s -> Built_ins.string_includes s needle | _ -> false)
+                | `Starts prefix ->
+                  (match datom.v with String s -> Built_ins.string_starts_with s prefix | _ -> false)
+                | `Ends suffix ->
+                  (match datom.v with String s -> Built_ins.string_ends_with s suffix | _ -> false))
+              constraints
+          in
+          primary_attr_datoms db Aevt attr
+          |> List.filter keep
+          |> List.map (fun (datom : datom) -> datom.e)
+          |> List.sort_uniq compare
+        | `InColl (attr, values) ->
+          (* attr membership against a bound collection *)
+          let set = Hashtbl.create (List.length values) in
+          List.iter (fun value -> Hashtbl.replace set (Marshal.to_string value []) value) values;
+          primary_attr_datoms db Aevt attr
+          |> List.filter_map (fun (datom : datom) ->
+               if Hashtbl.mem set (Marshal.to_string datom.v []) then Some datom.e else None)
+          |> List.sort_uniq compare
+        | `EntitySet ids -> List.sort_uniq compare ids
+        | `Or _ | `ValueIn _ -> assert false (* handled below *)
       in
-      (match collect_patterns [] patterns with
-       | Some (first_pattern :: rest_patterns) ->
-         Some
-           (List.fold_left
-              (fun entity_ids pattern -> intersect_sorted_entity_ids entity_ids (entity_ids_for_pattern pattern))
-              (entity_ids_for_pattern first_pattern)
-              rest_patterns)
-       | Some [] | None -> None)
+      let rec subtract_sorted acc left right =
+        match left, right with
+        | [], _ | _, [] -> List.rev_append acc left
+        | l :: ls, r :: rs ->
+          if l = r then subtract_sorted acc ls rs
+          else if l < r then subtract_sorted (l :: acc) ls right
+          else subtract_sorted acc left rs
+      in
+      let rec entity_ids_for_entry = function
+        | `Or branch_entries ->
+          (* each branch is a small intersection; the or is their union *)
+          Some
+            (List.fold_left
+               (fun union entries ->
+                 match entries with
+                 | [] -> union
+                 | first :: rest ->
+                   let branch_ids = List.fold_left (fun ids e -> intersect_sorted_entity_ids ids (entity_ids_for_pattern e)) (entity_ids_for_pattern first) rest in
+                   union_sorted [] union branch_ids)
+               []
+               branch_entries)
+        | `Neg _ | `NegValue _ -> None
+        | `ValueIn (attr, v_entries) ->
+          (* upstream binds v through the edge then filters it — the
+             inner candidate universe is the entities referenced by
+             this attr, which also covers entries that are pure Neg
+             (an unseeded collect would wrongly yield the empty set) *)
+          let edge_datoms = primary_attr_datoms db Aevt attr in
+          let targets =
+            List.filter_map
+              (fun (datom : datom) -> match datom.v with Ref id -> Some id | _ -> None)
+              edge_datoms
+            |> List.sort_uniq compare
+          in
+          (match eval_collected ~seed:targets v_entries with
+           | Some ids ->
+             let set = Hashtbl.create (List.length ids) in
+             List.iter (fun id -> Hashtbl.replace set id ()) ids;
+             Some
+               (edge_datoms
+                |> List.filter_map (fun (datom : datom) ->
+                     match datom.v with
+                     | Ref id when Hashtbl.mem set id -> Some datom.e
+                     | _ -> None)
+                |> List.sort_uniq compare)
+           | None -> Some [])
+        | entry -> Some (entity_ids_for_pattern entry)
+      and eval_collected ?seed entries =
+        let positives = List.filter_map entity_ids_for_entry entries in
+        let base =
+          match seed, positives with
+          | Some ids, pos -> Some (List.fold_left intersect_sorted_entity_ids ids pos)
+          | None, first :: rest -> Some (List.fold_left intersect_sorted_entity_ids first rest)
+          | None, [] -> None
+        in
+        Option.map
+          (fun base ->
+            List.fold_left
+              (fun entity_ids neg_ids -> subtract_sorted [] entity_ids neg_ids)
+              base
+              (List.filter_map
+                 (fun p -> match p with `Neg _ | `NegValue _ -> Some (entity_ids_for_pattern p) | _ -> None)
+                 entries))
+          base
+      in
+      (* [?s :a1] [?s :ref ?p] — find_var reached through ref edges from
+         one shared source var: src entity-set via the same collectors,
+         then per-entity ref-value union, then target-side entries. *)
+      let try_ref_target () =
+        let edge_of = function
+          | Pattern (QVar src, QAttr edge_attr, QVar v)
+            when v = find_var && src <> find_var && is_ref_attr db edge_attr ->
+            Some (src, edge_attr)
+          | _ -> None
+        in
+        let edges = List.filter_map edge_of patterns in
+        match edges with
+        | [] -> None
+        | (src_var, _) :: _ ->
+          if List.exists (fun (s, _) -> s <> src_var) edges || List.mem src_var input_vars then
+            None
+          else
+            let is_edge clause = Option.is_some (edge_of clause) in
+            let non_edges = List.filter (fun clause -> not (is_edge clause)) patterns in
+            let src_clauses, target_clauses =
+              List.partition
+                (fun clause -> match clause with Pattern (QVar e, _, _) -> e = src_var | _ -> false)
+                non_edges
+            in
+            let src_var_counts = Hashtbl.create 8 in
+            List.iter
+              (fun var ->
+                Hashtbl.replace src_var_counts var
+                  (1 + Option.value ~default:0 (Hashtbl.find_opt src_var_counts var)))
+              (List.concat_map Query.vars_of_clause src_clauses);
+            let src_local var =
+              var <> find_var
+              && var <> src_var
+              && not (List.mem var input_vars)
+              && Hashtbl.find_opt var_counts var = Hashtbl.find_opt src_var_counts var
+            in
+            let rec collect_src acc = function
+              | [] -> Some (List.rev acc)
+              | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = src_var ->
+                collect_src (`Attr a :: acc) rest
+              | Pattern (QVar e, QAttr a, QValue v) :: rest when e = src_var ->
+                collect_src (`Value (a, v) :: acc) rest
+              | Pattern (QVar e, QAttr a, QVar v) :: rest when e = src_var && src_local v ->
+                collect_src (`Attr a :: acc) rest
+              | Not [ Pattern (QVar e, QAttr a, QWildcard) ] :: rest when e = src_var ->
+                collect_src (`Neg a :: acc) rest
+              | Not [ Pattern (QVar e, QAttr a, QValue v) ] :: rest when e = src_var ->
+                collect_src (`NegValue (a, v) :: acc) rest
+              | Missing (QVar e, QAttr a) :: rest | SourceMissing ("$", QVar e, QAttr a) :: rest
+                when e = src_var ->
+                collect_src (`Neg a :: acc) rest
+              | _ -> None
+            in
+            (match collect_src [] src_clauses, collect_patterns_for ~seen:[] find_var target_clauses with
+             | Some src_entries, Some target_entries ->
+               (match eval_collected src_entries with
+                | Some src_ids ->
+                  let edge_attrs = List.map snd edges in
+                  (* per-src ref_value lookups are an accessor call
+                     each — build src->targets maps in one attr pass
+                     per edge instead; a src contributes targets only
+                     where every edge attr reaches something *)
+                  let src_set = Hashtbl.create (List.length src_ids) in
+                  List.iter (fun id -> Hashtbl.replace src_set id ()) src_ids;
+                  let per_attr =
+                    List.map
+                      (fun attr ->
+                        let m = Hashtbl.create 256 in
+                        List.iter
+                          (fun (datom : datom) ->
+                            match datom.v with
+                            | Ref id when Hashtbl.mem src_set datom.e ->
+                              Hashtbl.replace m datom.e
+                                (id :: Option.value ~default:[] (Hashtbl.find_opt m datom.e))
+                            | _ -> ())
+                          (primary_attr_datoms db Aevt attr);
+                        m)
+                      edge_attrs
+                  in
+                  let seed =
+                    List.fold_left
+                      (fun union entity_id ->
+                        let target_lists =
+                          List.filter_map (fun m -> Hashtbl.find_opt m entity_id) per_attr
+                        in
+                        match target_lists with
+                        | first :: rest when List.length target_lists = List.length edge_attrs ->
+                          let ids =
+                            List.fold_left intersect_sorted_entity_ids
+                              (List.sort_uniq compare first)
+                              (List.map (List.sort_uniq compare) rest)
+                          in
+                          union_sorted [] union ids
+                        | _ -> union)
+                      []
+                      src_ids
+                  in
+                  eval_collected ~seed target_entries
+                | None -> None)
+             | _ -> None)
+      in
+      (match collect_patterns_for ~seen:[] find_var patterns with
+       | Some entries -> eval_collected entries
+       | None -> try_ref_target ()))
     | _ -> None
 
-  let simple_attr_entity_pull_collection db query =
+  (* find_var projects the values of one [entity_var :attr find_var]
+     pattern — the entity set comes from the matcher, one aevt pass over
+     the attr emits distinct out values. A get-else clause also binds
+     find_var: one scalar per entity (attr value or the default).
+     Used by the value-var finds (?v, [?v ...], ?v .) that have no
+     entity column. *)
+  let value_var_projection db ?resolve ?coll find_var query =
+    (* a default term usable as a per-row constant *)
+    let const_value = function
+      | QValue value -> Some value
+      | QAttr attr -> Some (Keyword attr)
+      | QVar var -> Option.bind resolve (fun r -> r var)
+      | _ -> None
+    in
+    let counts = Hashtbl.create 8 in
+    List.iter
+      (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
+      (List.concat_map Query.vars_of_clause query.where);
+    if Hashtbl.find_opt counts find_var <> Some 1 then None
+    else
+      match
+        List.find_map
+          (function
+            | Pattern (QVar entity_var, QAttr attr, QVar v)
+              when v = find_var && entity_var <> find_var -> Some (entity_var, `Attr attr)
+            | GetElse (QVar entity_var, QAttr attr, default, out)
+            | SourceGetElse ("$", QVar entity_var, QAttr attr, default, out)
+              when out = find_var && entity_var <> find_var ->
+              Option.map (fun default -> entity_var, `Else (attr, default)) (const_value default)
+            | _ -> None)
+          query.where
+      with
+      | None -> None
+      | Some (entity_var, `Else (attr, default)) ->
+        (* one output per entity: attr value when present, else default *)
+        simple_attr_entity_ids db ?resolve ?coll entity_var query
+        |> Option.map (fun entity_ids ->
+               let out_of = function
+                 | Ref id -> Result_entity id
+                 | v -> Result_value v
+               in
+               let seen = Hashtbl.create (List.length entity_ids) in
+               entity_ids
+               |> List.filter_map (fun entity_id ->
+                    let out =
+                      match entity_attr_index_datoms db entity_id attr with
+                      | (d : datom) :: _ -> out_of d.v
+                      | [] -> out_of default
+                    in
+                    let key = Marshal.to_string out [] in
+                    if Hashtbl.mem seen key then None
+                    else (Hashtbl.replace seen key (); Some out)))
+      | Some (entity_var, `Attr attr) ->
+        simple_attr_entity_ids db ?resolve ?coll entity_var query
+        |> Option.map (fun entity_ids ->
+               let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+               List.iter
+                 (fun entity_id ->
+                   if entity_id >= 0 && entity_id < Bytes.length wanted then
+                     Bytes.set wanted entity_id '\001')
+                 entity_ids;
+               let keep =
+                 match Option.bind resolve (fun r -> r find_var) with
+                 | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                 | None -> fun _ -> true
+               in
+               let seen = Hashtbl.create (List.length entity_ids) in
+               primary_attr_datoms db Aevt attr
+               |> List.filter_map (fun (d : datom) ->
+                    if d.e >= 0 && d.e < Bytes.length wanted
+                      && Bytes.get wanted d.e = '\001' && keep d then
+                      let out =
+                        match d.v with
+                        | Ref id -> Result_entity id
+                        | _ -> Result_value d.v
+                      in
+                      let key = Marshal.to_string out [] in
+                      if Hashtbl.mem seen key then None
+                      else (Hashtbl.replace seen key (); Some out)
+                    else None))
+
+  let simple_attr_entity_collection db ?resolve ?coll query =
+    (* [?e ...] collection is the same entity-ids walk as every other
+       find shape — one matcher keeps all clause arms in one place. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
+       | Some entity_ids ->
+         Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
+       | None ->
+         (* find_var may project a value column ([?v ...] over [u :a ?v]) *)
+         Option.map (fun values -> Query_collection values)
+           (value_var_projection db ?resolve ?coll find_var query))
+    | _ -> None
+
+  let simple_attr_entity_pull_collection db ?resolve ?coll query =
     let cached lookup =
       let table = Hashtbl.create 128 in
       fun attr ->
@@ -2488,12 +4008,210 @@ module Query = struct
     in
     match query.find with
     | [ Find_pull (find_var, selector) ] ->
-      simple_attr_entity_ids db find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (pull_values selector)
     | [ Find_pull_form (find_var, pattern) ] ->
       let selector = parse_pull_pattern db pattern in
-      simple_attr_entity_ids db find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (pull_values selector)
+    | _ -> None
+
+  (* [(count ?e)]/(min ?e)/(max ?e) over an entity set is a fold over the
+     collected ids — no relation materialization at all. *)
+  let entity_aggregate_result aggregate entity_ids =
+    (* upstream: an aggregate over an empty group yields no row at all —
+       scalar nil, not zero or an exception *)
+    match aggregate, entity_ids with
+    | _, [] -> None
+    | Count, _ -> Some (Result_value (Int64 (Int64.of_int (List.length entity_ids))))
+    | Min, entity_id :: _ -> Some (Result_entity entity_id)
+    | Max, _ -> Some (Result_entity (List.fold_left (fun _ id -> id) 0 entity_ids))
+    | _ -> None
+
+  let simple_attr_entity_relation db ?resolve ?coll query =
+    (* [:find ?e :where ...] over find_var-only patterns is the same
+       entity-ids walk as the collection form, wrapped as 1-elem rows. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
+       | Some entity_ids ->
+         Some (Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
+       | None ->
+         (* find_var may project a value column (?v over [u :a ?v]) *)
+         Option.map (fun values -> Query_relation (List.map (fun v -> [ v ]) values))
+           (value_var_projection db ?resolve ?coll find_var query))
+    | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
+      simple_attr_entity_ids db ?resolve ?coll find_var query
+      |> Option.map (fun entity_ids ->
+             Query_relation
+               (match entity_aggregate_result aggregate entity_ids with
+                | Some value -> [ [ value ] ]
+                | None -> []))
+    | find_vars
+      when List.length find_vars >= 2
+        && List.for_all (function Find_var _ -> true | _ -> false) find_vars ->
+      (* rows (e, v1, v2 ...): every non-entity find var must be bound by
+         exactly one [entity_var :attr out_var] pattern — the entity set
+         comes from the matcher, then one aevt pass per out attr collects
+         per-entity values and the rows are the per-entity product.
+         Entities missing any out attr produce no rows (join semantics). *)
+      let find_var_names =
+        List.map (function Find_var v -> v | _ -> assert false) find_vars
+      in
+      let counts = Hashtbl.create 8 in
+      List.iter
+        (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
+        (List.concat_map Query.vars_of_clause query.where);
+      let single_use var = Hashtbl.find_opt counts var = Some 1 in
+      let attr_on entity_var value_var =
+        if single_use value_var then
+          List.find_map
+            (function
+              | Pattern (QVar e, QAttr attr, QVar v)
+                when e = entity_var && v = value_var -> Some attr
+              | _ -> None)
+            query.where
+        else None
+      in
+      (* candidate entity var: every other find var resolves on it.
+         Prefer a var from the find clause; otherwise any var that
+         occupies an entity position works — the find vars then project
+         that var's attr values (e.g. [?p ?ref-page] over ?block). *)
+      let entity_position_vars =
+        List.filter_map
+          (function Pattern (QVar u, _, _) -> Some u | _ -> None)
+          query.where
+        |> List.sort_uniq compare
+      in
+      let candidate =
+        List.find_map
+          (fun entity_var ->
+            let others = List.filter (fun v -> v <> entity_var) find_var_names in
+            if others <> [] && List.for_all (fun v -> Option.is_some (attr_on entity_var v)) others then
+              Some entity_var
+            else None)
+          (find_var_names @ entity_position_vars |> List.sort_uniq compare)
+      in
+      (match candidate with
+       | Some find_var ->
+         simple_attr_entity_ids db ?resolve ?coll find_var query
+         |> Option.map (fun entity_ids ->
+                let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
+                List.iter
+                  (fun entity_id ->
+                    if entity_id >= 0 && entity_id < Bytes.length wanted then
+                      Bytes.set wanted entity_id '\001')
+                  entity_ids;
+                let wanted_entity e =
+                  e >= 0 && e < Bytes.length wanted && Bytes.get wanted e = '\001'
+                in
+                let out_of (d_v : value) =
+                  match d_v with
+                  | Ref id -> Result_entity id
+                  | _ -> Result_value d_v
+                in
+                let out_vars = List.filter (fun v -> v <> find_var) find_var_names in
+                (match out_vars with
+                 | [ out_var ] ->
+                   (* single out column: emit straight off one aevt pass —
+                      no per-entity tables needed *)
+                   let attr = Option.get (attr_on find_var out_var) in
+                   let keep =
+                     match Option.bind resolve (fun r -> r out_var) with
+                     | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                     | None -> fun _ -> true
+                   in
+                   let entity_first = List.hd find_var_names = find_var in
+                   let rows =
+                     primary_attr_datoms db Aevt attr
+                     |> List.filter_map (fun (d : datom) ->
+                          if wanted_entity d.e && keep d then
+                            let out = out_of d.v in
+                            Some (if entity_first then [ Result_entity d.e; out ]
+                                  else [ out; Result_entity d.e ])
+                          else None)
+                   in
+                   Query_relation rows
+                 | _ ->
+                   (* var -> values table via one aevt pass per out attr *)
+                   let values_table var =
+                     let attr = Option.get (attr_on find_var var) in
+                     let keep =
+                       match Option.bind resolve (fun r -> r var) with
+                       | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
+                       | None -> fun _ -> true
+                     in
+                     let table = Hashtbl.create (List.length entity_ids) in
+                     primary_attr_datoms db Aevt attr
+                     |> List.iter (fun (d : datom) ->
+                          if wanted_entity d.e && keep d then
+                            Hashtbl.replace table d.e
+                              (d.v :: Option.value ~default:[] (Hashtbl.find_opt table d.e)));
+                     var, table
+                   in
+                   let tables = List.map values_table out_vars in
+                   let values_of var entity_id =
+                     Option.bind (List.assoc_opt var tables) (fun t -> Hashtbl.find_opt t entity_id)
+                     |> Option.value ~default:[]
+                     |> List.map out_of
+                   in
+                   (* emit rows honoring find order: entity col wherever it sits *)
+                   let columns var =
+                     if var = find_var then fun entity_id -> [ Result_entity entity_id ]
+                     else fun entity_id -> values_of var entity_id
+                   in
+                   let row_for entity_id =
+                     let rec product acc = function
+                       | [] -> [ List.rev acc ]
+                       | var :: rest ->
+                         (match columns var entity_id with
+                          | [] -> []
+                          | values -> List.concat_map (fun v -> product (v :: acc) rest) values)
+                     in
+                     product [] find_var_names
+                   in
+                   (* a relation is a set: when the entity var is not in
+                      the find, different entities can project identical
+                      rows — dedup by marshaled row *)
+                   let rows =
+                     List.concat_map row_for entity_ids
+                   in
+                   let rows =
+                     if List.mem find_var find_var_names then rows
+                     else
+                       let seen = Hashtbl.create (List.length rows) in
+                       List.filter
+                         (fun row ->
+                           let key = Marshal.to_string row [] in
+                           if Hashtbl.mem seen key then false
+                           else (Hashtbl.replace seen key (); true))
+                         rows
+                   in
+                   Query_relation rows))
+       | None -> None)
+    | _ -> None
+
+  let simple_attr_entity_scalar db ?resolve ?coll query =
+    (* [:find ?e . :where ...] — first entity of the sorted set, or
+       none. Same matcher, scalar wrap. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
+       | Some entity_ids ->
+         Some (Query_scalar
+               (match entity_ids with
+                | entity_id :: _ -> Some (Result_entity entity_id)
+                | [] -> None))
+       | None ->
+         (* find_var may project a value column (?v . over [u :a ?v]) *)
+         Option.map
+           (fun values ->
+             Query_scalar (match values with v :: _ -> Some v | [] -> None))
+           (value_var_projection db ?resolve ?coll find_var query))
+    | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
+      simple_attr_entity_ids db ?resolve ?coll find_var query
+      |> Option.map (fun entity_ids ->
+             Query_scalar (entity_aggregate_result aggregate entity_ids))
     | _ -> None
 
   let ref_target_pull_relation db query =
@@ -2525,9 +4243,6 @@ module Query = struct
       | Pattern (QVar var, QAttr attr, QWildcard) when var = source_var -> Some attr
       | _ -> None
     in
-    let entity_has_attr entity_id attr =
-      Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ()))
-    in
     match find_pull, query.rules, query.with_vars, only_source_inputs query.inputs with
     | Some (find_var, [ Pull_wildcard ]), [], [], true ->
       let missing_attrs = List.filter_map (missing_clause find_var) query.where in
@@ -2547,11 +4262,21 @@ module Query = struct
               && entity_id < Bytes.length source_entities
               && Bytes.get source_entities entity_id = '\001'
             in
+            (* one aevt pass for the missing-attr holders beats a
+               per-datom eavt accessor call on every edge target *)
+            let has_missing = Bytes.make (db.max_datom_e + 1) '\000' in
+            primary_attr_datoms db Aevt missing_attr
+            |> List.iter (fun datom ->
+              if datom.e >= 0 && datom.e < Bytes.length has_missing then
+                Bytes.set has_missing datom.e '\001');
             let target_ids =
               primary_attr_datoms db Aevt ref_attr
               |> List.filter_map (fun datom ->
                 match datom.v with
-                | Ref target_id when source_has_required datom.e && not (entity_has_attr target_id missing_attr) ->
+                | Ref target_id
+                  when source_has_required datom.e
+                    && (target_id < 0 || target_id >= Bytes.length has_missing
+                        || Bytes.get has_missing target_id <> '\001') ->
                   Some target_id
                 | _ -> None)
               |> List.sort_uniq compare
@@ -2595,12 +4320,6 @@ module Query = struct
       | _ :: _, [] -> None
     in
     collect query.inputs inputs
-
-  let value_of_query_result = function
-    | Result_value value -> Some value
-    | Result_entity entity_id -> Some (Ref entity_id)
-    | Result_attr attr -> Some (Keyword attr)
-    | Result_db _ | Result_pull _ -> None
 
   let exact_title_input_entity_ids db inputs query find_var =
     let title_pattern find_var = function
@@ -3070,6 +4789,13 @@ module Query = struct
               | [] -> None)
             |> fun values -> Query_collection values))
     | Return_collection, Some inputs ->
+      let resolve =
+        match scalar_input_bindings db query inputs with
+        | Some bindings ->
+          Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
+        | None -> None
+      in
+      let coll = coll_input_bindings query inputs in
       (match exact_title_pull_collection db inputs query with
        | Some result -> result
        | None ->
@@ -3085,23 +4811,39 @@ module Query = struct
          |> fun values -> Query_collection values
        | Some result -> result
        | None ->
-         let rows = q ~inputs db query in
-         rows
-         |> List.filter_map (function
-           | value :: _ -> Some value
-           | [] -> None)
-         |> fun values -> Query_collection values)))
+         (match simple_attr_entity_collection db ?resolve ?coll query with
+          | Some result -> result
+          | None ->
+         (match simple_attr_entity_pull_collection db ?resolve ?coll query with
+          | Some result -> result
+          | None ->
+            let rows = q ~inputs db query in
+            rows
+            |> List.filter_map (function
+              | value :: _ -> Some value
+              | [] -> None)
+            |> fun values -> Query_collection values)))))
     | Return_relation, None ->
       (match simple_attr_entity_pull_collection db query with
        | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
+       | Some result -> result
+       | None ->
+      (match simple_attr_entity_relation db query with
        | Some result -> result
        | None ->
       (match ref_target_pull_relation db query with
        | Some result -> result
        | None ->
          let rows = q db query in
-         Query_relation rows))
+         Query_relation rows)))
     | Return_relation, Some inputs ->
+      let resolve =
+        match scalar_input_bindings db query inputs with
+        | Some bindings ->
+          Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
+        | None -> None
+      in
+      let coll = coll_input_bindings query inputs in
       (match bound_entity_required_pull_relation db inputs query with
        | Some result -> result
        | None ->
@@ -3111,13 +4853,39 @@ module Query = struct
       (match bounded_timestamp_pull_relation db inputs query with
        | Some result -> result
        | None ->
-         let rows = q ~inputs db query in
-         Query_relation rows)))
-    | Return_scalar, Some inputs ->
-      (match exact_title_scalar_query db inputs query with
+      (match simple_attr_entity_relation db ?resolve ?coll query with
        | Some result -> result
        | None ->
          let rows = q ~inputs db query in
+         Query_relation rows))))
+    | Return_scalar, Some inputs ->
+      let resolve =
+        match scalar_input_bindings db query inputs with
+        | Some bindings ->
+          Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
+        | None -> None
+      in
+      let coll = coll_input_bindings query inputs in
+      (match exact_title_scalar_query db inputs query with
+       | Some result -> result
+       | None ->
+      (match simple_attr_entity_scalar db ?resolve ?coll query with
+       | Some result -> result
+       | None ->
+         let rows = q ~inputs db query in
+         let value =
+           Option.bind
+             (List.nth_opt rows 0)
+             (function
+               | value :: _ -> Some value
+               | [] -> None)
+         in
+         Query_scalar value))
+    | Return_scalar, None ->
+      (match simple_attr_entity_scalar db query with
+       | Some result -> result
+       | None ->
+         let rows = q db query in
          let value =
            Option.bind
              (List.nth_opt rows 0)
@@ -3146,6 +4914,87 @@ module Query = struct
             | [] -> None)
       in
       Query_scalar value)
+
+  (* rows for the parsed-query entry: the same fast-path ladder as
+     q_return, with each result unwrapped back to rows. Every helper
+     self-guards — it only returns Some when it can produce exactly
+     the rows the generic engine would. This shadows the earlier q
+     (which only ran the same-entity check) so Datascript.q callers
+     get the full ladder; q_string keeps its previous binding. *)
+  let rows_of_result = function
+    | Query_relation rows -> rows
+    | Query_collection values -> List.map (fun value -> [ value ]) values
+    | Query_scalar (Some value) -> [ [ value ] ]
+    | Query_scalar None -> []
+    | Query_tuple (Some row) -> [ row ]
+    | Query_tuple None -> []
+    | _ -> []
+
+  let q ?inputs db query =
+    match simple_same_entity_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+      (match inputs with
+       | Some inputs ->
+         let consume_rules = query.rules = [] in
+         let provided = List.length inputs + 1 in
+         let required =
+           List.filter (Query_impl.query_input_consumes_argument ~consume_rules) query.inputs
+           |> List.length
+           |> ( + ) 1
+         in
+         if provided <> required then Query_impl.q query_context ~inputs db query
+         else
+         let resolve =
+           match scalar_input_bindings db query inputs with
+           | Some bindings ->
+             Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
+           | None -> None
+         in
+         let coll = coll_input_bindings query inputs in
+         (match bound_entity_required_pull_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match title_includes_rule_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match bounded_timestamp_pull_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match exact_title_pull_collection db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match exact_title_scalar_query db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_collection db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_pull_collection db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_relation db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_scalar db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None -> Query_impl.q query_context ~inputs db query)))))))))
+       | None ->
+         (match simple_attr_entity_pull_collection db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_relation db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match ref_target_pull_relation db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_collection db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_scalar db query with
+          | Some result -> rows_of_result result
+          | None -> Query_impl.q query_context db query))))))
 
   let q_return_string ?inputs db input =
     let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in

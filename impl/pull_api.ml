@@ -205,10 +205,17 @@ let forward_entity context db entity_id attrs =
       ; materialize_attrs = (fun () -> attrs)
       }
 
-let dedupe_pulled_attrs attrs =
+(* Keep the last occurrence of each pull key, ordered by pull key — one
+   stable sort plus an adjacent sweep; pull keys are Keyword, so
+   compare_pull_key groups exactly the keys `=` would. *)
+let sort_dedupe_pulled_attrs context attrs =
   attrs
+  |> List.stable_sort (fun (left, _) (right, _) -> compare_pull_key context left right)
   |> List.fold_left
-       (fun deduped (attr, value) -> (attr, value) :: List.remove_assoc attr deduped)
+       (fun acc (key, _ as pair) ->
+         match acc with
+         | (prev_key, _) :: _ when compare_pull_key context prev_key key = 0 -> pair :: List.tl acc
+         | _ -> pair :: acc)
        []
   |> List.rev
 
@@ -241,8 +248,7 @@ and pull_entity_by_id_visited ?visitor ~root_id ~root_reexpanded context db visi
       selector
       |> List.concat_map
            (pull_selector_attrs ?visitor ~root_id ~root_reexpanded context db visited context_selector entity)
-      |> dedupe_pulled_attrs
-      |> List.sort (fun (left, _) (right, _) -> compare_pull_key context left right)
+      |> sort_dedupe_pulled_attrs context
     in
     (match attrs with
      | [] -> None

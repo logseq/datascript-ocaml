@@ -785,8 +785,14 @@ end) = struct
               never match; it still counts toward right-key uniqueness. *)
            let seen_entities = Hashtbl.create right_size_hint in
            let seen_other = Hashtbl.create 16 in
-           source_context.pattern_datoms source_db e_term a_term v_term None
-           |> Seq.iter (fun datom ->
+           source_context.fold_pattern_datoms
+             source_db
+             e_term
+             a_term
+             v_term
+             None
+             ~init:()
+             ~f:(fun () datom ->
              match right_row_of_datom datom with
              | Some right_row ->
                (match key_value (row_value right_row right_index) with
@@ -808,8 +814,14 @@ end) = struct
              | None -> ()))
          else (
            let seen_keys = Hashtbl.create right_size_hint in
-           source_context.pattern_datoms source_db e_term a_term v_term None
-           |> Seq.iter (fun datom ->
+           source_context.fold_pattern_datoms
+             source_db
+             e_term
+             a_term
+             v_term
+             None
+             ~init:()
+             ~f:(fun () datom ->
              match right_row_of_datom datom with
              | Some right_row ->
                let key = key_value (row_value right_row right_index) in
@@ -2874,6 +2886,58 @@ end) = struct
         bindings
         clauses
     in
+    (* Loop-invariant pure clauses: a deterministic *Value clause whose input
+       terms only reference vars already bound in the (single) seed binding
+       produces the same extension for every row — evaluate it once on the
+       seed instead of once per row. Only pure string/identity transforms
+       qualify; printing, random and user-callable clauses are excluded. *)
+    let hoistable_clause_io = function
+      | IdentityValue (term, out)
+      | StringLowerCaseValue (term, out)
+      | StringUpperCaseValue (term, out)
+      | StringCapitalizeValue (term, out)
+      | StringReverseValue (term, out)
+      | StringTrimValue (term, out)
+      | StringTrimLeftValue (term, out)
+      | StringTrimRightValue (term, out)
+      | StringTrimNewlineValue (term, out) -> Some ([ term ], out)
+      | _ -> None
+    in
+    let hoist_constant_clauses seed clauses =
+      let rec walk seed kept = function
+        | [] -> [ seed ], List.rev kept
+        | clause :: rest ->
+          (match hoistable_clause_io clause with
+           | Some (input_terms, output_var) ->
+             let seed_vars = List.map fst seed in
+             if
+               output_var <> "_"
+               && not (List.mem output_var seed_vars)
+               && List.for_all
+                    (fun var -> List.mem var seed_vars)
+                    (Query.vars_of_query_terms input_terms)
+             then
+               (match
+                  eval_clause ~active_rules ~callables ~default_source db sources rules seed clause
+                with
+                | [ extended ] -> walk extended kept rest
+                | [] -> [], []
+                | _ -> walk seed (clause :: kept) rest)
+             else
+               walk seed (clause :: kept) rest
+           | None -> walk seed (clause :: kept) rest)
+      in
+      walk seed [] clauses
+    in
+    let bindings, clauses =
+      match bindings with
+      | [ seed ] -> hoist_constant_clauses seed clauses
+      | _ -> bindings, clauses
+    in
+    match bindings, clauses with
+    | [], _ -> []
+    | _, [] -> bindings
+    | _ ->
     let eval_rule_with_suffix_relation_context
         rule_db
         rule_sources
@@ -3071,7 +3135,15 @@ end) = struct
          let branch_bindings =
            branches
            |> List.concat_map (fun branch ->
-             eval_clauses ~active_rules ~callables ~default_source db sources rules bindings branch)
+             eval_projected_clauses_for_bindings
+               ~active_rules
+               ~callables
+               ~default_source
+               db
+               sources
+               rules
+               bindings
+               branch)
          in
          eval_clauses ~active_rules ~callables ~default_source db sources rules branch_bindings rest
        | true, _ :: _ :: _, (SourceOr (source_name, branches) :: rest), _, _ ->
@@ -3081,7 +3153,7 @@ end) = struct
          let branch_bindings =
            branches
            |> List.concat_map (fun branch ->
-             eval_clauses
+             eval_projected_clauses_for_bindings
                ~active_rules
                ~callables
                ~default_source:(Db_source clause_db)
@@ -3541,9 +3613,28 @@ end) = struct
       rules
       bindings
       clauses =
-    match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
-    | Some bindings -> bindings
-    | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses
+    (* A branch whose first clause binds its entity term in every row
+       resolves as bounded index probes per row; materializing the whole
+       attr into a relation and joining is strictly more work. *)
+    let bound_e_first_pattern =
+      match clauses with
+      | Pattern (QVar e_var, _, _) :: _ ->
+        List.for_all (fun binding -> List.mem_assoc e_var binding) bindings
+      | _ -> false
+    in
+    if bound_e_first_pattern then
+      List.fold_left
+        (fun bindings clause ->
+          List.concat_map
+            (fun binding ->
+              eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+            bindings)
+        bindings
+        clauses
+    else
+      (match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
+       | Some bindings -> bindings
+       | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses)
 
   and eval_not_join_clauses_for_bindings
       ~active_rules
