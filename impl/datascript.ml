@@ -3090,19 +3090,7 @@ module Query = struct
             if v_clauses <> []
               && not
                    (List.mem v
-                      (List.concat_map Query.vars_of_find_spec query.find))
-              && List.exists
-                   (fun c ->
-                     match c with
-                     | Pattern (QVar ev, _, _) -> ev = v
-                     | Or branches ->
-                       List.exists
-                         (List.exists (function
-                            | Pattern (QVar ev, _, _) -> ev = v
-                            | _ -> false))
-                         branches
-                     | _ -> false)
-                   v_clauses then
+                      (List.concat_map Query.vars_of_find_spec query.find)) then
               (match collect_patterns_for ~seen:(for_var :: seen) v v_clauses with
                | Some v_entries -> Some (v, `ValueIn (a, v_entries), v_clauses)
                | None -> None)
@@ -3339,12 +3327,23 @@ module Query = struct
                branch_entries)
         | `Neg _ | `NegValue _ -> None
         | `ValueIn (attr, v_entries) ->
-          (match eval_collected v_entries with
+          (* upstream binds v through the edge then filters it — the
+             inner candidate universe is the entities referenced by
+             this attr, which also covers entries that are pure Neg
+             (an unseeded collect would wrongly yield the empty set) *)
+          let edge_datoms = primary_attr_datoms db Aevt attr in
+          let targets =
+            List.filter_map
+              (fun (datom : datom) -> match datom.v with Ref id -> Some id | _ -> None)
+              edge_datoms
+            |> List.sort_uniq compare
+          in
+          (match eval_collected ~seed:targets v_entries with
            | Some ids ->
              let set = Hashtbl.create (List.length ids) in
              List.iter (fun id -> Hashtbl.replace set id ()) ids;
              Some
-               (primary_attr_datoms db Aevt attr
+               (edge_datoms
                 |> List.filter_map (fun (datom : datom) ->
                      match datom.v with
                      | Ref id when Hashtbl.mem set id -> Some datom.e
@@ -3369,11 +3368,6 @@ module Query = struct
                  (fun p -> match p with `Neg _ | `NegValue _ -> Some (entity_ids_for_pattern p) | _ -> None)
                  entries))
           base
-      in
-      let ref_value_entity_ids db entity_id attr =
-        entity_attr_index_datoms db entity_id attr
-        |> List.filter_map (fun (d : datom) -> match d.v with Ref id -> Some id | _ -> None)
-        |> List.sort_uniq compare
       in
       (* [?s :a1] [?s :ref ?p] — find_var reached through ref edges from
          one shared source var: src entity-set via the same collectors,
@@ -3433,20 +3427,42 @@ module Query = struct
                (match eval_collected src_entries with
                 | Some src_ids ->
                   let edge_attrs = List.map snd edges in
+                  (* per-src ref_value lookups are an accessor call
+                     each — build src->targets maps in one attr pass
+                     per edge instead; a src contributes targets only
+                     where every edge attr reaches something *)
+                  let src_set = Hashtbl.create (List.length src_ids) in
+                  List.iter (fun id -> Hashtbl.replace src_set id ()) src_ids;
+                  let per_attr =
+                    List.map
+                      (fun attr ->
+                        let m = Hashtbl.create 256 in
+                        List.iter
+                          (fun (datom : datom) ->
+                            match datom.v with
+                            | Ref id when Hashtbl.mem src_set datom.e ->
+                              Hashtbl.replace m datom.e
+                                (id :: Option.value ~default:[] (Hashtbl.find_opt m datom.e))
+                            | _ -> ())
+                          (primary_attr_datoms db Aevt attr);
+                        m)
+                      edge_attrs
+                  in
                   let seed =
                     List.fold_left
                       (fun union entity_id ->
-                        match edge_attrs with
-                        | first_attr :: rest_attrs ->
-                          let first = ref_value_entity_ids db entity_id first_attr in
+                        let target_lists =
+                          List.filter_map (fun m -> Hashtbl.find_opt m entity_id) per_attr
+                        in
+                        match target_lists with
+                        | first :: rest when List.length target_lists = List.length edge_attrs ->
                           let ids =
-                            List.fold_left
-                              (fun ids attr -> intersect_sorted_entity_ids ids (ref_value_entity_ids db entity_id attr))
-                              first
-                              rest_attrs
+                            List.fold_left intersect_sorted_entity_ids
+                              (List.sort_uniq compare first)
+                              (List.map (List.sort_uniq compare) rest)
                           in
                           union_sorted [] union ids
-                        | [] -> union)
+                        | _ -> union)
                       []
                       src_ids
                   in
@@ -4142,9 +4158,6 @@ module Query = struct
       | Pattern (QVar var, QAttr attr, QWildcard) when var = source_var -> Some attr
       | _ -> None
     in
-    let entity_has_attr entity_id attr =
-      Option.is_some (Seq.uncons (datoms db Eavt ~e:entity_id ~a:attr ()))
-    in
     match find_pull, query.rules, query.with_vars, only_source_inputs query.inputs with
     | Some (find_var, [ Pull_wildcard ]), [], [], true ->
       let missing_attrs = List.filter_map (missing_clause find_var) query.where in
@@ -4164,11 +4177,21 @@ module Query = struct
               && entity_id < Bytes.length source_entities
               && Bytes.get source_entities entity_id = '\001'
             in
+            (* one aevt pass for the missing-attr holders beats a
+               per-datom eavt accessor call on every edge target *)
+            let has_missing = Bytes.make (db.max_datom_e + 1) '\000' in
+            primary_attr_datoms db Aevt missing_attr
+            |> List.iter (fun datom ->
+              if datom.e >= 0 && datom.e < Bytes.length has_missing then
+                Bytes.set has_missing datom.e '\001');
             let target_ids =
               primary_attr_datoms db Aevt ref_attr
               |> List.filter_map (fun datom ->
                 match datom.v with
-                | Ref target_id when source_has_required datom.e && not (entity_has_attr target_id missing_attr) ->
+                | Ref target_id
+                  when source_has_required datom.e
+                    && (target_id < 0 || target_id >= Bytes.length has_missing
+                        || Bytes.get has_missing target_id <> '\001') ->
                   Some target_id
                 | _ -> None)
               |> List.sort_uniq compare
