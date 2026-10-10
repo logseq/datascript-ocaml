@@ -1476,18 +1476,22 @@ let apply_tx context tx_ops db =
     in
     let tx_data_for_fact d =
       let d = { d with v = context.resolve_context.normalize_value d.v } in
-      let existing = existing_attr_datoms d in
-      let same_fact_exists = List.exists (context.same_fact d) existing in
-      match context.resolve_context.cardinality db d.a with
-      | Many -> if same_fact_exists then [] else [ d ]
-      | One ->
-        if same_fact_exists then
-          []
-        else
-          (existing
-           |> List.sort compare_eavt_datom
-           |> List.map retraction_datom)
-          @ [ d ]
+      (* a fact on a brand-new entity cannot retract or duplicate an
+         existing one — both cardinality branches reduce to [d] *)
+      if entity_is_new d then [ d ]
+      else
+        let existing = existing_attr_datoms d in
+        let same_fact_exists = List.exists (context.same_fact d) existing in
+        match context.resolve_context.cardinality db d.a with
+        | Many -> if same_fact_exists then [] else [ d ]
+        | One ->
+          if same_fact_exists then
+            []
+          else
+            (existing
+             |> List.sort compare_eavt_datom
+             |> List.map retraction_datom)
+            @ [ d ]
     in
     (* upstream transacts share one tempids table across the whole tx:
        value-position tempids resolve against (and extend) the same table
@@ -1856,7 +1860,13 @@ let apply_tx context tx_ops db =
          if in_tx_conflict || conflicts_with_existing facts then
            None
          else
-           let tx_data = List.concat_map tx_data_for_fact facts in
+           let tx_data =
+             List.fold_left
+               (fun acc d -> List.rev_append (tx_data_for_fact d) acc)
+               []
+               facts
+             |> List.rev
+           in
            let max_eid =
              List.fold_left
                (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
