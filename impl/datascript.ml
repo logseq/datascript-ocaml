@@ -2708,6 +2708,13 @@ module Query = struct
           collect (`NegValue (attr, value) :: acc) rest
         | Missing (QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
+        | (GetElse (QVar e, _, _, out) | SourceGetElse ("$", QVar e, _, _, out)) :: rest
+          when e = for_var && out <> for_var && not (List.mem out input_vars)
+            && Hashtbl.find_opt var_counts out = Some 1 ->
+          (* a get-else whose output var is used once is a free
+             projection — it reads for_var but adds no constraint on
+             the entity set *)
+          collect acc rest
         | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
         | clause :: rest
@@ -2934,9 +2941,18 @@ module Query = struct
 
   (* find_var projects the values of one [entity_var :attr find_var]
      pattern — the entity set comes from the matcher, one aevt pass over
-     the attr emits distinct out values. Used by the value-var finds
-     (?v, [?v ...], ?v .) that have no entity column. *)
+     the attr emits distinct out values. A get-else clause also binds
+     find_var: one scalar per entity (attr value or the default).
+     Used by the value-var finds (?v, [?v ...], ?v .) that have no
+     entity column. *)
   let value_var_projection db ?resolve find_var query =
+    (* a default term usable as a per-row constant *)
+    let const_value = function
+      | QValue value -> Some value
+      | QAttr attr -> Some (Keyword attr)
+      | QVar var -> Option.bind resolve (fun r -> r var)
+      | _ -> None
+    in
     let counts = Hashtbl.create 8 in
     List.iter
       (fun v -> Hashtbl.replace counts v (1 + Option.value ~default:0 (Hashtbl.find_opt counts v)))
@@ -2947,12 +2963,35 @@ module Query = struct
         List.find_map
           (function
             | Pattern (QVar entity_var, QAttr attr, QVar v)
-              when v = find_var && entity_var <> find_var -> Some (entity_var, attr)
+              when v = find_var && entity_var <> find_var -> Some (entity_var, `Attr attr)
+            | GetElse (QVar entity_var, QAttr attr, default, out)
+            | SourceGetElse ("$", QVar entity_var, QAttr attr, default, out)
+              when out = find_var && entity_var <> find_var ->
+              Option.map (fun default -> entity_var, `Else (attr, default)) (const_value default)
             | _ -> None)
           query.where
       with
       | None -> None
-      | Some (entity_var, attr) ->
+      | Some (entity_var, `Else (attr, default)) ->
+        (* one output per entity: attr value when present, else default *)
+        simple_attr_entity_ids db ?resolve entity_var query
+        |> Option.map (fun entity_ids ->
+               let out_of = function
+                 | Ref id -> Result_entity id
+                 | v -> Result_value v
+               in
+               let seen = Hashtbl.create (List.length entity_ids) in
+               entity_ids
+               |> List.filter_map (fun entity_id ->
+                    let out =
+                      match entity_attr_index_datoms db entity_id attr with
+                      | (d : datom) :: _ -> out_of d.v
+                      | [] -> out_of default
+                    in
+                    let key = Marshal.to_string out [] in
+                    if Hashtbl.mem seen key then None
+                    else (Hashtbl.replace seen key (); Some out)))
+      | Some (entity_var, `Attr attr) ->
         simple_attr_entity_ids db ?resolve entity_var query
         |> Option.map (fun entity_ids ->
                let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
