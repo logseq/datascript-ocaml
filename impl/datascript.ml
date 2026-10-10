@@ -2726,6 +2726,91 @@ module Query = struct
           |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (str_entry_of var))
         in
         let str_var_entry var = List.assoc_opt var str_vars in
+        (* contains? predicates on a value var: [(contains? ?c ?v)] where
+           ?v is bound by one [for_var :attr ?v] pattern — following
+           value_contains exactly: Set/Map → member/key membership,
+           List/Vector/Tuple → Int64 index range, scalars → nothing.
+           The container resolves from a scalar input or from each
+           collection-input element. A contains? appearing before the
+           binding pattern drops every row upstream — an empty set. *)
+        let contains_preds = Hashtbl.create 8 in
+        List.iter
+          (fun clause ->
+            match clause with
+            | ContainsValue (QVar cvar, QVar v)
+              when v <> for_var && not (List.mem v input_vars) ->
+              Hashtbl.replace contains_preds v
+                ((cvar, clause) :: Option.value ~default:[] (Hashtbl.find_opt contains_preds v))
+            | _ -> ())
+          clauses;
+        let contains_entry_of var =
+          let preds = Option.value ~default:[] (Hashtbl.find_opt contains_preds var) in
+          if preds = []
+            || Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
+            || var = for_var || List.mem var input_vars
+            || Hashtbl.mem range_preds var || Hashtbl.mem str_preds var then
+            None
+          else
+            (match
+               List.find_index
+                 (function
+                   | Pattern (QVar e, QAttr _, QVar vv) -> e = for_var && vv = var
+                   | _ -> false)
+                 clauses,
+               List.find_map
+                 (function
+                   | Pattern (QVar e, QAttr a, QVar vv) when e = for_var && vv = var -> Some a
+                   | _ -> None)
+                 clauses
+             with
+             | Some pat_idx, Some attr ->
+               (* allowed values per contains? clause — the intersection
+                  of all of them; any contains? before the pattern drops
+                  every row *)
+               let allowed_of cvar clause =
+                 let before =
+                   match List.find_index (fun c -> c == clause) clauses with
+                   | Some this_idx -> pat_idx < this_idx
+                   | _ -> false
+                 in
+                 if not before then Some []
+                 else
+                   let one = function
+                     | List vs | Vector vs ->
+                       Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                     | Tuple vs ->
+                       Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                     | Set vs -> Some vs
+                     | Map entries -> Some (List.map fst entries)
+                     | _ -> Some []
+                   in
+                   (match resolve_const (QVar cvar), coll_resolve cvar with
+                    | Some value, _ -> one value
+                    | None, Some elements ->
+                      (try Some (List.concat_map (fun e -> Option.get (one e)) elements)
+                       with _ -> None)
+                    | None, None -> None)
+               in
+               (match List.map (fun (cvar, clause) -> allowed_of cvar clause) preds with
+                | alloweds when List.for_all Option.is_some alloweds ->
+                  let allowed =
+                    match List.filter_map (fun x -> x) alloweds with
+                    | first :: rest ->
+                      List.fold_left
+                        (fun acc other ->
+                          List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
+                        first rest
+                    | [] -> []
+                  in
+                  Some (`InColl (attr, allowed))
+                | _ -> None)
+             | _ -> None)
+        in
+        let contains_vars =
+          Hashtbl.fold (fun var _ acc -> var :: acc) contains_preds []
+          |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (contains_entry_of var))
+        in
+        let contains_var_entry var = List.assoc_opt var contains_vars in
         (* cross-ref edges: [?e :ref ?v] where every other clause
            mentioning v constrains v in entity position — v's entity set
            comes from a recursive collect (depth-bounded by [seen]), and
@@ -2760,7 +2845,7 @@ module Query = struct
         let cross_entries = List.filter_map cross_entry_of clauses in
         let cross_var_entry var = List.assoc_opt var cross_entries in
         let rec collect acc = function
-          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd str_vars @ List.map snd cross_entries))
+          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd str_vars @ List.map snd contains_vars @ List.map snd cross_entries))
         | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when for_var = entity_var ->
           collect (`Attr attr :: acc) rest
         | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when for_var = entity_var ->
@@ -2783,6 +2868,7 @@ module Query = struct
           when for_var = entity_var
             && (Option.is_some (range_var_entry value_var)
                 || Option.is_some (str_var_entry value_var)
+                || Option.is_some (contains_var_entry value_var)
                 || Option.is_some (cross_var_entry value_var)) ->
           (* pattern consumed into a `Range/`Str/`ValueIn entry *)
           collect acc rest
@@ -2815,7 +2901,10 @@ module Query = struct
                 | None ->
                   (match str_pred_bound clause with
                    | Some (var, _) -> Option.is_some (str_var_entry var)
-                   | None -> false)) ->
+                   | None ->
+                     (match clause with
+                      | ContainsValue (_, QVar v) -> Option.is_some (contains_var_entry v)
+                      | _ -> false))) ->
           (* comparison/string predicate consumed into a `Range/`Str
              entry *)
           collect acc rest
