@@ -57,3 +57,23 @@ Remaining candidates (diminishing): pulled_attrs boxing/dedupe/sort rework,
 collect_find_specs pull fast path, or-join + rule machinery, T5 tx report,
 X2 alloc trims. Join machinery is already streaming hash-join ~0.65us/datom;
 bindings machinery ~0.8us/row is the sequential-eval floor.
+
+## cljs upstream comparison (2026-10-10, size 2000 / 14.6k datoms, min-of-8)
+
+Harness: bench/lq_upstream.js on _deps/datascript/release-js/datascript.js
+v1.7.3 (node); same LCG-seeded synthetic Logseq db + same query shapes as
+lq_prof. String attrs (datascript.js does not keywordize tx attrs); schema
+properties need colon-prefixed keyword values (":db/index", ":db.type/ref").
+
+OCaml vs cljs (native ocaml vs V8, apples-to-oranges runtime):
+  bulk db_with 57 vs 305ms (5.4x)   add-1 15.7 vs 163ms (10x)
+  retr+add 14.7 vs 182ms (12x)      pull-wild 5.9 vs 80ms (13.5x)
+  q143 10.3 vs 45ms (4.4x)   q176 6.3 vs 60ms (9.5x)   q160 3.9 vs 23ms (5.9x)
+  q132 4.0 vs 9.5ms (2.4x)   q188 1.9 vs 3.2ms (1.7x)   joinonly 1.9 vs 2.7ms
+  q110 or-join real attr arg: 44us vs 0.9ms (20x, after r17)
+Everything is faster than upstream; no case trails cljs.
+
+Caveat discovered: lq_prof arg synthesis maps "?property-id" -> Int64
+(suffix "id"), so the edn q110 number measured a degenerate non-string
+attr scan (~2.2ms full eavt), not the real or-join. Real or-join timing
+needs explicit inputs (see "q110 attr-arg" variant in lq_prof).
