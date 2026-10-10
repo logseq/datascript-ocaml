@@ -103,3 +103,4 @@ Verdict after cljs compare: no workload trails upstream. Remaining pool
 is pull-assembly boxing internals (q143 ~10ms, ~3us/entity floor) and
 degenerate-input edges — all <20% projected.
 - r50 q 入口接通 fast-path 阶梯（shadow 绑定）：所有 Datascript.q 调用方获得全部收益；+arity/not-boundness/or-free-vars 语义预检 + 反向 attr(_a) 求值。q176 -98% q188 -95% q132 -76% q186/q184 -40%
+- r50 后水位：q143 7065us（pull 装配内部 ~3us/entity 为最大剩余块——wildcard attr 展开/entity_attrs/pulled_map 装箱），q160 3.9ms，q186/q184 ~1.5ms（规则 or/class-extends 递归 fallback），q132 940us。下一步候选：pull [*] 的 attr 列表复用/pulled_attrs 装配热循环；GetElse in-component 收集；recursive class-extends 缓存。
