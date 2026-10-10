@@ -174,7 +174,7 @@ end) = struct
     | Result_attr a -> Hashtbl.hash a * 31 + 2
     | Result_value v -> query_value_hash v * 31 + 3
     | Result_db _ -> 0
-    | Result_pull _ -> 1
+    | Result_pull pulled -> pulled.pulled_id * 7 + 19
   and query_value_hash = function
     | Int64 i -> Hashtbl.hash i * 7 + 11
     | Float f -> Hashtbl.hash f * 7 + 12
