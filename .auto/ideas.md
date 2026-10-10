@@ -102,3 +102,4 @@ constants in attr position answer empty instead of full eavt scan (r18).
 Verdict after cljs compare: no workload trails upstream. Remaining pool
 is pull-assembly boxing internals (q143 ~10ms, ~3us/entity floor) and
 degenerate-input edges — all <20% projected.
+- r50 q 入口接通 fast-path 阶梯（shadow 绑定）：所有 Datascript.q 调用方获得全部收益；+arity/not-boundness/or-free-vars 语义预检 + 反向 attr(_a) 求值。q176 -98% q188 -95% q132 -76% q186/q184 -40%
