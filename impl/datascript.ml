@@ -2258,9 +2258,257 @@ module Query = struct
     in
     loop [] left right
 
+  (* Inline rule invocations whose bodies are plain clauses: params are
+     replaced by the invocation's terms and body-local vars are renamed
+     fresh so they cannot collide with the outer query — the same
+     rewriting the generic engine does by evaluating the body in a
+     nested binding. Multiple same-name rules wrap the expansions in an
+     Or. Recursive or unhandled bodies leave the Rule clause in place
+     and the collect below falls back to the generic engine. *)
+  let expand_rule_clauses rules clauses =
+    let fresh = ref 0 in
+    let subst_terms_in_clause env clause =
+      let term = function
+        | QVar var -> (match List.assoc_opt var env with Some t -> t | None -> QVar var)
+        | t -> t
+      in
+      let var_name name =
+        match List.assoc_opt name env with
+        | None -> Some name
+        | Some (QVar v) -> Some v
+        | Some _ -> None
+      in
+      let rec one = function
+        | Pattern (e, a, v) -> Some (Pattern (term e, term a, term v))
+        | PatternTx (e, a, v, tx) -> Some (PatternTx (term e, term a, term v, term tx))
+        | PatternTxOp (e, a, v, tx, op) -> Some (PatternTxOp (term e, term a, term v, term tx, term op))
+        | SourcePattern (s, e, a, v) -> Some (SourcePattern (s, term e, term a, term v))
+        | SourcePatternTx (s, e, a, v, tx) -> Some (SourcePatternTx (s, term e, term a, term v, term tx))
+        | SourcePatternTxOp (s, e, a, v, tx, op) -> Some (SourcePatternTxOp (s, term e, term a, term v, term tx, term op))
+        | SourceRelationPattern (s, ts) -> Some (SourceRelationPattern (s, List.map term ts))
+        | Missing (e, a) -> Some (Missing (term e, term a))
+        | SourceMissing (s, e, a) -> Some (SourceMissing (s, term e, term a))
+        | GetElse (e, a, d, out) -> Option.map (fun out -> GetElse (term e, term a, term d, out)) (var_name out)
+        | SourceGetElse (s, e, a, d, out) -> Option.map (fun out -> SourceGetElse (s, term e, term a, term d, out)) (var_name out)
+        | GetSome (e, attrs, a, out) ->
+          Option.map (fun out -> GetSome (term e, List.map term attrs, a, out)) (var_name out)
+        | SourceGetSome (s, e, attrs, a, out) ->
+          Option.map (fun out -> SourceGetSome (s, term e, List.map term attrs, a, out)) (var_name out)
+        | GetValue (m, k, out) -> Option.map (fun out -> GetValue (term m, term k, out)) (var_name out)
+        | GetDefaultValue (m, k, d, out) -> Option.map (fun out -> GetDefaultValue (term m, term k, term d, out)) (var_name out)
+        | CountValue (t, out) -> Option.map (fun out -> CountValue (term t, out)) (var_name out)
+        | EmptyValue t -> Some (EmptyValue (term t))
+        | NotEmptyValue t -> Some (NotEmptyValue (term t))
+        | ContainsValue (c, k) -> Some (ContainsValue (term c, term k))
+        | ValuePredicate (op, t) -> Some (ValuePredicate (op, term t))
+        | NumericPredicate (op, t) -> Some (NumericPredicate (op, term t))
+        | ComparisonPredicate (op, l, r) -> Some (ComparisonPredicate (op, term l, term r))
+        | ComparisonPredicateN (op, ts) -> Some (ComparisonPredicateN (op, List.map term ts))
+        | EqualityPredicate (op, ts) -> Some (EqualityPredicate (op, List.map term ts))
+        | ArithmeticValue (op, ts, out) -> Option.map (fun out -> ArithmeticValue (op, List.map term ts, out)) (var_name out)
+        | CompareValue (l, r, out) -> Option.map (fun out -> CompareValue (term l, term r, out)) (var_name out)
+        | ExtremumValue (op, ts, out) -> Option.map (fun out -> ExtremumValue (op, List.map term ts, out)) (var_name out)
+        | BooleanPredicate (op, t) -> Some (BooleanPredicate (op, term t))
+        | BooleanNotPredicate t -> Some (BooleanNotPredicate (term t))
+        | BooleanNotValue (t, out) -> Option.map (fun out -> BooleanNotValue (term t, out)) (var_name out)
+        | IdentityValue (t, out) -> Option.map (fun out -> IdentityValue (term t, out)) (var_name out)
+        | BooleanAndPredicate ts -> Some (BooleanAndPredicate (List.map term ts))
+        | BooleanAndValue (ts, out) -> Option.map (fun out -> BooleanAndValue (List.map term ts, out)) (var_name out)
+        | BooleanOrPredicate ts -> Some (BooleanOrPredicate (List.map term ts))
+        | BooleanOrValue (ts, out) -> Option.map (fun out -> BooleanOrValue (List.map term ts, out)) (var_name out)
+        | RandomValue _ as c -> Some c
+        | RandomIntValue (b, out) -> Option.map (fun out -> RandomIntValue (term b, out)) (var_name out)
+        | DifferPredicate ts -> Some (DifferPredicate (List.map term ts))
+        | IdenticalPredicate (l, r) -> Some (IdenticalPredicate (term l, term r))
+        | TypeValue (t, out) -> Option.map (fun out -> TypeValue (term t, out)) (var_name out)
+        | MetaValue (t, out) -> Option.map (fun out -> MetaValue (term t, out)) (var_name out)
+        | NameValue (t, out) -> Option.map (fun out -> NameValue (term t, out)) (var_name out)
+        | NamespaceValue (t, out) -> Option.map (fun out -> NamespaceValue (term t, out)) (var_name out)
+        | KeywordFromName (t, out) -> Option.map (fun out -> KeywordFromName (term t, out)) (var_name out)
+        | KeywordFromNamespaceName (t, ns, out) -> Option.map (fun out -> KeywordFromNamespaceName (term t, term ns, out)) (var_name out)
+        | StringIncludesValue (a, b) -> Some (StringIncludesValue (term a, term b))
+        | StringStartsWithValue (a, b) -> Some (StringStartsWithValue (term a, term b))
+        | StringEndsWithValue (a, b) -> Some (StringEndsWithValue (term a, term b))
+        | StringLowerCaseValue (t, out) -> Option.map (fun out -> StringLowerCaseValue (term t, out)) (var_name out)
+        | StringUpperCaseValue (t, out) -> Option.map (fun out -> StringUpperCaseValue (term t, out)) (var_name out)
+        | StringCapitalizeValue (t, out) -> Option.map (fun out -> StringCapitalizeValue (term t, out)) (var_name out)
+        | StringReverseValue (t, out) -> Option.map (fun out -> StringReverseValue (term t, out)) (var_name out)
+        | StringTrimValue (t, out) -> Option.map (fun out -> StringTrimValue (term t, out)) (var_name out)
+        | StringTrimLeftValue (t, out) -> Option.map (fun out -> StringTrimLeftValue (term t, out)) (var_name out)
+        | StringTrimRightValue (t, out) -> Option.map (fun out -> StringTrimRightValue (term t, out)) (var_name out)
+        | StringTrimNewlineValue (t, out) -> Option.map (fun out -> StringTrimNewlineValue (term t, out)) (var_name out)
+        | StringIndexOfValue (a, b, out) -> Option.map (fun out -> StringIndexOfValue (term a, term b, out)) (var_name out)
+        | StringLastIndexOfValue (a, b, out) -> Option.map (fun out -> StringLastIndexOfValue (term a, term b, out)) (var_name out)
+        | StringSubstringValue (t, a, b, out) -> Option.map (fun out -> StringSubstringValue (term t, term a, b, out)) (var_name out)
+        | StringBuildValue (ts, out) -> Option.map (fun out -> StringBuildValue (List.map term ts, out)) (var_name out)
+        | PrintStringValue (ts, out) -> Option.map (fun out -> PrintStringValue (List.map term ts, out)) (var_name out)
+        | PrintLineStringValue (ts, out) -> Option.map (fun out -> PrintLineStringValue (List.map term ts, out)) (var_name out)
+        | PrStringValue (ts, out) -> Option.map (fun out -> PrStringValue (List.map term ts, out)) (var_name out)
+        | PrnStringValue (ts, out) -> Option.map (fun out -> PrnStringValue (List.map term ts, out)) (var_name out)
+        | StringJoinPlainValue (t, out) -> Option.map (fun out -> StringJoinPlainValue (term t, out)) (var_name out)
+        | StringJoinValue (a, b, out) -> Option.map (fun out -> StringJoinValue (term a, term b, out)) (var_name out)
+        | StringReplaceValue (a, b, c, out) -> Option.map (fun out -> StringReplaceValue (term a, term b, term c, out)) (var_name out)
+        | StringReplaceFirstValue (a, b, c, out) -> Option.map (fun out -> StringReplaceFirstValue (term a, term b, term c, out)) (var_name out)
+        | StringEscapeValue (a, b, out) -> Option.map (fun out -> StringEscapeValue (term a, term b, out)) (var_name out)
+        | RePatternValue _ as c -> Some c
+        | ReFindValue (a, b, out) -> Option.map (fun out -> ReFindValue (term a, term b, out)) (var_name out)
+        | ReMatchesValue (a, b, out) -> Option.map (fun out -> ReMatchesValue (term a, term b, out)) (var_name out)
+        | ReSeqValue (a, b, out) -> Option.map (fun out -> ReSeqValue (term a, term b, out)) (var_name out)
+        | ReFindPredicate (a, b) -> Some (ReFindPredicate (term a, term b))
+        | ReMatchesPredicate (a, b) -> Some (ReMatchesPredicate (term a, term b))
+        | StringBlankValue t -> Some (StringBlankValue (term t))
+        | StringSplitValue (a, b, out) -> Option.map (fun out -> StringSplitValue (term a, term b, out)) (var_name out)
+        | StringSplitLimitValue (a, b, c, out) -> Option.map (fun out -> StringSplitLimitValue (term a, term b, term c, out)) (var_name out)
+        | StringSplitLinesValue (t, out) -> Option.map (fun out -> StringSplitLinesValue (term t, out)) (var_name out)
+        | (Ground _ | GroundCollection _ | GroundTuple _ | GroundRelation _) as c -> Some c
+        | GroundTerm (t, out) -> Option.map (fun out -> GroundTerm (term t, out)) (var_name out)
+        | GroundTermCollection (t, out) -> Option.map (fun out -> GroundTermCollection (term t, out)) (var_name out)
+        | GroundTermTuple (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> GroundTermTuple (term t, outs)) (sub_vars outs)
+        | GroundTermRelation (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> GroundTermRelation (term t, outs)) (sub_vars outs)
+        | VectorValue (ts, out) -> Option.map (fun out -> VectorValue (List.map term ts, out)) (var_name out)
+        | ListValue (ts, out) -> Option.map (fun out -> ListValue (List.map term ts, out)) (var_name out)
+        | SetValue (ts, out) -> Option.map (fun out -> SetValue (List.map term ts, out)) (var_name out)
+        | HashMapValue (ts, out) -> Option.map (fun out -> HashMapValue (List.map term ts, out)) (var_name out)
+        | ArrayMapValue (ts, out) -> Option.map (fun out -> ArrayMapValue (List.map term ts, out)) (var_name out)
+        | RangeEndValue (t, out) -> Option.map (fun out -> RangeEndValue (term t, out)) (var_name out)
+        | RangeValue (a, b, out) -> Option.map (fun out -> RangeValue (term a, term b, out)) (var_name out)
+        | RangeStepValue (a, b, c, out) -> Option.map (fun out -> RangeStepValue (term a, term b, term c, out)) (var_name out)
+        | TupleFunction (ts, out) -> Option.map (fun out -> TupleFunction (List.map term ts, out)) (var_name out)
+        | UntupleFunction (t, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> UntupleFunction (term t, outs)) (sub_vars outs)
+        | Predicate (n, ts, f) -> Some (Predicate (n, List.map term ts, f))
+        | Function (n, ts, outs, f) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> Function (n, List.map term ts, outs, f)) (sub_vars outs)
+        | DynamicPredicate (n, ts) -> Some (DynamicPredicate (n, List.map term ts))
+        | DynamicFunction (n, ts, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> DynamicFunction (n, List.map term ts, outs)) (sub_vars outs)
+        | DynamicFunctionCollection (n, ts, out) -> Option.map (fun out -> DynamicFunctionCollection (n, List.map term ts, out)) (var_name out)
+        | DynamicFunctionRelation (n, ts, outs) ->
+          let rec sub_vars = function
+            | [] -> Some []
+            | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_vars rest))
+          in
+          Option.map (fun outs -> DynamicFunctionRelation (n, List.map term ts, outs)) (sub_vars outs)
+        | SourceClause (s, c) -> Option.map (fun c -> SourceClause (s, c)) (one c)
+        | Not cs -> Option.map (fun cs -> Not cs) (many cs)
+        | SourceNot (s, cs) -> Option.map (fun cs -> SourceNot (s, cs)) (many cs)
+        | NotJoin (vs, cs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun cs -> NotJoin (vs, cs)) (many cs))
+        | SourceNotJoin (s, vs, cs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun cs -> SourceNotJoin (s, vs, cs)) (many cs))
+        | Or brs -> Option.map (fun bs -> Or bs) (branches brs)
+        | SourceOr (s, brs) -> Option.map (fun bs -> SourceOr (s, bs)) (branches brs)
+        | OrJoin (vs, brs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun bs -> OrJoin (vs, bs)) (branches brs))
+        | SourceOrJoin (s, vs, brs) ->
+          Option.bind (sub_names vs) (fun vs -> Option.map (fun bs -> SourceOrJoin (s, vs, bs)) (branches brs))
+        | OrJoinRequired (rvs, vs, brs) ->
+          Option.bind (sub_names rvs)
+            (fun rvs ->
+              Option.bind (sub_names vs)
+                (fun vs -> Option.map (fun bs -> OrJoinRequired (rvs, vs, bs)) (branches brs)))
+        | SourceOrJoinRequired (s, rvs, vs, brs) ->
+          Option.bind (sub_names rvs)
+            (fun rvs ->
+              Option.bind (sub_names vs)
+                (fun vs -> Option.map (fun bs -> SourceOrJoinRequired (s, rvs, vs, bs)) (branches brs)))
+        | (Rule _ | SourceRule _) as c -> Some c
+      and many clauses =
+        match clauses with
+        | [] -> Some []
+        | c :: rest -> Option.bind (one c) (fun c -> Option.map (fun r -> c :: r) (many rest))
+      and branches bs =
+        match bs with
+        | [] -> Some []
+        | b :: rest -> Option.bind (many b) (fun b -> Option.map (fun r -> b :: r) (branches rest))
+      and sub_names names =
+        match names with
+        | [] -> Some []
+        | n :: rest -> Option.bind (var_name n) (fun n -> Option.map (fun r -> n :: r) (sub_names rest))
+      in
+      one clause
+    in
+    let rec expand ~depth ~seen clauses =
+      let rec go acc = function
+        | [] -> Some (List.rev acc)
+        | Rule (name, terms) :: rest ->
+          (match expand_invocation ~depth ~seen name terms with
+           | Some expansion -> go (List.rev_append expansion acc) rest
+           | None -> go (Rule (name, terms) :: acc) rest)
+        | (SourceRule _ as c) :: rest -> go (c :: acc) rest
+        | clause :: rest -> go (clause :: acc) rest
+      in
+      go [] clauses
+    and expand_invocation ~depth ~seen name terms =
+      if depth > 8 || List.mem name seen then None
+      else
+        match Query.matching_rules rules name (List.length terms) with
+        | [] -> None
+        | candidates ->
+          let expand_body rule =
+            (* params -> invocation terms; body-local vars -> fresh names *)
+            let env = List.combine rule.rule_params terms in
+            let body_vars =
+              List.concat_map Query.vars_of_clause rule.rule_body
+              |> List.filter (fun v -> not (List.mem_assoc v env))
+              |> List.sort_uniq compare
+            in
+            let env =
+              env
+              @ List.map
+                  (fun var ->
+                    incr fresh;
+                    var, QVar (var ^ "#" ^ string_of_int !fresh))
+                  body_vars
+            in
+            let rec sub = function
+              | [] -> Some []
+              | c :: rest ->
+                Option.bind (subst_terms_in_clause env c)
+                  (fun c -> Option.map (fun r -> c :: r) (sub rest))
+            in
+            match sub rule.rule_body with
+            | None -> None
+            | Some expanded -> expand ~depth:(depth + 1) ~seen:(name :: seen) expanded
+          in
+          match List.map expand_body candidates with
+          | [] -> None
+          | [ Some single ] -> Some single
+          | bodies when List.for_all Option.is_some bodies ->
+            Some [ Or (List.map Option.get bodies) ]
+          | _ -> None
+    in
+    expand ~depth:0 ~seen:[] clauses
 
-  let simple_attr_entity_ids db ?resolve find_var query =
+  let rec simple_attr_entity_ids db ?resolve find_var query =
     match query.where, query.rules, query.with_vars with
+    | patterns, rules, [] when rules <> [] ->
+      (match expand_rule_clauses rules patterns with
+       | Some expanded ->
+         simple_attr_entity_ids db ?resolve find_var { query with where = expanded; rules = [] }
+       | None -> None)
     | patterns, [], []
       when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
       (* Same relaxation as simple_attr_entity_collection: a value var used
