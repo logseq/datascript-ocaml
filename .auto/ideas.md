@@ -2,6 +2,9 @@
 
 Status: ( ) queued  (>) running  (k) kept  (x) reverted  (d) done/dry
 
+- r44 coll inputs ([?v ...] membership), r45 string/eq preds, r46 contains? on value vars, r47 ident-entity resolution + or-bound contains + cross component closure — property/task rule family covered end-to-end
+- remaining uncovered: or branches mixing ground-resolved clauses with for_var patterns (branch-local ground eval), top-level or-join, untuple, recursive rules (parent/class-extends), pull-selector vars
+
 ## Transact path (page/block edits)
 (d) T1: profile add-1/add-5 — where do the ~21ms go for a small tx?
       -> rounds 1-3: tempid machinery skip + small-tx early-out + new-entity
