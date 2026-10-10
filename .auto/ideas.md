@@ -41,4 +41,4 @@ Status: ( ) queued  (>) running  (k) kept  (x) reverted  (d) done/dry
       replace without rebalance (r7, pin b4c97e3)
 ( ) X1: remove per-call string concat / Printf.sprintf in hot loops.
 ( ) X2: allocation reduction in datom/tuple construction on query path.
-- [ ] Q7 where-eval for join+missing?/not/or patterns — q132/q176 ~10ms on 2k rows (5us/row bindings machinery), q188 3.1ms attr-attr join, q110 or-join 2.2ms, q184/186 rule queries ~2.6ms — identified by lq_prof (logseq_queries.edn timing, scratch probe)
+- [ ] Q7 (partially done: lean clause datoms + attr memo + const hoist; join already streaming-hash) where-eval for join+missing?/not/or patterns — q132/q176 ~10ms on 2k rows (5us/row bindings machinery), q188 3.1ms attr-attr join, q110 or-join 2.2ms, q184/186 rule queries ~2.6ms — identified by lq_prof (logseq_queries.edn timing, scratch probe)
