@@ -12,7 +12,7 @@ depends: [
   "odoc" {with-doc}
 ]
 pin-depends: [
-  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#d4a8ca5adedeb529ab39baa576f7f3744747f211"]
+  ["persistent_sorted_set_ocaml.dev" "git+https://github.com/logseq/persistent-sorted-set-ocaml.git#b4c97e37b4d62175b376d76e795c298071444343"]
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
