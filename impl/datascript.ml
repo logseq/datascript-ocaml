@@ -2280,22 +2280,47 @@ module Query = struct
       let rec collect_attrs acc = function
         | [] -> Some (List.rev acc)
         | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
-          collect_attrs (attr :: acc) rest
+          collect_attrs (`Attr attr :: acc) rest
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
           when find_var = entity_var && free_value_var value_var ->
-          collect_attrs (attr :: acc) rest
+          collect_attrs (`Attr attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when find_var = entity_var ->
+          collect_attrs (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
+          when find_var = entity_var && free_value_var value_var ->
+          collect_attrs (`Neg attr :: acc) rest
         | _ -> None
       in
       (match collect_attrs [] patterns with
-       | Some (first_attr :: rest_attrs) ->
-         let entity_ids =
-           List.fold_left
-             (fun entity_ids attr -> intersect_sorted_entity_ids entity_ids (entity_ids_with_attr db attr))
-             (entity_ids_with_attr db first_attr)
-             rest_attrs
+       | Some entries ->
+         (* (not [?e :attr]) is a sorted-list difference on the attr's
+            entity set — both sides come out of aevt order. *)
+         let rec subtract_sorted acc left right =
+           match left, right with
+           | [], _ | _, [] -> List.rev_append acc left
+           | l :: ls, r :: rs ->
+             if l = r then subtract_sorted acc ls rs
+             else if l < r then subtract_sorted (l :: acc) ls right
+             else subtract_sorted acc left rs
          in
-         Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
-       | Some [] | None -> None)
+         let positives = List.filter_map (function `Attr attr -> Some attr | _ -> None) entries in
+         (match positives with
+          | first_attr :: rest_attrs ->
+            let entity_ids =
+              List.fold_left
+                (fun entity_ids attr -> intersect_sorted_entity_ids entity_ids (entity_ids_with_attr db attr))
+                (entity_ids_with_attr db first_attr)
+                rest_attrs
+            in
+            let entity_ids =
+              List.fold_left
+                (fun entity_ids attr -> subtract_sorted [] entity_ids (entity_ids_with_attr db attr))
+                entity_ids
+                (List.filter_map (function `Neg attr -> Some attr | _ -> None) entries)
+            in
+            Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
+          | [] -> None)
+       | None -> None)
     | _ -> None
 
   let simple_attr_entity_ids db find_var query =
