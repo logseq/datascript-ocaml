@@ -28,3 +28,4 @@
 {"round":28,"idea":"Q6","kind":"keep","title":"or-clause union in collection + pull matchers","tests":"green","verify":"MATCH x4 incl shared-var, escaped-var fallback"}
 {"round":29,"idea":"Q6","kind":"keep","title":"Find_var relation uses entity-ids matcher","tests":"green"}
 {"round":30,"idea":"Q6","kind":"keep","title":"Find_var scalar uses entity-ids matcher","tests":"green"}
+{"round":31,"idea":"Q6","kind":"keep","title":"missing? mapped to Neg in entity matchers","tests":"green","verify":"missing-vs-not MATCH"}
