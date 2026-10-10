@@ -2289,6 +2289,8 @@ module Query = struct
         | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
           when find_var = entity_var && free_value_var value_var ->
           collect_attrs (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
+          collect_attrs (`NegValue (attr, value) :: acc) rest
         | _ -> None
       in
       (match collect_attrs [] patterns with
@@ -2314,9 +2316,14 @@ module Query = struct
             in
             let entity_ids =
               List.fold_left
-                (fun entity_ids attr -> subtract_sorted [] entity_ids (entity_ids_with_attr db attr))
+                (fun entity_ids entry ->
+                  match entry with
+                  | `Neg attr -> subtract_sorted [] entity_ids (entity_ids_with_attr db attr)
+                  | `NegValue (attr, value) ->
+                    subtract_sorted [] entity_ids (exact_attr_value_entity_ids db attr value)
+                  | _ -> entity_ids)
                 entity_ids
-                (List.filter_map (function `Neg attr -> Some attr | _ -> None) entries)
+                entries
             in
             Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
           | [] -> None)
@@ -2355,12 +2362,15 @@ module Query = struct
         | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
           when find_var = entity_var && free_value_var value_var ->
           collect_patterns (`Neg attr :: acc) rest
+        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
+          collect_patterns (`NegValue (attr, value) :: acc) rest
         | _ -> None
       in
       let entity_ids_for_pattern = function
         | `Attr attr -> Some (entity_ids_with_attr db attr)
         | `Value (attr, value) -> Some (exact_attr_value_entity_ids db attr value)
         | `Neg attr -> Some (entity_ids_with_attr db attr)
+        | `NegValue (attr, value) -> Some (exact_attr_value_entity_ids db attr value)
       in
       (match collect_patterns [] patterns with
        | Some entries ->
