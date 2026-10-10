@@ -2888,6 +2888,19 @@ module Query = struct
              Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
     | _ -> None
 
+  let simple_attr_entity_scalar db query =
+    (* [:find ?e . :where ...] — first entity of the sorted set, or
+       none. Same matcher, scalar wrap. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      simple_attr_entity_ids db find_var query
+      |> Option.map (fun entity_ids ->
+             Query_scalar
+               (match entity_ids with
+                | entity_id :: _ -> Some (Result_entity entity_id)
+                | [] -> None))
+    | _ -> None
+
   let ref_target_pull_relation db query =
     let wildcard_selector = function
       | [ Pull_wildcard ] -> Some [ Pull_wildcard ]
@@ -3518,7 +3531,23 @@ module Query = struct
       (match exact_title_scalar_query db inputs query with
        | Some result -> result
        | None ->
+      (match simple_attr_entity_scalar db query with
+       | Some result -> result
+       | None ->
          let rows = q ~inputs db query in
+         let value =
+           Option.bind
+             (List.nth_opt rows 0)
+             (function
+               | value :: _ -> Some value
+               | [] -> None)
+         in
+         Query_scalar value))
+    | Return_scalar, None ->
+      (match simple_attr_entity_scalar db query with
+       | Some result -> result
+       | None ->
+         let rows = q db query in
          let value =
            Option.bind
              (List.nth_opt rows 0)
