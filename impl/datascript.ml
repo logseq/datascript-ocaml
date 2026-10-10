@@ -2304,10 +2304,11 @@ module Query = struct
            | _ -> None)
         | _ -> None
       in
-      (* Range analysis is scoped to the clause list being collected —
-         try_ref_target re-enters on a partition, and a var whose pattern
-         and predicates split across partitions simply stays generic. *)
-      let collect_patterns clauses =
+      (* Range/cross-ref analysis is scoped to the clause list being
+         collected — try_ref_target re-enters on a partition, and a var
+         whose pattern and predicates split across partitions simply
+         stays generic. *)
+      let rec collect_patterns_for ~seen for_var clauses =
         let range_preds = Hashtbl.create 8 in
         List.iter
           (fun clause ->
@@ -2321,14 +2322,14 @@ module Query = struct
            only the collected predicates *)
         let range_entry_of var =
           let preds = Option.value ~default:[] (Hashtbl.find_opt range_preds var) in
-          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1) || var = find_var then
+          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1) || var = for_var then
             None
           else
             let attr =
               List.find_map
                 (function
                   | Pattern (QVar entity_var, QAttr attr, QVar value_var)
-                    when entity_var = find_var && value_var = var -> Some attr
+                    when entity_var = for_var && value_var = var -> Some attr
                   | _ -> None)
                 clauses
             in
@@ -2364,29 +2365,64 @@ module Query = struct
           |> List.filter_map (fun var -> Option.map (fun entry -> var, entry) (range_entry_of var))
         in
         let range_var_entry var = List.assoc_opt var range_vars in
+        (* cross-ref edges: [?e :ref ?v] where every other clause
+           mentioning v constrains v in entity position — v's entity set
+           comes from a recursive collect (depth-bounded by [seen]), and
+           the edge becomes a value-membership filter on the ref attr *)
+        let cross_entry_of clause =
+          match clause with
+          | Pattern (QVar e, QAttr a, QVar v)
+            when e = for_var && v <> for_var && is_ref_attr db a
+              && not (List.mem v input_vars) && not (List.mem v seen)
+              && not (Hashtbl.mem range_preds v) ->
+            let mentions v' clause' = List.mem v' (Query.vars_of_clause clause') in
+            let v_clauses =
+              List.filter (fun c -> c != clause && mentions v c) clauses
+            in
+            let self = function
+              | Pattern (QVar ev, _, _) -> ev = v
+              | Not [ Pattern (QVar ev, _, _) ] -> ev = v
+              | Missing (QVar ev, _) | SourceMissing (_, QVar ev, _) -> ev = v
+              | _ -> false
+            in
+            if v_clauses <> []
+              && List.for_all self v_clauses
+              && List.exists
+                   (fun c -> match c with Pattern (QVar ev, _, _) -> ev = v | _ -> false)
+                   v_clauses then
+              (match collect_patterns_for ~seen:(for_var :: seen) v v_clauses with
+               | Some v_entries -> Some (v, `ValueIn (a, v_entries))
+               | None -> None)
+            else None
+          | _ -> None
+        in
+        let cross_entries = List.filter_map cross_entry_of clauses in
+        let cross_var_entry var = List.assoc_opt var cross_entries in
         let rec collect acc = function
-          | [] -> Some (List.rev_append acc (List.map snd range_vars))
-        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
+          | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd cross_entries))
+        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when for_var = entity_var ->
           collect (`Attr attr :: acc) rest
-        | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when find_var = entity_var ->
+        | Pattern (QVar entity_var, QAttr attr, QValue value) :: rest when for_var = entity_var ->
           collect (`Value (attr, value) :: acc) rest
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
-          when find_var = entity_var && free_value_var value_var ->
+          when for_var = entity_var && free_value_var value_var ->
           collect (`Attr attr :: acc) rest
         | Pattern (QVar entity_var, QAttr _, QVar value_var) :: rest
-          when find_var = entity_var && Option.is_some (range_var_entry value_var) ->
-          (* pattern consumed into the range var's `Range entry *)
+          when for_var = entity_var
+            && (Option.is_some (range_var_entry value_var)
+                || Option.is_some (cross_var_entry value_var)) ->
+          (* pattern consumed into a `Range or `ValueIn entry *)
           collect acc rest
-        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when find_var = entity_var ->
+        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
         | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
-          when find_var = entity_var && free_value_var value_var ->
+          when for_var = entity_var && free_value_var value_var ->
           collect (`Neg attr :: acc) rest
-        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
+        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when for_var = entity_var ->
           collect (`NegValue (attr, value) :: acc) rest
-        | Missing (QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+        | Missing (QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
-        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
         | clause :: rest
           when (match pred_bound clause with
@@ -2413,10 +2449,10 @@ module Query = struct
           in
           let rec collect_branch acc = function
             | [] -> Some (List.rev acc)
-            | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = find_var -> collect_branch (`Attr a :: acc) rest
-            | Pattern (QVar e, QAttr a, QValue v) :: rest when e = find_var ->
+            | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = for_var -> collect_branch (`Attr a :: acc) rest
+            | Pattern (QVar e, QAttr a, QValue v) :: rest when e = for_var ->
               collect_branch (`Value (a, v) :: acc) rest
-            | Pattern (QVar e, QAttr a, QVar v) :: rest when e = find_var && or_local v ->
+            | Pattern (QVar e, QAttr a, QVar v) :: rest when e = for_var && or_local v ->
               collect_branch (`Attr a :: acc) rest
             | _ -> None
           in
@@ -2465,9 +2501,17 @@ module Query = struct
           |> List.filter keep
           |> List.map (fun (datom : datom) -> datom.e)
           |> List.sort_uniq compare
-        | `Or _ -> assert false (* handled below *)
+        | `Or _ | `ValueIn _ -> assert false (* handled below *)
       in
-      let entity_ids_for_entry = function
+      let rec subtract_sorted acc left right =
+        match left, right with
+        | [], _ | _, [] -> List.rev_append acc left
+        | l :: ls, r :: rs ->
+          if l = r then subtract_sorted acc ls rs
+          else if l < r then subtract_sorted (l :: acc) ls right
+          else subtract_sorted acc left rs
+      in
+      let rec entity_ids_for_entry = function
         | `Or branch_entries ->
           (* each branch is a small intersection; the or is their union *)
           Some
@@ -2481,17 +2525,21 @@ module Query = struct
                []
                branch_entries)
         | `Neg _ | `NegValue _ -> None
+        | `ValueIn (attr, v_entries) ->
+          (match eval_collected v_entries with
+           | Some ids ->
+             let set = Hashtbl.create (List.length ids) in
+             List.iter (fun id -> Hashtbl.replace set id ()) ids;
+             Some
+               (primary_attr_datoms db Aevt attr
+                |> List.filter_map (fun (datom : datom) ->
+                     match datom.v with
+                     | Ref id when Hashtbl.mem set id -> Some datom.e
+                     | _ -> None)
+                |> List.sort_uniq compare)
+           | None -> Some [])
         | entry -> Some (entity_ids_for_pattern entry)
-      in
-      let rec subtract_sorted acc left right =
-        match left, right with
-        | [], _ | _, [] -> List.rev_append acc left
-        | l :: ls, r :: rs ->
-          if l = r then subtract_sorted acc ls rs
-          else if l < r then subtract_sorted (l :: acc) ls right
-          else subtract_sorted acc left rs
-      in
-      let eval_collected ?seed entries =
+      and eval_collected ?seed entries =
         let positives = List.filter_map entity_ids_for_entry entries in
         let base =
           match seed, positives with
@@ -2567,7 +2615,7 @@ module Query = struct
                 collect_src (`Neg a :: acc) rest
               | _ -> None
             in
-            (match collect_src [] src_clauses, collect_patterns target_clauses with
+            (match collect_src [] src_clauses, collect_patterns_for ~seen:[] find_var target_clauses with
              | Some src_entries, Some target_entries ->
                (match eval_collected src_entries with
                 | Some src_ids ->
@@ -2593,7 +2641,7 @@ module Query = struct
                 | None -> None)
              | _ -> None)
       in
-      (match collect_patterns patterns with
+      (match collect_patterns_for ~seen:[] find_var patterns with
        | Some entries -> eval_collected entries
        | None -> try_ref_target ())
     | _ -> None
