@@ -1401,8 +1401,23 @@ let apply_tx context tx_ops db =
         && supported_value attr value
       | _ -> false
     in
+    let supported_retract = function
+      | Retract (Entity_id _, attr, value) ->
+        (* component attrs cascade into child-entity retractions — that
+           machinery stays on the slow path *)
+        attr_is_supported attr
+        && not
+             (match List.assoc_opt attr db.schema with
+              | Some spec -> spec.is_component
+              | None -> false)
+        &&
+        (match value with
+         | None -> true
+         | Some value -> supported_value attr value)
+      | _ -> false
+    in
     let supported_tx_op tx_op =
-      supported_entity tx_op || supported_add tx_op
+      supported_entity tx_op || supported_add tx_op || supported_retract tx_op
     in
     let duplicate_cardinality_one attrs =
       let seen = Hashtbl.create (List.length attrs) in
@@ -1454,9 +1469,6 @@ let apply_tx context tx_ops db =
             false ))
         facts
     in
-    let entity_is_new d =
-      d.e > db.max_datom_e
-    in
     let existing_unique_conflict d =
       unique_attr d.a
       &&
@@ -1471,8 +1483,8 @@ let apply_tx context tx_ops db =
       { d with tx; added = false }
     in
     let compare_eavt_datom = Util.compare_datom Eavt in
-    let existing_attr_datoms d =
-      if entity_is_new d then [] else context.existing_entity_attr_datoms db d.e d.a
+    let entity_is_new d =
+      d.e > db.max_datom_e
     in
     let tx_data_for_fact d =
       let d = { d with v = context.resolve_context.normalize_value d.v } in
@@ -1480,7 +1492,7 @@ let apply_tx context tx_ops db =
          existing one — both cardinality branches reduce to [d] *)
       if entity_is_new d then [ d ]
       else
-        let existing = existing_attr_datoms d in
+        let existing = context.existing_entity_attr_datoms db d.e d.a in
         let same_fact_exists = List.exists (context.same_fact d) existing in
         match context.resolve_context.cardinality db d.a with
         | Many -> if same_fact_exists then [] else [ d ]
@@ -1756,6 +1768,64 @@ let apply_tx context tx_ops db =
         in
         loop max_eid empty_tempid_map tempid_add_groups
       in
+      let tx_data_rev = ref [] in
+      (* txs without retract ops emit facts through the plain per-fact
+         path; txs with retracts need a staged effective view so an op
+         sees datoms added (and already retracted) by earlier ops in the
+         same tx — one (e,a) bucket caches the db index lookup. *)
+      let emit_add, emit_retract =
+        if not (List.exists (function Retract _ -> true | _ -> false) tx_ops) then
+          ( (fun d -> tx_data_rev := List.rev_append (tx_data_for_fact d) !tx_data_rev)
+          , fun _ _ _ -> () )
+        else
+          let staged = Hashtbl.create 17 in
+          let staged_effective e a =
+            match Hashtbl.find_opt staged (e, a) with
+            | Some effective -> effective
+            | None ->
+              let effective =
+                if e > db.max_datom_e then []
+                else context.existing_entity_attr_datoms db e a
+              in
+              Hashtbl.add staged (e, a) effective;
+              effective
+          in
+          let emit_sorted_retractions datoms =
+            datoms
+            |> List.sort compare_eavt_datom
+            |> List.map retraction_datom
+            |> fun datoms -> tx_data_rev := List.rev_append datoms !tx_data_rev
+          in
+          ( (fun d ->
+               let d = { d with v = context.resolve_context.normalize_value d.v } in
+               let effective = staged_effective d.e d.a in
+               if List.exists (context.same_fact d) effective then
+                 ()
+               else
+                 match context.resolve_context.cardinality db d.a with
+                 | Many ->
+                   Hashtbl.replace staged (d.e, d.a) (d :: effective);
+                   tx_data_rev := d :: !tx_data_rev
+                 | One ->
+                   emit_sorted_retractions effective;
+                   Hashtbl.replace staged (d.e, d.a) [ d ];
+                   tx_data_rev := d :: !tx_data_rev)
+          , fun e a value ->
+              let effective = staged_effective e a in
+              let value = Option.map context.resolve_context.normalize_value value in
+              let matches =
+                match value with
+                | None -> effective
+                | Some value ->
+                  List.filter (fun d -> context.value_equal d.v value) effective
+              in
+              if matches <> [] then begin
+                emit_sorted_retractions matches;
+                Hashtbl.replace staged
+                  (e, a)
+                  (List.filter (fun d -> not (List.exists (( == ) d) matches)) effective)
+              end )
+      in
       let build_entity (facts_rev, max_eid, tempids) = function
         | Entity { db_id = Some (Entity_id entity_id); attrs } ->
           if duplicate_cardinality_one attrs then
@@ -1764,6 +1834,7 @@ let apply_tx context tx_ops db =
             let entity_id = context.resolve_context.validate_entity_id entity_id in
             let resolved_attrs, max_eid, tempids = resolve_fast_attrs max_eid tempids attrs in
             let entity_facts = facts_for_resolved_attrs entity_id resolved_attrs in
+            List.iter emit_add entity_facts;
             Some
               ( List.rev_append entity_facts facts_rev
               , context.resolve_context.max_eid_with_entity_id max_eid entity_id
@@ -1797,6 +1868,7 @@ let apply_tx context tx_ops db =
                    entity_id, context.resolve_context.max_eid_with_entity_id max_eid entity_id
                in
                let entity_facts = facts_for_resolved_attrs entity_id resolved_attrs in
+               List.iter emit_add entity_facts;
                Some
                  ( List.rev_append entity_facts facts_rev
                  , max_eid
@@ -1807,6 +1879,7 @@ let apply_tx context tx_ops db =
         | Add (Entity_id entity_id, attr, value) ->
           let value, max_eid, tempids = resolve_fast_value_for_attr attr value max_eid tempids in
           let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
+          emit_add fact;
           Some
             ( fact :: facts_rev
             , context.resolve_context.max_eid_with_entity_id max_eid entity_id
@@ -1821,6 +1894,7 @@ let apply_tx context tx_ops db =
            | Some entity_id ->
              let value, max_eid, tempids = resolve_fast_value_for_attr attr value max_eid tempids in
              let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
+             emit_add fact;
              Some (fact :: facts_rev, max_eid, tempids))
         | Add (Temp_id tempid, attr, value) ->
           (match tempid_map_find tempids tempid with
@@ -1828,7 +1902,23 @@ let apply_tx context tx_ops db =
            | Some entity_id ->
              let value, max_eid, tempids = resolve_fast_value_for_attr attr value max_eid tempids in
              let fact = context.datom ~tx ~e:entity_id ~a:attr ~v:value () in
+             emit_add fact;
              Some (fact :: facts_rev, max_eid, tempids))
+        | _ -> None
+      in
+      let build_retract (facts_rev, max_eid, tempids) = function
+        | Retract (Entity_id entity_id, attr, value) ->
+          let value, max_eid, tempids =
+            match value with
+            | None -> None, max_eid, tempids
+            | Some value ->
+              let value, max_eid, tempids =
+                resolve_fast_value_for_attr attr value max_eid tempids
+              in
+              Some value, max_eid, tempids
+          in
+          emit_retract entity_id attr value;
+          Some (facts_rev, max_eid, tempids)
         | _ -> None
       in
       let rec build state = function
@@ -1838,6 +1928,7 @@ let apply_tx context tx_ops db =
             match tx_op with
             | Entity _ -> build_entity state tx_op
             | Add _ -> build_add state tx_op
+            | Retract _ -> build_retract state tx_op
             | _ -> None
           in
           (match state with
@@ -1860,13 +1951,7 @@ let apply_tx context tx_ops db =
          if in_tx_conflict || conflicts_with_existing facts then
            None
          else
-           let tx_data =
-             List.fold_left
-               (fun acc d -> List.rev_append (tx_data_for_fact d) acc)
-               []
-               facts
-             |> List.rev
-           in
+           let tx_data = List.rev !tx_data_rev in
            let max_eid =
              List.fold_left
                (fun max_eid d -> context.resolve_context.max_eid_in_value (context.resolve_context.max_eid_with_entity_id max_eid d.e) d.v)
