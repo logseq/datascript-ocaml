@@ -1448,6 +1448,14 @@ let pattern_datoms db e_term a_term v_term tx_term =
     (match e, db.duplicate_datoms, db.filter_pred with
      | Some entity_id, [], None -> List.to_seq (entity_attr_index_datoms db entity_id attr)
      | _ -> query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ())
+  | QValue (Keyword attr | String attr | Symbol attr), _ ->
+    (* A definite attr name that skipped bound_attr_pattern_term resolves
+       like QAttr — never a full eavt scan. *)
+    query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ()
+  | (QValue _ | QEntity _), _ ->
+    (* A resolved non-attr constant in attr position cannot match any
+       datom — answer empty instead of scanning eavt. *)
+    Seq.empty
   | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
@@ -1483,6 +1491,9 @@ let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
     |> List.fold_left (fun acc datom -> if matches_optional_e_tx datom then f acc datom else acc) init
   | QAttr attr, _ ->
     fold_datoms f init db Aevt ?e ~a:attr ?tx ()
+  | QValue (Keyword attr | String attr | Symbol attr), _ ->
+    fold_datoms f init db Aevt ?e ~a:attr ?tx ()
+  | (QValue _ | QEntity _), _ -> init
   | _ -> fold_datoms f init db Eavt ?e ?v ?tx ()
 
 let pattern_comparison_datoms db terms predicate threshold =
