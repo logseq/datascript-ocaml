@@ -2258,137 +2258,6 @@ module Query = struct
     in
     loop [] left right
 
-  let simple_attr_entity_collection db query =
-    match query.find, query.where, query.rules, query.with_vars with
-    | [ Find_var find_var ], patterns, [], []
-      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
-      (* A value-position var that occurs exactly once in where and is not
-         bound by any input cannot constrain the entity set, so it reads like
-         a wildcard. Input vars can never reach this matcher: any pattern
-         referencing one fails to match either arm below. *)
-      let input_vars = List.concat_map Query.vars_of_input query.inputs in
-      let var_counts = Hashtbl.create 8 in
-      List.iter
-        (fun var ->
-          Hashtbl.replace var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt var_counts var)))
-        (List.concat_map Query.vars_of_clause patterns);
-      let free_value_var var =
-        var <> find_var
-        && not (List.mem var input_vars)
-        && Hashtbl.find_opt var_counts var = Some 1
-      in
-      let rec collect_attrs acc = function
-        | [] -> Some (List.rev acc)
-        | Pattern (QVar entity_var, QAttr attr, QWildcard) :: rest when find_var = entity_var ->
-          collect_attrs (`Attr attr :: acc) rest
-        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
-          when find_var = entity_var && free_value_var value_var ->
-          collect_attrs (`Attr attr :: acc) rest
-        | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when find_var = entity_var ->
-          collect_attrs (`Neg attr :: acc) rest
-        | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
-          when find_var = entity_var && free_value_var value_var ->
-          collect_attrs (`Neg attr :: acc) rest
-        | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
-          collect_attrs (`NegValue (attr, value) :: acc) rest
-        | Missing (QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
-          collect_attrs (`Neg attr :: acc) rest
-        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
-          collect_attrs (`Neg attr :: acc) rest
-        | Or branches :: rest ->
-          (* An or-clause over find_var contributes the union of its
-             branches' entity sets. A value var inside the or is safe
-             iff it appears nowhere outside this or (global count equal
-             to or-internal count). *)
-          let or_var_counts = Hashtbl.create 8 in
-          List.iter
-            (fun var ->
-              Hashtbl.replace or_var_counts var (1 + Option.value ~default:0 (Hashtbl.find_opt or_var_counts var)))
-            (List.concat_map (List.concat_map Query.vars_of_clause) branches);
-          let or_local var =
-            var <> find_var
-            && not (List.mem var input_vars)
-            && Hashtbl.find_opt var_counts var = Hashtbl.find_opt or_var_counts var
-          in
-          let rec collect_branch acc = function
-            | [] -> Some (List.rev acc)
-            | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = find_var -> collect_branch (a :: acc) rest
-            | Pattern (QVar e, QAttr a, QVar v) :: rest when e = find_var && or_local v ->
-              collect_branch (a :: acc) rest
-            | _ -> None
-          in
-          let rec collect_branches acc = function
-            | [] -> Some (List.rev acc)
-            | branch :: rest ->
-              (match collect_branch [] branch with
-               | Some attrs -> collect_branches (attrs :: acc) rest
-               | None -> None)
-          in
-          (match collect_branches [] branches with
-           | Some branch_attrs -> collect_attrs (`Or branch_attrs :: acc) rest
-           | None -> None)
-        | _ -> None
-      in
-      (match collect_attrs [] patterns with
-       | Some entries ->
-         (* (not [?e :attr]) is a sorted-list difference on the attr's
-            entity set — both sides come out of aevt order. *)
-         let rec subtract_sorted acc left right =
-           match left, right with
-           | [], _ | _, [] -> List.rev_append acc left
-           | l :: ls, r :: rs ->
-             if l = r then subtract_sorted acc ls rs
-             else if l < r then subtract_sorted (l :: acc) ls right
-             else subtract_sorted acc left rs
-         in
-         let rec union_sorted acc left right =
-           match left, right with
-           | [], r -> List.rev_append acc r
-           | l, [] -> List.rev_append acc l
-           | l :: ls, r :: rs ->
-             if l = r then union_sorted (l :: acc) ls rs
-             else if l < r then union_sorted (l :: acc) ls right
-             else union_sorted (r :: acc) left rs
-         in
-         let positive_ids = function
-           | `Attr attr -> Some (entity_ids_with_attr db attr)
-           | `Or branch_attrs ->
-             Some
-               (List.fold_left
-                  (fun union attrs ->
-                    match attrs with
-                    | [] -> union
-                    | first :: rest ->
-                      let branch_ids =
-                        List.fold_left
-                          (fun ids attr -> intersect_sorted_entity_ids ids (entity_ids_with_attr db attr))
-                          (entity_ids_with_attr db first)
-                          rest
-                      in
-                      union_sorted [] union branch_ids)
-                  []
-                  branch_attrs)
-           | `Neg _ | `NegValue _ -> None
-         in
-         let positives = List.filter_map positive_ids entries in
-         (match positives with
-          | first_ids :: rest_ids ->
-            let entity_ids = List.fold_left intersect_sorted_entity_ids first_ids rest_ids in
-            let entity_ids =
-              List.fold_left
-                (fun entity_ids entry ->
-                  match entry with
-                  | `Neg attr -> subtract_sorted [] entity_ids (entity_ids_with_attr db attr)
-                  | `NegValue (attr, value) ->
-                    subtract_sorted [] entity_ids (exact_attr_value_entity_ids db attr value)
-                  | _ -> entity_ids)
-                entity_ids
-                entries
-            in
-            Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
-          | [] -> None)
-       | None -> None)
-    | _ -> None
 
   let simple_attr_entity_ids db find_var query =
     match query.where, query.rules, query.with_vars with
@@ -2495,34 +2364,132 @@ module Query = struct
                    union_sorted [] union branch_ids)
                []
                branch_entries)
-        | `Neg _ -> None
+        | `Neg _ | `NegValue _ -> None
         | entry -> Some (entity_ids_for_pattern entry)
       in
+      let rec subtract_sorted acc left right =
+        match left, right with
+        | [], _ | _, [] -> List.rev_append acc left
+        | l :: ls, r :: rs ->
+          if l = r then subtract_sorted acc ls rs
+          else if l < r then subtract_sorted (l :: acc) ls right
+          else subtract_sorted acc left rs
+      in
+      let eval_collected ?seed entries =
+        let positives = List.filter_map entity_ids_for_entry entries in
+        let base =
+          match seed, positives with
+          | Some ids, pos -> Some (List.fold_left intersect_sorted_entity_ids ids pos)
+          | None, first :: rest -> Some (List.fold_left intersect_sorted_entity_ids first rest)
+          | None, [] -> None
+        in
+        Option.map
+          (fun base ->
+            List.fold_left
+              (fun entity_ids neg_ids -> subtract_sorted [] entity_ids neg_ids)
+              base
+              (List.filter_map
+                 (fun p -> match p with `Neg _ | `NegValue _ -> Some (entity_ids_for_pattern p) | _ -> None)
+                 entries))
+          base
+      in
+      let ref_value_entity_ids db entity_id attr =
+        entity_attr_index_datoms db entity_id attr
+        |> List.filter_map (fun (d : datom) -> match d.v with Ref id -> Some id | _ -> None)
+        |> List.sort_uniq compare
+      in
+      (* [?s :a1] [?s :ref ?p] — find_var reached through ref edges from
+         one shared source var: src entity-set via the same collectors,
+         then per-entity ref-value union, then target-side entries. *)
+      let try_ref_target () =
+        let edge_of = function
+          | Pattern (QVar src, QAttr edge_attr, QVar v)
+            when v = find_var && src <> find_var && is_ref_attr db edge_attr ->
+            Some (src, edge_attr)
+          | _ -> None
+        in
+        let edges = List.filter_map edge_of patterns in
+        match edges with
+        | [] -> None
+        | (src_var, _) :: _ ->
+          if List.exists (fun (s, _) -> s <> src_var) edges || List.mem src_var input_vars then
+            None
+          else
+            let is_edge clause = Option.is_some (edge_of clause) in
+            let non_edges = List.filter (fun clause -> not (is_edge clause)) patterns in
+            let src_clauses, target_clauses =
+              List.partition
+                (fun clause -> match clause with Pattern (QVar e, _, _) -> e = src_var | _ -> false)
+                non_edges
+            in
+            let src_var_counts = Hashtbl.create 8 in
+            List.iter
+              (fun var ->
+                Hashtbl.replace src_var_counts var
+                  (1 + Option.value ~default:0 (Hashtbl.find_opt src_var_counts var)))
+              (List.concat_map Query.vars_of_clause src_clauses);
+            let src_local var =
+              var <> find_var
+              && var <> src_var
+              && not (List.mem var input_vars)
+              && Hashtbl.find_opt var_counts var = Hashtbl.find_opt src_var_counts var
+            in
+            let rec collect_src acc = function
+              | [] -> Some (List.rev acc)
+              | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = src_var ->
+                collect_src (`Attr a :: acc) rest
+              | Pattern (QVar e, QAttr a, QValue v) :: rest when e = src_var ->
+                collect_src (`Value (a, v) :: acc) rest
+              | Pattern (QVar e, QAttr a, QVar v) :: rest when e = src_var && src_local v ->
+                collect_src (`Attr a :: acc) rest
+              | Not [ Pattern (QVar e, QAttr a, QWildcard) ] :: rest when e = src_var ->
+                collect_src (`Neg a :: acc) rest
+              | Not [ Pattern (QVar e, QAttr a, QValue v) ] :: rest when e = src_var ->
+                collect_src (`NegValue (a, v) :: acc) rest
+              | Missing (QVar e, QAttr a) :: rest | SourceMissing ("$", QVar e, QAttr a) :: rest
+                when e = src_var ->
+                collect_src (`Neg a :: acc) rest
+              | _ -> None
+            in
+            (match collect_src [] src_clauses, collect_patterns [] target_clauses with
+             | Some src_entries, Some target_entries ->
+               (match eval_collected src_entries with
+                | Some src_ids ->
+                  let edge_attrs = List.map snd edges in
+                  let seed =
+                    List.fold_left
+                      (fun union entity_id ->
+                        match edge_attrs with
+                        | first_attr :: rest_attrs ->
+                          let first = ref_value_entity_ids db entity_id first_attr in
+                          let ids =
+                            List.fold_left
+                              (fun ids attr -> intersect_sorted_entity_ids ids (ref_value_entity_ids db entity_id attr))
+                              first
+                              rest_attrs
+                          in
+                          union_sorted [] union ids
+                        | [] -> union)
+                      []
+                      src_ids
+                  in
+                  eval_collected ~seed target_entries
+                | None -> None)
+             | _ -> None)
+      in
       (match collect_patterns [] patterns with
-       | Some entries ->
-         let positives = List.filter_map entity_ids_for_entry entries in
-         (match positives with
-          | first_ids :: rest_ids ->
-            let entity_ids =
-              List.fold_left intersect_sorted_entity_ids first_ids rest_ids
-            in
-            let rec subtract_sorted acc left right =
-              match left, right with
-              | [], _ | _, [] -> List.rev_append acc left
-              | l :: ls, r :: rs ->
-                if l = r then subtract_sorted acc ls rs
-                else if l < r then subtract_sorted (l :: acc) ls right
-                else subtract_sorted acc left rs
-            in
-            Some
-              (List.fold_left
-                 (fun entity_ids neg_ids -> subtract_sorted [] entity_ids neg_ids)
-                 entity_ids
-                 (List.filter_map
-                    (fun p -> match p with `Neg _ | `NegValue _ -> Some (entity_ids_for_pattern p) | _ -> None)
-                    entries))
-          | [] -> None)
-       | None -> None)
+       | Some entries -> eval_collected entries
+       | None -> try_ref_target ())
+    | _ -> None
+
+  let simple_attr_entity_collection db query =
+    (* [?e ...] collection is the same entity-ids walk as every other
+       find shape — one matcher keeps all clause arms in one place. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      simple_attr_entity_ids db find_var query
+      |> Option.map (fun entity_ids ->
+             Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
     | _ -> None
 
   let simple_attr_entity_pull_collection db query =
