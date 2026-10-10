@@ -3082,7 +3082,16 @@ module Query = struct
             query.where
         else None
       in
-      (* candidate entity var: every other find var resolves on it *)
+      (* candidate entity var: every other find var resolves on it.
+         Prefer a var from the find clause; otherwise any var that
+         occupies an entity position works — the find vars then project
+         that var's attr values (e.g. [?p ?ref-page] over ?block). *)
+      let entity_position_vars =
+        List.filter_map
+          (function Pattern (QVar u, _, _) -> Some u | _ -> None)
+          query.where
+        |> List.sort_uniq compare
+      in
       let candidate =
         List.find_map
           (fun entity_var ->
@@ -3090,7 +3099,7 @@ module Query = struct
             if others <> [] && List.for_all (fun v -> Option.is_some (attr_on entity_var v)) others then
               Some entity_var
             else None)
-          find_var_names
+          (find_var_names @ entity_position_vars |> List.sort_uniq compare)
       in
       (match candidate with
        | Some find_var ->
@@ -3170,7 +3179,24 @@ module Query = struct
                      in
                      product [] find_var_names
                    in
-                   Query_relation (List.concat_map row_for entity_ids)))
+                   (* a relation is a set: when the entity var is not in
+                      the find, different entities can project identical
+                      rows — dedup by marshaled row *)
+                   let rows =
+                     List.concat_map row_for entity_ids
+                   in
+                   let rows =
+                     if List.mem find_var find_var_names then rows
+                     else
+                       let seen = Hashtbl.create (List.length rows) in
+                       List.filter
+                         (fun row ->
+                           let key = Marshal.to_string row [] in
+                           if Hashtbl.mem seen key then false
+                           else (Hashtbl.replace seen key (); true))
+                         rows
+                   in
+                   Query_relation rows))
        | None -> None)
     | _ -> None
 
