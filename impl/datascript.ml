@@ -2522,6 +2522,49 @@ module Query = struct
       | _ :: _, [] -> None
     in
     collect [] query.inputs inputs
+  (* ground checks after ident resolution: a clause left with no
+     variables is evaluated directly against the index *)
+  let clause_bool db =
+    let attr_present e a =
+      match datoms db Eavt ~e ~a () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let value_present e a v =
+      match datoms db Eavt ~e ~a ~v () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let rec clause_bool = function
+      | Pattern (QEntity e, QAttr a, QWildcard) -> Some (attr_present e a)
+      | Pattern (QEntity e, QAttr a, QValue v) -> Some (value_present e a v)
+      | Missing (QEntity e, QAttr a) -> Some (not (attr_present e a))
+      | Not clauses ->
+        (match clauses_bool clauses with
+         | Some b -> Some (not b)
+         | None -> None)
+      | Or branches ->
+        let rec any acc = function
+          | [] -> acc
+          | branch :: rest ->
+            (match clauses_bool branch with
+             | Some true -> Some true
+             | Some false -> any acc rest
+             | None -> (match acc with Some true -> acc | _ -> None))
+        in
+        any (Some false) branches
+      | _ -> None
+    and clauses_bool clauses =
+      List.fold_left
+        (fun acc clause ->
+          match acc, clause_bool clause with
+          | Some acc', Some b -> Some (acc' && b)
+          | Some false, _ -> Some false
+          | _, None -> None
+          | None, Some _ -> None)
+        (Some true) clauses
+    in
+    clause_bool
   (* Rule bodies expanded inline bind a property entity var through
      [?x :db/ident K] — the property attr elsewhere is the keyword
      itself, so ?x only ever shows up in entity position (its own
@@ -2605,52 +2648,13 @@ module Query = struct
       in
       go clause
     in
-    let attr_present e a =
-      match datoms db Eavt ~e ~a () () with
-      | Seq.Cons _ -> true
-      | Seq.Nil -> false
-    in
-    let value_present e a v =
-      match datoms db Eavt ~e ~a ~v () () with
-      | Seq.Cons _ -> true
-      | Seq.Nil -> false
-    in
-    let rec clause_bool = function
-      | Pattern (QEntity e, QAttr a, QWildcard) -> Some (attr_present e a)
-      | Pattern (QEntity e, QAttr a, QValue v) -> Some (value_present e a v)
-      | Missing (QEntity e, QAttr a) -> Some (not (attr_present e a))
-      | Not clauses ->
-        (match clauses_bool clauses with
-         | Some b -> Some (not b)
-         | None -> None)
-      | Or branches ->
-        let rec any acc = function
-          | [] -> acc
-          | branch :: rest ->
-            (match clauses_bool branch with
-             | Some true -> Some true
-             | Some false -> any acc rest
-             | None -> (match acc with Some true -> acc | _ -> None))
-        in
-        any (Some false) branches
-      | _ -> None
-    and clauses_bool clauses =
-      List.fold_left
-        (fun acc clause ->
-          match acc, clause_bool clause with
-          | Some acc', Some b -> Some (acc' && b)
-          | Some false, _ -> Some false
-          | _, None -> None
-          | None, Some _ -> None)
-        (Some true) clauses
-    in
     (* drop ground clauses that check out, fail fast on false ones,
        keep unresolvable ones for the generic machinery *)
     let finish clauses =
       let rec go acc = function
         | [] -> `Ok (List.rev acc)
         | clause :: rest when Query.vars_of_clause clause = [] ->
-          (match clause_bool clause with
+          (match clause_bool db clause with
            | Some true -> go acc rest
            | Some false -> `Empty
            | None -> go (clause :: acc) rest)
@@ -3195,25 +3199,40 @@ module Query = struct
             && not (List.mem var input_vars)
             && Hashtbl.find_opt var_counts var = Hashtbl.find_opt or_var_counts var
           in
+          (* branch-local ground eval: ident resolution can leave
+             var-free clauses inside a branch (e.g. [?pe :block/tags
+             :Property] with ?pe substituted). A var-free clause
+             evaluating to false kills its branch; a branch reduced
+             to all-true clauses constrains nothing, so the whole or
+             is always satisfied and contributes no entity filter. *)
           let rec collect_branch acc = function
-            | [] -> Some (List.rev acc)
+            | [] -> if acc = [] then `Unconstrained else `Entries (List.rev acc)
+            | clause :: rest when Query.vars_of_clause clause = [] ->
+              (match clause_bool db clause with
+               | Some true -> collect_branch acc rest
+               | Some false -> `Dead
+               | None -> `Fail)
             | Pattern (QVar e, QAttr a, QWildcard) :: rest when e = for_var -> collect_branch (`Attr a :: acc) rest
             | Pattern (QVar e, QAttr a, QValue v) :: rest when e = for_var ->
               collect_branch (`Value (a, v) :: acc) rest
             | Pattern (QVar e, QAttr a, QVar v) :: rest when e = for_var && or_local v ->
               collect_branch (`Attr a :: acc) rest
-            | _ -> None
+            | Missing (QVar e, QAttr a) :: rest when e = for_var -> collect_branch (`Neg a :: acc) rest
+            | _ -> `Fail
           in
           let rec collect_branches acc = function
-            | [] -> Some (List.rev acc)
+            | [] -> `Ok (List.rev acc)
             | branch :: rest ->
               (match collect_branch [] branch with
-               | Some entries -> collect_branches (entries :: acc) rest
-               | None -> None)
+               | `Entries entries -> collect_branches (entries :: acc) rest
+               | `Dead -> collect_branches acc rest
+               | `Unconstrained -> `Unconstrained
+               | `Fail -> `Fail)
           in
           (match collect_branches [] branches with
-           | Some branch_entries -> collect (`Or branch_entries :: acc) rest
-           | None ->
+           | `Ok branch_entries -> collect (`Or branch_entries :: acc) rest
+           | `Unconstrained -> collect acc rest
+           | `Fail ->
              (* every branch a single [for_var :attr vv] where vv is
                 otherwise bound only by contains? — contains_entry_of
                 already folded it into an `Or of `InColl branches *)
