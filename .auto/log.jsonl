@@ -16,3 +16,4 @@
 {"round":16,"idea":"Q5","kind":"keep","title":"dedupe_pulled_attrs sort-based","pull_us_before":3.2,"pull_us_after":2.9,"tests":"green"}
 {"round":17,"idea":"Q7","kind":"keep","title":"or/not branch per-row eval for lone e-bound pattern","q110_ms_before":2.2,"q110_us_after":44,"tests":"green"}
 {"round":18,"idea":"Q2","kind":"keep","title":"non-attr constant in attr position -> empty not eavt scan","q110_deg_ms_before":2.2,"q110_deg_us_after":0,"tests":"green"}
+{"round":19,"idea":"Q7","kind":"keep","title":"per-row eval for e-bound first-pattern branches (generalized)","tests":"green"}
