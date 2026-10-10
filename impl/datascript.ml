@@ -1532,10 +1532,22 @@ let collect_query_terms_exn db bindings terms =
   Query.collect_query_terms_exn (query_match_context db) bindings terms
 
 
+(* Clause evaluation (missing?, get-else, ...) issues many bounded
+   (e, a) eavt lookups per row; route them through the lean index slices
+   when no duplicate bookkeeping or filter applies — identical datoms as
+   the full accessor, which still runs otherwise. *)
+let query_eval_datoms db index ?e ?a ?v ?tx () =
+  match index, e, a, v, tx, db.duplicate_datoms, db.filter_pred with
+  | Eavt, Some entity_id, Some attr, None, None, [], None ->
+    List.to_seq (entity_attr_index_datoms db entity_id attr)
+  | Eavt, Some entity_id, None, None, None, [], None ->
+    List.to_seq (entity_index_datoms db entity_id)
+  | _ -> datoms db index ?e ?a ?v ?tx ()
+
 let query_evaluator_context : Query_eval.evaluator_context =
   { result_resolution_context = query_result_context
   ; match_context = query_match_context
-  ; datoms
+  ; datoms = query_eval_datoms
   ; is_reverse_ref
   ; reverse_ref
   ; compare_value
