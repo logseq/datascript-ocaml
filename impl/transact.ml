@@ -685,6 +685,9 @@ let apply_tx context tx_ops db =
   let materialized_eids : (entity_id, unit) Hashtbl.t = Hashtbl.create 8 in
   let mark_materialized eid = Hashtbl.replace materialized_eids eid () in
   let validate_tempid_usage tx_data =
+    (* no value-position tempid ever appeared, so there is nothing to
+       materialize or report — skip the tx_data scan entirely *)
+    if Hashtbl.length value_tempids = 0 then () else begin
     List.iter
       (fun d -> if d.added then Hashtbl.remove value_tempids d.e)
       tx_data;
@@ -703,6 +706,7 @@ let apply_tx context tx_ops db =
         ("Tempids used only as value in transaction: ("
          ^ String.concat " " tempids
          ^ ")")
+    end
   in
   let rec tx_value_has_assertions attr = function
     | One_value (List []) | One_value (Vector []) | One_value (Set []) when attr_expands_collection context.resolve_context db attr -> false
@@ -1843,7 +1847,13 @@ let apply_tx context tx_ops db =
        | None -> None
        | Some (facts_rev, max_eid, tempids) ->
          let facts = List.rev facts_rev in
-         if duplicate_fact facts || duplicate_unique facts || duplicate_cardinality_one_fact facts || conflicts_with_existing facts then
+         let in_tx_conflict =
+           match facts with
+           (* a single fact cannot duplicate or conflict within the tx *)
+           | [] | [ _ ] -> false
+           | _ -> duplicate_fact facts || duplicate_unique facts || duplicate_cardinality_one_fact facts
+         in
+         if in_tx_conflict || conflicts_with_existing facts then
            None
          else
            let tx_data = List.concat_map tx_data_for_fact facts in
