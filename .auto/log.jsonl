@@ -24,3 +24,4 @@
 {"round":24,"idea":"Q6","kind":"keep","title":"free-value-var relaxation in simple_attr_entity_ids (pull matchers)","tests":"green","note":"coverage extension — enables pull fast paths on more real queries"}
 {"round":25,"idea":"Q6","kind":"keep","title":"not-clause in entity collection fast path","verify":"fast-vs-generic row equality MATCH on synthetic db","tests":"green"}
 {"round":26,"idea":"Q6","kind":"keep","title":"not-clause in pull entity-ids matcher","tests":"green","verify":"not-pull counts equal"}
+{"round":27,"idea":"Q6","kind":"keep","title":"not-value clauses in entity collection + pull matchers","tests":"green","verify":"MATCH vs generic"}
