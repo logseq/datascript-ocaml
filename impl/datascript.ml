@@ -2322,7 +2322,8 @@ module Query = struct
            only the collected predicates *)
         let range_entry_of var =
           let preds = Option.value ~default:[] (Hashtbl.find_opt range_preds var) in
-          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1) || var = for_var then
+          if Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
+            || var = for_var || List.mem var input_vars then
             None
           else
             let attr =
@@ -2407,6 +2408,17 @@ module Query = struct
         | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
           when for_var = entity_var && free_value_var value_var ->
           collect (`Attr attr :: acc) rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when for_var = entity_var
+            && Option.is_some (resolve_const (QVar value_var))
+            && not (Hashtbl.mem range_preds value_var) ->
+          (* input-bound value var: a point lookup, same as a literal.
+             A bound var that also carries comparison predicates stays
+             generic — the predicates check the bound value globally,
+             not the attr range. *)
+          (match resolve_const (QVar value_var) with
+           | Some value -> collect (`Value (attr, value) :: acc) rest
+           | None -> collect acc rest)
         | Pattern (QVar entity_var, QAttr _, QVar value_var) :: rest
           when for_var = entity_var
             && (Option.is_some (range_var_entry value_var)
