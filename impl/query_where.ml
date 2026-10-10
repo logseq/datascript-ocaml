@@ -3135,7 +3135,15 @@ end) = struct
          let branch_bindings =
            branches
            |> List.concat_map (fun branch ->
-             eval_clauses ~active_rules ~callables ~default_source db sources rules bindings branch)
+             eval_projected_clauses_for_bindings
+               ~active_rules
+               ~callables
+               ~default_source
+               db
+               sources
+               rules
+               bindings
+               branch)
          in
          eval_clauses ~active_rules ~callables ~default_source db sources rules branch_bindings rest
        | true, _ :: _ :: _, (SourceOr (source_name, branches) :: rest), _, _ ->
@@ -3145,7 +3153,7 @@ end) = struct
          let branch_bindings =
            branches
            |> List.concat_map (fun branch ->
-             eval_clauses
+             eval_projected_clauses_for_bindings
                ~active_rules
                ~callables
                ~default_source:(Db_source clause_db)
@@ -3605,9 +3613,24 @@ end) = struct
       rules
       bindings
       clauses =
-    match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
-    | Some bindings -> bindings
-    | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses
+    (* A lone pattern whose entity term is bound in every row resolves as one
+       bounded index probe per row; materializing a relation over the whole
+       attr and joining is strictly more work. *)
+    let bound_e_single_pattern =
+      match clauses with
+      | [ Pattern (QVar e_var, _, _) ] ->
+        List.for_all (fun binding -> List.mem_assoc e_var binding) bindings
+      | _ -> false
+    in
+    match bound_e_single_pattern, clauses with
+    | true, [ clause ] ->
+      bindings
+      |> List.concat_map (fun binding ->
+        eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+    | _ ->
+      (match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
+       | Some bindings -> bindings
+       | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses)
 
   and eval_not_join_clauses_for_bindings
       ~active_rules
