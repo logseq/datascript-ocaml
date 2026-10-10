@@ -1443,7 +1443,11 @@ let pattern_datoms db e_term a_term v_term tx_term =
     |> List.to_seq
     |> Seq.filter matches_optional_e_tx
   | QAttr attr, _ ->
-    query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ()
+    (* An e-bounded attr probe resolves to one (e, a) eavt slice — take the
+       lean index lookup instead of the full accessor machinery. *)
+    (match e, db.duplicate_datoms, db.filter_pred with
+     | Some entity_id, [], None -> List.to_seq (entity_attr_index_datoms db entity_id attr)
+     | _ -> query_attr_datoms_seq db Aevt ?e ~a:attr ?tx ())
   | _ -> datoms db Eavt ?e ?v ?tx ()
 
 let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
