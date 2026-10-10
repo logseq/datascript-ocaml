@@ -20,6 +20,16 @@ Status: ( ) queued  (>) running  (k) kept  (x) reverted  (d) done/dry
 ( ) T5: tx report / listen pipeline cost for Logseq listeners (if measurable).
 
 ## Query path (page load, outliner reads)
+(k) Q7: find-shape coverage over the entity-set matcher — ALL done:
+      r25-31 not/or/missing?/scalar/relation/prefilter arms;
+      r32 ref-target join (-45%); r33 range preds (-97%);
+      r34 cross-ref ValueIn (-71%); r35 bound value vars (-95%);
+      r36 aggregates (-97%); r37-39 n-var relation finds incl. external
+      entity var + row dedup (-76~97%); r40 value-var finds
+      (?v/[?v...]/?v.) (-80%); r41 non-recursive rule inlining;
+      r42 input-bound attr vars (-96%); r43 get-else-bound vars.
+      Equivalence: fast-vs-generic Marshal row compare in lq_prof.
+
 (d) Q1: get-page-data profile — entity materialization per block dominates;
       matches upstream shape, no cheap structural win at impl level
 ( ) Q2: datoms seek iteration — seq allocation overhead in Avet/Aevt slices
