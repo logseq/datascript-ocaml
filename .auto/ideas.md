@@ -77,3 +77,15 @@ Caveat discovered: lq_prof arg synthesis maps "?property-id" -> Int64
 (suffix "id"), so the edn q110 number measured a degenerate non-string
 attr scan (~2.2ms full eavt), not the real or-join. Real or-join timing
 needs explicit inputs (see "q110 attr-arg" variant in lq_prof).
+
+## Status 2026-10-10c (rounds 16-19)
+
+Kept: sort-based pulled-attr dedupe (r16); per-row eval for projected
+branches whose first clause binds its entity var (r17+r19 — covers Or,
+SourceOr, OrJoin(-Required), SourceClause, NotJoin paths and rule bodies;
+q110 real-attr or-join ~44us, 20x under cljs); resolved non-attr
+constants in attr position answer empty instead of full eavt scan (r18).
+
+Verdict after cljs compare: no workload trails upstream. Remaining pool
+is pull-assembly boxing internals (q143 ~10ms, ~3us/entity floor) and
+degenerate-input edges — all <20% projected.
