@@ -25,3 +25,4 @@
 {"round":25,"idea":"Q6","kind":"keep","title":"not-clause in entity collection fast path","verify":"fast-vs-generic row equality MATCH on synthetic db","tests":"green"}
 {"round":26,"idea":"Q6","kind":"keep","title":"not-clause in pull entity-ids matcher","tests":"green","verify":"not-pull counts equal"}
 {"round":27,"idea":"Q6","kind":"keep","title":"not-value clauses in entity collection + pull matchers","tests":"green","verify":"MATCH vs generic"}
+{"round":28,"idea":"Q6","kind":"keep","title":"or-clause union in collection + pull matchers","tests":"green","verify":"MATCH x4 incl shared-var, escaped-var fallback"}
