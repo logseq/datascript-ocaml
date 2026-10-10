@@ -2291,6 +2291,10 @@ module Query = struct
           collect_attrs (`Neg attr :: acc) rest
         | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
           collect_attrs (`NegValue (attr, value) :: acc) rest
+        | Missing (QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+          collect_attrs (`Neg attr :: acc) rest
+        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+          collect_attrs (`Neg attr :: acc) rest
         | Or branches :: rest ->
           (* An or-clause over find_var contributes the union of its
              branches' entity sets. A value var inside the or is safe
@@ -2420,6 +2424,10 @@ module Query = struct
           collect_patterns (`Neg attr :: acc) rest
         | Not [ Pattern (QVar entity_var, QAttr attr, QValue value) ] :: rest when find_var = entity_var ->
           collect_patterns (`NegValue (attr, value) :: acc) rest
+        | Missing (QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+          collect_patterns (`Neg attr :: acc) rest
+        | SourceMissing ("$", QVar entity_var, QAttr attr) :: rest when find_var = entity_var ->
+          collect_patterns (`Neg attr :: acc) rest
         | Or branches :: rest ->
           (* An or-clause over find_var contributes the union of its
              branches' entity sets. A value var inside the or is safe
