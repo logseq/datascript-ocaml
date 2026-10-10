@@ -785,8 +785,14 @@ end) = struct
               never match; it still counts toward right-key uniqueness. *)
            let seen_entities = Hashtbl.create right_size_hint in
            let seen_other = Hashtbl.create 16 in
-           source_context.pattern_datoms source_db e_term a_term v_term None
-           |> Seq.iter (fun datom ->
+           source_context.fold_pattern_datoms
+             source_db
+             e_term
+             a_term
+             v_term
+             None
+             ~init:()
+             ~f:(fun () datom ->
              match right_row_of_datom datom with
              | Some right_row ->
                (match key_value (row_value right_row right_index) with
@@ -808,8 +814,14 @@ end) = struct
              | None -> ()))
          else (
            let seen_keys = Hashtbl.create right_size_hint in
-           source_context.pattern_datoms source_db e_term a_term v_term None
-           |> Seq.iter (fun datom ->
+           source_context.fold_pattern_datoms
+             source_db
+             e_term
+             a_term
+             v_term
+             None
+             ~init:()
+             ~f:(fun () datom ->
              match right_row_of_datom datom with
              | Some right_row ->
                let key = key_value (row_value right_row right_index) in
