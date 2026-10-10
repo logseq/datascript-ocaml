@@ -2502,12 +2502,32 @@ module Query = struct
     in
     expand ~depth:0 ~seen:[] clauses
 
-  let rec simple_attr_entity_ids db ?resolve find_var query =
+  let value_of_query_result = function
+    | Result_value value -> Some value
+    | Result_entity entity_id -> Some (Ref entity_id)
+    | Result_attr attr -> Some (Keyword attr)
+    | Result_db _ | Result_pull _ -> None
+
+  (* collection inputs ([?var ...] args) map a var to the values it
+     ranges over — a membership constraint, not a scalar binding *)
+  let coll_input_bindings query inputs =
+    let rec collect acc declarations args =
+      match declarations, args with
+      | [], _ -> Some (List.rev acc)
+      | Input_source_decl _ :: rest, _ -> collect acc rest args
+      | Input_rules_decl :: rest, Arg_rules _ :: args -> collect acc rest args
+      | Input_collection_decl var :: rest, Arg_collection values :: args ->
+        collect ((var, values) :: acc) rest args
+      | (_ :: rest), (_ :: args) -> collect acc rest args
+      | _ :: _, [] -> None
+    in
+    collect [] query.inputs inputs
+  let rec simple_attr_entity_ids db ?resolve ?coll find_var query =
     match query.where, query.rules, query.with_vars with
     | patterns, rules, [] when rules <> [] ->
       (match expand_rule_clauses rules patterns with
        | Some expanded ->
-         simple_attr_entity_ids db ?resolve find_var { query with where = expanded; rules = [] }
+         simple_attr_entity_ids db ?resolve ?coll find_var { query with where = expanded; rules = [] }
        | None -> None)
     | patterns, [], []
       when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
@@ -2562,6 +2582,14 @@ module Query = struct
            | Some resolve -> resolve var
            | None -> None)
         | _ -> None
+      in
+      let coll_resolve var =
+        match coll with
+        | Some coll ->
+          Option.map
+            (List.filter_map value_of_query_result)
+            (List.assoc_opt var coll)
+        | None -> None
       in
       let pred_bound = function
         | ComparisonPredicate (op, QVar var, other) | ComparisonPredicateN (op, [ QVar var; other ]) ->
@@ -2699,6 +2727,11 @@ module Query = struct
                 || Option.is_some (cross_var_entry value_var)) ->
           (* pattern consumed into a `Range or `ValueIn entry *)
           collect acc rest
+        | Pattern (QVar entity_var, QAttr attr, QVar value_var) :: rest
+          when for_var = entity_var && Option.is_some (coll_resolve value_var) ->
+          (* a collection-bound value var is a membership constraint on
+             the attr's values *)
+          collect (`InColl (attr, Option.get (coll_resolve value_var)) :: acc) rest
         | Not [ Pattern (QVar entity_var, QAttr attr, QWildcard) ] :: rest when for_var = entity_var ->
           collect (`Neg attr :: acc) rest
         | Not [ Pattern (QVar entity_var, QAttr attr, QVar value_var) ] :: rest
@@ -2794,6 +2827,15 @@ module Query = struct
           |> List.filter keep
           |> List.map (fun (datom : datom) -> datom.e)
           |> List.sort_uniq compare
+        | `InColl (attr, values) ->
+          (* attr membership against a bound collection *)
+          let set = Hashtbl.create (List.length values) in
+          List.iter (fun value -> Hashtbl.replace set (Marshal.to_string value []) value) values;
+          primary_attr_datoms db Aevt attr
+          |> List.filter_map (fun (datom : datom) ->
+               if Hashtbl.mem set (Marshal.to_string datom.v []) then Some datom.e else None)
+          |> List.sort_uniq compare
+        | `EntitySet ids -> List.sort_uniq compare ids
         | `Or _ | `ValueIn _ -> assert false (* handled below *)
       in
       let rec subtract_sorted acc left right =
@@ -2945,7 +2987,7 @@ module Query = struct
      find_var: one scalar per entity (attr value or the default).
      Used by the value-var finds (?v, [?v ...], ?v .) that have no
      entity column. *)
-  let value_var_projection db ?resolve find_var query =
+  let value_var_projection db ?resolve ?coll find_var query =
     (* a default term usable as a per-row constant *)
     let const_value = function
       | QValue value -> Some value
@@ -2974,7 +3016,7 @@ module Query = struct
       | None -> None
       | Some (entity_var, `Else (attr, default)) ->
         (* one output per entity: attr value when present, else default *)
-        simple_attr_entity_ids db ?resolve entity_var query
+        simple_attr_entity_ids db ?resolve ?coll entity_var query
         |> Option.map (fun entity_ids ->
                let out_of = function
                  | Ref id -> Result_entity id
@@ -2992,7 +3034,7 @@ module Query = struct
                     if Hashtbl.mem seen key then None
                     else (Hashtbl.replace seen key (); Some out)))
       | Some (entity_var, `Attr attr) ->
-        simple_attr_entity_ids db ?resolve entity_var query
+        simple_attr_entity_ids db ?resolve ?coll entity_var query
         |> Option.map (fun entity_ids ->
                let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
                List.iter
@@ -3020,21 +3062,21 @@ module Query = struct
                       else (Hashtbl.replace seen key (); Some out)
                     else None))
 
-  let simple_attr_entity_collection db ?resolve query =
+  let simple_attr_entity_collection db ?resolve ?coll query =
     (* [?e ...] collection is the same entity-ids walk as every other
        find shape — one matcher keeps all clause arms in one place. *)
     match query.find with
     | [ Find_var find_var ] ->
-      (match simple_attr_entity_ids db ?resolve find_var query with
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
        | Some entity_ids ->
          Some (Query_collection (List.map (fun entity_id -> Result_entity entity_id) entity_ids))
        | None ->
          (* find_var may project a value column ([?v ...] over [u :a ?v]) *)
          Option.map (fun values -> Query_collection values)
-           (value_var_projection db ?resolve find_var query))
+           (value_var_projection db ?resolve ?coll find_var query))
     | _ -> None
 
-  let simple_attr_entity_pull_collection db ?resolve query =
+  let simple_attr_entity_pull_collection db ?resolve ?coll query =
     let cached lookup =
       let table = Hashtbl.create 128 in
       fun attr ->
@@ -3387,11 +3429,11 @@ module Query = struct
     in
     match query.find with
     | [ Find_pull (find_var, selector) ] ->
-      simple_attr_entity_ids db ?resolve find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (pull_values selector)
     | [ Find_pull_form (find_var, pattern) ] ->
       let selector = parse_pull_pattern db pattern in
-      simple_attr_entity_ids db ?resolve find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (pull_values selector)
     | _ -> None
 
@@ -3407,20 +3449,20 @@ module Query = struct
     | Max, _ -> Some (Result_entity (List.fold_left (fun _ id -> id) 0 entity_ids))
     | _ -> None
 
-  let simple_attr_entity_relation db ?resolve query =
+  let simple_attr_entity_relation db ?resolve ?coll query =
     (* [:find ?e :where ...] over find_var-only patterns is the same
        entity-ids walk as the collection form, wrapped as 1-elem rows. *)
     match query.find with
     | [ Find_var find_var ] ->
-      (match simple_attr_entity_ids db ?resolve find_var query with
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
        | Some entity_ids ->
          Some (Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
        | None ->
          (* find_var may project a value column (?v over [u :a ?v]) *)
          Option.map (fun values -> Query_relation (List.map (fun v -> [ v ]) values))
-           (value_var_projection db ?resolve find_var query))
+           (value_var_projection db ?resolve ?coll find_var query))
     | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
-      simple_attr_entity_ids db ?resolve find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (fun entity_ids ->
              Query_relation
                (match entity_aggregate_result aggregate entity_ids with
@@ -3473,7 +3515,7 @@ module Query = struct
       in
       (match candidate with
        | Some find_var ->
-         simple_attr_entity_ids db ?resolve find_var query
+         simple_attr_entity_ids db ?resolve ?coll find_var query
          |> Option.map (fun entity_ids ->
                 let wanted = Bytes.make (db.max_datom_e + 1) '\000' in
                 List.iter
@@ -3570,12 +3612,12 @@ module Query = struct
        | None -> None)
     | _ -> None
 
-  let simple_attr_entity_scalar db ?resolve query =
+  let simple_attr_entity_scalar db ?resolve ?coll query =
     (* [:find ?e . :where ...] — first entity of the sorted set, or
        none. Same matcher, scalar wrap. *)
     match query.find with
     | [ Find_var find_var ] ->
-      (match simple_attr_entity_ids db ?resolve find_var query with
+      (match simple_attr_entity_ids db ?resolve ?coll find_var query with
        | Some entity_ids ->
          Some (Query_scalar
                (match entity_ids with
@@ -3586,9 +3628,9 @@ module Query = struct
          Option.map
            (fun values ->
              Query_scalar (match values with v :: _ -> Some v | [] -> None))
-           (value_var_projection db ?resolve find_var query))
+           (value_var_projection db ?resolve ?coll find_var query))
     | [ Find_aggregate (((Count | Min | Max) as aggregate), [ QVar find_var ]) ] ->
-      simple_attr_entity_ids db ?resolve find_var query
+      simple_attr_entity_ids db ?resolve ?coll find_var query
       |> Option.map (fun entity_ids ->
              Query_scalar (entity_aggregate_result aggregate entity_ids))
     | _ -> None
@@ -3692,12 +3734,6 @@ module Query = struct
       | _ :: _, [] -> None
     in
     collect query.inputs inputs
-
-  let value_of_query_result = function
-    | Result_value value -> Some value
-    | Result_entity entity_id -> Some (Ref entity_id)
-    | Result_attr attr -> Some (Keyword attr)
-    | Result_db _ | Result_pull _ -> None
 
   let exact_title_input_entity_ids db inputs query find_var =
     let title_pattern find_var = function
@@ -4173,6 +4209,7 @@ module Query = struct
           Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
         | None -> None
       in
+      let coll = coll_input_bindings query inputs in
       (match exact_title_pull_collection db inputs query with
        | Some result -> result
        | None ->
@@ -4188,10 +4225,10 @@ module Query = struct
          |> fun values -> Query_collection values
        | Some result -> result
        | None ->
-         (match simple_attr_entity_collection db ?resolve query with
+         (match simple_attr_entity_collection db ?resolve ?coll query with
           | Some result -> result
           | None ->
-         (match simple_attr_entity_pull_collection db ?resolve query with
+         (match simple_attr_entity_pull_collection db ?resolve ?coll query with
           | Some result -> result
           | None ->
             let rows = q ~inputs db query in
@@ -4220,6 +4257,7 @@ module Query = struct
           Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
         | None -> None
       in
+      let coll = coll_input_bindings query inputs in
       (match bound_entity_required_pull_relation db inputs query with
        | Some result -> result
        | None ->
@@ -4229,7 +4267,7 @@ module Query = struct
       (match bounded_timestamp_pull_relation db inputs query with
        | Some result -> result
        | None ->
-      (match simple_attr_entity_relation db ?resolve query with
+      (match simple_attr_entity_relation db ?resolve ?coll query with
        | Some result -> result
        | None ->
          let rows = q ~inputs db query in
@@ -4241,10 +4279,11 @@ module Query = struct
           Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
         | None -> None
       in
+      let coll = coll_input_bindings query inputs in
       (match exact_title_scalar_query db inputs query with
        | Some result -> result
        | None ->
-      (match simple_attr_entity_scalar db ?resolve query with
+      (match simple_attr_entity_scalar db ?resolve ?coll query with
        | Some result -> result
        | None ->
          let rows = q ~inputs db query in
