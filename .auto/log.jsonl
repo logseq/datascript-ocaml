@@ -13,3 +13,4 @@
 {"round":13,"idea":"Q7","kind":"keep","title":"hoist constant pure clauses","q160_ms_before":4.87,"q160_ms_after":3.9,"tests":"green"}
 {"round":14,"idea":"Q5","kind":"revert","title":"wildcard_shadowed_attrs memo","notes":"no measurable gain; selector walk already cheap"}
 {"round":15,"idea":"Q7","kind":"keep","title":"e-bound attr probe lean path","join_ms_before":3.28,"join_ms_after":1.9,"q132_ms":3.7,"q188_ms":1.9,"tests":"green"}
+{"round":16,"idea":"Q5","kind":"keep","title":"dedupe_pulled_attrs sort-based","pull_us_before":3.2,"pull_us_after":2.9,"tests":"green"}
