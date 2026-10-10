@@ -2522,6 +2522,178 @@ module Query = struct
       | _ :: _, [] -> None
     in
     collect [] query.inputs inputs
+  (* Rule bodies expanded inline bind a property entity var through
+     [?x :db/ident K] — the property attr elsewhere is the keyword
+     itself, so ?x only ever shows up in entity position (its own
+     attribute clauses: tags, public?, valueType, ...). Resolve each
+     such var to its (unique) entity: entity-position uses become
+     QEntity e, the ident clause drops out, and any clause left
+     without variables becomes a ground check evaluated here. A
+     missing ident or a failed check means the join has no rows —
+     the query result is empty. A var in attr/value position stays
+     unresolved — the generic engine doesn't resolve entities there
+     either. *)
+  let resolve_ident_entity_vars db ?resolve clauses =
+    let ident_attr = "db/ident" in
+    let ident_const = function
+      | QValue (Keyword k | String k | Symbol k) -> Some k
+      | QVar var ->
+        (match resolve with
+         | Some resolve ->
+           (match resolve var with
+            | Some (Keyword k | String k | Symbol k) -> Some k
+            | _ -> None)
+         | None -> None)
+      | _ -> None
+    in
+    (* every mention of var must sit at a substitutable position —
+       entity or attr position of a pattern-ish clause (or/not wrappers
+       recurse); join-var lists and value/output positions are not *)
+    let term_has var = function QVar v -> v = var | _ -> false in
+    let rec var_ok var clause =
+      match clause with
+      | Pattern (_, a, v) | SourcePattern (_, _, a, v) ->
+        not (term_has var a) && not (term_has var v)
+      | PatternTx (_, a, v, tx) | SourcePatternTx (_, _, a, v, tx) ->
+        not (term_has var a) && not (term_has var v) && not (term_has var tx)
+      | PatternTxOp (_, a, v, tx, op) | SourcePatternTxOp (_, _, a, v, tx, op) ->
+        not (term_has var a) && not (term_has var v) && not (term_has var tx)
+        && not (term_has var op)
+      | Missing (_, a) | SourceMissing (_, _, a) -> not (term_has var a)
+      | GetElse (_, a, default, output) | SourceGetElse (_, _, a, default, output) ->
+        not (term_has var a) && not (term_has var default) && output <> var
+      | Or branches | SourceOr (_, branches) ->
+        List.for_all (List.for_all (var_ok var)) branches
+      | OrJoin (vars, branches) | SourceOrJoin (_, vars, branches) ->
+        not (List.mem var vars) && List.for_all (List.for_all (var_ok var)) branches
+      | OrJoinRequired (required_vars, vars, branches)
+      | SourceOrJoinRequired (_, required_vars, vars, branches) ->
+        not (List.mem var required_vars || List.mem var vars)
+        && List.for_all (List.for_all (var_ok var)) branches
+      | Not cs | SourceNot (_, cs) -> List.for_all (var_ok var) cs
+      | NotJoin (vars, cs) | SourceNotJoin (_, vars, cs) ->
+        not (List.mem var vars) && List.for_all (var_ok var) cs
+      | SourceClause (_, c) -> var_ok var c
+      | c -> not (List.mem var (Query.vars_of_clause c))
+    in
+    let subst var eid clause =
+      let sub_e = function QVar v when v = var -> QEntity eid | t -> t in
+      let rec go = function
+        | Pattern (e, a, v) -> Pattern (sub_e e, a, v)
+        | PatternTx (e, a, v, tx) -> PatternTx (sub_e e, a, v, tx)
+        | PatternTxOp (e, a, v, tx, op) -> PatternTxOp (sub_e e, a, v, tx, op)
+        | SourcePattern (s, e, a, v) -> SourcePattern (s, sub_e e, a, v)
+        | SourcePatternTx (s, e, a, v, tx) -> SourcePatternTx (s, sub_e e, a, v, tx)
+        | SourcePatternTxOp (s, e, a, v, tx, op) -> SourcePatternTxOp (s, sub_e e, a, v, tx, op)
+        | Missing (e, a) -> Missing (sub_e e, a)
+        | SourceMissing (s, e, a) -> SourceMissing (s, sub_e e, a)
+        | GetElse (e, a, d, out) -> GetElse (sub_e e, a, d, out)
+        | SourceGetElse (s, e, a, d, out) -> SourceGetElse (s, sub_e e, a, d, out)
+        | Or bs -> Or (List.map (List.map go) bs)
+        | SourceOr (s, bs) -> SourceOr (s, List.map (List.map go) bs)
+        | OrJoin (vars, bs) -> OrJoin (vars, List.map (List.map go) bs)
+        | SourceOrJoin (s, vars, bs) -> SourceOrJoin (s, vars, List.map (List.map go) bs)
+        | OrJoinRequired (req, vars, bs) -> OrJoinRequired (req, vars, List.map (List.map go) bs)
+        | SourceOrJoinRequired (s, req, vars, bs) ->
+          SourceOrJoinRequired (s, req, vars, List.map (List.map go) bs)
+        | Not cs -> Not (List.map go cs)
+        | SourceNot (s, cs) -> SourceNot (s, List.map go cs)
+        | NotJoin (vars, cs) -> NotJoin (vars, List.map go cs)
+        | SourceNotJoin (s, vars, cs) -> SourceNotJoin (s, vars, List.map go cs)
+        | SourceClause (s, c) -> SourceClause (s, go c)
+        | c -> c
+      in
+      go clause
+    in
+    let attr_present e a =
+      match datoms db Eavt ~e ~a () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let value_present e a v =
+      match datoms db Eavt ~e ~a ~v () () with
+      | Seq.Cons _ -> true
+      | Seq.Nil -> false
+    in
+    let rec clause_bool = function
+      | Pattern (QEntity e, QAttr a, QWildcard) -> Some (attr_present e a)
+      | Pattern (QEntity e, QAttr a, QValue v) -> Some (value_present e a v)
+      | Missing (QEntity e, QAttr a) -> Some (not (attr_present e a))
+      | Not clauses ->
+        (match clauses_bool clauses with
+         | Some b -> Some (not b)
+         | None -> None)
+      | Or branches ->
+        let rec any acc = function
+          | [] -> acc
+          | branch :: rest ->
+            (match clauses_bool branch with
+             | Some true -> Some true
+             | Some false -> any acc rest
+             | None -> (match acc with Some true -> acc | _ -> None))
+        in
+        any (Some false) branches
+      | _ -> None
+    and clauses_bool clauses =
+      List.fold_left
+        (fun acc clause ->
+          match acc, clause_bool clause with
+          | Some acc', Some b -> Some (acc' && b)
+          | Some false, _ -> Some false
+          | _, None -> None
+          | None, Some _ -> None)
+        (Some true) clauses
+    in
+    (* drop ground clauses that check out, fail fast on false ones,
+       keep unresolvable ones for the generic machinery *)
+    let finish clauses =
+      let rec go acc = function
+        | [] -> `Ok (List.rev acc)
+        | clause :: rest when Query.vars_of_clause clause = [] ->
+          (match clause_bool clause with
+           | Some true -> go acc rest
+           | Some false -> `Empty
+           | None -> go (clause :: acc) rest)
+        | clause :: rest -> go (clause :: acc) rest
+      in
+      go [] clauses
+    in
+    let rec resolve_all clauses =
+      let candidate =
+        List.find_map
+          (function
+            | Pattern (QVar var, QAttr attr, term)
+              when attr = ident_attr -> Option.map (fun k -> var, k) (ident_const term)
+            | _ -> None)
+          clauses
+      in
+      match candidate with
+      | None -> `Ok clauses
+      | Some (var, ident) ->
+        if
+          List.exists
+            (fun c -> List.mem var (Query.vars_of_clause c) && not (var_ok var c))
+            clauses
+        then `Ok clauses
+        else
+          (match entid db ident_attr (Keyword ident) with
+           | None -> `Empty
+           | Some eid ->
+             let dropped = ref false in
+             resolve_all
+               (List.filter_map
+                  (fun c ->
+                    match c with
+                    | Pattern (QVar v, QAttr attr, _)
+                      when v = var && attr = ident_attr && not !dropped ->
+                      dropped := true;
+                      None
+                    | _ -> Some (subst var eid c))
+                  clauses))
+    in
+    match resolve_all clauses with
+    | `Empty -> `Empty
+    | `Ok clauses -> finish clauses
   let rec simple_attr_entity_ids db ?resolve ?coll find_var query =
     match query.where, query.rules, query.with_vars with
     | patterns, rules, [] when rules <> [] ->
@@ -2561,6 +2733,9 @@ module Query = struct
             | clause -> clause)
           patterns
       in
+      (match resolve_ident_entity_vars db ?resolve patterns with
+       | `Empty -> Some []
+       | `Ok patterns ->
       let var_counts = Hashtbl.create 8 in
       List.iter
         (fun var ->
@@ -2745,66 +2920,128 @@ module Query = struct
           clauses;
         let contains_entry_of var =
           let preds = Option.value ~default:[] (Hashtbl.find_opt contains_preds var) in
-          if preds = []
-            || Hashtbl.find_opt var_counts var <> Some (List.length preds + 1)
-            || var = for_var || List.mem var input_vars
+          if preds = [] || var = for_var || List.mem var input_vars
             || Hashtbl.mem range_preds var || Hashtbl.mem str_preds var then
             None
           else
-            (match
-               List.find_index
-                 (function
-                   | Pattern (QVar e, QAttr _, QVar vv) -> e = for_var && vv = var
-                   | _ -> false)
-                 clauses,
-               List.find_map
-                 (function
-                   | Pattern (QVar e, QAttr a, QVar vv) when e = for_var && vv = var -> Some a
+            (* allowed values per contains? clause — the intersection
+               of all of them; a contains? before the binding drops
+               every row (matches upstream left-to-right eval) *)
+            let allowed_of cvar clause bind_idx =
+              let before =
+                match List.find_index (fun c -> c == clause) clauses with
+                | Some this_idx -> bind_idx < this_idx
+                | _ -> false
+              in
+              if not before then Some []
+              else
+                let one = function
+                  | List vs | Vector vs ->
+                    Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                  | Tuple vs ->
+                    (* value option elements; the index range only needs
+                       the length *)
+                    Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
+                  | Set vs -> Some vs
+                  | Map entries -> Some (List.map fst entries)
+                  | _ -> Some []
+                in
+                (match resolve_const (QVar cvar), coll_resolve cvar with
+                 | Some value, _ -> one value
+                 | None, Some elements ->
+                   (try Some (List.concat_map (fun e -> Option.get (one e)) elements)
+                    with _ -> None)
+                 | None, None -> None)
+            in
+            let binding_pattern_idx =
+              List.find_index
+                (function
+                  | Pattern (QVar e, QAttr _, QVar vv) -> e = for_var && vv = var
+                  | _ -> false)
+                clauses
+            in
+            (match binding_pattern_idx with
+             | Some pat_idx ->
+               (match
+                  List.find_map
+                    (function
+                      | Pattern (QVar e, QAttr a, QVar vv) when e = for_var && vv = var -> Some a
+                      | _ -> None)
+                    clauses
+                with
+                | Some attr
+                  when Hashtbl.find_opt var_counts var = Some (List.length preds + 1) ->
+                  (match List.map (fun (cvar, clause) -> allowed_of cvar clause pat_idx) preds with
+                   | alloweds when List.for_all Option.is_some alloweds ->
+                     let allowed =
+                       match List.filter_map (fun x -> x) alloweds with
+                       | first :: rest ->
+                         List.fold_left
+                           (fun acc other ->
+                             List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
+                           first rest
+                       | [] -> []
+                     in
+                     Some (`InColl (attr, allowed))
                    | _ -> None)
-                 clauses
-             with
-             | Some pat_idx, Some attr ->
-               (* allowed values per contains? clause — the intersection
-                  of all of them; any contains? before the pattern drops
-                  every row *)
-               let allowed_of cvar clause =
-                 let before =
-                   match List.find_index (fun c -> c == clause) clauses with
-                   | Some this_idx -> pat_idx < this_idx
-                   | _ -> false
-                 in
-                 if not before then Some []
-                 else
-                   let one = function
-                     | List vs | Vector vs ->
-                       Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
-                     | Tuple vs ->
-                       Some (List.init (List.length vs) (fun i -> Int64 (Int64.of_int i)))
-                     | Set vs -> Some vs
-                     | Map entries -> Some (List.map fst entries)
-                     | _ -> Some []
-                   in
-                   (match resolve_const (QVar cvar), coll_resolve cvar with
-                    | Some value, _ -> one value
-                    | None, Some elements ->
-                      (try Some (List.concat_map (fun e -> Option.get (one e)) elements)
-                       with _ -> None)
-                    | None, None -> None)
-               in
-               (match List.map (fun (cvar, clause) -> allowed_of cvar clause) preds with
-                | alloweds when List.for_all Option.is_some alloweds ->
-                  let allowed =
-                    match List.filter_map (fun x -> x) alloweds with
-                    | first :: rest ->
-                      List.fold_left
-                        (fun acc other ->
-                          List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
-                        first rest
-                    | [] -> []
-                  in
-                  Some (`InColl (attr, allowed))
                 | _ -> None)
-             | _ -> None)
+             | None ->
+               (* no top-level binding: an or whose every branch is a
+                  single [for_var :attr var] pattern binds var too —
+                  each branch becomes a membership entry *)
+               (match
+                  List.find_index
+                    (function
+                      | Or branches ->
+                        List.for_all
+                          (function
+                            | [ Pattern (QVar e, QAttr _, QVar vv) ] -> e = for_var && vv = var
+                            | _ -> false)
+                          branches
+                      | _ -> false)
+                    clauses
+                with
+                | None -> None
+                | Some or_idx ->
+                  let or_branches =
+                    List.find_map
+                      (function
+                        | Or branches
+                          when List.for_all
+                                 (function
+                                   | [ Pattern (QVar e, QAttr _, QVar vv) ] -> e = for_var && vv = var
+                                   | _ -> false)
+                                 branches ->
+                          Some
+                            (List.map
+                               (function
+                                 | [ Pattern (_, QAttr a, _) ] -> a
+                                 | _ -> assert false)
+                               branches)
+                        | _ -> None)
+                      clauses
+                  in
+                  (match or_branches with
+                   | Some attrs ->
+                     (* vars_of_clause dedupes within a clause: var
+                        shows once for the or itself however many
+                        branches bind it *)
+                     if Hashtbl.find_opt var_counts var = Some (List.length preds + 1) then
+                     (match List.map (fun (cvar, clause) -> allowed_of cvar clause or_idx) preds with
+                      | alloweds when List.for_all Option.is_some alloweds ->
+                        let allowed =
+                          match List.filter_map (fun x -> x) alloweds with
+                          | first :: rest ->
+                            List.fold_left
+                              (fun acc other ->
+                                List.filter (fun v -> List.exists (fun w -> compare_value v w = 0) other) acc)
+                              first rest
+                          | [] -> []
+                        in
+                        Some (`Or (List.map (fun a -> [ `InColl (a, allowed) ]) attrs))
+                      | _ -> None)
+                     else None
+                   | _ -> None)))
         in
         let contains_vars =
           Hashtbl.fold (fun var _ acc -> var :: acc) contains_preds []
@@ -2822,27 +3059,55 @@ module Query = struct
               && not (List.mem v input_vars) && not (List.mem v seen)
               && not (Hashtbl.mem range_preds v) && not (Hashtbl.mem str_preds v) ->
             let mentions v' clause' = List.mem v' (Query.vars_of_clause clause') in
-            let v_clauses =
-              List.filter (fun c -> c != clause && mentions v c) clauses
+            (* v's constraint component: the transitive closure over
+               shared vars — a clause can bind a var that only shows up
+               inside v's or-branches (contains? on the or's value var),
+               so pull every clause sharing a var with what we already
+               have until fixpoint *)
+            let seed = List.filter (fun c -> c != clause && mentions v c) clauses in
+            let rec closure acc =
+              let vars = List.concat_map Query.vars_of_clause acc in
+              let more =
+                List.filter
+                  (fun c ->
+                    c != clause
+                    && not (List.exists (fun c' -> c' == c) acc)
+                    && List.exists (fun x -> List.mem x vars) (Query.vars_of_clause c))
+                  clauses
+              in
+              if more = [] then acc else closure (acc @ more)
             in
-            let self = function
-              | Pattern (QVar ev, _, _) -> ev = v
-              | Not [ Pattern (QVar ev, _, _) ] -> ev = v
-              | Missing (QVar ev, _) | SourceMissing (_, QVar ev, _) -> ev = v
-              | _ -> false
-            in
+            let v_clauses = closure seed in
+            (* the component is consumable iff every clause in it falls
+               to the recursive collect — a clause on an unrelated var
+               simply fails there. v itself must not be projected: the
+               `ValueIn entry only filters, it cannot produce v's
+               values per row *)
             if v_clauses <> []
-              && List.for_all self v_clauses
+              && not
+                   (List.mem v
+                      (List.concat_map Query.vars_of_find_spec query.find))
               && List.exists
-                   (fun c -> match c with Pattern (QVar ev, _, _) -> ev = v | _ -> false)
+                   (fun c ->
+                     match c with
+                     | Pattern (QVar ev, _, _) -> ev = v
+                     | Or branches ->
+                       List.exists
+                         (List.exists (function
+                            | Pattern (QVar ev, _, _) -> ev = v
+                            | _ -> false))
+                         branches
+                     | _ -> false)
                    v_clauses then
               (match collect_patterns_for ~seen:(for_var :: seen) v v_clauses with
-               | Some v_entries -> Some (v, `ValueIn (a, v_entries))
+               | Some v_entries -> Some (v, `ValueIn (a, v_entries), v_clauses)
                | None -> None)
             else None
           | _ -> None
         in
-        let cross_entries = List.filter_map cross_entry_of clauses in
+        let cross_results = List.filter_map cross_entry_of clauses in
+        let cross_entries = List.map (fun (v, entry, _) -> v, entry) cross_results in
+        let cross_consumed = List.concat_map (fun (_, _, cs) -> cs) cross_results in
         let cross_var_entry var = List.assoc_opt var cross_entries in
         let rec collect acc = function
           | [] -> Some (List.rev_append acc (List.map snd range_vars @ List.map snd str_vars @ List.map snd contains_vars @ List.map snd cross_entries))
@@ -2908,6 +3173,11 @@ module Query = struct
           (* comparison/string predicate consumed into a `Range/`Str
              entry *)
           collect acc rest
+        | clause :: rest
+          when List.exists (fun c -> c == clause) cross_consumed ->
+          (* pulled into a cross-ref component — already folded into
+             the `ValueIn entry *)
+          collect acc rest
         | Or branches :: rest ->
           (* An or-clause over find_var contributes the union of its
              branches' entity sets. A value var inside the or is safe
@@ -2943,7 +3213,26 @@ module Query = struct
           in
           (match collect_branches [] branches with
            | Some branch_entries -> collect (`Or branch_entries :: acc) rest
-           | None -> None)
+           | None ->
+             (* every branch a single [for_var :attr vv] where vv is
+                otherwise bound only by contains? — contains_entry_of
+                already folded it into an `Or of `InColl branches *)
+             let shared_var =
+               match branches with
+               | [ Pattern (QVar e, QAttr _, QVar vv) ] :: _ when e = for_var ->
+                 if
+                   List.for_all
+                     (function
+                       | [ Pattern (QVar e', QAttr _, QVar vv') ] -> e' = for_var && vv' = vv
+                       | _ -> false)
+                     branches
+                 then Some vv
+                 else None
+               | _ -> None
+             in
+             (match Option.bind shared_var contains_var_entry with
+              | Some entry -> collect (entry :: acc) rest
+              | None -> None))
         | _ -> None
         in
         collect [] clauses
@@ -3148,7 +3437,7 @@ module Query = struct
       in
       (match collect_patterns_for ~seen:[] find_var patterns with
        | Some entries -> eval_collected entries
-       | None -> try_ref_target ())
+       | None -> try_ref_target ()))
     | _ -> None
 
   (* find_var projects the values of one [entity_var :attr find_var]
