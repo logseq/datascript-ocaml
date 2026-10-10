@@ -12,15 +12,34 @@ type evaluator_context =
   ; normalize_value : value -> value
   }
 
+(* missing?/get-else probe the same (e, a) for every row that shares an
+   entity, so memoize per db: a db is immutable, which keeps cached results
+   valid as long as the db object is physically the same; a different db
+   resets the table. *)
+let attr_memo_db = ref None
+let attr_memo = Hashtbl.create 1024
+
 let attr_value_for_query context db entity_id attr =
-  if context.is_reverse_ref attr then
-    let forward_attr = context.reverse_ref attr in
-    context.datoms db Eavt ()
-    |> Seq.find_map (fun d ->
-      if d.a = forward_attr && d.v = Ref entity_id then Some (Ref d.e) else None)
-  else
-    context.datoms db Eavt ~e:entity_id ~a:attr ()
-    |> Seq.find_map (fun d -> Some d.v)
+  (match !attr_memo_db with
+   | Some prev when prev == db -> ()
+   | _ ->
+     Hashtbl.reset attr_memo;
+     attr_memo_db := Some db);
+  match Hashtbl.find_opt attr_memo (entity_id, attr) with
+  | Some cached -> cached
+  | None ->
+    let value =
+      if context.is_reverse_ref attr then
+        let forward_attr = context.reverse_ref attr in
+        context.datoms db Eavt ()
+        |> Seq.find_map (fun d ->
+          if d.a = forward_attr && d.v = Ref entity_id then Some (Ref d.e) else None)
+      else
+        context.datoms db Eavt ~e:entity_id ~a:attr ()
+        |> Seq.find_map (fun d -> Some d.v)
+    in
+    Hashtbl.add attr_memo (entity_id, attr) value;
+    value
 
 let attr_present_for_query context db entity_id attr =
   Option.is_some (attr_value_for_query context db entity_id attr)
