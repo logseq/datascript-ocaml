@@ -2197,7 +2197,23 @@ module Query = struct
         | _ -> false)
       inputs
 
+  (* reverse attr spelling: _a means the source side — an entity
+     "has" _a when another entity references it through a. The set of
+     such entities is the ref targets of a's datoms. *)
+  let reverse_base_attr attr =
+    if String.length attr > 1 && attr.[0] = '_' then
+      Some (String.sub attr 1 (String.length attr - 1))
+    else
+      None
+
   let entity_ids_with_attr db attr =
+    match reverse_base_attr attr with
+    | Some base ->
+      primary_attr_datoms db Aevt base
+      |> List.filter_map (fun (datom : datom) ->
+             (match datom.v with Ref id -> Some id | _ -> None))
+      |> List.sort_uniq compare
+    | None ->
     let rec collect previous acc = function
       | [] -> List.rev acc
       | datom :: rest ->
@@ -2209,6 +2225,18 @@ module Query = struct
     collect None [] (primary_attr_datoms db Aevt attr)
 
   let exact_attr_value_entity_ids db attr value =
+    match reverse_base_attr attr with
+    | Some base ->
+      (* ?e :_a v — (v, a, ?e): entities referenced by src through base *)
+      (match resolve_query_value_for_attr db base value with
+       | Some (Ref src) ->
+         datoms db Eavt ~e:src ~a:base ()
+         |> Seq.filter_map (fun (datom : datom) ->
+                (match datom.v with Ref id -> Some id | _ -> None))
+         |> List.of_seq
+         |> List.sort_uniq compare
+       | _ -> [])
+    | None ->
     match resolve_query_value_for_attr db attr value with
     | None -> []
     | Some value ->
@@ -2526,11 +2554,27 @@ module Query = struct
      variables is evaluated directly against the index *)
   let clause_bool db =
     let attr_present e a =
+      match reverse_base_attr a with
+      | Some base ->
+        (* ?e :_a — some other entity references e through base *)
+        primary_attr_datoms db Aevt base
+        |> List.exists (fun (datom : datom) -> datom.v = Ref e)
+      | None ->
       match datoms db Eavt ~e ~a () () with
       | Seq.Cons _ -> true
       | Seq.Nil -> false
     in
     let value_present e a v =
+      match reverse_base_attr a with
+      | Some base ->
+        (* e :_a v — (v, a, e): v is the source entity referencing e *)
+        (match resolve_query_value_for_attr db base v with
+         | Some (Ref src) ->
+           (match datoms db Eavt ~e:src ~a:base ~v:(Ref e) () () with
+            | Seq.Cons _ -> true
+            | Seq.Nil -> false)
+         | _ -> false)
+      | None ->
       match datoms db Eavt ~e ~a ~v () () with
       | Seq.Cons _ -> true
       | Seq.Nil -> false
@@ -2698,6 +2742,46 @@ module Query = struct
     match resolve_all clauses with
     | `Empty -> `Empty
     | `Ok clauses -> finish clauses
+  (* Upstream evaluates clauses left to right and requires every var in
+     a not/missing? clause to be bound by the clauses before it (or by
+     :in inputs) — violating queries raise. Fast paths collect clauses
+     out of order, so they must decline when this invariant does not
+     hold and let the generic engine produce the same error. *)
+  let clauses_respect_binding_order query clauses =
+    let seeded () =
+      let bound = Hashtbl.create 16 in
+      List.iter
+        (fun var -> Hashtbl.replace bound var ())
+        (List.concat_map Query.vars_of_input query.inputs);
+      bound
+    in
+    let rec walk bound = function
+      | [] -> true
+      | clause :: rest ->
+        let vars = Query.vars_of_clause clause in
+        (match clause with
+         | Not _ | SourceNot (_, _) | NotJoin (_, _) | SourceNotJoin (_, _, _)
+         | Missing _ | SourceMissing (_, _, _) ->
+           List.for_all (fun var -> Hashtbl.mem bound var) vars && walk bound rest
+         | Or branches | SourceOr (_, branches) ->
+           let branch_vars =
+             List.map
+               (fun branch -> List.sort_uniq compare (List.concat_map Query.vars_of_clause branch))
+               branches
+           in
+           (match branch_vars with
+            | first :: rest' when List.for_all (fun bs -> bs = first) rest' ->
+              (* upstream requires every or-branch to bind the same free
+                 vars — check the rule even for hand-built queries *)
+              List.for_all (fun branch -> walk (Hashtbl.copy bound) branch) branches
+              && (List.iter (fun var -> Hashtbl.replace bound var ()) vars; walk bound rest)
+            | _ -> false)
+         | _ ->
+           List.iter (fun var -> Hashtbl.replace bound var ()) vars;
+           walk bound rest)
+    in
+    walk (seeded ()) clauses
+
   let rec simple_attr_entity_ids db ?resolve ?coll find_var query =
     match query.where, query.rules, query.with_vars with
     | patterns, rules, [] when rules <> [] ->
@@ -2706,7 +2790,8 @@ module Query = struct
          simple_attr_entity_ids db ?resolve ?coll find_var { query with where = expanded; rules = [] }
        | None -> None)
     | patterns, [], []
-      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs)) ->
+      when not (List.mem find_var (List.concat_map Query.vars_of_input query.inputs))
+        && clauses_respect_binding_order query patterns ->
       (* Same relaxation as simple_attr_entity_collection: a value var used
          exactly once and not bound by an input is a wildcard for the purpose
          of constraining find_var's entity set. *)
@@ -4829,6 +4914,87 @@ module Query = struct
             | [] -> None)
       in
       Query_scalar value)
+
+  (* rows for the parsed-query entry: the same fast-path ladder as
+     q_return, with each result unwrapped back to rows. Every helper
+     self-guards — it only returns Some when it can produce exactly
+     the rows the generic engine would. This shadows the earlier q
+     (which only ran the same-entity check) so Datascript.q callers
+     get the full ladder; q_string keeps its previous binding. *)
+  let rows_of_result = function
+    | Query_relation rows -> rows
+    | Query_collection values -> List.map (fun value -> [ value ]) values
+    | Query_scalar (Some value) -> [ [ value ] ]
+    | Query_scalar None -> []
+    | Query_tuple (Some row) -> [ row ]
+    | Query_tuple None -> []
+    | _ -> []
+
+  let q ?inputs db query =
+    match simple_same_entity_constant_rows ?inputs db query with
+    | Some rows -> rows
+    | None ->
+      (match inputs with
+       | Some inputs ->
+         let consume_rules = query.rules = [] in
+         let provided = List.length inputs + 1 in
+         let required =
+           List.filter (Query_impl.query_input_consumes_argument ~consume_rules) query.inputs
+           |> List.length
+           |> ( + ) 1
+         in
+         if provided <> required then Query_impl.q query_context ~inputs db query
+         else
+         let resolve =
+           match scalar_input_bindings db query inputs with
+           | Some bindings ->
+             Some (fun var -> Option.bind (List.assoc_opt var bindings) value_of_query_result)
+           | None -> None
+         in
+         let coll = coll_input_bindings query inputs in
+         (match bound_entity_required_pull_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match title_includes_rule_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match bounded_timestamp_pull_relation db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match exact_title_pull_collection db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match exact_title_scalar_query db inputs query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_collection db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_pull_collection db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_relation db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_scalar db ?resolve ?coll query with
+          | Some result -> rows_of_result result
+          | None -> Query_impl.q query_context ~inputs db query)))))))))
+       | None ->
+         (match simple_attr_entity_pull_collection db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_relation db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match ref_target_pull_relation db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_collection db query with
+          | Some result -> rows_of_result result
+          | None ->
+         (match simple_attr_entity_scalar db query with
+          | Some result -> rows_of_result result
+          | None -> Query_impl.q query_context db query))))))
 
   let q_return_string ?inputs db input =
     let return, query = parse_query_return_string_with_pull_context ~default_pull_db:db input in
