@@ -2878,6 +2878,16 @@ module Query = struct
       |> Option.map (pull_values selector)
     | _ -> None
 
+  let simple_attr_entity_relation db query =
+    (* [:find ?e :where ...] over find_var-only patterns is the same
+       entity-ids walk as the collection form, wrapped as 1-elem rows. *)
+    match query.find with
+    | [ Find_var find_var ] ->
+      simple_attr_entity_ids db find_var query
+      |> Option.map (fun entity_ids ->
+             Query_relation (List.map (fun entity_id -> [ Result_entity entity_id ]) entity_ids))
+    | _ -> None
+
   let ref_target_pull_relation db query =
     let wildcard_selector = function
       | [ Pull_wildcard ] -> Some [ Pull_wildcard ]
@@ -3481,11 +3491,14 @@ module Query = struct
        | Some (Query_collection values) -> Query_relation (List.map (fun value -> [ value ]) values)
        | Some result -> result
        | None ->
+      (match simple_attr_entity_relation db query with
+       | Some result -> result
+       | None ->
       (match ref_target_pull_relation db query with
        | Some result -> result
        | None ->
          let rows = q db query in
-         Query_relation rows))
+         Query_relation rows)))
     | Return_relation, Some inputs ->
       (match bound_entity_required_pull_relation db inputs query with
        | Some result -> result
@@ -3496,8 +3509,11 @@ module Query = struct
       (match bounded_timestamp_pull_relation db inputs query with
        | Some result -> result
        | None ->
+      (match simple_attr_entity_relation db query with
+       | Some result -> result
+       | None ->
          let rows = q ~inputs db query in
-         Query_relation rows)))
+         Query_relation rows))))
     | Return_scalar, Some inputs ->
       (match exact_title_scalar_query db inputs query with
        | Some result -> result
