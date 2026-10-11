@@ -3380,11 +3380,11 @@ module Query = struct
           |> List.sort_uniq compare
         | `InColl (attr, values) ->
           (* attr membership against a bound collection *)
-          let set = Hashtbl.create (List.length values) in
-          List.iter (fun value -> Hashtbl.replace set (Marshal.to_string value []) value) values;
+          let set = Query_api_impl.Query_value_table.create (List.length values) in
+          List.iter (fun value -> Query_api_impl.Query_value_table.replace set value ()) values;
           primary_attr_datoms db Aevt attr
           |> List.filter_map (fun (datom : datom) ->
-               if Hashtbl.mem set (Marshal.to_string datom.v []) then Some datom.e else None)
+               if Query_api_impl.Query_value_table.mem set datom.v then Some datom.e else None)
           |> List.sort_uniq compare
         | `EntitySet ids -> List.sort_uniq compare ids
         | `Or _ | `ValueIn _ -> assert false (* handled below *)
@@ -3601,7 +3601,7 @@ module Query = struct
                  | Ref id -> Result_entity id
                  | v -> Result_value v
                in
-               let seen = Hashtbl.create (List.length entity_ids) in
+               let seen = Query_api_impl.Query_result_table.create (List.length entity_ids) in
                entity_ids
                |> List.filter_map (fun entity_id ->
                     let out =
@@ -3609,9 +3609,8 @@ module Query = struct
                       | (d : datom) :: _ -> out_of d.v
                       | [] -> out_of default
                     in
-                    let key = Marshal.to_string out [] in
-                    if Hashtbl.mem seen key then None
-                    else (Hashtbl.replace seen key (); Some out)))
+                    if Query_api_impl.Query_result_table.mem seen out then None
+                    else (Query_api_impl.Query_result_table.replace seen out (); Some out)))
       | Some (entity_var, `Attr attr) ->
         simple_attr_entity_ids db ?resolve ?coll entity_var query
         |> Option.map (fun entity_ids ->
@@ -3626,7 +3625,7 @@ module Query = struct
                  | Some bound -> fun (d : datom) -> compare_value d.v bound = 0
                  | None -> fun _ -> true
                in
-               let seen = Hashtbl.create (List.length entity_ids) in
+               let seen = Query_api_impl.Query_result_table.create (List.length entity_ids) in
                primary_attr_datoms db Aevt attr
                |> List.filter_map (fun (d : datom) ->
                     if d.e >= 0 && d.e < Bytes.length wanted
@@ -3636,9 +3635,8 @@ module Query = struct
                         | Ref id -> Result_entity id
                         | _ -> Result_value d.v
                       in
-                      let key = Marshal.to_string out [] in
-                      if Hashtbl.mem seen key then None
-                      else (Hashtbl.replace seen key (); Some out)
+                      if Query_api_impl.Query_result_table.mem seen out then None
+                      else (Query_api_impl.Query_result_table.replace seen out (); Some out)
                     else None))
 
   let simple_attr_entity_collection db ?resolve ?coll query =
@@ -4179,12 +4177,11 @@ module Query = struct
                    let rows =
                      if List.mem find_var find_var_names then rows
                      else
-                       let seen = Hashtbl.create (List.length rows) in
+                       let seen = Query_api_impl.List_row_table.create (List.length rows) in
                        List.filter
                          (fun row ->
-                           let key = Marshal.to_string row [] in
-                           if Hashtbl.mem seen key then false
-                           else (Hashtbl.replace seen key (); true))
+                           if Query_api_impl.List_row_table.mem seen row then false
+                           else (Query_api_impl.List_row_table.replace seen row (); true))
                          rows
                    in
                    Query_relation rows))
