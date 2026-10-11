@@ -214,6 +214,22 @@ end) = struct
     let hash row = List.fold_left (fun acc v -> acc * 31 + query_result_hash v) 0 row
   end)
 
+  module Query_value_table = Hashtbl.Make (struct
+    type t = value
+
+    let equal left right = compare_query_value left right = 0
+
+    let hash = query_value_hash
+  end)
+
+  module Query_result_table = Hashtbl.Make (struct
+    type t = query_result
+
+    let equal left right = compare_query_result left right = 0
+
+    let hash = query_result_hash
+  end)
+
   (* O(n) hash dedup preserving first-occurrence order. [q] results are
      sets, so row order is unspecified — sorting survivors would only add
      O(n log n) cost for no observable difference. *)
