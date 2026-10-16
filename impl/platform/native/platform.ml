@@ -206,4 +206,5 @@ let split_regex_limited regex value limit =
   if limit = 1 then [ value ]
   else if limit <= 0 then Str.split regex value
   else Str.bounded_split regex value limit
-let strong_index_node_cache = true
+(* Let restored index nodes be collected after scans and transactions. *)
+let strong_index_node_cache = false

@@ -574,7 +574,30 @@ let test_storage__test_empty_and_missing_count_metadata () =
    | exception Invalid_argument _ -> ()
    | _ -> failwith "negative current snapshot count must be rejected")
 
+let test_storage__test_restore_preserves_node_reference_policy () =
+  List.iter
+    (fun (ref_type, keyword) ->
+      let storage = count_fixture () in
+      map_storage_root storage (fun root -> { root with storage_ref_type = ref_type });
+      let measured, reads = restore_counting_storage storage in
+      let restored = Option.get (restore measured) in
+      if List.assoc_opt "ref-type" (settings restored) <> Some (Keyword keyword) then
+        failwith ("restore must preserve " ^ keyword ^ " index references");
+      let lookup () = datoms restored Eavt ~e:1 () in
+      let expected = lookup () in
+      reads := [];
+      Gc.full_major ();
+      assert_equal_triples "index lookup survives node collection"
+        (List.map (fun d -> d.e, d.a, d.v) expected) (lookup ());
+      match ref_type with
+      | Persistent_sorted_set.Weak ->
+          if !reads = [] then failwith "weak index nodes must be reloadable after collection"
+      | Persistent_sorted_set.Strong ->
+          if !reads <> [] then failwith "explicit strong index nodes must stay cached")
+    [ Persistent_sorted_set.Weak, "weak"; Persistent_sorted_set.Strong, "strong" ]
+
 let () =
+  test_storage__test_restore_preserves_node_reference_policy ();
   test_storage__test_restore_keeps_snapshot_counts ();
   test_storage__test_restore_counts_after_tail ();
   test_storage__test_empty_and_missing_count_metadata ();
