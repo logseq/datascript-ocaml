@@ -570,23 +570,26 @@ let compare_bound_tx fields left right =
 
 let compare_bound_fields context fields left right = function
   | Eavt ->
-    first_nonzero4
-      (compare_bound_e fields left right)
-      (compare_bound_a fields left right)
-      (compare_bound_v context fields left right)
-      (compare_bound_tx fields left right)
+    let cmp = compare_bound_e fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_a fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_v context fields left right in
+    if cmp <> 0 then cmp else compare_bound_tx fields left right
   | Aevt ->
-    first_nonzero4
-      (compare_bound_a fields left right)
-      (compare_bound_e fields left right)
-      (compare_bound_v context fields left right)
-      (compare_bound_tx fields left right)
+    let cmp = compare_bound_a fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_e fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_v context fields left right in
+    if cmp <> 0 then cmp else compare_bound_tx fields left right
   | Avet ->
-    first_nonzero4
-      (compare_bound_a fields left right)
-      (compare_bound_v context fields left right)
-      (compare_bound_e fields left right)
-      (compare_bound_tx fields left right)
+    let cmp = compare_bound_a fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_v context fields left right in
+    if cmp <> 0 then cmp else
+    let cmp = compare_bound_e fields left right in
+    if cmp <> 0 then cmp else compare_bound_tx fields left right
 
 let slice_cmp context index from_bound from_fields to_bound to_fields left right =
   if right == from_bound then
