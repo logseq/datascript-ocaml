@@ -545,12 +545,17 @@ type tx_report =
 module List = struct
   include List
 
+  (* Native OCaml uses tail-modulo-cons without the JS fallback
+     accumulator and final reverse copies. *)
   let concat_map f l =
-    let rec rev_chunks acc = function
-      | [] -> acc
-      | x :: xs -> rev_chunks (List.rev_append (f x) acc) xs
-    in
-    List.rev (rev_chunks [] l)
+    match Sys.backend_type with
+    | Native -> List.concat_map f l
+    | Bytecode | Other _ ->
+      let rec rev_chunks acc = function
+        | [] -> acc
+        | x :: xs -> rev_chunks (List.rev_append (f x) acc) xs
+      in
+      List.rev (rev_chunks [] l)
 
   let concat l = concat_map (fun x -> x) l
   let flatten = concat

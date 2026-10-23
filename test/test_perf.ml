@@ -166,13 +166,25 @@ let test_seek_datoms_is_lazy_to_first_match () =
       count_elapsed
 
 let test_aevt_prefix_count_has_low_per_item_overhead () =
-  let db = build_db 10_000 in
-  let iterations = 200 in
-  let elapsed = time_repeated iterations (fun () -> count_name_datoms db) in
-  if elapsed > 0.100 then
+  let size = 10_000 in
+  let db = init_db (List.init size (fun e -> datom ~e:(e + 1) ~a:"name" ~v:(String "Ivan") ())) in
+  let allocated f =
+    Gc.full_major ();
+    let before = Gc.allocated_bytes () in
+    let count = f () in
+    let bytes = Gc.allocated_bytes () -. before in
+    if count <> size then failf "expected %d datoms, got %d" size count;
+    bytes
+  in
+  let baseline = allocated (fun () -> seq_length (datoms db Aevt ())) in
+  let bounded = allocated (fun () -> count_name_datoms db) in
+  (* Leaf cursor setup costs about nine bytes per visited datom in this
+     fixture. Allow that overhead, but reject even one extra heap object
+     per comparison. Allocation is independent of CI host scheduling. *)
+  if bounded > baseline +. float_of_int size *. 12. +. 4096. then
     failf
-      "counting an AEVT attr prefix should avoid comparator allocation overhead: elapsed=%.4fs"
-      elapsed
+      "AEVT prefix comparisons should not allocate per datom: full=%.0f prefix=%.0f bytes"
+      baseline bounded
 
 let test_name_age_join_uses_indexed_plan () =
   let db = build_db 1_000 in

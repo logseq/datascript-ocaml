@@ -260,3 +260,7 @@
  (name test_query_engine_fixes)
  (modules test_query_engine_fixes)
  (libraries datascript-ocaml-native))
+(test
+ (name test_query_bound_constants)
+ (modules test_query_bound_constants)
+ (libraries datascript-ocaml-native))

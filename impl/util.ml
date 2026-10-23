@@ -128,12 +128,18 @@ let split_keyword keyword =
    vocabulary would grow this table without bound; past the cap, keys are
    recomputed per call. *)
 let attr_key_tbl_cap = 65536
-let attr_key_tbl : (attr, attr) Hashtbl.t = Hashtbl.create 256
+module Attr_keys = Hashtbl.Make (struct
+  type t = attr
+  let equal = String.equal
+  let hash = Hashtbl.hash
+end)
+
+let attr_key_tbl : attr Attr_keys.t = Attr_keys.create 256
 
 let attr_key attr =
-  match Hashtbl.find_opt attr_key_tbl attr with
-  | Some key -> key
-  | None ->
+  match Attr_keys.find attr_key_tbl attr with
+  | key -> key
+  | exception Not_found ->
     let key =
       match String.rindex_opt attr '/' with
       | None -> "\x00" ^ attr
@@ -141,8 +147,8 @@ let attr_key attr =
         String.init (String.length attr) (fun j ->
           if j = i then '\x00' else attr.[j])
     in
-    if Hashtbl.length attr_key_tbl < attr_key_tbl_cap then
-      Hashtbl.replace attr_key_tbl attr key;
+    if Attr_keys.length attr_key_tbl < attr_key_tbl_cap then
+      Attr_keys.replace attr_key_tbl attr key;
     key
 
 let compare_attr left right =
