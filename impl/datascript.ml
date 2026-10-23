@@ -1245,18 +1245,6 @@ let query_result_entity_id db result =
 let bind_var db name value bindings =
   Query.bind_var (query_result_context db) name value bindings
 
-let match_query_term db term value bindings =
-  Query.match_query_term (query_match_context db) term value bindings
-
-let match_pattern_clause db bindings e_term a_term v_term datom =
-  Query.match_pattern_clause (query_match_context db) bindings e_term a_term v_term datom
-
-let match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom =
-  Query.match_pattern_tx_clause (query_match_context db) bindings e_term a_term v_term tx_term datom
-
-let match_reverse_pattern_clause db bindings e_term reverse_attr v_term datom =
-  Query.match_reverse_pattern_clause (query_match_context db) bindings e_term reverse_attr v_term datom
-
 (* A bound term in entity position that cannot resolve to an entity id makes
    the pattern unsatisfiable — upstream `-search` finds no datoms. A term
    carrying no binding (variable, wildcard) imposes no constraint. *)
@@ -1337,13 +1325,22 @@ let datom_value_matcher db attr value =
         | Some entity_value -> values_compare_equal_fast datom.v entity_value
         | None -> false )
 
-let datoms_by_attr_value db attr value =
+let datoms_by_attr_value ?e db attr value =
   match datom_value_matcher db attr value with
   | None -> []
   | Some (value, ident_entity_value, datom_value_matches) ->
-    if Option.is_none ident_entity_value && query_value_uses_avet value && query_attr_uses_avet db attr then
-      datoms_list db Avet ~a:attr ~v:value ()
-    else
+    match e with
+    | Some entity_id ->
+      datoms_list db Eavt ~e:entity_id ~a:attr ()
+      |> List.filter datom_value_matches
+    | None when query_value_uses_avet value && query_attr_uses_avet db attr ->
+      let primary = datoms_list db Avet ~a:attr ~v:value () in
+      (match ident_entity_value with
+       | None -> primary
+       | Some entity_value ->
+         let aliases = datoms_list db Avet ~a:attr ~v:entity_value () in
+         List.merge (Util.compare_datom Aevt) primary aliases)
+    | None ->
       datoms_list db Aevt ~a:attr ()
       |> List.filter datom_value_matches
 
@@ -1439,7 +1436,7 @@ let pattern_datoms db e_term a_term v_term tx_term =
     else
       query_attr_datoms_seq db Aevt ?e ~a:attr ~v:value ?tx ()
   | QAttr attr, Some value ->
-    datoms_by_attr_value db attr value
+    datoms_by_attr_value ?e db attr value
     |> List.to_seq
     |> Seq.filter matches_optional_e_tx
   | QAttr attr, _ ->
@@ -1487,7 +1484,7 @@ let fold_pattern_datoms db e_term a_term v_term tx_term ~init ~f =
     else
       fold_datoms f init db Aevt ?e ~a:attr ~v:value ?tx ()
   | QAttr attr, Some value ->
-    datoms_by_attr_value db attr value
+    datoms_by_attr_value ?e db attr value
     |> List.fold_left (fun acc datom -> if matches_optional_e_tx datom then f acc datom else acc) init
   | QAttr attr, _ ->
     fold_datoms f init db Aevt ?e ~a:attr ?tx ()
@@ -1511,33 +1508,39 @@ let pattern_comparison_datoms db terms predicate threshold =
   | Some attr, LessThan | Some attr, LessOrEqual -> Some (index_range db attr ~stop:threshold ())
   | _ -> None
 
-let match_data_pattern db bindings e_term a_term v_term datom =
+let match_data_pattern_with_context context bindings e_term a_term v_term datom =
   match a_term with
   | QAttr attr when is_reverse_ref attr ->
-    match_reverse_pattern_clause db bindings e_term attr v_term datom
-  | _ -> match_pattern_clause db bindings e_term a_term v_term datom
+    Query.match_reverse_pattern_clause context bindings e_term attr v_term datom
+  | _ -> Query.match_pattern_clause context bindings e_term a_term v_term datom
 
-let match_data_pattern_tx db bindings e_term a_term v_term tx_term datom =
+let match_data_pattern_tx_with_context context bindings e_term a_term v_term tx_term datom =
   match a_term with
   | QAttr attr when is_reverse_ref attr ->
     let ( let* ) = Option.bind in
-    let* bindings = match_reverse_pattern_clause db bindings e_term attr v_term datom in
-    match_query_term db tx_term (result_of_datom_tx datom) bindings
-  | _ -> match_pattern_tx_clause db bindings e_term a_term v_term tx_term datom
+    let* bindings = Query.match_reverse_pattern_clause context bindings e_term attr v_term datom in
+    Query.match_query_term context tx_term (result_of_datom_tx datom) bindings
+  | _ -> Query.match_pattern_tx_clause context bindings e_term a_term v_term tx_term datom
 
-let match_data_pattern_tx_op db bindings e_term a_term v_term tx_term op_term datom =
+let match_data_pattern_tx_op_with_context context bindings e_term a_term v_term tx_term op_term datom =
   let ( let* ) = Option.bind in
-  let* bindings = match_data_pattern_tx db bindings e_term a_term v_term tx_term datom in
-  match_query_term db op_term (result_of_datom_op datom) bindings
+  let* bindings = match_data_pattern_tx_with_context context bindings e_term a_term v_term tx_term datom in
+  Query.match_query_term context op_term (result_of_datom_op datom) bindings
 
 let query_source_context db : Query.source_context =
-  { match_context = query_match_context db
+  let match_context = query_match_context db in
+  let context_for source_db =
+    if source_db == db then match_context else query_match_context source_db in
+  { match_context
   ; pattern_datoms
   ; fold_pattern_datoms
   ; pattern_comparison_datoms
-  ; match_data_pattern
-  ; match_data_pattern_tx
-  ; match_data_pattern_tx_op
+  ; match_data_pattern = (fun source_db bindings e a v datom ->
+      match_data_pattern_with_context (context_for source_db) bindings e a v datom)
+  ; match_data_pattern_tx = (fun source_db bindings e a v tx datom ->
+      match_data_pattern_tx_with_context (context_for source_db) bindings e a v tx datom)
+  ; match_data_pattern_tx_op = (fun source_db bindings e a v tx op datom ->
+      match_data_pattern_tx_op_with_context (context_for source_db) bindings e a v tx op datom)
   }
 
 let eval_query_term db bindings term =
