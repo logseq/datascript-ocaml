@@ -1,4 +1,9 @@
 (test
+ (name test_query_bound_constants)
+ (modules test_query_bound_constants)
+ (libraries datascript-ocaml-native))
+
+(test
  (name test_datascript)
  (modules test_datascript)
  (libraries datascript-ocaml-native unix))

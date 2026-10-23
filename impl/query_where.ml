@@ -229,11 +229,6 @@ end) = struct
     | Result_attr attr | Result_value (Keyword attr | String attr | Symbol attr) -> Some attr
     | _ -> None
 
-  let bound_attr_values bindings var =
-    bindings
-    |> List.filter_map (fun binding -> Option.bind (List.assoc_opt var binding) attr_of_query_result)
-    |> List.sort_uniq compare
-
   let relation_rows_of_pattern_datoms (source_context : Query.source_context) source_db attrs terms datoms =
     let can_direct =
       direct_pattern_terms terms
@@ -329,62 +324,77 @@ end) = struct
       Some (reverse_comparison_predicate predicate, threshold)
     | _ -> None
 
-  let relation_of_pattern_with_bound_attrs db source bindings terms =
-    match source, terms with
-    | Relation_source _, _ -> None
-    | Db_source source_db, ([ _; QVar attr_var; _ ] | [ _; QVar attr_var; _; _ ] | [ _; QVar attr_var; _; _; _ ]) ->
-      let attr_values = bound_attr_values bindings attr_var in
-      if attr_values = [] then
-        None
-      else
-        let source_context = query_source_context db in
-        let attrs = unique_vars terms in
-        let lookup_vars = relation_lookup_vars source_db terms in
-        let indexed_terms attr =
-          match terms with
-          | [ e_term; _; v_term ] -> [ e_term; QAttr attr; v_term ]
-          | [ e_term; _; v_term; tx_term ] -> [ e_term; QAttr attr; v_term; tx_term ]
-          | [ e_term; _; v_term; tx_term; op_term ] -> [ e_term; QAttr attr; v_term; tx_term; op_term ]
-          | _ -> terms
+  let bound_pattern_term bindings = function
+    | QVar name as term ->
+      (match List.assoc_opt name bindings with
+       | Some (Result_entity entity_id) -> QEntity entity_id
+       | Some (Result_value value) -> QValue value
+       | Some (Result_attr attr) -> QAttr attr
+       | Some (Result_db _ | Result_pull _) | None -> term)
+    | term -> term
+
+  let bound_attr_pattern_term bindings term =
+    match bound_pattern_term bindings term with
+    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
+    | term -> term
+
+  let relation_of_pattern_with_bindings db source bindings terms =
+    (* Keep the original variable columns while constraining index probes.
+       Varying values use AVET only; repeating a nonindexed attribute scan
+       for every input value would be more expensive than scanning it once. *)
+    let vars = unique_vars terms in
+    let common_bindings = match bindings with
+      | [] -> []
+      | first :: rest -> List.filter (fun (var, value) ->
+          List.mem var vars &&
+          match value with
+          | Result_db _ | Result_pull _ -> false
+          | _ -> List.for_all (fun binding -> List.assoc_opt var binding = Some value) rest) first in
+    let constrained = List.mapi (fun index term ->
+      if index = 1 then bound_attr_pattern_term common_bindings term
+      else bound_pattern_term common_bindings term) terms in
+    let patterns = match source, constrained with
+      | Db_source source_db, e :: a :: v :: tail ->
+        let vary_attr = match a with QVar _ -> true | _ -> false in
+        let vary_value = match a, v with
+          | QAttr attr, QVar _ ->
+            Schema_access.is_indexed source_db attr || Schema_access.is_unique source_db attr || is_ref_attr source_db attr
+          | QVar _, QVar _ -> true
+          | _ -> false in
+        if not (vary_attr || vary_value) then [constrained] else
+          List.map (fun binding ->
+            let attr = if vary_attr then bound_attr_pattern_term binding a else a in
+            let value = match attr with
+              | QAttr attr when vary_value &&
+                  (Schema_access.is_indexed source_db attr || Schema_access.is_unique source_db attr || is_ref_attr source_db attr) ->
+                bound_pattern_term binding v
+              | _ -> v in
+            e :: attr :: value :: tail) bindings |> List.sort_uniq compare
+      | _ -> [constrained] in
+    let patterns = if List.mem terms patterns then [] else patterns in
+    match source, patterns with
+    | Relation_source _, _ | _, [] -> None
+    | Db_source source_db, patterns ->
+      let source_context = query_source_context db in
+      let attrs = unique_vars terms in
+      let seen = Hashtbl.create 16 in
+      let multiple_patterns = match patterns with _ :: _ :: _ -> true | _ -> false in
+      let rows = List.concat_map (fun pattern ->
+        let datoms = match pattern with
+          | [e; a; v] -> source_context.pattern_datoms source_db e a v None
+          | [e; a; v; tx] | [e; a; v; tx; _] -> source_context.pattern_datoms source_db e a v (Some tx)
+          | _ -> invalid_arg "database source patterns expect 3, 4, or 5 terms"
         in
-        let rows =
-          attr_values
-          |> List.concat_map (fun attr ->
-            match indexed_terms attr, terms with
-            | [ index_e; index_a; index_v ], [ e_term; a_term; v_term ] ->
-              source_context.pattern_datoms source_db index_e index_a index_v None
-              |> Seq.filter_map (fun datom ->
-                let* binding = source_context.match_data_pattern source_db [] e_term a_term v_term datom in
-                binding_row attrs binding)
-              |> List.of_seq
-            | [ index_e; index_a; index_v; index_tx ], [ e_term; a_term; v_term; tx_term ] ->
-              source_context.pattern_datoms source_db index_e index_a index_v (Some index_tx)
-              |> Seq.filter_map (fun datom ->
-                let* binding =
-                  source_context.match_data_pattern_tx source_db [] e_term a_term v_term tx_term datom
-                in
-                binding_row attrs binding)
-              |> List.of_seq
-            | [ index_e; index_a; index_v; index_tx; _ ], [ e_term; a_term; v_term; tx_term; op_term ] ->
-              source_context.pattern_datoms source_db index_e index_a index_v (Some index_tx)
-              |> Seq.filter_map (fun datom ->
-                let* binding =
-                  source_context.match_data_pattern_tx_op
-                    source_db
-                    []
-                    e_term
-                    a_term
-                    v_term
-                    tx_term
-                    op_term
-                    datom
-                in
-                binding_row attrs binding)
-              |> List.of_seq
-            | _ -> [])
-        in
-        Some { attrs; rows; lookup_vars; unique_rows = false }
-    | _ -> None
+        (* Aliases can make distinct probes overlap. Preserve the original
+           datom multiplicity while including overlapping ranges only once. *)
+        let counts = Hashtbl.create 16 in
+        let datoms = if not multiple_patterns then datoms else Seq.filter (fun datom ->
+          let count = 1 + Option.value (Hashtbl.find_opt counts datom) ~default:0 in
+          Hashtbl.replace counts datom count;
+          let previous = Option.value (Hashtbl.find_opt seen datom) ~default:0 in
+          if count > previous then (Hashtbl.replace seen datom count; true) else false) datoms in
+        relation_rows_of_pattern_datoms source_context source_db attrs terms datoms) patterns in
+      Some {attrs; rows; lookup_vars = relation_lookup_vars source_db terms; unique_rows = false}
 
   let relation_of_source_relation_pattern db sources source_name terms =
     let attrs = unique_vars terms in
@@ -1855,20 +1865,6 @@ end) = struct
       | Some next -> Some (hash_join relation next)
       | None -> apply relation clauses
 
-  let bound_pattern_term bindings = function
-    | QVar name as term ->
-      (match List.assoc_opt name bindings with
-       | Some (Result_entity entity_id) -> QEntity entity_id
-       | Some (Result_value value) -> QValue value
-       | Some (Result_attr attr) -> QAttr attr
-       | Some (Result_db _ | Result_pull _) | None -> term)
-    | term -> term
-
-  let bound_attr_pattern_term bindings term =
-    match bound_pattern_term bindings term with
-    | QValue (Keyword attr | String attr | Symbol attr) -> QAttr attr
-    | term -> term
-
   let rec bound_relation_clause binding = function
     | Pattern (e_term, a_term, v_term) ->
       Pattern
@@ -2175,14 +2171,18 @@ end) = struct
     | SourceClause _ :: _ -> true
     | _ -> false
 
+  let relation_prefix_is_independent bindings clauses =
+    List.for_all (fun clause ->
+      match clause with
+      | Pattern _ | PatternTx _ | PatternTxOp _
+      | SourcePattern _ | SourcePatternTx _ | SourcePatternTxOp _ ->
+        Query.vars_of_clause clause
+        |> List.for_all (fun var -> not (List.exists (List.mem_assoc var) bindings))
+      | _ -> false) clauses
+
   let relation_prefix_uses_bound_lookup_key db sources default_source bindings clauses =
-    let binding_vars =
-      bindings
-      |> List.concat_map (List.map fst)
-      |> List.sort_uniq compare
-    in
     let has_bound_lookup_var lookup_vars =
-      List.exists (fun (var, _) -> List.mem var binding_vars) lookup_vars
+      List.exists (fun (var, _) -> List.exists (List.mem_assoc var) bindings) lookup_vars
     in
     let clause_lookup_vars = function
       | Pattern (e_term, a_term, v_term) ->
@@ -2207,13 +2207,8 @@ end) = struct
     List.exists (fun clause -> clause_lookup_vars clause |> has_bound_lookup_var) clauses
 
   let relation_prefix_uses_bound_attr_key bindings clauses =
-    let binding_vars =
-      bindings
-      |> List.concat_map (List.map fst)
-      |> List.sort_uniq compare
-    in
     let attr_var_is_bound = function
-      | QVar var -> List.mem var binding_vars
+      | QVar var -> List.exists (List.mem_assoc var) bindings
       | _ -> false
     in
     List.exists
@@ -2229,16 +2224,11 @@ end) = struct
       clauses
 
   let relation_prefix_uses_bound_equality bindings clauses =
-    let binding_vars =
-      bindings
-      |> List.concat_map (List.map fst)
-      |> List.sort_uniq compare
-    in
     clauses
     |> List.exists (function
       | EqualityPredicate (_, terms) ->
         Query.vars_of_query_terms terms
-        |> List.exists (fun var -> List.mem var binding_vars)
+        |> List.exists (fun var -> List.exists (List.mem_assoc var) bindings)
       | _ -> false)
 
   let eval_relation_from_empty db sources default_source clauses =
@@ -2437,90 +2427,35 @@ end) = struct
         | [ binding ] -> Some binding
         | _ -> None
       in
+      let pattern_relation relation source terms =
+        let terms = relation_terms single_binding terms in
+        match relation_of_pattern_with_bindings db source (relation_bindings relation) terms with
+        | Some relation -> Some relation
+        | None -> relation_of_pattern db source terms
+      in
       let rec apply relation = function
         | [] -> Some (relation_bindings relation)
         | _ when relation.rows = [] -> Some []
         | Pattern (e_term, a_term, v_term) :: rest ->
-          let* next =
-            match single_binding with
-            | Some _ -> relation_of_pattern db default_source (relation_terms single_binding [ e_term; a_term; v_term ])
-            | None ->
-              (match relation_of_pattern_with_bound_attrs db default_source bindings [ e_term; a_term; v_term ] with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term ])
-          in
+          let* next = pattern_relation relation default_source [ e_term; a_term; v_term ] in
           apply (hash_join relation next) rest
         | PatternTx (e_term, a_term, v_term, tx_term) :: rest ->
-          let* next =
-            match single_binding with
-            | Some _ ->
-              relation_of_pattern
-                db
-                default_source
-                (relation_terms single_binding [ e_term; a_term; v_term; tx_term ])
-            | None ->
-              (match
-                 relation_of_pattern_with_bound_attrs db default_source bindings [ e_term; a_term; v_term; tx_term ]
-               with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term ])
-          in
+          let* next = pattern_relation relation default_source [ e_term; a_term; v_term; tx_term ] in
           apply (hash_join relation next) rest
         | PatternTxOp (e_term, a_term, v_term, tx_term, op_term) :: rest ->
-          let* next =
-            match single_binding with
-            | Some _ ->
-              relation_of_pattern
-                db
-                default_source
-                (relation_terms single_binding [ e_term; a_term; v_term; tx_term; op_term ])
-            | None ->
-              (match
-                 relation_of_pattern_with_bound_attrs
-                   db
-                   default_source
-                   bindings
-                   [ e_term; a_term; v_term; tx_term; op_term ]
-               with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db default_source [ e_term; a_term; v_term; tx_term; op_term ])
-          in
+          let* next = pattern_relation relation default_source [ e_term; a_term; v_term; tx_term; op_term ] in
           apply (hash_join relation next) rest
         | SourcePattern (source_name, e_term, a_term, v_term) :: rest ->
           let source = source db sources source_name in
-          let* next =
-            match single_binding with
-            | Some _ -> relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term ])
-            | None ->
-              (match relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term ] with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db source [ e_term; a_term; v_term ])
-          in
+          let* next = pattern_relation relation source [ e_term; a_term; v_term ] in
           apply (hash_join relation next) rest
         | SourcePatternTx (source_name, e_term, a_term, v_term, tx_term) :: rest ->
           let source = source db sources source_name in
-          let* next =
-            match single_binding with
-            | Some _ -> relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term; tx_term ])
-            | None ->
-              (match relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term; tx_term ] with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db source [ e_term; a_term; v_term; tx_term ])
-          in
+          let* next = pattern_relation relation source [ e_term; a_term; v_term; tx_term ] in
           apply (hash_join relation next) rest
         | SourcePatternTxOp (source_name, e_term, a_term, v_term, tx_term, op_term) :: rest ->
           let source = source db sources source_name in
-          let* next =
-            match single_binding with
-            | Some _ ->
-              relation_of_pattern db source (relation_terms single_binding [ e_term; a_term; v_term; tx_term; op_term ])
-            | None ->
-              (match
-                 relation_of_pattern_with_bound_attrs db source bindings [ e_term; a_term; v_term; tx_term; op_term ]
-               with
-               | Some relation -> Some relation
-               | None -> relation_of_pattern db source [ e_term; a_term; v_term; tx_term; op_term ])
-          in
+          let* next = pattern_relation relation source [ e_term; a_term; v_term; tx_term; op_term ] in
           apply (hash_join relation next) rest
         | SourceRelationPattern (source_name, terms) :: rest ->
           let terms =
@@ -2864,15 +2799,12 @@ end) = struct
       bindings
       clauses =
     let default_source = Option.value default_source ~default:(source db sources "$") in
-    let eval_sequential bindings clauses =
-      List.fold_left
-        (fun bindings clause ->
-          List.concat_map
-            (fun binding ->
-               eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-            bindings)
-        bindings
-        clauses
+    let eval_sequential bindings = function
+      | [] -> bindings
+      | clause :: rest ->
+        let bindings = eval_clause_for_bindings
+          ~active_rules ~callables ~default_source db sources rules bindings clause in
+        eval_clauses ~active_rules ~callables ~default_source db sources rules bindings rest
     in
     let eval_rule_with_suffix_relation_context
         rule_db
@@ -3008,14 +2940,7 @@ end) = struct
               rule_bindings
               rest
           | None ->
-            List.fold_left
-              (fun bindings clause ->
-                List.concat_map
-                  (fun binding ->
-                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-                  bindings)
-              bindings
-               clauses)
+            eval_sequential bindings clauses)
        | true, _ :: _ :: _, (SourceRule (source_name, name, terms) :: rest), _, _ ->
          let rule_db = source_db db sources source_name in
          let source_sources = sources_with_root_default db sources in
@@ -3043,14 +2968,7 @@ end) = struct
               rule_bindings
               rest
           | None ->
-            List.fold_left
-              (fun bindings clause ->
-                List.concat_map
-                  (fun binding ->
-                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-                  bindings)
-              bindings
-              clauses)
+            eval_sequential bindings clauses)
        | true, _ :: _ :: _, (SourceClause (source_name, clause) :: rest), _, _ ->
          let clause_db = source_db db sources source_name in
          let source_sources = sources_with_root_default db sources in
@@ -3207,14 +3125,7 @@ end) = struct
               prefix_bindings
               rest
           | None ->
-            List.fold_left
-              (fun bindings clause ->
-                List.concat_map
-                  (fun binding ->
-                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-                  bindings)
-              bindings
-              clauses)
+            eval_sequential bindings clauses)
        | true, _ :: _, _, _ :: _, _
          when (match bindings with
                | [ _ ] when active_rules <> [] ->
@@ -3225,7 +3136,8 @@ end) = struct
                  relation_rest_starts_source_clause rest
                  || relation_prefix_uses_bound_equality bindings relation_prefix
                | _ :: _ :: _ ->
-                 relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
+                 relation_prefix_is_independent bindings relation_prefix
+                 || relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
                  || relation_prefix_uses_bound_attr_key bindings relation_prefix
                | _ -> false) ->
          (match
@@ -3248,23 +3160,9 @@ end) = struct
               prefix_bindings
               rest
           | None ->
-            List.fold_left
-              (fun bindings clause ->
-                List.concat_map
-                  (fun binding ->
-                     eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-                  bindings)
-              bindings
-              clauses)
+            eval_sequential bindings clauses)
        | _ ->
-         List.fold_left
-           (fun bindings clause ->
-             List.concat_map
-               (fun binding ->
-                  eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-               bindings)
-           bindings
-           clauses))
+         eval_sequential bindings clauses))
   
   and rule_binding_extends db initial_binding rule_binding =
     List.for_all
@@ -3532,6 +3430,25 @@ end) = struct
     |> List.iter (fun binding ->
       ensure_join_vars_bound_in_clause binding vars clause_string)
 
+  and eval_clause_for_bindings
+      ~active_rules ~callables ~default_source db sources rules bindings clause =
+    let pattern = match clause with
+      | Pattern (e, a, v) -> Some (default_source, [e; a; v])
+      | PatternTx (e, a, v, tx) -> Some (default_source, [e; a; v; tx])
+      | PatternTxOp (e, a, v, tx, op) -> Some (default_source, [e; a; v; tx; op])
+      | SourcePattern (name, e, a, v) -> Some (source db sources name, [e; a; v])
+      | SourcePatternTx (name, e, a, v, tx) -> Some (source db sources name, [e; a; v; tx])
+      | SourcePatternTxOp (name, e, a, v, tx, op) -> Some (source db sources name, [e; a; v; tx; op])
+      | _ -> None in
+    match pattern with
+    | Some (source, terms) ->
+      let context_db = match source with Db_source source_db -> source_db | Relation_source _ -> db in
+      let context = query_source_context context_db in
+      List.concat_map (fun binding -> Query.match_query_source_pattern context db source binding terms) bindings
+    | None -> List.concat_map
+        (fun binding -> eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+        bindings
+
   and eval_projected_clauses_for_bindings
       ~active_rules
       ~callables
@@ -3541,6 +3458,9 @@ end) = struct
       rules
       bindings
       clauses =
+    if not (relation_only_clauses clauses) then
+      eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses
+    else
     match eval_relation_clauses ~allow_initial_bindings:true db sources default_source bindings clauses with
     | Some bindings -> bindings
     | None -> eval_clauses ~active_rules ~callables ~default_source db sources rules bindings clauses
@@ -3610,7 +3530,19 @@ end) = struct
       terms =
     let candidates = matching_rules_for_invocation rules name terms in
     if List.exists rule_is_recursive candidates then
-      None
+      match candidates, transitive_closure_attr candidates with
+      | first :: _, Some attr
+        when not (List.exists
+          (fun binding -> List.mem (rule_call_key db source_name name binding terms) active_rules)
+          bindings) ->
+        let vars = Query.vars_of_query_terms terms in
+        let projected = bindings |> List.map (project_binding vars) |> unique_projected_bindings in
+        let results = List.concat_map (fun binding ->
+          Option.value
+            (eval_closure_invocation db callables source_name (query_source_context db) db binding attr first terms)
+            ~default:[]) projected in
+        Some (merge_projected_bindings db vars bindings results)
+      | _ -> None
     else
       let active_rule_keys =
         lazy
@@ -3778,9 +3710,10 @@ end) = struct
       db
       sources
       rules
-      bindings =
+      bindings
+      clause =
     let default_source = Option.value default_source ~default:(source db sources "$") in
-    function
+    match clause with
     | Pattern (e_term, a_term, v_term) ->
       match_query_source_pattern db default_source bindings [ e_term; a_term; v_term ]
     | PatternTx (e_term, a_term, v_term, tx_term) ->
