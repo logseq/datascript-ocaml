@@ -1213,7 +1213,10 @@ let query_result_entity_id db result =
   Query.query_result_entity_id (query_result_context db) result
 
 let bind_var db name value bindings =
-  Query.bind_var (query_result_context db) name value bindings
+  if List.mem_assoc name bindings then
+    Query.bind_var (query_result_context db) name value bindings
+  else
+    Some ((name, value) :: bindings)
 
 (* A bound term in entity position that cannot resolve to an entity id makes
    the pattern unsatisfiable — upstream `-search` finds no datoms. A term
@@ -1491,8 +1494,9 @@ let query_source_context db : Query.source_context =
       match_data_pattern_tx_op_with_context (context_for source_db) bindings e a v tx op datom)
   }
 
-let eval_query_term db bindings term =
-  Query.eval_query_term (query_match_context db) bindings term
+let eval_query_term db bindings = function
+  | QVar name -> List.assoc_opt name bindings
+  | term -> Query.eval_query_term (query_match_context db) bindings term
 
 let collect_query_terms_exn db bindings terms =
   Query.collect_query_terms_exn (query_match_context db) bindings terms

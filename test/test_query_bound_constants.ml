@@ -203,7 +203,7 @@ let bound_entity_rule_continuations_keep_bulk_context () =
   if List.length rows <> count then failf "expected %d members, got %d" count (List.length rows);
   Printf.printf "bound entity allocations: %.0f bytes\n%!" allocated;
   (* The previous bound-entity fallback allocated over 20 MB. *)
-  if allocated > 12_000_000. then
+  if allocated > 8_800_000. then
     failf "bound entity rule continuations must preserve bulk evaluation: %.0f bytes" allocated
 
 let derived_attribute_uses_current_bindings scopes () =
@@ -293,12 +293,83 @@ let varying_nonindexed_values_scan_once () =
   if allocated > 16_000_000. then
     failf "varying nonindexed values must share one scan: %.0f bytes" allocated
 
+let attribute_comparison_preserves_keyword_order_without_allocation () =
+  let attrs = ["name"; ""; "a"; "a/b"; "a.b/c"; "a/b/c"; "a/bb";
+    "block/tags"; "block/title"; "logseq.property/built-in?";
+    "logseq.property.class/extends"; "/a"; "a/"; "a//b"] in
+  List.iter (fun left -> List.iter (fun right ->
+    let expected = compare (Util.split_keyword left) (Util.split_keyword right) in
+    let actual = Util.compare_datom Aevt (datom ~e:1 ~a:left ~v:Nil ()) (datom ~e:1 ~a:right ~v:Nil ()) in
+    if compare expected 0 <> compare actual 0 then
+      failf "attribute ordering differs for %S and %S" left right) attrs) attrs;
+  let left = datom ~e:1 ~a:"logseq.property/built-in?" ~v:Nil () in
+  let right = datom ~e:1 ~a:"logseq.property.class/extends" ~v:Nil () in
+  Gc.full_major ();
+  let before = Gc.allocated_bytes () in
+  for _ = 1 to 10_000 do
+    if Util.compare_datom Aevt left right >= 0 then
+      failf "keyword namespace order changed"
+  done;
+  let allocated = Gc.allocated_bytes () -. before in
+  if Sys.backend_type = Native && allocated > 1024. then
+    failf "repeated attribute comparisons must avoid cache lookup allocations: %.0f bytes" allocated
+
+let batched_predicates_share_match_context () =
+  let count = 5000 in
+  let input = Arg_relation (List.init count (fun i -> [Result_entity (i + 1); scalar 1])) in
+  Gc.full_major ();
+  let before = Gc.allocated_bytes () in
+  let rows = q_string ~inputs:[input] (empty_db ())
+    "[:find ?e :in $ [[?e ?kind]] :where (or [(= ?kind 1)] [(= ?kind 2)]) [(missing? $ ?e :hidden)]]" in
+  let allocated = Gc.allocated_bytes () -. before in
+  if List.length rows <> count then failf "expected %d predicate rows, got %d" count (List.length rows);
+  Printf.printf "predicate allocations: %.0f bytes\n%!" allocated;
+  if allocated > 20_000_000. then
+    failf "batched predicate evaluation must share its match context: %.0f bytes" allocated
+
+
+let bound_value_prefix_keeps_bulk_context () =
+  let db, _ = fixture () in
+  let count = 1000 in
+  let rule_set = rules "[[(named-scope ?scope ?value) [?b :name ?value] (keep ?scope)]
+    [(keep ?scope) [(identity ?scope) ?scope]]]" in
+  let input = Arg_relation (List.init count (fun i -> [scalar i; text "Alice"])) in
+  Gc.full_major ();
+  let before = Gc.allocated_bytes () in
+  let rows = run ~rule_set ~inputs:[input] db
+    "[:find ?scope :in $ % [[?scope ?value]] :where (named-scope ?scope ?value)]" in
+  let allocated = Gc.allocated_bytes () -. before in
+  assert_rows (List.init count (fun i -> [scalar i])) rows;
+  Printf.printf "bound value prefix allocations: %.0f bytes\n%!" allocated;
+  if allocated > 13_000_000. then
+    failf "a bound value prefix must probe once before its rule continuation: %.0f bytes" allocated
+
+let attribute_bindings_remain_keyword_values () =
+  let db = init_db ~schema:["db/ident", {indexed with unique = Some Identity}]
+    [datom ~e:1 ~a:"db/ident" ~v:(Keyword "wanted") ();
+     datom ~e:2 ~a:"db/ident" ~v:(Keyword "other") ()] in
+  let rule_set = rules "[[(identified ?scope ?prop) [?e :db/ident ?prop] (keep ?scope)]
+    [(keep ?scope) [(identity ?scope) ?scope]]]" in
+  List.iter (fun rows ->
+    run ~rule_set ~inputs:[Arg_relation rows] db
+      "[:find ?scope :in $ % [[?scope ?prop]] :where (identified ?scope ?prop)]"
+    |> assert_rows [[scalar 1]])
+    [[[scalar 1; Result_attr "wanted"]];
+     [[scalar 1; Result_attr "wanted"]; [scalar 2; Result_attr "missing"]]];
+  run ~rule_set ~inputs:[Arg_relation [[scalar 2; Result_attr "missing"]]] db
+    "[:find ?scope :in $ % [[?scope ?prop]] :where (identified ?scope ?prop)]"
+  |> assert_rows []
+
 let () =
   let failed = ref false in
   List.iter (fun (name, test) ->
     try test (); Printf.printf "PASS %s\n%!" name
     with exn -> failed := true; Printf.eprintf "FAIL %s: %s\n%!" name (Printexc.to_string exn))
-    ["matching rows", matching_rows; "missing rows", missing_rows;
+    ["attribute bindings remain keyword values", attribute_bindings_remain_keyword_values;
+     "bound value prefixes keep bulk context", bound_value_prefix_keeps_bulk_context;
+     "batched predicates share context", batched_predicates_share_match_context;
+     "attribute comparison avoids allocations", attribute_comparison_preserves_keyword_order_without_allocation;
+     "matching rows", matching_rows; "missing rows", missing_rows;
      "varying bound values", varying_values; "source database", source_database;
      "transaction and operation columns", transaction_pattern;
      "nonindexed values", nonindexed_pattern; "dynamic attributes", dynamic_attribute;

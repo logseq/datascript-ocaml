@@ -329,7 +329,7 @@ end) = struct
       (match List.assoc_opt name bindings with
        | Some (Result_entity entity_id) -> QEntity entity_id
        | Some (Result_value value) -> QValue value
-       | Some (Result_attr attr) -> QAttr attr
+       | Some (Result_attr attr) -> QValue (Keyword attr)
        | Some (Result_db _ | Result_pull _) | None -> term)
     | term -> term
 
@@ -2223,6 +2223,17 @@ end) = struct
         | _ -> false)
       clauses
 
+  let relation_prefix_uses_bound_value_key bindings clauses =
+    List.exists (function
+      | Pattern (_, _, QVar var)
+      | PatternTx (_, _, QVar var, _)
+      | PatternTxOp (_, _, QVar var, _, _)
+      | SourcePattern (_, _, _, QVar var)
+      | SourcePatternTx (_, _, _, QVar var, _)
+      | SourcePatternTxOp (_, _, _, QVar var, _, _) ->
+        List.exists (List.mem_assoc var) bindings
+      | _ -> false) clauses
+
   let relation_prefix_uses_bound_equality bindings clauses =
     clauses
     |> List.exists (function
@@ -3132,13 +3143,16 @@ end) = struct
                  relation_prefix_has_multiple_clauses relation_prefix
                  || relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
                  || relation_prefix_uses_bound_attr_key bindings relation_prefix
+                 || relation_prefix_uses_bound_value_key bindings relation_prefix
                | [ _ ] ->
                  relation_rest_starts_source_clause rest
                  || relation_prefix_uses_bound_equality bindings relation_prefix
+                 || relation_prefix_uses_bound_value_key bindings relation_prefix
                | _ :: _ :: _ ->
                  relation_prefix_is_independent bindings relation_prefix
                  || relation_prefix_uses_bound_lookup_key db sources default_source bindings relation_prefix
                  || relation_prefix_uses_bound_attr_key bindings relation_prefix
+                 || relation_prefix_uses_bound_value_key bindings relation_prefix
                | _ -> false) ->
          (match
             eval_relation_clauses
@@ -3432,6 +3446,7 @@ end) = struct
 
   and eval_clause_for_bindings
       ~active_rules ~callables ~default_source db sources rules bindings clause =
+    if bindings = [] then [] else
     let pattern = match clause with
       | Pattern (e, a, v) -> Some (default_source, [e; a; v])
       | PatternTx (e, a, v, tx) -> Some (default_source, [e; a; v; tx])
@@ -3445,9 +3460,30 @@ end) = struct
       let context_db = match source with Db_source source_db -> source_db | Relation_source _ -> db in
       let context = query_source_context context_db in
       List.concat_map (fun binding -> Query.match_query_source_pattern context db source binding terms) bindings
-    | None -> List.concat_map
-        (fun binding -> eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
-        bindings
+    | None ->
+      let batch_predicate clause_db evaluate =
+        let match_context = query_match_context clause_db in
+        let context = {query_evaluator_context with
+          match_context = (fun _ -> match_context);
+          result_resolution_context = (fun _ -> match_context.result_resolution_context)} in
+        List.concat_map (evaluate context clause_db) bindings
+      in
+      (match clause with
+       | EqualityPredicate (predicate, terms) ->
+         batch_predicate db (fun context db binding ->
+           Query_eval.eval_equality_predicate_clause context db binding predicate terms)
+       | Missing (entity, attr) ->
+         batch_predicate (query_source_db default_source) (fun context db binding ->
+           Query_eval.eval_missing_clause context db binding entity attr)
+       | SourceMissing (name, entity, attr) ->
+         batch_predicate (source_db db sources name) (fun context db binding ->
+           Query_eval.eval_missing_clause context db binding entity attr)
+       | ValuePredicate (predicate, term) ->
+         batch_predicate db (fun context db binding ->
+           Query_eval.eval_type_predicate_clause context db binding predicate term)
+       | _ -> List.concat_map
+           (fun binding -> eval_clause ~active_rules ~callables ~default_source db sources rules binding clause)
+           bindings)
 
   and eval_projected_clauses_for_bindings
       ~active_rules
