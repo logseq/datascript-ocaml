@@ -1174,18 +1174,21 @@ end) = struct
       then
         None
       else
-        let value_var_patterns, constant_patterns, required_patterns =
+        let* value_var_patterns, constant_patterns, required_patterns =
           patterns
           |> List.fold_left
-               (fun (value_vars, constants, required) (_, attr, value_term) ->
-                 match value_term with
-                 | QVar value_var when value_var <> e_var ->
-                   ((value_var, attr) :: value_vars, constants, required)
-                 | QValue value -> (value_vars, (attr, value) :: constants, required)
-                 | QWildcard -> (value_vars, constants, attr :: required)
-                 | QVar _ | QEntity _ | QAttr _ | QIdent _ | QLookupRef _ | QSource _ ->
-                   (value_vars, constants, required))
-               ([], [], [])
+               (fun acc (_, attr, value_term) ->
+                 match acc, value_term with
+                 | Some (value_vars, constants, required), QVar value_var when value_var <> e_var ->
+                   Some ((value_var, attr) :: value_vars, constants, required)
+                 | Some (value_vars, constants, required), QValue value ->
+                   Some (value_vars, (attr, value) :: constants, required)
+                 | Some (value_vars, constants, required), QWildcard ->
+                   Some (value_vars, constants, attr :: required)
+                 | None, _
+                 | Some _, (QVar _ | QEntity _ | QAttr _ | QIdent _ | QLookupRef _ | QSource _) ->
+                   None)
+               (Some ([], [], []))
         in
         let duplicate_value_var =
           let seen = Hashtbl.create (List.length value_var_patterns) in

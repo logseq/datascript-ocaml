@@ -317,6 +317,36 @@ let test_collection_in_binding () =
     (q_string ~inputs:[ Arg_collection [ Result_value (Int64 1L); Result_value (Int64 3L) ] ] db
        "[:find ?e :in $ [?x ...] :where [?e :attr ?x]]")
 
+let test_singleton_ref_collection_keeps_pattern_constraints () =
+  let schema =
+    schema_of_edn_string
+      "{:block/tags {:db/valueType :db.type/ref :db/cardinality :db.cardinality/many}}"
+  in
+  let db =
+    empty_db ~schema ()
+    |> db_with_string
+         "[{:db/id 1 :block/uuid \"untagged\"}
+           {:db/id 2 :block/uuid \"other-tag\" :block/tags [100]}
+           {:db/id 3 :block/uuid \"card\" :block/tags [200]}]"
+  in
+  List.iter
+    (fun (label, tags, expected) ->
+      assert_rows label expected
+        (q_string db
+           "[:find [?b ...] :in $ [?t ...] ?now-inst-ms %
+             :where [?b :block/tags ?t] [?b :block/uuid]]"
+           ~inputs:
+             [ Arg_collection tags
+             ; Arg_scalar (Result_value (Int64 0L))
+             ; Arg_rules []
+             ]))
+    [ "singleton ref keeps the tag constraint", [ Result_entity 200 ], [ [ Result_entity 3 ] ]
+    ; "missing ref returns no entities", [ Result_entity 201 ], []
+    ; "multiple refs keep the tag constraint", [ Result_entity 200; Result_entity 201 ], [ [ Result_entity 3 ] ]
+    ; "ref values preserve the same result", [ Result_value (Ref 200) ], [ [ Result_entity 3 ] ]
+    ; "empty input returns no entities", [], []
+    ]
+
 (* Bug 2 extended: comparison predicates over :in-bound vars *)
 let test_comparison_predicates_over_in () =
   let db =
@@ -1068,6 +1098,7 @@ let () =
     ; "rule_joined_with_clauses", test_rule_joined_with_clauses
     ; "predicate_over_in_scalar", test_predicate_over_in_scalar
     ; "collection_in_binding", test_collection_in_binding
+    ; "singleton_ref_collection_keeps_pattern_constraints", test_singleton_ref_collection_keeps_pattern_constraints
     ; "comparison_predicates_over_in", test_comparison_predicates_over_in
     ; "predicate_over_collection_in", test_predicate_over_collection_in
     ; "entity_map_lookup_ref_earlier_tx_entity", test_entity_map_lookup_ref_earlier_tx_entity
